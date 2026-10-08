@@ -58,7 +58,11 @@ done
 
 # ── Set app-role password ──────────────────────────────────────────────────────
 echo "[migrate] setting innobox_app password"
-psql -v ON_ERROR_STOP=1 -c \
-  "ALTER ROLE innobox_app LOGIN PASSWORD '${INNOBOX_APP_PASSWORD}';"
+# The password travels as a psql variable and is expanded with :'pw' (psql quotes it as a
+# literal), never pasted into the SQL text — a quote in the password cannot break out of the
+# statement. psql only interpolates variables in script input, not in -c, hence stdin.
+psql -v ON_ERROR_STOP=1 -v pw="${INNOBOX_APP_PASSWORD}" <<'SQL'
+ALTER ROLE innobox_app LOGIN PASSWORD :'pw';
+SQL
 
 echo "[migrate] done"

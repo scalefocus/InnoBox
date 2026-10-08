@@ -1,8 +1,11 @@
 // POST /api/attachments/uploads/:uploadId/complete — assemble the uploaded chunks into the
 // single immutable object and materialize the `pending` attachments row (INNOBOX_SPEC.md §11).
-// Re-checks the edit-window + per-item cap before committing; fires the on-demand scan after.
+// First verifies the assembly against the declared size (a missing or wrongly-sized part aborts
+// the upload: 400 with code `upload_incomplete`, and the client must start over); then re-checks
+// the edit-window + per-item cap before committing; fires the on-demand scan after.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { completeChunkedUpload } from "../../../store";
 
@@ -11,6 +14,8 @@ export const dynamic = "force-dynamic";
 export async function POST(_req: Request, context: { params: Promise<{ uploadId: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { uploadId } = await context.params;
 
   const viewer = { userId: gate.user.id, roles: gate.user.roles };
@@ -26,5 +31,10 @@ export async function POST(_req: Request, context: { params: Promise<{ uploadId:
       return Response.json({ error: "attachments can only be added while the item is editable" }, { status: 409 });
     case "too_many":
       return Response.json({ error: "attachment limit reached for this item" }, { status: 409 });
+    case "upload_incomplete":
+      return Response.json(
+        { error: "the upload was incomplete — please upload the file again", code: "upload_incomplete" },
+        { status: 400 },
+      );
   }
 }

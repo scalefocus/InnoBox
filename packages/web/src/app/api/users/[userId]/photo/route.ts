@@ -8,6 +8,7 @@
 // revalidates cheaply instead of re-downloading the bytes.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { isUuid } from "../../../challenges/validation";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export async function GET(req: Request, context: { params: Promise<{ userId: str
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { userId } = await context.params;
+  if (!isUuid(userId)) return new Response(null, { status: 404 });
 
   const { rows } = await pool.query<{ photo: Buffer | null; photo_etag: string | null }>(
     `select photo, photo_etag from users where id = $1 and active = true`,

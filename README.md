@@ -52,7 +52,7 @@ The `migrate` service applies every migration in order and exits 0 when done. He
 endpoints are `/healthz` and `/readyz`; Prometheus metrics are at `/metrics`; logs are
 structured JSON.
 
-For local development (Node ≥ 20, pnpm 9.15.x):
+For local development (Node 24 LTS, pnpm 9.15.x):
 
 ```bash
 pnpm install

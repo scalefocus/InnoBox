@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderMetrics, metricsAuthorized, type MetricSample } from "./metrics.js";
+import { renderMetrics, metricsAccess, type MetricSample } from "./metrics.js";
 
 test("renderMetrics: groups same-named samples under one HELP/TYPE header, in first-seen order", () => {
   const samples: MetricSample[] = [
@@ -26,16 +26,32 @@ test("renderMetrics: label values are escaped (backslash, quote, newline)", () =
   assert.match(out, /x\{l="a\\"b\\\\c\\nd"\} 1/);
 });
 
-test("metricsAuthorized: open when no token is configured (dev)", () => {
-  assert.equal(metricsAuthorized(null, undefined), true);
-  assert.equal(metricsAuthorized(undefined, ""), true);
-  assert.equal(metricsAuthorized("Bearer anything", null), true);
+const gate = (authorization: string | null | undefined, token: string | null | undefined, nodeEnv?: string) =>
+  metricsAccess({ authorization, token, nodeEnv });
+
+test("metricsAccess: open when no token is configured outside production (dev)", () => {
+  assert.equal(gate(null, undefined), "allow");
+  assert.equal(gate(undefined, "", "development"), "allow");
+  assert.equal(gate("Bearer anything", null, "test"), "allow");
 });
 
-test("metricsAuthorized: requires an exact bearer match when a token is set", () => {
-  assert.equal(metricsAuthorized("Bearer s3cret", "s3cret"), true);
-  assert.equal(metricsAuthorized("Bearer wrong", "s3cret"), false);
-  assert.equal(metricsAuthorized("s3cret", "s3cret"), false); // missing "Bearer " prefix
-  assert.equal(metricsAuthorized(null, "s3cret"), false);
-  assert.equal(metricsAuthorized("", "s3cret"), false);
+test("metricsAccess: disabled (404) in production when no token is configured", () => {
+  assert.equal(gate(null, undefined, "production"), "disabled");
+  assert.equal(gate("Bearer anything", "", "production"), "disabled");
+});
+
+test("metricsAccess: requires an exact bearer match when a token is set", () => {
+  for (const env of [undefined, "development", "production"]) {
+    assert.equal(gate("Bearer s3cret", "s3cret", env), "allow");
+    assert.equal(gate("Bearer wrong", "s3cret", env), "unauthorized");
+    assert.equal(gate("s3cret", "s3cret", env), "unauthorized"); // missing "Bearer " prefix
+    assert.equal(gate(null, "s3cret", env), "unauthorized");
+    assert.equal(gate("", "s3cret", env), "unauthorized");
+  }
+});
+
+test("metricsAccess: a prefix or extension of the token is rejected (no length short-cut)", () => {
+  assert.equal(gate("Bearer s3cre", "s3cret"), "unauthorized");
+  assert.equal(gate("Bearer s3cret2", "s3cret"), "unauthorized");
+  assert.equal(gate("Bearer s3cret ", "s3cret"), "unauthorized");
 });

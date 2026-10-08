@@ -11,6 +11,15 @@ export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
 
+/** A challenge/solution number path segment (§2.4): a positive integer in canonical form (no
+ *  sign, no leading zeros) that fits the `bigint` column. Anything else is a 404 without a DB
+ *  round-trip — a non-numeric value would otherwise surface as a Postgres cast error (500). */
+const ENTITY_NUMBER_RE = /^[1-9]\d{0,17}$/;
+
+export function isEntityNumber(value: string): boolean {
+  return ENTITY_NUMBER_RE.test(value);
+}
+
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function fail(error: string): { ok: false; error: string } {

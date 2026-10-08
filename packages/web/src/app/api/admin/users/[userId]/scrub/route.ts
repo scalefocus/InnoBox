@@ -4,13 +4,18 @@
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { scrubUser } from "../../../../users/store";
+import { rateLimit } from "@/lib/rate-limit";
+import { isUuid } from "../../../../challenges/validation";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(_req: Request, context: { params: Promise<{ userId: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { userId } = await context.params;
+  if (!isUuid(userId)) return Response.json({ error: "user not found" }, { status: 404 });
 
   const result = await scrubUser(pool, gate.user.id, userId);
   switch (result.status) {

@@ -5,6 +5,8 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { parseNamespaceCreate } from "../validation";
 import { createNamespace, listNamespaces } from "../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 // Admin lists must never be prerendered or cached — always hit the DB per request.
 export const dynamic = "force-dynamic";
@@ -18,12 +20,11 @@ export async function GET(): Promise<Response> {
 export async function POST(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
   const parsed = parseNamespaceCreate(body);
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
   const namespace = await createNamespace(pool, parsed.value, gate.user.id);

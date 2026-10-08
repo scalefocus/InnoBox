@@ -8,9 +8,11 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchEvent, getFollowerUserIds } from "@/lib/notify";
 import { getStorage } from "@/lib/storage";
-import { parseStatusOverride } from "../validation";
+import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
 import { editChallenge, getChallengeByNumber, setChallengeStatus } from "../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +20,7 @@ export async function GET(_req: Request, context: { params: Promise<{ number: st
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
   const challenge = await getChallengeByNumber(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   if (!challenge) return Response.json({ error: "challenge not found" }, { status: 404 });
@@ -27,14 +30,14 @@ export async function GET(_req: Request, context: { params: Promise<{ number: st
 export async function PATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
   const parsed = parseStatusOverride(body, (s) => isChallengeStatus(s));
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
@@ -63,24 +66,23 @@ export async function PATCH(req: Request, context: { params: Promise<{ number: s
 export async function PUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const b = (body ?? {}) as Record<string, unknown>;
-  if (typeof b.impactAreaId !== "string" || b.impactAreaId === "") {
-    return Response.json({ error: "impactAreaId is required" }, { status: 400 });
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  if (typeof body.impactAreaId !== "string" || !isUuid(body.impactAreaId)) {
+    return Response.json({ error: "impactAreaId must be a uuid" }, { status: 400 });
   }
 
   const result = await editChallenge(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
-    title: b.title,
-    description: b.description,
-    clientName: b.clientName,
-    impactAreaId: b.impactAreaId,
+    title: body.title,
+    description: body.description,
+    clientName: body.clientName,
+    impactAreaId: body.impactAreaId,
   });
   switch (result.status) {
     case "ok":
@@ -109,15 +111,15 @@ export async function PUT(req: Request, context: { params: Promise<{ number: str
 export async function DELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const reason = validateDeleteReason((body as Record<string, unknown> | null)?.reason);
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const reason = validateDeleteReason(body.reason);
   if (!reason.ok) return Response.json({ error: reason.error }, { status: 422 });
 
   const result = await deleteChallenge(

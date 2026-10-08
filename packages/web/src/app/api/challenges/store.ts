@@ -40,7 +40,7 @@ import { inTransaction } from "../../../lib/db";
 import { isScanAvailable } from "../../../lib/clamav";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, hasUncleanStagedAttachments, listAttachmentsForParent } from "../attachments/store";
-import { isUuid, type ChallengeListFilters } from "./validation";
+import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
 
 export interface Viewer {
   userId: string;
@@ -200,6 +200,52 @@ function toListItem(row: ChallengeRow): ChallengeListItem {
  *  this namespace — a committee member of the namespace, or the challenge's assignee. */
 function isEnforcer(viewer: Viewer, namespaceId: string, assigneeId: string | null): boolean {
   return viewer.roles.isCommittee(namespaceId) || (assigneeId !== null && assigneeId === viewer.userId);
+}
+
+/** §2.4 existence-not-disclosed: the visibility gate every by-number write path runs BEFORE any
+ *  permission (403) or state (409) check, so an item the caller cannot see answers exactly like
+ *  one that does not exist. Takes the raw challenge columns the write paths already select. */
+function isChallengeRowVisible(
+  viewer: Viewer,
+  row: { namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string },
+): boolean {
+  return canSeeChallenge(viewer, {
+    namespaceId: row.namespace_id,
+    visibility: row.visibility,
+    status: row.status as ChallengeStatus,
+    authorId: row.author_id,
+  });
+}
+
+/** The columns isSolutionRowVisible needs, as the `solutions s join challenges c` reads name them. */
+interface SolutionVisibilityColumns {
+  status: string;
+  author_id: string;
+  namespace_id: string;
+  visibility: "org" | "namespace";
+  challenge_status: string;
+  challenge_author_id: string;
+  assignee_id: string | null;
+}
+
+const SOLUTION_VISIBILITY_SELECT = `s.status, s.author_id, c.namespace_id, c.visibility, c.status as challenge_status,
+            c.author_id as challenge_author_id, c.assignee_id`;
+
+/** The solution counterpart: the parent challenge must be visible AND the solution itself (a
+ *  `proposed` solution is narrower still, §4.3). */
+function isSolutionRowVisible(viewer: Viewer, row: SolutionVisibilityColumns): boolean {
+  const challengeVisible = canSeeChallenge(viewer, {
+    namespaceId: row.namespace_id,
+    visibility: row.visibility,
+    status: row.challenge_status as ChallengeStatus,
+    authorId: row.challenge_author_id,
+  });
+  if (!challengeVisible) return false;
+  return canSeeSolution(
+    viewer,
+    { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
+    { status: row.status as SolutionStatus, authorId: row.author_id },
+  );
 }
 
 function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem[], attachments: AttachmentView[] = []): ChallengeDetail {
@@ -386,6 +432,7 @@ export async function listChallenges(
  *  invisible item must never be distinguishable from a nonexistent one (no 404-vs-403
  *  existence oracle). */
 export async function getChallengeByNumber(pool: Pool, viewer: Viewer, number: string): Promise<ChallengeDetail | null> {
+  if (!isEntityNumber(number)) return null; // §2.4: a malformed number is "not found", no DB round-trip
   const { rows } = await pool.query<ChallengeRow>(
     `${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.number = $1`,
     [number, viewer.userId],
@@ -458,7 +505,7 @@ export async function createChallenge(
   // §11 staging: bind any files staged during the form to this challenge (in-transaction).
   const draftKey = typeof input.draftKey === "string" && isUuid(input.draftKey) ? input.draftKey : null;
   // §11 scan gate: when a scanner is available, refuse to submit while any staged file is still
-  // scanning or infected — so a challenge is only ever born with clean attachments. When ClamAV
+  // scanning, infected, or unscannable — so a challenge is only ever born with clean attachments. When ClamAV
   // is unavailable the platform fails open and pending files bind as before (scanned later).
   if (draftKey && (await isScanAvailable()) && (await hasUncleanStagedAttachments(pool, author, "challenge", draftKey))) {
     return { status: "attachments_not_clean" };
@@ -517,6 +564,7 @@ export async function createSolution(
   challengeNumber: string,
   input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown },
 ): Promise<CreateSolutionResult> {
+  if (!isEntityNumber(challengeNumber)) return { status: "not_found" };
   const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string; assignee_id: string | null }>(
     `select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`,
     [challengeNumber],
@@ -612,12 +660,18 @@ async function loadChallengeForStatusChange(
   | { status: "not_found" | "forbidden" | "illegal_transition" | "invalid_status" }
 > {
   if (!isChallengeStatus(newStatus)) return { status: "invalid_status" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; status: string; assignee_id: string | null }>(
-    `select id, namespace_id, status, assignee_id from challenges where number = $1`,
-    [number],
-  );
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{
+    id: string;
+    namespace_id: string;
+    visibility: "org" | "namespace";
+    status: string;
+    author_id: string;
+    assignee_id: string | null;
+  }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
   const current = rows[0];
-  if (!current) return { status: "not_found" };
+  // §2.4: a challenge the actor cannot see is "not found", never "forbidden".
+  if (!current || !isChallengeRowVisible(actor, current)) return { status: "not_found" };
   const decision = decideTransition({
     from: current.status,
     to: newStatus,
@@ -712,16 +766,17 @@ export async function setSolutionStatus(
   newStatus: string,
 ): Promise<SetSolutionStatusResult> {
   if (!isSolutionStatus(newStatus)) return { status: "invalid_status" };
+  if (!isEntityNumber(number)) return { status: "not_found" };
 
-  const { rows } = await pool.query<{ id: string; challenge_id: string; status: string; namespace_id: string; assignee_id: string | null; challenge_number: string; challenge_title: string }>(
-    `select s.id, s.challenge_id, s.status, c.namespace_id, c.assignee_id, c.number::text as challenge_number, c.title as challenge_title
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+    `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
        from solutions s
        join challenges c on c.id = s.challenge_id
       where s.number = $1`,
     [number],
   );
   const current = rows[0];
-  if (!current) return { status: "not_found" };
+  if (!current || !isSolutionRowVisible(actor, current)) return { status: "not_found" };
   // Enforcer of a solution = committee of the parent's namespace, or the parent challenge's
   // assignee (§8.2). Admins free-set (override); anyone else is refused.
   const decision = decideTransition({
@@ -989,12 +1044,17 @@ async function loadChallengeForAssignment(
   | { status: "ok"; current: { id: string; namespace_id: string; status: string; assignee_id: string | null } }
   | { status: "not_found" | "forbidden" | "terminal_status" | "unknown_user" }
 > {
-  const { rows } = await pool.query<{ id: string; namespace_id: string; status: string; assignee_id: string | null }>(
-    `select id, namespace_id, status, assignee_id from challenges where number = $1`,
-    [number],
-  );
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{
+    id: string;
+    namespace_id: string;
+    visibility: "org" | "namespace";
+    status: string;
+    author_id: string;
+    assignee_id: string | null;
+  }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
   const current = rows[0];
-  if (!current) return { status: "not_found" };
+  if (!current || !isChallengeRowVisible(admin, current)) return { status: "not_found" };
   if (!admin.roles.isNamespaceAdmin(current.namespace_id)) return { status: "forbidden" };
   if (!canAssignAtStatus(current.status as ChallengeStatus)) return { status: "terminal_status" };
 
@@ -1068,12 +1128,13 @@ export type SetVisibilityResult =
  *  namespace/platform admin, and every change is audited (§15 "visibility changes"). */
 export async function setChallengeVisibility(pool: Pool, admin: Viewer, number: string, visibility: string): Promise<SetVisibilityResult> {
   if (visibility !== "org" && visibility !== "namespace") return { status: "invalid" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace" }>(
-    `select id, namespace_id, visibility from challenges where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
+    `select id, namespace_id, visibility, status, author_id from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isChallengeRowVisible(admin, cur)) return { status: "not_found" };
   if (!admin.roles.isNamespaceAdmin(cur.namespace_id)) return { status: "forbidden" };
   if (cur.visibility === visibility) return { status: "ok", challenge: await reloadChallengeDetail(pool, admin, cur.id) };
 
@@ -1132,8 +1193,10 @@ export async function editChallenge(
   number: string,
   input: { title: unknown; description: unknown; clientName: unknown; impactAreaId: string },
 ): Promise<EditChallengeResult> {
+  if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<{
     id: string;
+    namespace_id: string;
     status: string;
     author_id: string;
     impact_area_id: string;
@@ -1143,12 +1206,12 @@ export async function editChallenge(
     visibility: "org" | "namespace";
     is_anonymous: boolean;
   }>(
-    `select id, status, author_id, impact_area_id, title, description, client_name, visibility, is_anonymous
+    `select id, namespace_id, status, author_id, impact_area_id, title, description, client_name, visibility, is_anonymous
        from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorEditChallenge(cur.status as ChallengeStatus)) return { status: "not_editable" };
 
@@ -1199,13 +1262,14 @@ export async function editSolution(
   number: string,
   input: { description: unknown; costVsBenefits: unknown },
 ): Promise<EditSolutionResult> {
-  const { rows } = await pool.query<{ id: string; challenge_id: string; status: string; author_id: string; description: string; cost_vs_benefits: string | null; namespace_id: string; assignee_id: string | null }>(
-    `select s.id, s.challenge_id, s.status, s.author_id, s.description, s.cost_vs_benefits, c.namespace_id, c.assignee_id
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; description: string; cost_vs_benefits: string | null }>(
+    `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, s.description, s.cost_vs_benefits
        from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorEditSolution(cur.status as SolutionStatus)) return { status: "not_editable" };
 
@@ -1242,12 +1306,13 @@ export type WithdrawChallengeResult =
 
 /** Author withdraws their own challenge from any non-terminal status → withdrawn (§10.1). */
 export async function withdrawChallenge(pool: Pool, author: Viewer, number: string): Promise<WithdrawChallengeResult> {
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; title: string; assignee_id: string | null }>(
-    `select id, status, author_id, namespace_id, title, assignee_id from challenges where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
+    `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorWithdrawChallenge(cur.status as ChallengeStatus)) return { status: "not_withdrawable" };
 
@@ -1272,13 +1337,14 @@ export type WithdrawSolutionResult =
   | { status: "not_withdrawable" };
 
 export async function withdrawSolution(pool: Pool, author: Viewer, number: string): Promise<WithdrawSolutionResult> {
-  const { rows } = await pool.query<{ id: string; challenge_id: string; status: string; author_id: string; namespace_id: string; assignee_id: string | null; challenge_number: string; challenge_title: string }>(
-    `select s.id, s.challenge_id, s.status, s.author_id, c.namespace_id, c.assignee_id, c.number::text as challenge_number, c.title as challenge_title
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+    `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
        from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorWithdrawSolution(cur.status as SolutionStatus)) return { status: "not_withdrawable" };
 
@@ -1305,12 +1371,13 @@ export type ResubmitChallengeResult =
 /** Author resubmits their own needs_improvement challenge → in_review (§10.1); notifies
  *  reviewers (route). Audited as an enforced status change (`override:false`). */
 export async function resubmitChallenge(pool: Pool, author: Viewer, number: string): Promise<ResubmitChallengeResult> {
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; title: string; assignee_id: string | null }>(
-    `select id, status, author_id, namespace_id, title, assignee_id from challenges where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
+    `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorResubmit(cur.status as ChallengeStatus)) return { status: "not_resubmittable" };
 
@@ -1335,13 +1402,14 @@ export type ResubmitSolutionResult =
   | { status: "not_resubmittable" };
 
 export async function resubmitSolution(pool: Pool, author: Viewer, number: string): Promise<ResubmitSolutionResult> {
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; assignee_id: string | null; challenge_number: string; challenge_title: string }>(
-    `select s.id, s.status, s.author_id, c.namespace_id, c.assignee_id, c.number::text as challenge_number, c.title as challenge_title
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_number: string; challenge_title: string }>(
+    `select s.id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
        from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
     [number],
   );
   const cur = rows[0];
-  if (!cur) return { status: "not_found" };
+  if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorResubmit(cur.status as SolutionStatus)) return { status: "not_resubmittable" };
 
@@ -1371,12 +1439,14 @@ export type RevealResult =
  *  audited (§9). Namespace admins (own namespace) and platform admins only; committee and
  *  assignees cannot reveal. */
 export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
-  const { rows } = await pool.query<{ id: string; namespace_id: string; is_anonymous: boolean; author_id: string }>(
-    `select id, namespace_id, is_anonymous, author_id from challenges where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string }>(
+    `select id, namespace_id, visibility, status, is_anonymous, author_id from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
-  if (!row) return { status: "not_found" };
+  // §2.4: visibility first — a non-admin probing a hidden challenge gets 404, never 403.
+  if (!row || !isChallengeRowVisible(admin, row)) return { status: "not_found" };
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1395,13 +1465,14 @@ export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: s
 }
 
 export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
-  const { rows } = await pool.query<{ id: string; namespace_id: string; is_anonymous: boolean; author_id: string }>(
-    `select s.id, c.namespace_id, s.is_anonymous, s.author_id
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; is_anonymous: boolean }>(
+    `select s.id, ${SOLUTION_VISIBILITY_SELECT}, s.is_anonymous
        from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
     [number],
   );
   const row = rows[0];
-  if (!row) return { status: "not_found" };
+  if (!row || !isSolutionRowVisible(admin, row)) return { status: "not_found" };
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1423,12 +1494,13 @@ export type SelfRevealResult = { status: "ok"; challenge?: ChallengeDetail } | {
 
 /** Self-reveal: the author permanently removes their own anonymity (one-way, §9). */
 export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: string): Promise<SelfRevealResult> {
-  const { rows } = await pool.query<{ id: string; is_anonymous: boolean; author_id: string }>(
-    `select id, is_anonymous, author_id from challenges where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string }>(
+    `select id, namespace_id, visibility, status, is_anonymous, author_id from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
-  if (!row) return { status: "not_found" };
+  if (!row || !isChallengeRowVisible(viewer, row)) return { status: "not_found" };
   if (row.author_id !== viewer.userId) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1455,12 +1527,14 @@ export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: st
 }
 
 export async function selfRevealSolution(pool: Pool, viewer: Viewer, number: string): Promise<SelfRevealResult> {
-  const { rows } = await pool.query<{ id: string; is_anonymous: boolean; author_id: string }>(
-    `select id, is_anonymous, author_id from solutions where number = $1`,
+  if (!isEntityNumber(number)) return { status: "not_found" };
+  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; is_anonymous: boolean }>(
+    `select s.id, ${SOLUTION_VISIBILITY_SELECT}, s.is_anonymous
+       from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
     [number],
   );
   const row = rows[0];
-  if (!row) return { status: "not_found" };
+  if (!row || !isSolutionRowVisible(viewer, row)) return { status: "not_found" };
   if (row.author_id !== viewer.userId) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 

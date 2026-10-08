@@ -7,13 +7,18 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchToUser, getFollowerUserIds, getNamespaceAdminUserIds } from "@/lib/notify";
 import { withdrawSolution } from "../../../challenges/store";
+import { rateLimit } from "@/lib/rate-limit";
+import { isEntityNumber } from "../../../challenges/validation";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "solution not found" }, { status: 404 });
 
   const result = await withdrawSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {

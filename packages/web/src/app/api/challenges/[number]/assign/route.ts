@@ -4,21 +4,23 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchToUser } from "@/lib/notify";
 import { setChallengeAssignee } from "../../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
+import { isEntityNumber, isUuid } from "../../validation";
 
 export async function POST(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const rec = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
-  const assigneeUserId = rec.userId === null ? null : typeof rec.userId === "string" ? rec.userId : undefined;
-  if (assigneeUserId === undefined) return Response.json({ error: "userId must be a string or null" }, { status: 400 });
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const assigneeUserId = body.userId === null ? null : typeof body.userId === "string" && isUuid(body.userId) ? body.userId : undefined;
+  if (assigneeUserId === undefined) return Response.json({ error: "userId must be a uuid or null" }, { status: 400 });
 
   const result = await setChallengeAssignee(pool, { userId: gate.user.id, roles: gate.user.roles }, number, assigneeUserId);
   switch (result.status) {

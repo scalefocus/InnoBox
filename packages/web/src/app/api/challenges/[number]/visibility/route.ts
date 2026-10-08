@@ -4,21 +4,24 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { setChallengeVisibility } from "../../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
+import { isEntityNumber } from "../../validation";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const visibility = (body as Record<string, unknown>)?.visibility;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const visibility = body.visibility;
   if (typeof visibility !== "string") return Response.json({ error: "visibility is required" }, { status: 400 });
 
   const result = await setChallengeVisibility(pool, { userId: gate.user.id, roles: gate.user.roles }, number, visibility);

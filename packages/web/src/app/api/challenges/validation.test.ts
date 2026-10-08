@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  isEntityNumber,
   isUuid,
   parseChallengeCreateIds,
   parseChallengeListFilters,
@@ -102,4 +103,11 @@ test("parseLikeToggle: rejects an unknown parentType", () => {
 test("parseLikeToggle: rejects a malformed parentId", () => {
   const result = parseLikeToggle({ parentType: "challenge", parentId: "nope" });
   assert.equal(result.ok, false);
+});
+
+test("isEntityNumber: canonical positive integers only (a malformed path number is a 404, never a DB cast error)", () => {
+  for (const ok of ["1", "42", "999999999999999999"]) assert.equal(isEntityNumber(ok), true, ok);
+  for (const bad of ["", "0", "-1", "01", "1.5", "1e3", "abc", "CH-1", " 1", "1 ", "9999999999999999999", "١"]) {
+    assert.equal(isEntityNumber(bad), false, JSON.stringify(bad));
+  }
 });

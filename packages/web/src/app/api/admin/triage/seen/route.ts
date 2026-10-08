@@ -4,12 +4,15 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, markTriageSeen } from "../store";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
   const adminNs = adminNamespaceIds(gate.user.roles);
   if (adminNs !== "all" && adminNs.length === 0) {

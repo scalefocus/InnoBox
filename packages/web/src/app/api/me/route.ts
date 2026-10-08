@@ -5,6 +5,8 @@ import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
 import { markQuickStartSeen } from "./store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function GET(): Promise<Response> {
   const user = await getSessionUser();
@@ -42,14 +44,13 @@ export async function GET(): Promise<Response> {
 export async function PATCH(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const quickStartSeen = (body as Record<string, unknown>).quickStartSeen;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const quickStartSeen = body.quickStartSeen;
   if (quickStartSeen !== true) {
     return Response.json({ error: "quickStartSeen must be true" }, { status: 400 });
   }

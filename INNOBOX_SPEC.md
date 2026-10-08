@@ -77,15 +77,25 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
 
 Cross-cutting requirements:
 
-- Node ≥ 20, pnpm 9.x pinned via `packageManager`; TypeScript everywhere, ESM.
+- **Node 24 LTS** (the runtime images, `.tool-versions`, CI, and `engines` all name the
+  same major), pnpm 9.x pinned via `packageManager`; TypeScript everywhere, ESM. The
+  platform tracks a Node line that is still receiving security fixes: Node 20 reached
+  end-of-life in April 2026, and moving to the next LTS line before the current one's
+  end-of-life is a routine maintenance task, not a feature.
 - Parameterized SQL through a thin query layer; no ORM magic.
 - Secrets via env / mounted files only; never in images or the repo.
 - Structured JSON logs; health `/healthz`, readiness `/readyz`, Prometheus `/metrics`
   on **both** web and worker. `/metrics` emits the Prometheus text exposition format:
   `innobox_build_info{version,service}`, `innobox_up`, process memory/uptime gauges, and
   (worker) `innobox_worker_leader` plus notification- and scan-sweep counters. When
-  `METRICS_TOKEN` is set, `/metrics` requires `Authorization: Bearer <token>` (401 otherwise);
-  when unset it is open (local dev).
+  `METRICS_TOKEN` is set, `/metrics` requires `Authorization: Bearer <token>` (401 otherwise),
+  compared in **constant time**. When it is unset, `/metrics` is open **only outside
+  production** (local dev); in a production build (`NODE_ENV=production`) an unset token
+  **disables** the endpoint (404) rather than exposing it, so forgetting the variable can
+  never publish process details through the public proxy. `/healthz` and `/readyz` stay
+  unauthenticated (orchestrator probes) but return **only** a status word
+  (`ok` / `not_ready`) and the failing check's name — never an exception message,
+  host, role, or other connection detail; the detail goes to the structured log.
 - **Timestamps: store UTC (`timestamptz`), serialize UTC ISO, convert in the browser**
   via a shared formatter. Display style (EU dd/mm/yyyy 24h vs US mm/dd/yyyy AM/PM) is
   a platform setting (§14.3).
@@ -316,7 +326,7 @@ The delivery pipeline, pinned:
   workflow.
 - **CI (Jenkins declarative pipeline) — retained for deploy, and as the internal
   pre-deploy gate:** stages —
-  **Toolchain** (asdf-provisioned Node 20 from `.tool-versions`, corepack-pinned
+  **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
   pnpm) → **Install** (`pnpm install --frozen-lockfile`) → **Build** (recursive;
   `shared` builds first) → **Typecheck** (recursive) → **Unit tests** (recursive;
   hermetic — live-DB suites self-skip) → **DB integration tests** (parameter-gated:
@@ -348,6 +358,76 @@ The delivery pipeline, pinned:
   mistake there is no longer sufficient to open a bypass. **No evaluation/demo mode
   ships** (§19, §21.8) — precisely because the only way to build one on this flag
   would be to punch a hole in that second condition.
+  **The mistake is also loud, not silent:** a production build that finds
+  `INNOBOX_DEV_AUTH` set in its environment **refuses to start** (web logs a fatal
+  structured error naming the variable and exits non-zero). The structural guard above
+  is unchanged and remains the actual protection; the refusal exists so a bad deploy env
+  fails the `/readyz` smoke check instead of shipping a misconfiguration nobody noticed.
+
+### §2.4 Web security baseline
+
+Cross-cutting rules for every HTTP response and every API request served by the web
+tier. They sit beside the invariants (§2.1): the invariants say *what* must never leak;
+these rules close the generic web-platform paths by which it could.
+
+- **Response headers (every response, pages and API):**
+  - `Content-Security-Policy` — `default-src 'self'`; `script-src 'self' 'nonce-<per-request>'
+    'strict-dynamic'`; `style-src 'self' 'unsafe-inline'` (inline `style` attributes);
+    `img-src 'self' data: blob:`; `font-src 'self'` (fonts are self-hosted, §2.2);
+    `connect-src 'self'`; `object-src 'none'`; `base-uri 'none'`; `frame-ancestors 'none'`;
+    `form-action 'self' https://login.microsoftonline.com` (the OIDC sign-in redirect).
+    The nonce is minted per request by the middleware and applied to the framework's own
+    inline scripts and to the theme-init script, so **no** `'unsafe-inline'` script source
+    exists. Local dev additionally allows `'unsafe-eval'` and the HMR websocket — never in
+    a production build.
+  - `Strict-Transport-Security: max-age=31536000` whenever `PUBLIC_BASE_URL` is `https`
+    (no `includeSubDomains`/`preload` — those are decisions for the deployment's own
+    domain, made at the org proxy).
+  - `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` (legacy companion to
+    `frame-ancestors`), `Referrer-Policy: strict-origin-when-cross-origin`,
+    `Cross-Origin-Opener-Policy: same-origin`, and a `Permissions-Policy` that denies
+    camera, microphone, geolocation, payment, and USB.
+  - No `X-Powered-By` (web or worker).
+  - Attachment downloads add their own stricter policy (§11 *Download gateway*).
+- **Cross-site request forgery.** Session cookies are `SameSite=Lax`, which stops other
+  sites but not a sibling sub-domain of the same registrable domain. So every
+  state-changing API request (`POST`/`PUT`/`PATCH`/`DELETE` under `/api/*`, except the
+  Auth.js routes under `/api/auth/*`, which carry their own CSRF token) must carry an
+  `Origin` header equal to the origin of `PUBLIC_BASE_URL`; a missing or different
+  `Origin` is rejected with **403** before the route runs. Endpoints that take a JSON
+  body additionally require `Content-Type: application/json` (**415** otherwise), so a
+  plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
+- **Request body limits** — enforced **before** a body is read into memory (from
+  `Content-Length`, and by a running byte count when it is absent), answering **413**:
+  - JSON bodies: **1 MB**.
+  - Single-shot attachment upload (§11): the chunk size plus 64 KB of multipart
+    overhead — anything larger must use the chunked protocol anyway.
+  - Chunked-upload part (§11): the session's negotiated chunk size.
+  - The bundled reverse proxy enforces an outer cap of the maximum upload size plus
+    1 MB as a backstop; the per-route limits above are the real ones.
+- **Rate limiting** — per signed-in user, token-bucket, held in the web process
+  (v1 runs one web instance; the buckets reset on restart, which is acceptable for an
+  abuse brake). Limits:
+  - creating a challenge or solution — **30 per hour**;
+  - posting a comment — **60 per hour**;
+  - starting an upload (single-shot or chunked initiate; parts are bounded by the
+    declared size instead) — **60 per hour**;
+  - every other state-changing API request — **120 per minute**.
+  An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
+  requests — try again shortly."). Rate-limit rejections are **logged** (structured
+  warning with user id and bucket), **not audited** — a flood must not become an audit
+  flood. The limits apply to every role; a bulk triage action is one request.
+- **Existence is not disclosed.** Any request about a challenge, solution, comment, or
+  attachment the caller **cannot see** (§4.3) answers **404**, indistinguishable from a
+  number or id that does not exist. Permission (**403**) and state (**409**) checks
+  run **only after** the visibility check passes. So a probe across challenge numbers
+  cannot tell "exists in a namespace you can't see" from "doesn't exist". This
+  generalizes the rule §16 already states for admin delete.
+- **Malformed input is a 400, never a 500.** A JSON body that is not an object
+  (`null`, an array, a scalar) or does not parse is **400**. A path parameter that is
+  not a well-formed id (a non-UUID user id, a non-integer challenge number) is **404**
+  without reaching the database. Every free-text field has a maximum length; the
+  challenge **client name** is capped at **200** characters (§6.1).
 
 ---
 
@@ -527,7 +607,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`attachments`** — id, parent (challenge | solution; `parent_id` **nullable while
   staged**, §11), **`draft_key`** (nullable UUID; set only while staged, before the
   parent exists), filename, size, mime, object key, scan_status (pending | clean |
-  infected), scanned_at, uploaded_by, created_at. Rows are retained as tombstones
+  infected | unscannable), scanned_at, scan_attempts, next_scan_at, uploaded_by,
+  created_at. Rows are retained as tombstones
   (§11) and hard-deleted only inside the §10.3 cascade.
 - **`attachment_uploads`** — transient chunked-upload sessions (initiate → complete),
   §11: id, attachment_id, parent (nullable) / draft_key, filename, mime,
@@ -564,13 +645,13 @@ Reached at **`/challenges/new`**, via the **Submit a Challenge** sidebar nav ite
 (§2.2, directly above **Challenges**) — shown to every authenticated user.
 
 Form: title, description, impact area (active areas), client name (only when
-impact = Client), namespace (memberships; default `global`), visibility (default
+impact = Client; at most 200 characters, §2.4), namespace (memberships; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11), **"Submit
 anonymously"** checkbox (§9).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
-is **rejected while any staged file is still scanning or infected** when a scanner is
+is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — author auto-follows it (§12.3),
 notifications fire (§12.1 event 1), audit entry.
 
@@ -941,7 +1022,10 @@ never deleted, by anyone, for any reason (invariant 5).
   max size per upload — default **10 MB** (its floor is raised to **5 MB** — see
   chunking). Only an **allowlist** of safe content types is accepted (documents,
   images, plain text/CSV, zip); everything else — including executables and
-  scripts — is refused outright.
+  scripts — is refused outright. The type is judged by the file's **content**, not
+  only by the name and type the browser claims (see *content check* below). The
+  per-item count cap holds under concurrency: two uploads racing for the last slot
+  cannot both succeed.
 - **Chunked upload:** a file **larger than the configured chunk size** (platform
   setting, default **5 MB**, §14.3) is sliced by the browser and uploaded **one
   chunk at a time through the server**, which reassembles the chunks into the single
@@ -956,9 +1040,15 @@ never deleted, by anyone, for any reason (invariant 5).
   as its bytes are complete**, so the verdict is known within moments; a
   leader-elected **worker sweep** remains the fallback for rows left `pending`. The
   verdict moves the row to `clean` (visible per parent visibility) or `infected`
-  (blocked, uploader notified, audited).
+  (blocked, uploader notified, audited). A file the scanner keeps **failing on** — not
+  an outage, but clamd answering with an error for that particular file — is retried
+  with backoff and, after a bounded number of attempts, moves to a terminal
+  **`unscannable`** state, treated exactly like `infected` for serving (never
+  downloadable, uploader notified, audited). A file is therefore never `pending`
+  forever, and never served without a clean verdict.
 - **Submission blocks on the scan when a scanner is available:** a challenge or
-  solution cannot be submitted while any of its files is `pending` or `infected` —
+  solution cannot be submitted while any of its files is `pending`, `infected`, or
+  `unscannable` —
   the author waits for the (fast) clean verdict or removes the file, so a submitted
   item is only ever born with `clean` attachments. **If ClamAV is unavailable** (a
   live health probe fails) the platform **fails open**: submission proceeds with
@@ -971,10 +1061,12 @@ never deleted, by anyone, for any reason (invariant 5).
 
 - **Schema** (`attachments`, §5): `id` uuid, `parent_type` (challenge|solution),
   `parent_id`, `filename`, `size_bytes`, `mime`, `object_key` (unique), `scan_status`
-  (`pending`|`clean`|`infected`, default `pending`), `scanned_at`, `removed_at`,
-  `uploaded_by`, `created_at`. Indexes on `(parent_type, parent_id)` and
-  `(scan_status)`; the app DB role gets INSERT/SELECT/UPDATE (no DELETE — infected and
-  author-removed rows stay as tombstones; the MinIO object is purged in both cases).
+  (`pending`|`clean`|`infected`|`unscannable`, default `pending`), `scanned_at`,
+  `scan_attempts` int (default 0), `next_scan_at` timestamptz (nullable — the earliest
+  time the sweep may retry), `removed_at`, `uploaded_by`, `created_at`. Indexes on
+  `(parent_type, parent_id)` and `(scan_status, next_scan_at)`; the app DB role gets
+  INSERT/SELECT/UPDATE (no DELETE — infected, unscannable, and author-removed rows stay
+  as tombstones; the MinIO object is purged in all three cases).
 - **Upload-session schema** (`attachment_uploads`, new) — tracks one in-flight chunked
   upload between *initiate* and *complete*: `id` uuid (the client-facing upload id),
   `attachment_id` uuid (pre-allocated at initiate, forms the eventual `object_key`),
@@ -1000,6 +1092,20 @@ never deleted, by anyone, for any reason (invariant 5).
   - **Images** — `.png`, `.jpg`/`.jpeg`, `.gif`, `.webp` (SVG is excluded — it can
     carry script)
   - **Archives** — `.zip` (ClamAV recurses into it during the scan)
+
+  **Content check.** The extension and the claimed MIME come from the client, so the
+  server also checks the file's **leading bytes** against its extension, and rejects a
+  mismatch with **415** ("The file's contents don't match its type."):
+  - `.pdf` starts `%PDF-`; `.png` the PNG signature; `.jpg`/`.jpeg` `FF D8 FF`;
+    `.gif` `GIF87a`/`GIF89a`; `.webp` `RIFF…WEBP`; `.rtf` `{\rtf`.
+  - `.docx`/`.xlsx`/`.pptx`/`.odt`/`.ods`/`.odp`/`.zip` start with a ZIP local-file
+    header (`PK\x03\x04`).
+  - `.doc`/`.xls`/`.ppt` start with the OLE2 compound-file signature
+    (`D0 CF 11 E0 A1 B1 1A E1`).
+  - `.txt`/`.csv`/`.md` contain **no NUL byte** in their first 8 KB.
+
+  A single-shot upload is checked at upload; a chunked upload is checked on **part 1**
+  (the part carrying the file's first bytes), so a mismatched file fails fast.
 
   On success the bytes are written to MinIO — **bound** rows under
   `object_key = <parentType>/<parentId>/<attachmentId>`, **staged** rows under
@@ -1036,10 +1142,22 @@ never deleted, by anyone, for any reason (invariant 5).
     the server relays it to MinIO `UploadPart` (part `n`). Every non-final part is exactly
     `chunkSizeMb` (≥ 5 MB — the S3 multipart part floor, which is why the setting's minimum
     is 5 MB); the final part may be smaller. Only the session's `uploaded_by` may send parts.
-  - **Complete** — `POST /api/attachments/uploads/:uploadId/complete` runs
-    `CompleteMultipartUpload`, inserts the `pending` `attachments` row (bound or staged,
-    exactly as single-shot), deletes the session row, audits `attachment.uploaded`, runs the
-    **on-demand scan**, and returns the `AttachmentView`.
+    **The declared size is binding.** With `N = ceil(declared size / chunk size)` parts,
+    the server rejects (400, nothing relayed to MinIO) a part whose number is outside
+    `1…N`, a non-final part (`n < N`) that is not exactly the chunk size, and a final part
+    (`n = N`) that is not exactly `declared size − (N − 1) × chunk size`. Re-sending a part
+    number already sent (a retry) replaces it. Together these bound the stored object to
+    the declared size, which was checked against max-upload at initiate.
+  - **Complete** — `POST /api/attachments/uploads/:uploadId/complete` first **verifies the
+    assembly**: the store must hold exactly parts `1…N`, each the size the rule above
+    requires, so their sum equals the declared size. On any mismatch (a missing part, or
+    sizes that don't add up) the upload is **aborted** — `AbortMultipartUpload`, session row
+    dropped, `attachment.upload_aborted` audited with reason `size_mismatch` — and the
+    request fails with 400 `upload_incomplete`; no `attachments` row is created and the
+    client must start a new upload. On success it runs `CompleteMultipartUpload`, inserts
+    the `pending` `attachments` row (bound or staged, exactly as single-shot) with
+    `size_bytes` = the verified size, deletes the session row, audits `attachment.uploaded`,
+    runs the **on-demand scan**, and returns the `AttachmentView`.
   - **Failure** — a failed part is retried; if the file is abandoned, an **abort**
     (`POST …/abort`, or the GC) runs `AbortMultipartUpload`, frees the orphaned MinIO parts,
     drops the session row, and audits `attachment.upload_aborted`. No partial object is ever
@@ -1050,8 +1168,8 @@ never deleted, by anyone, for any reason (invariant 5).
   null`, matching `parent_type`), re-checks the §14.3 cap, sets `parent_id = <new id>`,
   clears `draft_key`, and audits `attachment.bound` per row; `object_key` is left as-is
   (no MinIO move). **Scan gate:** when a scanner is available the create is **rejected**
-  (409 `attachments_not_clean`) if any staged row for that key is still `pending` or
-  `infected` — the author must let the (on-demand) scan finish or remove the file, so a
+  (409 `attachments_not_clean`) if any staged row for that key is still `pending`,
+  `infected`, or `unscannable` — the author must let the (on-demand) scan finish or remove the file, so a
   submitted item is only ever born with `clean` attachments. When ClamAV is unavailable
   (the health probe fails) the gate is **skipped** and `pending` rows bind as before,
   scanning later. A caller can only bind rows they uploaded, so a foreign `draftKey`
@@ -1075,10 +1193,29 @@ never deleted, by anyone, for any reason (invariant 5).
   applies the verdict + `scanned_at`. **Infected** → the object is deleted from MinIO (the
   row stays as an `infected` tombstone), the uploader is notified (§12.1 event 11), and
   `attachment.scan_infected` is audited; **clean** → `attachment.scan_clean` audited.
-  Transient scan errors leave the row `pending` for the next sweep. Removed rows (staged or
-  bound) are excluded from scanning. The verdict handler is **shared** with the on-demand
-  path, so behaviour is identical whichever fires first (and the sweep is idempotent for a
-  row the web tier already resolved).
+  Removed rows (staged or bound) are excluded from scanning. The verdict handler is
+  **shared** with the on-demand path, so behaviour is identical whichever fires first
+  (and the sweep is idempotent for a row the web tier already resolved).
+- **Scan retries** — two kinds of failure are told apart:
+  - **Engine unavailable** (clamd unreachable, connection refused or reset, the health
+    probe failing): the row stays `pending`, `scan_attempts` is **not** incremented, and
+    the next sweep tries again. An outage never condemns a file.
+  - **Per-file error** (clamd answered, but with an error for this stream, or the
+    object could not be read from MinIO): `scan_attempts` is incremented and
+    `next_scan_at` is pushed out with exponential backoff (1 min, 2, 4, 8 … capped at
+    1 h). At **8** attempts the row moves to **`unscannable`**: the object is purged, the
+    uploader is notified (§12.1 event 11), and `attachment.scan_unscannable` is audited
+    with the last error class (never file content).
+
+  The sweep selects `pending` rows whose `next_scan_at` is null or past, oldest first, so
+  a file that keeps failing cannot hold back newer uploads.
+- **Scanner limits** — the shipped clamd configuration keeps its stream and scan limits
+  **at or above** the platform's maximum upload size (§14.3 allows up to 200 MB), so a
+  permitted upload is never rejected for size. It also turns **on** the alerts for
+  content the engine cannot inspect — limits exceeded inside an archive, and encrypted
+  archives or documents — which clamd then reports as a detection. Such a file is
+  therefore **`infected`** (failed scan), not silently passed: content the scanner cannot
+  see is not served.
 - **Draft GC sweep (worker)** — a second leader-elected sweep purges **abandoned staged
   uploads**: unbound rows (`parent_id is null`, `removed_at is null`) older than **24
   hours** have their MinIO object deleted and `removed_at` stamped — the row survives as
@@ -1097,26 +1234,34 @@ never deleted, by anyone, for any reason (invariant 5).
   the **sole** carve-out from the retention rule above; no other code path may DELETE
   from `attachments`.
 - **Attachment visibility** (§4.3): an attachment inherits its parent's visibility.
-  Author-**removed** rows (`removed_at` set) are never listed to anyone. `pending` and
-  `infected` rows are listed **only to the uploader** (as "scanning…" / "removed —
-  failed scan"); `clean` rows are listed to anyone who can see the parent. The list
+  Author-**removed** rows (`removed_at` set) are never listed to anyone. `pending`,
+  `infected`, and `unscannable` rows are listed **only to the uploader** (as
+  "scanning…" / "removed — failed scan" / "removed — couldn't be scanned"); `clean` rows
+  are listed to anyone who can see the parent. The list
   never exposes the uploader's identity, preserving anonymity (invariant 3) — the
   per-status affordance is decided server-side by comparing the viewer to
   `uploaded_by`, which is never sent to the client. Bytes are never served for
-  `pending`/`infected`/removed rows.
+  `pending`/`infected`/`unscannable`/removed rows.
 - **Download gateway** (invariant 4) — `GET /api/attachments/:id`: auth-required,
   re-checks parent visibility, and streams the object **only when `scan_status=clean`
   and `removed_at is null`** (Content-Disposition: attachment). Any denial (not
   visible / not clean / removed) returns the same 404 and is audited
   `attachment.download_denied`. No presigned/direct MinIO URLs are ever emitted.
+  The bytes are **streamed** from MinIO to the client, never buffered whole in memory.
+  A served attachment always carries `X-Content-Type-Options: nosniff` and
+  `Content-Security-Policy: sandbox; default-src 'none'`, on top of the §2.4 baseline.
+  So even if a file were opened in place, or pulled in by a `<script>`/`<link>` tag on
+  another page, it could not run as script or style in the app's origin.
 - **UI** — one upload control is used identically on **all three surfaces**: the §6.1
   challenge form, the §6.2 solution form, and the §13.1 detail-page author-edit section.
   Each file moves through **two visually distinct phases**: **Uploading** — a **progress
   bar** (bytes sent / total) for a chunked file, or a **spinner** for a single-shot file
   ≤ the chunk size — then **Scanning…** — an indeterminate indicator until the verdict —
-  then **Ready** (clean) or **Failed scan** (infected, removable). A file may be removed
-  at any phase. On the two **submission forms** (backed by a per-form `draftKey`) the
-  **Submit button is disabled while any file is Uploading, Scanning…, or Failed**
+  then **Ready** (clean), **Failed scan** (infected, removable), or **Couldn't be
+  scanned** (unscannable, removable — the author may try again with a different file).
+  A file may be removed at any phase. On the two **submission forms** (backed by a per-form `draftKey`) the
+  **Submit button is disabled while any file is Uploading, Scanning…, Failed, or
+  Couldn't be scanned**
   whenever scanning is enforced (`scanAvailable`); when a scanner is unavailable the gate
   lifts and still-`pending` files may be submitted. The detail-page control has no submit
   to block — a bound file simply isn't downloadable until `clean` (unchanged gateway
@@ -1156,13 +1301,29 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 | 8 | Solution implemented (auto-close) | Challenge author, authors of `not_selected` siblings, followers of the challenge and its solutions |
 | 9 | Resubmitted (`needs_improvement` → `in_review` by the author, §10.1) | Namespace admins + committee, the assignee, followers |
 | 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/followers already had it) |
-| 11 | Attachment failed its scan (§11) | The uploader |
+| 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader |
 
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
 rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`
 (`<PUBLIC_BASE_URL>/challenges/:number`, `…/solutions/:number`).
 Delivery is immediate (no digest in v1).
+
+**E-mail content safety.** A notification e-mail comes from the organization's trusted
+service mailbox, so it must not lend that trust to links a user wrote:
+- **Only links to the app itself are clickable.** In the HTML body, a URL is turned into
+  a link **only** when its origin equals `PUBLIC_BASE_URL`'s. Any other URL that appears
+  in user-written text (a challenge title, a comment excerpt) is rendered as plain,
+  escaped text: still readable and copyable, but never an anchor. The plain-text (SMTP)
+  body is unchanged; it has no anchors.
+- **The admin-authored HTML wrapper is sanitized by a real HTML parser** against an
+  explicit allowlist of e-mail-safe elements and attributes (layout tables, text
+  formatting, images, links), not by pattern matching. Anything off the list is dropped:
+  script, style, `<meta>`, `<base>`, `<link>`, forms, frames, every `on*` attribute,
+  and any URL whose scheme isn't `https`, `mailto`, or `cid`. The sanitizer runs when the
+  wrapper is saved **and** again when it is rendered, so a row stored before a sanitizer
+  change is still cleaned on use. HTML comments, including the conditional comments
+  that HTML e-mail layouts depend on, are kept as-is: browsers treat them as inert.
 
 **Admin notifications.** Wherever **namespace admins** appear as recipients
 (events 1, 2, 9, 10), **all platform admins are included too** for global oversight;
@@ -1342,7 +1503,18 @@ items I follow; latest activity (newest first, any status — fixing the legacy
 "oldest in-review only" bug); notification preference (the e-mail opt-out
 **switch**, below).
 Other users' profiles show display name, department, job title, **office location**,
-photo, and their **non-anonymous** org-visible contributions.
+photo, and their **non-anonymous** org-visible contributions. "Org-visible" is the full
+§4.3 test that an arbitrary authenticated viewer would pass, applied to **both** the item
+and, for a solution, its parent challenge:
+- a challenge is listed only if it is `org`-visible and not `awaiting_triage` or
+  `withdrawn`;
+- a solution is listed only if it is not `proposed` or `withdrawn` **and** its parent
+  challenge passes the challenge test above — so a solution whose challenge was later
+  withdrawn, or moved back to `awaiting_triage` by an admin, drops off the public profile
+  (it inherits the parent's visibility, §4.3). It reappears if the challenge becomes
+  visible again.
+
+The owner's own profile is unaffected: it lists all of their own contributions, as above.
 
 The **e-mail notifications** control is a §2.2 pill switch rather than a labelled
 button: an `On`/`Off` word, then the pill — 📧 in the knob and an `--accent` track when
@@ -1619,6 +1791,16 @@ the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
 the export; every export is audited (who, filter, row count).
 
+**CSV formula neutralization.** Every exported cell is user- or directory-supplied text
+(titles, names, impact areas), and spreadsheet applications run a cell that begins with
+a formula trigger. So any cell whose value begins with `=`, `+`, `-`, `@`, a tab, or a
+carriage return is prefixed with a single quote (`'`) **before** the usual RFC 4180
+quoting. The rule applies to **every** cell, header row included, with no per-column
+exceptions, so a new column cannot be forgotten. The visible cost is that such a value
+shows a leading `'` in tools that don't hide it (e.g. a title `- Reduce costs` exports
+as `'- Reduce costs`); the export is for people to read in a spreadsheet, not for
+machine round-tripping, so that trade-off is accepted.
+
 **Tabs — Challenges & Solutions.** The default **Challenges** tab is the queue
 described above. A second **Solutions** tab lists the namespace's **`proposed`**
 solutions — the state awaiting committee/assignee attention (§8.2) and counted by the
@@ -1836,7 +2018,9 @@ counts and the mandatory reason only, never content); every status transition
 (enforced vs override, from → to); assignment
 changes; visibility changes; anonymity reveals (admin and self); comment posted,
 edited, deleted (incl. moderator deletes); like/unlike; attachment uploaded, bound
-(staged → parent), draft-expired and **chunk-upload-aborted** (§11), scan verdict, download denials; CSV exports; settings, namespace,
+(staged → parent), draft-expired and **chunk-upload-aborted** (§11, with its reason —
+`stale`, `client_abort`, or `size_mismatch`), scan verdict (clean, infected, or
+**unscannable**), download denials; CSV exports; settings, namespace,
 impact-area create/rename/retire/delete (a delete carries `before: { name, active }` plus any reassignment target and
 per-challenge diffs), and role-mapping changes; **`presence.view`** — a platform admin
 loading the Currently online panel, with the selected window (§14.5; the one audited
@@ -1844,6 +2028,13 @@ loading the Currently online panel, with the selected window (§14.5; the one au
 filterable audit browser; a target that no longer resolves (a deleted challenge or
 solution, §10.3) renders as plain text rather than a link. Audit retains actor PII
 for provenance and is exempt from GDPR erasure (§3).
+
+**Append-only covers TRUNCATE too.** The mutation-blocking trigger is a row trigger
+(UPDATE, DELETE). `TRUNCATE` bypasses row triggers, so `audit_log` also carries a
+statement-level `BEFORE TRUNCATE` trigger that raises. The app role holds no TRUNCATE
+grant in any case; the trigger closes the path for the owner role too, so emptying the
+table requires deliberately dropping the trigger first (itself a DDL change visible in
+migrations), never an accidental `TRUNCATE`.
 
 ---
 
@@ -1871,6 +2062,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 Exact shapes are defined during implementation and documented alongside the code;
 any change to a shipped shape is a spec change first (§17). Responses apply
 visibility and anonymity masking server-side without exception (invariants 2–3).
+Every route also follows the §2.4 baseline: the `Origin` check on state-changing
+requests, the body-size limits, rate limiting (**429** with `Retry-After`), 404 for
+anything the caller can't see, and 400 (never 500) for malformed input.
 
 ---
 

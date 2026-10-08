@@ -6,10 +6,12 @@ import "@fontsource-variable/open-sans/index.css";
 import "@fontsource-variable/jetbrains-mono/index.css";
 import "./globals.css";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 import { Providers } from "@/components/Providers";
 import { DateFormatProvider } from "@/components/DateFormat";
 import { AppShell } from "@/components/AppShell";
+import { NONCE_HEADER } from "@/lib/security-headers";
 
 const DESCRIPTION =
   "Challenge & solution management — raise challenges, propose solutions, drive them to implementation.";
@@ -42,14 +44,18 @@ export const metadata: Metadata = {
 };
 
 // Runs before paint (blocking, first thing in <body>) so the page never flashes the wrong
-// theme: an explicit user choice from localStorage wins, otherwise follow the OS.
+// theme: an explicit user choice from localStorage wins, otherwise follow the OS. It carries the
+// per-request CSP nonce the middleware minted (§2.4 — the CSP has no 'unsafe-inline' script
+// source); reading the request header also keeps every page dynamically rendered, which a
+// per-request nonce requires (a statically prerendered page could not carry one).
 const THEME_INIT = `(function(){try{var s=localStorage.getItem("innobox.theme");var t=s==="light"||s==="dark"?s:window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","light");}})();`;
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
         <Providers>
           <DateFormatProvider>
             <AppShell>{children}</AppShell>

@@ -4,6 +4,8 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getOwnProfile, setEmailNotificationsEnabled } from "./store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -19,14 +21,13 @@ export async function GET(): Promise<Response> {
 export async function PATCH(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const enabled = (body as Record<string, unknown>).emailNotificationsEnabled;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const enabled = body.emailNotificationsEnabled;
   if (typeof enabled !== "boolean") {
     return Response.json({ error: "emailNotificationsEnabled must be a boolean" }, { status: 400 });
   }

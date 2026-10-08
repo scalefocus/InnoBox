@@ -10,8 +10,9 @@
 import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
-import { parseEmailTokenKey, renderMetrics, metricsAuthorized, type GraphMailEnv } from "@innobox/shared";
+import { parseEmailTokenKey, type GraphMailEnv } from "@innobox/shared";
 import { createScimRouter } from "./scim/router.js";
+import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep, type SmtpEnv } from "./notifications/dispatch.js";
@@ -19,49 +20,47 @@ import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps,
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
 import { runPresenceRollupSweep } from "./presence/rollup.js";
-import { recordNotificationSweep, recordScanSweep, setLeader, workerMetricsSamples } from "./metrics.js";
+import {
+  createMetricsHandler,
+  createReadyzHandler,
+  healthzHandler,
+  recordNotificationSweep,
+  recordScanSweep,
+  setLeader,
+} from "./metrics.js";
+
+// ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
+// and change group membership, so a missing or short (< 32 chars) value refuses to start. The
+// fatal log names the variable, never its value.
+const scimTokenCheck = checkScimBearerToken(process.env.SCIM_BEARER_TOKEN);
+if (!scimTokenCheck.ok) {
+  console.error(scimTokenFatalLog(scimTokenCheck.reason));
+  process.exit(1);
+}
+const scimToken = scimTokenCheck.token;
 
 const port = Number(process.env.WORKER_PORT ?? 4000);
 const app = express();
+app.disable("x-powered-by"); // §2.4: no X-Powered-By on the worker either
 
 // DB pool (phase 1): used by SCIM endpoints, leader election, and reconciliation.
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error("DATABASE_URL required");
 const pool = new Pool({ connectionString: dbUrl });
 
-// Liveness — the process is up.
-app.get("/healthz", (_req, res) => {
-  res.json({ status: "ok", version: APP_VERSION });
-});
+// Liveness — the process is up. Body is the status word only (§2).
+app.get("/healthz", healthzHandler);
 
-// Readiness — safe to receive traffic.
-// Phase 1: checks DB connectivity and whether this instance holds the leader lock.
+// Readiness — safe to receive traffic: DB connectivity and whether this instance holds the
+// leader lock. Body is the status word + failing check's name; detail goes to the log (§2).
 let isLeader = false;
-app.get("/readyz", async (_req, res) => {
-  try {
-    await pool.query("select 1");
-    const ready = isLeader;
-    res.status(ready ? 200 : 503).json({
-      status: ready ? "ready" : "not_leader",
-      leader: isLeader,
-    });
-  } catch {
-    res.status(503).json({ status: "db_error" });
-  }
-});
+app.get("/readyz", createReadyzHandler({ pingDb: () => pool.query("select 1"), isLeader: () => isLeader }));
 
-// Prometheus metrics (§2 observability). Bearer-token-guarded when METRICS_TOKEN is set.
-app.get("/metrics", (req, res) => {
-  if (!metricsAuthorized(req.header("authorization"), process.env.METRICS_TOKEN)) {
-    res.status(401).type("text/plain").send("unauthorized\n");
-    return;
-  }
-  res.status(200).type("text/plain; version=0.0.4").send(renderMetrics(workerMetricsSamples()));
-});
+// Prometheus metrics (§2 observability). Constant-time bearer gate when METRICS_TOKEN is set;
+// unset → open in dev, disabled (404) in production.
+app.get("/metrics", createMetricsHandler());
 
 // Mount SCIM 2.0 server (phase 1) at /scim/v2 per ENTRA_AUTH_SPEC.md §3.
-const scimToken = process.env.SCIM_BEARER_TOKEN;
-if (!scimToken) throw new Error("SCIM_BEARER_TOKEN required");
 app.use("/scim/v2", createScimRouter(pool, { bearerToken: scimToken }));
 
 // Start the server before leader election (health checks must work immediately).

@@ -3,7 +3,8 @@
 // uploaded BEFORE the parent exists, keyed by a client-generated `draftKey`; on submit the parent
 // form posts that same draftKey and the API binds these rows to the new item. Each file moves
 // through two distinct phases — Uploading (a progress bar for a chunked file > the chunk size, a
-// spinner for a single-shot file) then Scanning… → Ready / Failed scan. While a scanner is
+// spinner for a single-shot file) then Scanning… → Ready / Failed scan / Couldn't be scanned (the
+// last two removable, so the author can drop the file and try another). While a scanner is
 // available the parent form's Submit stays disabled until every file is Ready (via `onBusyChange`);
 // when unavailable the platform fails open. Bytes are never served for a staged row, so filenames
 // are plain text (no download link).
@@ -15,7 +16,7 @@ export interface StagedAttachmentItem {
   id: string;
   filename: string;
   sizeBytes: number;
-  status: "pending" | "clean" | "infected";
+  status: "pending" | "clean" | "infected" | "unscannable";
   isUploader: boolean;
   createdAt: string;
 }
@@ -118,9 +119,10 @@ export function StagedAttachments({
   }, [hasPending, refresh]);
 
   // Tell the parent when Submit must stay disabled: a file is uploading, or — when scanning is
-  // enforced — any file is still scanning or failed (§11 scan gate). Fails open when unavailable.
+  // enforced — any file is still scanning, failed its scan, or couldn't be scanned (§11 scan
+  // gate). Fails open when unavailable.
   const scanEnforced = config?.scanEnforced ?? false;
-  const busy = active !== null || (scanEnforced && items.some((a) => a.status === "pending" || a.status === "infected"));
+  const busy = active !== null || (scanEnforced && items.some((a) => a.status !== "clean"));
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
@@ -186,11 +188,10 @@ export function StagedAttachments({
               {a.status === "pending" && <span className="chip">Scanning…</span>}
               {a.status === "clean" && <span className="pill pill-ok">Ready</span>}
               {a.status === "infected" && <span className="pill pill-danger">Failed scan</span>}
-              {a.status !== "infected" && (
-                <button type="button" className="btn btn-sm btn-danger" disabled={disabled || uploading} onClick={() => remove(a.id)}>
-                  Remove
-                </button>
-              )}
+              {a.status === "unscannable" && <span className="pill pill-danger">Couldn&apos;t be scanned</span>}
+              <button type="button" className="btn btn-sm btn-danger" disabled={disabled || uploading} onClick={() => remove(a.id)}>
+                Remove
+              </button>
             </li>
           ))}
           {active && (

@@ -2,7 +2,7 @@
 // (INNOBOX_SPEC.md §2.3) Mirrors the GitHub Actions CI workflow and deploys via Docker remote context (no registry).
 //
 // AGENT PREREQUISITES (label: linux):
-//   - asdf with nodejs 20+ plugin, Docker Engine + the `docker compose` plugin, git, ssh.
+//   - asdf with the nodejs plugin (Node 24, from .tool-versions), Docker Engine + the `docker compose` plugin, git, ssh.
 //
 // JENKINS CREDENTIALS (create these in Jenkins → Credentials, then adjust the IDs):
 //   - innobox-deploy-env  : "Secret file"   → the production deploy/.env (secrets; never in git)
@@ -64,7 +64,7 @@ pipeline {
       steps {
         sh '''
           set -eu
-          # Activate asdf and install the Node version declared in .tool-versions (or latest 20).
+          # Activate asdf and install the Node version declared in .tool-versions (Node 24 LTS).
           . "${HOME}/.asdf/asdf.sh"
           asdf plugin add nodejs || true
           asdf install nodejs   # reads .tool-versions; falls back gracefully if already installed

@@ -4,17 +4,18 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { createImpactArea } from "../store";
 import { parseImpactAreaCreate } from "../validation";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
   const parsed = parseImpactAreaCreate(body);
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 

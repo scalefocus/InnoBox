@@ -11,6 +11,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.27.1",
+    date: "2026-10-08",
+    summary:
+      "A notification whose text contains an unusually long run of punctuation inside a link no longer slows down e-mail rendering.",
+  },
+  {
+    version: "0.27.0",
+    date: "2026-10-08",
+    summary:
+      "Security hardening across the app. Attachments are now checked by their actual contents, large uploads must match the size they declared, and a file the virus scanner can't check is marked \"Couldn't be scanned\" instead of waiting forever — encrypted archives are refused for the same reason. Items you can't see now look exactly like items that don't exist, a solution on a withdrawn challenge no longer shows on its author's public profile, and spreadsheet exports can no longer smuggle in formulas. Notification e-mails only link back to InnoBox itself, and very rapid repeated actions are briefly slowed down.",
+  },
+  {
     version: "0.26.2",
     date: "2026-10-08",
     summary:

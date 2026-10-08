@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type Request, type Response } from "express";
+import { checkScimBearerToken, scimTokenFatalLog, SCIM_TOKEN_MIN_LENGTH } from "./token.js";
 
 // Copied from router.ts — export these from there to avoid duplication if desired.
 function safeTokenEqual(provided: string, expected: string): boolean {
@@ -130,4 +131,33 @@ test("bearerAuth: does not leak token in error response", (t, done) => {
     }),
   } as any;
   middleware(req, res, () => done(new Error("should not call next()")));
+});
+
+// ── SCIM_BEARER_TOKEN minimum length (ENTRA_AUTH_SPEC.md §3 *Auth*) ─────────────────────
+
+test("checkScimBearerToken: missing or empty token is refused", () => {
+  assert.deepStrictEqual(checkScimBearerToken(undefined), { ok: false, reason: "missing" });
+  assert.deepStrictEqual(checkScimBearerToken(null), { ok: false, reason: "missing" });
+  assert.deepStrictEqual(checkScimBearerToken(""), { ok: false, reason: "missing" });
+});
+
+test("checkScimBearerToken: shorter than 32 characters is refused, 32+ accepted", () => {
+  assert.strictEqual(SCIM_TOKEN_MIN_LENGTH, 32);
+  assert.deepStrictEqual(checkScimBearerToken("x".repeat(31)), { ok: false, reason: "too_short" });
+  assert.deepStrictEqual(checkScimBearerToken("x".repeat(32)), { ok: true, token: "x".repeat(32) });
+  const generated = "q".repeat(64); // the length `openssl rand -base64 48` yields
+  assert.deepStrictEqual(checkScimBearerToken(generated), { ok: true, token: generated });
+});
+
+test("scimTokenFatalLog: names the variable, never the value", () => {
+  const secret = "short-secret-value";
+  const check = checkScimBearerToken(secret);
+  assert.strictEqual(check.ok, false);
+  if (check.ok) return;
+  const line = scimTokenFatalLog(check.reason);
+  const parsed = JSON.parse(line) as { level: string; variable: string; msg: string };
+  assert.strictEqual(parsed.level, "fatal");
+  assert.strictEqual(parsed.variable, "SCIM_BEARER_TOKEN");
+  assert.match(parsed.msg, /SCIM_BEARER_TOKEN/);
+  assert.strictEqual(line.includes(secret), false);
 });

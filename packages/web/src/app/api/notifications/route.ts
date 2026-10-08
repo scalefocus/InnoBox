@@ -4,6 +4,7 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getInbox, markAllRead } from "./store";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,8 @@ export async function GET(): Promise<Response> {
 export async function PATCH(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   await markAllRead(pool, gate.user.id);
   return Response.json({ ok: true });
 }
