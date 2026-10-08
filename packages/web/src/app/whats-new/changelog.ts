@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.38.0",
+    date: "2026-10-08",
+    summary:
+      "Behind the scenes: operators can now run the browser security policy in report-only mode while checking a new deployment, and violations are counted for monitoring. Nothing changes in how InnoBox looks or works.",
+  },
+  {
     version: "0.37.0",
     date: "2026-10-08",
     summary:

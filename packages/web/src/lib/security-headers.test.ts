@@ -7,9 +7,13 @@ import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
   canonicalBaseUrl,
+  CSP_REPORT_GROUP,
+  CSP_REPORT_PATH,
   generateNonce,
   HSTS_VALUE,
   isAttachmentDownload,
+  reportingEndpoints,
+  reportingOrigin,
   STATIC_SECURITY_HEADERS,
   strictTransportSecurity,
 } from "./security-headers";
@@ -51,6 +55,26 @@ test("dev adds 'unsafe-eval' and the HMR websocket, nothing else", () => {
   assert.deepEqual(d.get("script-src"), ["'self'", "'nonce-n'", "'strict-dynamic'", "'unsafe-eval'"]);
   assert.deepEqual(d.get("connect-src"), ["'self'", "ws:", "wss:"]);
   assert.ok(!d.get("script-src")!.includes("'unsafe-inline'"));
+});
+
+test("report: appends report-uri + report-to naming the sink, and changes nothing else", () => {
+  const plain = buildContentSecurityPolicy({ nonce: "n", dev: false });
+  const reporting = buildContentSecurityPolicy({ nonce: "n", dev: false, report: true });
+  const d = directives(reporting);
+  assert.deepEqual(d.get("report-uri"), ["/api/csp-report"]);
+  assert.deepEqual(d.get("report-to"), ["csp"]);
+  assert.equal(d.size, 12);
+  assert.equal(reporting, `${plain}; report-uri ${CSP_REPORT_PATH}; report-to ${CSP_REPORT_GROUP}`);
+  assert.ok(!/report-/.test(plain));
+});
+
+test("Reporting-Endpoints: the canonical origin, the request origin only in dev, else none", () => {
+  assert.equal(reportingOrigin("https://innobox.example.com/some/path", "http://web:3000", false), "https://innobox.example.com");
+  assert.equal(reportingOrigin("https://innobox.example.com", "http://localhost:3000", true), "https://innobox.example.com");
+  assert.equal(reportingOrigin(undefined, "http://localhost:3000", true), "http://localhost:3000");
+  assert.equal(reportingOrigin(undefined, "http://web:3000", false), null);
+  assert.equal(reportingOrigin("not a url", "http://web:3000", false), null);
+  assert.equal(reportingEndpoints("https://innobox.example.com"), 'csp="https://innobox.example.com/api/csp-report"');
 });
 
 test("without a nonce, scripts are same-origin only (no 'strict-dynamic' without a nonce to anchor it)", () => {

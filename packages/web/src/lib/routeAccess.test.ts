@@ -19,6 +19,13 @@ test("health probes, metrics, static assets, and Auth.js endpoints are public", 
   assert.equal(isPublicPath("/_next/static/chunk.js"), true);
 });
 
+test("the CSP report sink is the one public API route — exact path only", () => {
+  assert.equal(isPublicPath("/api/csp-report"), true);
+  assert.equal(isPublicPath("/api/csp-report/"), false);
+  assert.equal(isPublicPath("/api/csp-report/anything"), false);
+  assert.equal(isPublicPath("/api/csp-reports"), false);
+});
+
 test("static brand images under /brand/ are public (the sidebar logo shows on the signed-out landing)", () => {
   assert.equal(isPublicPath("/brand/innobox-light.png"), true);
   assert.equal(isPublicPath("/brand/innobox-dark.png"), true);

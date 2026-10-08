@@ -125,6 +125,12 @@ services:
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # §2.4 Content-Security-Policy mode: enforce (default) | report-only. "off" (and any
+      # unrecognised value) makes a production build refuse to start.
+      CSP_MODE: ${CSP_MODE:-enforce}
+      # Same value as the worker: the CSP report sink (/api/csp-report) rate-limits per client IP,
+      # read from X-Forwarded-For behind the one-hop Caddy proxy.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
       # §12 email channel: token encryption key (shared with the worker) + SMTP_HOST so the
       # admin card's status pill can tell "SMTP fallback" from "email down".
       # ENTRA_EMAIL_CLIENT_ID/SECRET come from the dedicated "InnoBox Email" app registration
