@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.36.1",
+    date: "2026-10-08",
+    summary:
+      "Menus and pop-ups now open with the same quick, subtle animation everywhere, including the search suggestions under the top bar, and they share one consistent look. If your device is set to reduce motion, they simply appear.",
+  },
+  {
     version: "0.36.0",
     date: "2026-10-08",
     summary:

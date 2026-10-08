@@ -135,8 +135,11 @@ export const TopbarSearch = forwardRef<TopbarSearchHandle>(function TopbarSearch
       <kbd className="search-hint" aria-hidden="true">
         {isMac ? "⌘K" : "Ctrl+K"}
       </kbd>
+      {/* A popover (INNOBOX_SPEC.md §2.2, §13.4): `.menu-pop` fades + scales it in once, when it
+          first appears. This <ul> must stay the same mounted element while results refresh (no
+          key, no wrapper that toggles), so the open animation never replays as you type. */}
       {open && query.trim().length >= 2 && (
-        <ul className="search-ac">
+        <ul className="search-ac menu-pop">
           {!hasResults && (
             <li className="search-ac-empty">
               No matches for <span className="mono">{query}</span>
