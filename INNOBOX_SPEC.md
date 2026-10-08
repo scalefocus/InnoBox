@@ -368,8 +368,8 @@ The delivery pipeline, pinned:
   repository is public the clone and fetch are **anonymous** — the pipeline carries no
   git token (§21.4) and re-points an existing checkout's `origin` on every deploy.
 - **CI (GitHub Actions — `.github/workflows/ci.yml`):** runs on every push and pull
-  request. Mirrors the Jenkins CI stages below (install → build → typecheck → unit
-  tests), which is what a reader of the public repository can actually see and what
+  request. Mirrors the Jenkins CI stages below (install → build → typecheck → lint →
+  unit tests), which is what a reader of the public repository can actually see and what
   proves the tree is green. The **live-DB integration suite** runs on a `postgres:16`
   service container with the least-privilege app role created and all
   `db/migrations/*.sql` applied in order. `.gitlab-ci.yml` is removed — it mirrors
@@ -379,7 +379,7 @@ The delivery pipeline, pinned:
   pre-deploy gate:** stages —
   **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
   pnpm) → **Install** (`pnpm install --frozen-lockfile`) → **Build** (recursive;
-  `shared` builds first) → **Typecheck** (recursive) → **Unit tests** (recursive;
+  `shared` builds first) → **Typecheck** (recursive) → **Lint** (recursive) → **Unit tests** (recursive;
   hermetic — live-DB suites self-skip) → **DB integration tests** (parameter-gated:
   ephemeral `postgres:16-alpine` container, least-privilege app role created,
   all `db/migrations/*.sql` applied in order, integration suites run against it,

@@ -11,6 +11,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.44.1",
+    date: "2026-10-08",
+    summary: "Behind-the-scenes code-quality fixes; nothing changes in how InnoBox works.",
+  },
+  {
     version: "0.44.0",
     date: "2026-10-08",
     summary:

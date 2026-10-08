@@ -2,6 +2,7 @@
 # a reader of the public repository can actually see and re-run.
 #
 #   typecheck : type-check every package
+#   lint      : ESLint every package (warnings report, errors fail)
 #   test      : hermetic unit tests (the live-DB suites gated-skip here)
 #   db-test   : the gated live-DB suite against a real Postgres service
 #   build     : production build of the UI (proves the standalone server compiles)
@@ -44,6 +45,20 @@ jobs:
       # which a fresh checkout does not have — build it first or typecheck cannot resolve it.
       - run: pnpm --filter @innobox/shared build
       - run: pnpm -r typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r lint
 
   test:
     runs-on: ubuntu-latest
