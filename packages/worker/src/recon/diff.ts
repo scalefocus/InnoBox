@@ -19,6 +19,18 @@ export type GraphUser =
       officeLocation: string | null;
     };
 
+/**
+ * Normalizes a directory-profile attribute (department, job title, office location) from Graph:
+ * absent, empty, or whitespace-only → NULL; otherwise the trimmed value. Entra can hand back ""
+ * for a cleared attribute, and §3 requires that clearing it upstream clears it here — a stored
+ * empty string would render as a blank label instead of no label.
+ */
+export function directoryAttr(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 /** The local `users` columns reconciliation may refresh (spec §4 / §5 pass step 1). */
 export interface LocalUserAttrs {
   userName: string;
@@ -63,9 +75,13 @@ export function computeUserHeal(local: LocalUserAttrs, graph: GraphUser): UserHe
   if (graph.mail !== local.email) patch.email = graph.mail;
   // Directory profile (§13.8): refreshed unconditionally like every other attribute here — a
   // Graph value that is absent or empty writes NULL, so clearing it upstream clears it locally.
-  if (graph.department !== local.department) patch.department = graph.department;
-  if (graph.jobTitle !== local.jobTitle) patch.job_title = graph.jobTitle;
-  if (graph.officeLocation !== local.officeLocation) patch.office_location = graph.officeLocation;
+  // Normalized here too (graph.ts already does), so an empty string can never be written.
+  const department = directoryAttr(graph.department);
+  const jobTitle = directoryAttr(graph.jobTitle);
+  const officeLocation = directoryAttr(graph.officeLocation);
+  if (department !== local.department) patch.department = department;
+  if (jobTitle !== local.jobTitle) patch.job_title = jobTitle;
+  if (officeLocation !== local.officeLocation) patch.office_location = officeLocation;
 
   return Object.keys(patch).length > 0 ? { action: "refresh", patch } : { action: "none" };
 }

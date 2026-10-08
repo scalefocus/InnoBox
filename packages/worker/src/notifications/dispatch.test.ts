@@ -7,7 +7,7 @@
 // email/email_notifications_enabled directly (a "missing user" row just has both null).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runNotificationSweep } from "./dispatch.js";
+import { emailRetryDelayMinutes, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
 
 interface FakeRow {
   [key: string]: unknown;
@@ -15,9 +15,11 @@ interface FakeRow {
 
 function makeFakePool(outbox: FakeRow[]) {
   const updates: { sql: string; params: unknown[] }[] = [];
+  const selects: { sql: string; params: unknown[] }[] = [];
   const pool = {
     query: async (sql: string, params: unknown[] = []) => {
       if (sql.includes("from notification_outbox")) {
+        selects.push({ sql, params });
         return { rows: outbox, rowCount: outbox.length };
       }
       if (sql.startsWith("update notification_outbox")) {
@@ -27,7 +29,7 @@ function makeFakePool(outbox: FakeRow[]) {
       throw new Error(`unexpected query: ${sql}`);
     },
   };
-  return { pool, updates };
+  return { pool, updates, selects };
 }
 
 test("runNotificationSweep: no pending rows returns a zeroed summary without querying users", async () => {
@@ -103,4 +105,35 @@ test("runNotificationSweep: a missing user row (deleted between write and sweep)
   ]);
   const summary = await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
   assert.deepEqual(summary, { sent: 0, skippedOptOut: 1, failed: 0 });
+});
+
+test("emailRetryDelayMinutes: exponential 1, 2, 4, 8 … minutes, capped at 60", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 7, 20].map(emailRetryDelayMinutes), [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+  assert.equal(emailRetryDelayMinutes(-1), 1, "a nonsensical count never yields a sub-minute delay");
+});
+
+test("runNotificationSweep: a failure backs off next_attempt_at by the row's attempt count", async () => {
+  const { pool, updates } = makeFakePool([
+    {
+      id: "o1",
+      user_id: "u1",
+      type: "comment_posted",
+      payload: { message: "hi", link: "/challenges/1" },
+      attempts: 3,
+      email: "a@b.com",
+      email_notifications_enabled: true,
+    },
+  ]);
+  await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
+  assert.equal(updates.length, 1);
+  assert.match(updates[0]!.sql, /next_attempt_at = now\(\) \+ make_interval\(mins => \$3::int\)/);
+  assert.equal(updates[0]!.params[2], 8, "the 4th failure waits 8 minutes");
+});
+
+test("runNotificationSweep: only due failed rows below the attempt cap are selected", async () => {
+  const { pool, selects } = makeFakePool([]);
+  await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
+  assert.equal(selects.length, 1);
+  assert.match(selects[0]!.sql, /o\.next_attempt_at is null or o\.next_attempt_at <= now\(\)/);
+  assert.equal(selects[0]!.params[1], MAX_EMAIL_ATTEMPTS);
 });

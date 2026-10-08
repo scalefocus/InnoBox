@@ -98,3 +98,19 @@ test("runUploadGcSweep: a failed multipart abort does not abort the sweep — th
   assert.deepEqual(summary, { aborted: 1, errors: 0 }, "a failed abort is logged, not fatal");
   assert.equal(deletes.length, 1, "the session row is still deleted");
 });
+
+test("runUploadGcSweep: without object-store config (s3 null) the DB side still runs — row reaped, abort recorded as skipped", async () => {
+  const { pool, deletes, audits } = makeFakePool([staleSession]);
+  const summary = await runUploadGcSweep(pool as never, { s3: null });
+  assert.deepEqual(summary, { aborted: 1, errors: 0 });
+  assert.equal(deletes.length, 1, "the stale session row is deleted without S3");
+  assert.equal(audits.length, 1, "the reap is audited");
+  assert.match(JSON.stringify(audits[0]), /\\"multipartAborted\\":false/, "the audit records that no abort happened");
+});
+
+test("runUploadGcSweep: a successful abort is recorded in the audit", async () => {
+  const { pool, audits } = makeFakePool([staleSession]);
+  const { s3 } = fakeS3();
+  await runUploadGcSweep(pool as never, { s3 });
+  assert.match(JSON.stringify(audits[0]), /\\"multipartAborted\\":true/);
+});

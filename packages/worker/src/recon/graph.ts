@@ -3,7 +3,7 @@
 // spec §3) cached until expiry minus skew, plus the three read helpers the pass needs.
 // Global fetch; access tokens and Authorization headers are NEVER logged — errors carry
 // only the HTTP status and a truncated Entra error body (error codes, no credentials).
-import type { GraphUser } from "./diff.js";
+import { directoryAttr, type GraphUser } from "./diff.js";
 
 export type { GraphUser };
 
@@ -121,9 +121,10 @@ export function createGraphClient(env: GraphEnv): GraphClient {
         displayName: j.displayName ?? "",
         userPrincipalName: j.userPrincipalName ?? "",
         mail: j.mail ?? null,
-        department: j.department ?? null,
-        jobTitle: j.jobTitle ?? null,
-        officeLocation: j.officeLocation ?? null,
+        // Directory profile: absent, empty or whitespace-only → NULL (§3 — clearing upstream clears it).
+        department: directoryAttr(j.department),
+        jobTitle: directoryAttr(j.jobTitle),
+        officeLocation: directoryAttr(j.officeLocation),
       };
     },
 
