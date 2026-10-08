@@ -155,10 +155,14 @@ test(
 
       // Drive the §8.3 auto-close: winner → implemented solves the challenge, sibling closes.
       for (const st of ["in_review", "valid", "accepted_internally", "waiting_for_resources", "in_implementation", "implemented"]) {
+        // Like the winner on its last open step: once it is implemented the challenge is solved
+        // and likes are frozen (§8.3).
+        if (st === "implemented") {
+          assert.equal((await toggleLike(pool, rival, "solution", winnerId)).status, "ok", "the advancing winner is visible to the rival");
+        }
         const r = await setSolutionStatus(pool, platformAdmin, winnerNum, st);
         assert.equal(r.status, "ok", `winner → ${st}`);
       }
-      assert.equal((await toggleLike(pool, rival, "solution", winnerId)).status, "ok", "the implemented winner is visible to the rival");
       const solvedRow = await pool.query<{ status: string; resolved_at: Date | null }>(`select status, resolved_at from challenges where id = $1`, [
         challengeId,
       ]);

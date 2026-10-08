@@ -35,6 +35,8 @@ test("core journey: submit → triage → propose", async ({ browser }) => {
   await author.waitForURL(/\/challenges\/\d+$/);
   const number = author.url().match(/\/challenges\/(\d+)$/)![1];
   await expect(author.locator(".pill", { hasText: "Awaiting triage" })).toBeVisible();
+  // §13.1: "Propose a solution" is visible to everyone but enabled only once the challenge is valid.
+  await expect(author.getByRole("button", { name: "Propose a solution" })).toBeDisabled();
 
   // ── 2. A platform admin triages the challenge to `valid` via the override control. ──
   const adminCtx = await browser.newContext();

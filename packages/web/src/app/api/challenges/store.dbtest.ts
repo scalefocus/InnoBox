@@ -176,13 +176,9 @@ test(
       await assertAudited(pool, "challenge.status_changed", created.challenge.id); // the auto-close row
       await assertAudited(pool, "solution.status_changed", sol2.solution.id); // the auto-closed sibling
 
-      // 11. Likes toggle: on, then off, audited both ways.
-      const liked = await toggleLike(pool, member, "challenge", created.challenge.id);
-      assert.deepEqual(liked, { status: "ok", liked: true, count: 1 });
-      await assertAudited(pool, "like.added", created.challenge.id);
-      const unliked = await toggleLike(pool, member, "challenge", created.challenge.id);
-      assert.deepEqual(unliked, { status: "ok", liked: false, count: 0 });
-      await assertAudited(pool, "like.removed", created.challenge.id);
+      // 11. Likes are frozen on the now-solved challenge (§8.3) — the full toggle is covered on
+      //     an open challenge in likes-frozen.dbtest.ts.
+      assert.deepEqual(await toggleLike(pool, member, "challenge", created.challenge.id), { status: "frozen" });
 
       // 12. Anonymity masking is total — even the author's own view shows "Anonymous".
       const anon = await createChallenge(pool, author, {

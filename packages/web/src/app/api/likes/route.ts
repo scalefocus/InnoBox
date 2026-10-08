@@ -1,6 +1,7 @@
 // POST /api/likes (INNOBOX_SPEC.md §13.1, likes pulled forward from Phase 3): toggle
 // like/unlike on a challenge or solution. Comments and likes are never anonymous (§9) —
 // the like itself always records the real user, only the ITEM's authorship may be masked.
+// Likes are frozen once the challenge is solved (§8.3) — refused with 409.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { parseLikeToggle } from "../challenges/validation";
@@ -29,6 +30,10 @@ async function handlePOST(req: Request): Promise<Response> {
   );
   if (result.status === "not_found") {
     return Response.json({ error: "not found" }, { status: 404 });
+  }
+  if (result.status === "frozen") {
+    // §8.3: a solved challenge freezes likes (on it and its solutions); counts stay as they are.
+    return Response.json({ error: "likes are closed on a solved challenge" }, { status: 409 });
   }
   return Response.json({ liked: result.liked, count: result.count });
 }
