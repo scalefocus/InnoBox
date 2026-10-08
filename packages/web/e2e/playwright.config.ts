@@ -15,8 +15,8 @@ const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 // the dev server is already started + health-checked on the host by the job. Without this, a host
 // server that dies between the job's curl check and Playwright's probe would make Playwright try to
 // spawn `pnpm …` inside the image (ENOENT) and mis-report it as "webServer was not able to start";
-// omitting the block makes it fail fast with a clear connection error instead. Locally and in
-// GitLab (pnpm present) the block stays and reuses the already-listening server.
+// omitting the block makes it fail fast with a clear connection error instead. Locally (pnpm
+// present) the block stays and reuses the already-listening server.
 const webServer =
   process.env.E2E_NO_WEBSERVER === "1"
     ? undefined
@@ -54,8 +54,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
     // Jenkins runs the suite inside the official Playwright image as the agent's non-root uid,
     // where Chromium's user-namespace sandbox can't start; E2E_NO_SANDBOX=1 disables it there
-    // (throwaway CI container). Unset locally and in GitLab (root container — Playwright already
-    // runs Chromium sandbox-less as root).
+    // (throwaway CI container). Unset locally.
     ...(process.env.E2E_NO_SANDBOX === "1" ? { chromiumSandbox: false } : {}),
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],

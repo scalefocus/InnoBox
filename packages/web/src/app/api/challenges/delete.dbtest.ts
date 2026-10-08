@@ -35,7 +35,7 @@ test(
   { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
   async () => {
     const { Pool, randomUUID } = await importDeps();
-    const { buildRoleSet } = await import("@innobox/shared");
+    const { buildRoleSet, validateDeleteReason } = await import("@innobox/shared");
     const { createChallenge, createSolution, listActiveImpactAreas, setChallengeStatus, setSolutionStatus, toggleLike } = await import("./store");
     const { deleteChallenge, deleteSolution } = await import("./delete");
 
@@ -179,7 +179,12 @@ test(
       assert.equal((await deleteChallenge(deps, platformAdmin, "99999999", "nope")).status, "not_found");
 
       // ── 2. Delete the implemented solution ──────────────────────────────────────────────
-      const delSol = await deleteSolution(deps, platformAdmin, winnerNum, "  contained a client contract  ");
+      // The route trims the reason (validateDeleteReason) before the store sees it; mirror that
+      // here so the audit assertion below exercises the same input path.
+      const reason = validateDeleteReason("  contained a client contract  ");
+      assert.ok(reason.ok);
+      if (!reason.ok) return;
+      const delSol = await deleteSolution(deps, platformAdmin, winnerNum, reason.value);
       assert.equal(delSol.status, "ok");
       if (delSol.status !== "ok") return;
       assert.equal(delSol.challengeRevertedToValid, true);
