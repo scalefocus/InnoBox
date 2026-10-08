@@ -101,8 +101,9 @@ test(
       const winnerNum = winner.solution.number.replace("SOL-", "");
 
       // Children on both the challenge and its solutions.
-      await toggleLike(pool, rival, "challenge", challengeId);
-      await toggleLike(pool, rival, "solution", winnerId);
+      // (The winner's like waits until it leaves `proposed` below — a proposed solution is
+      // invisible to the rival, so liking it now would be refused as not_found.)
+      assert.equal((await toggleLike(pool, rival, "challenge", challengeId)).status, "ok");
       for (const [parentType, parentId] of [
         ["challenge", challengeId],
         ["solution", winnerId],
@@ -155,6 +156,7 @@ test(
         const r = await setSolutionStatus(pool, platformAdmin, winnerNum, st);
         assert.equal(r.status, "ok", `winner → ${st}`);
       }
+      assert.equal((await toggleLike(pool, rival, "solution", winnerId)).status, "ok", "the implemented winner is visible to the rival");
       const solvedRow = await pool.query<{ status: string; resolved_at: Date | null }>(`select status, resolved_at from challenges where id = $1`, [
         challengeId,
       ]);
