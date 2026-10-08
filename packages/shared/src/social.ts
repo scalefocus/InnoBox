@@ -47,6 +47,8 @@ export const NOTIFICATION_TYPES = [
   "challenge_unassigned",
   "solution_implemented",
   "attachment_scan_failed",
+  // §14.7: the platform admins' coalesced system-log alert — in-app only, never e-mailed.
+  "system_error",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

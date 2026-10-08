@@ -45,3 +45,7 @@ export * from "./avatars.js";
 // §2.4 rate limiting: the worker's SCIM per-IP rule + the pure sliding-window limiter, and the
 // RATE_LIMIT_MULTIPLIER resolver the web tier's token buckets also honour.
 export * from "./ratelimit.js";
+
+// §14.7 system log: which statuses are recorded, message sanitizing, the status chips, and the
+// entity-in-path extraction behind anonymity masking. DB access lives in each tier.
+export * from "./system-log.js";

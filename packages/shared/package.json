@@ -29,6 +29,10 @@
     "./email-template": {
       "types": "./dist/email-template.d.ts",
       "default": "./dist/email-template.js"
+    },
+    "./system-log": {
+      "types": "./dist/system-log.d.ts",
+      "default": "./dist/system-log.js"
     }
   },
   "scripts": {

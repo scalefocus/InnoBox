@@ -10,10 +10,11 @@ import { appendAudit } from "@/lib/audit";
 import { pool } from "@/lib/db";
 import { parsePresenceWindow } from "@/lib/presence";
 import { presenceSummary } from "./store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
@@ -29,3 +30,6 @@ export async function GET(req: Request): Promise<Response> {
 
   return Response.json(summary);
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/presence", handleGET);

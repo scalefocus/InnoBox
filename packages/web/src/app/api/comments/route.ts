@@ -11,10 +11,11 @@ import { parseCommentCreate, parseParentQuery } from "./validation";
 import { createComment, listComments } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const url = new URL(req.url);
@@ -26,7 +27,7 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ comments });
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "comment");
@@ -82,3 +83,7 @@ async function fireCommentNotification(parentType: "challenge" | "solution", par
     },
   );
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/comments", handleGET);
+export const POST = withSystemLog("/api/comments", handlePOST);

@@ -13,10 +13,11 @@ import { deleteSolution } from "../../challenges/delete";
 import { editSolution, setSolutionStatus } from "../../challenges/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -56,7 +57,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ number: s
   }
 }
 
-export async function PUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -92,7 +93,7 @@ export async function PUT(req: Request, context: { params: Promise<{ number: str
  * un-solved back to `valid` in the same transaction. Nobody is notified (§12.1); a caller who
  * is not a platform admin gets the same 404 as a missing solution (invariant 2).
  */
-export async function DELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handleDELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -170,3 +171,8 @@ async function fireSolutionStatusNotifications(
     );
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PATCH = withSystemLog("/api/solutions/[number]", handlePATCH);
+export const PUT = withSystemLog("/api/solutions/[number]", handlePUT);
+export const DELETE = withSystemLog("/api/solutions/[number]", handleDELETE);

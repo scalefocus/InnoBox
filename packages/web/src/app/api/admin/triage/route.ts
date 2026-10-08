@@ -4,10 +4,11 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, listTriageQueue } from "./store";
 import { parseTriageFilters, parseTriagePagination } from "./validation";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -29,3 +30,6 @@ export async function GET(req: Request): Promise<Response> {
   const page = await listTriageQueue(pool, admin, parsed.value, pagination.value);
   return Response.json(page);
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/triage", handleGET);

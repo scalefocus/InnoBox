@@ -5,8 +5,9 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { listNamespaces } from "../admin/store";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const all = await listNamespaces(pool);
@@ -15,3 +16,6 @@ export async function GET(): Promise<Response> {
     .map((ns) => ({ id: ns.id, slug: ns.slug, displayName: ns.displayName }));
   return Response.json({ namespaces });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/namespaces", handleGET);

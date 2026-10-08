@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.29.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins get a System log: a view of the errors InnoBox returned to people — server failures and refused requests — with who hit them, searchable, filterable by status and date, exportable to CSV, and kept for 90 days. New entries light up a badge on the Administration console and a single in-app alert that keeps counting until it is read. It is operational telemetry, separate from the audit log, and it never stores request contents; entries that concern an anonymous challenge or solution never name the item.",
+  },
+  {
     version: "0.28.0",
     date: "2026-10-08",
     summary:

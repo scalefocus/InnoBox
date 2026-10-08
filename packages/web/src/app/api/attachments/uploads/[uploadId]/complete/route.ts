@@ -8,10 +8,11 @@ import { pool } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { completeChunkedUpload } from "../../../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_req: Request, context: { params: Promise<{ uploadId: string }> }): Promise<Response> {
+async function handlePOST(_req: Request, context: { params: Promise<{ uploadId: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -38,3 +39,6 @@ export async function POST(_req: Request, context: { params: Promise<{ uploadId:
       );
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/attachments/uploads/[uploadId]/complete", handlePOST);

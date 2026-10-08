@@ -9,10 +9,11 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../../challenges/validation";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request, context: { params: Promise<{ userId: string }> }): Promise<Response> {
+async function handleGET(req: Request, context: { params: Promise<{ userId: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { userId } = await context.params;
@@ -40,3 +41,6 @@ export async function GET(req: Request, context: { params: Promise<{ userId: str
     },
   });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/users/[userId]/photo", handleGET);

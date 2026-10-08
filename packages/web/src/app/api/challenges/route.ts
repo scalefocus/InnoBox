@@ -10,10 +10,11 @@ import { parseChallengeCreateIds, parseChallengeListFilters } from "./validation
 import { createChallenge, listChallenges } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -25,7 +26,7 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ challenges });
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "create");
@@ -82,3 +83,7 @@ export async function POST(req: Request): Promise<Response> {
       return Response.json({ error: result.error }, { status: 400 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/challenges", handleGET);
+export const POST = withSystemLog("/api/challenges", handlePOST);

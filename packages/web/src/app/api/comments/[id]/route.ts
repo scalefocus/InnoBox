@@ -6,8 +6,9 @@ import { deleteComment, editComment } from "../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isUuid } from "../validation";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handlePATCH(req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -31,7 +32,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
   }
 }
 
-export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handleDELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -49,3 +50,7 @@ export async function DELETE(_req: Request, context: { params: Promise<{ id: str
       return Response.json({ error: "you can only delete your own comment within 15 minutes, or moderate as an admin" }, { status: 403 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PATCH = withSystemLog("/api/comments/[id]", handlePATCH);
+export const DELETE = withSystemLog("/api/comments/[id]", handleDELETE);

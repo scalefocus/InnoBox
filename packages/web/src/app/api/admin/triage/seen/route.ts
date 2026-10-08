@@ -5,10 +5,11 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, markTriageSeen } from "../store";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(): Promise<Response> {
+async function handlePOST(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -22,3 +23,6 @@ export async function POST(): Promise<Response> {
   await markTriageSeen(pool, gate.user.id);
   return Response.json({ ok: true });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/admin/triage/seen", handlePOST);

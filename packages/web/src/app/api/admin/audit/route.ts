@@ -4,12 +4,13 @@
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { AUDIT_PAGE_SIZE_DEFAULT, AUDIT_PAGE_SIZE_MAX, listAudit } from "./store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
@@ -43,3 +44,6 @@ export async function GET(req: Request): Promise<Response> {
   );
   return Response.json(result);
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/audit", handleGET);

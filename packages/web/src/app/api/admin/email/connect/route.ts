@@ -7,8 +7,9 @@ import { NextResponse } from "next/server";
 import { buildAuthorizeUrl, createPkcePair } from "@innobox/shared/email";
 import { requirePlatformAdmin } from "@/lib/auth";
 import { EMAIL_OAUTH_STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE, webBaseUrl, webGraphMailEnv } from "@/lib/email";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
@@ -31,3 +32,6 @@ export async function GET(): Promise<Response> {
   res.cookies.set(EMAIL_OAUTH_VERIFIER_COOKIE, verifier, cookieOpts);
   return res;
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/email/connect", handleGET);

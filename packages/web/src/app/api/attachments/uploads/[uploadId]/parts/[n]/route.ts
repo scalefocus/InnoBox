@@ -11,10 +11,11 @@ import { declaredLengthExceeds, readBytesLimited } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { getOwnUploadChunkSize, uploadChunkPart } from "../../../../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function PUT(req: Request, context: { params: Promise<{ uploadId: string; n: string }> }): Promise<Response> {
+async function handlePUT(req: Request, context: { params: Promise<{ uploadId: string; n: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -46,3 +47,6 @@ export async function PUT(req: Request, context: { params: Promise<{ uploadId: s
       return Response.json({ error: "The file's contents don't match its type." }, { status: 415 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PUT = withSystemLog("/api/attachments/uploads/[uploadId]/parts/[n]", handlePUT);

@@ -13,10 +13,11 @@ import { deleteChallenge } from "../delete";
 import { editChallenge, getChallengeByNumber, setChallengeStatus } from "../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handleGET(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { number } = await context.params;
@@ -27,7 +28,7 @@ export async function GET(_req: Request, context: { params: Promise<{ number: st
   return Response.json({ challenge });
 }
 
-export async function PATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -63,7 +64,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ number: s
   }
 }
 
-export async function PUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -108,7 +109,7 @@ export async function PUT(req: Request, context: { params: Promise<{ number: str
  * admin — and any caller asking about an item they cannot see — gets the same 404 as a
  * genuinely missing challenge, so this is no existence oracle (invariant 2).
  */
-export async function DELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handleDELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -171,3 +172,9 @@ async function fireStatusChangedNotification(
     { message, link: `/challenges/${numberDigits}` },
   );
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/challenges/[number]", handleGET);
+export const PATCH = withSystemLog("/api/challenges/[number]", handlePATCH);
+export const PUT = withSystemLog("/api/challenges/[number]", handlePUT);
+export const DELETE = withSystemLog("/api/challenges/[number]", handleDELETE);

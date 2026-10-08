@@ -5,10 +5,11 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getInbox, markAllRead } from "./store";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -16,7 +17,7 @@ export async function GET(): Promise<Response> {
   return Response.json(inbox);
 }
 
-export async function PATCH(): Promise<Response> {
+async function handlePATCH(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -24,3 +25,7 @@ export async function PATCH(): Promise<Response> {
   await markAllRead(pool, gate.user.id);
   return Response.json({ ok: true });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/notifications", handleGET);
+export const PATCH = withSystemLog("/api/notifications", handlePATCH);

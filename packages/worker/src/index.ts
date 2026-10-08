@@ -29,6 +29,8 @@ import {
   setLeader,
 } from "./metrics.js";
 import { createScimRateLimit, parseTrustProxy } from "./ratelimit.js";
+import { createScimEventRecorder, trimSystemEvents } from "./system-log/record.js";
+import { runSystemLogAlertSweep } from "./system-log/alert.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -68,6 +70,9 @@ app.get("/metrics", createMetricsHandler());
 // Mount SCIM 2.0 server (phase 1) at /scim/v2 per ENTRA_AUTH_SPEC.md §3.
 // §2.4 SCIM rate limiting — keyed per client IP; the operational endpoints above are
 // deliberately outside the limiter so probe/scrape cadence can never be throttled.
+// §14.7 system log — the SCIM 401/403 carve-out, observed on the finished response. Mounted
+// ahead of the limiter so it sees the auth outcome; a limiter 429 is deliberately not recorded.
+app.use("/scim/v2", createScimEventRecorder(pool));
 app.use("/scim/v2", createScimRateLimit());
 app.use("/scim/v2", createScimRouter(pool, { bearerToken: scimToken }));
 
@@ -139,6 +144,7 @@ let notificationInterval: NodeJS.Timeout | null = null;
 let scanInterval: NodeJS.Timeout | null = null;
 let draftGcInterval: NodeJS.Timeout | null = null;
 let presenceRollupInterval: NodeJS.Timeout | null = null;
+let systemLogAlertInterval: NodeJS.Timeout | null = null;
 
 const leaderElection = startLeaderElection(dbUrl, {
   lockKey: WORKER_LEADER_LOCK_KEY,
@@ -161,9 +167,30 @@ const leaderElection = startLeaderElection(dbUrl, {
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "presence rollup sweep failed", error: String(err) }));
       }
+      // §14.7 retention: the system log keeps 90 days. Same hourly housekeeping cadence.
+      try {
+        const trimmed = await trimSystemEvents(pool);
+        if (trimmed) console.log(JSON.stringify({ level: "info", msg: "system log trim", trimmed }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "system log trim failed", error: String(err) }));
+      }
     };
     void runPresenceRollup();
     presenceRollupInterval = setInterval(runPresenceRollup, 60 * 60 * 1000); // hourly
+
+    // §14.7 alert sweep: a coalesced in-app `system_error` row per platform admin when new
+    // system-log events appear, watermarked so nothing is double-counted. Pure DB work, so it
+    // too is scheduled before the Entra-credential check below.
+    const runSystemLogAlert = async () => {
+      try {
+        const summary = await runSystemLogAlertSweep(pool, { bootstrapAdminGroup: process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP });
+        if (summary.newEvents) console.log(JSON.stringify({ level: "info", msg: "system log alert sweep", ...summary }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "system log alert sweep failed", error: String(err) }));
+      }
+    };
+    void runSystemLogAlert();
+    systemLogAlertInterval = setInterval(runSystemLogAlert, 5 * 60 * 1000); // every 5 minutes
 
     // Run reconciliation immediately on leadership acquisition (only if Entra creds present).
     const tenantId = process.env.ENTRA_TENANT_ID;
@@ -299,6 +326,10 @@ const leaderElection = startLeaderElection(dbUrl, {
       clearInterval(presenceRollupInterval);
       presenceRollupInterval = null;
     }
+    if (systemLogAlertInterval) {
+      clearInterval(systemLogAlertInterval);
+      systemLogAlertInterval = null;
+    }
     console.log(JSON.stringify({ level: "info", msg: "lost leader lock" }));
   },
 });
@@ -311,6 +342,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     if (scanInterval) clearInterval(scanInterval);
     if (draftGcInterval) clearInterval(draftGcInterval);
     if (presenceRollupInterval) clearInterval(presenceRollupInterval);
+    if (systemLogAlertInterval) clearInterval(systemLogAlertInterval);
     await leaderElection.stop();
     await pool.end();
     server.close(() => process.exit(0));

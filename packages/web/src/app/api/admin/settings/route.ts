@@ -6,10 +6,11 @@ import { getAttachmentLimits, getDateFormat, listAllImpactAreas, setAttachmentLi
 import { parseSettingsPatch } from "./validation";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
@@ -21,7 +22,7 @@ export async function GET(): Promise<Response> {
   return Response.json({ dateFormat, attachmentLimits, impactAreas });
 }
 
-export async function PATCH(req: Request): Promise<Response> {
+async function handlePATCH(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -39,3 +40,7 @@ export async function PATCH(req: Request): Promise<Response> {
   const [dateFormat, attachmentLimits] = await Promise.all([getDateFormat(pool), getAttachmentLimits(pool)]);
   return Response.json({ dateFormat, attachmentLimits });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/settings", handleGET);
+export const PATCH = withSystemLog("/api/admin/settings", handlePATCH);

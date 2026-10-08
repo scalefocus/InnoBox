@@ -7,8 +7,9 @@ import { isUuid, parseNamespacePatch } from "../../validation";
 import { patchNamespace } from "../../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function PATCH(
+async function handlePATCH(
   req: Request,
   context: { params: Promise<{ id: string }> },
 ): Promise<Response> {
@@ -33,3 +34,6 @@ export async function PATCH(
   }
   return Response.json({ namespace: result.namespace });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PATCH = withSystemLog("/api/admin/namespaces/[id]", handlePATCH);

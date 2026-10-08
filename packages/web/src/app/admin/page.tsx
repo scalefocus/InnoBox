@@ -126,11 +126,43 @@ export default function AdminPage() {
               <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Read-only, filterable history of every audited action.</p>
             </Link>
           )}
+          {gate === "platform_admin" && <SystemLogCard />}
         </div>
       )}
 
       {gate === "platform_admin" && <AdminConsole />}
     </>
+  );
+}
+
+/** The §14.7 console card: links to the system log and carries a 1–9+ badge of events recorded
+ *  since this admin last opened it (cleared by opening the page). */
+function SystemLogCard() {
+  const [unseen, setUnseen] = useState(0);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/admin/system-log/seen", { headers: { accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (live && json) setUnseen(json.count ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <Link href="/admin/system-log" className="card card-pad">
+      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+        System log →
+        {unseen > 0 && (
+          <span className="nav-badge" style={{ marginLeft: 0 }} aria-label={`${unseen} new event${unseen === 1 ? "" : "s"}`}>
+            {unseen > 9 ? "9+" : unseen}
+          </span>
+        )}
+      </h3>
+      <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>The errors people hit — server failures and refused requests — kept for 90 days.</p>
+    </Link>
   );
 }
 

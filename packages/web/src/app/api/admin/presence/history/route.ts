@@ -9,10 +9,11 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { MIN_CHART_POINTS, parsePresenceRange } from "@/lib/presence";
 import { presenceHistory } from "../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
@@ -23,3 +24,6 @@ export async function GET(req: Request): Promise<Response> {
   // renders the "not enough history yet" note instead of a chart while this is true.
   return Response.json({ range, points, enoughHistory: points.length >= MIN_CHART_POINTS });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/presence/history", handleGET);

@@ -6,8 +6,9 @@ import { adminNamespaceIds, bulkAssign } from "../store";
 import { parseBulkAssignBody } from "../validation";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -25,3 +26,6 @@ export async function POST(req: Request): Promise<Response> {
   const outcomes = await bulkAssign(pool, admin, parsed.value.numbers, parsed.value.assigneeUserId);
   return Response.json({ outcomes });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/admin/triage/bulk-assign", handlePOST);
