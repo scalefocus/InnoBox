@@ -8,6 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
+import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
 
 interface MeResponse {
   roles: { platformAdmin: boolean };
@@ -67,6 +68,7 @@ interface SettingsData {
   dateFormat: "eu" | "us";
   attachmentLimits: { maxPerItem: number; maxUploadSizeMb: number; chunkSizeMb: number };
   impactAreas: ImpactArea[];
+  featuredLimit: number;
 }
 
 interface EmailStatus {
@@ -128,6 +130,7 @@ function SettingsConsole() {
       <ImpactAreasCard areas={data.impactAreas} onChanged={refresh} onError={notify} />
       <AttachmentLimitsCard limits={data.attachmentLimits} onChanged={refresh} onError={notify} />
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />
+      <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />
       <EmailSenderCard status={email} onChanged={refreshEmail} onError={notify} />
       {toast && <div className="toast">{toast}</div>}
     </>

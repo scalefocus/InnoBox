@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.44.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can now feature up to a few hand-picked challenges at the top of Home. Featured challenges show only to people allowed to see them, and a challenge drops off the list on its own if it is closed or withdrawn. The number of featured slots is a platform setting.",
+  },
+  {
     version: "0.43.0",
     date: "2026-10-08",
     summary:

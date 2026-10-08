@@ -42,6 +42,8 @@ import { onChallengeStatusChanged, onSolutionImplemented } from "../../../lib/we
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, hasUncleanStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
+import { featuredDetailFields, type FeaturedDetailFields } from "./featured-rules";
+import { unpinOnStatusChange } from "./featured-unpin";
 
 export interface Viewer {
   userId: string;
@@ -91,7 +93,8 @@ export interface SolutionListItem {
   attachments: AttachmentView[];
 }
 
-export interface ChallengeDetail extends ChallengeListItem {
+/** `FeaturedDetailFields`: the §13.2 `featured` / `canFeature` (+ admin-only provenance). */
+export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields {
   description: string;
   clientName: string | null;
   impactAreaId: string;
@@ -118,7 +121,7 @@ export interface ChallengeDetail extends ChallengeListItem {
   attachments: AttachmentView[];
 }
 
-interface ChallengeRow {
+export interface ChallengeRow {
   id: string;
   number: string;
   title: string;
@@ -144,6 +147,9 @@ interface ChallengeRow {
   followed_by_viewer: boolean;
   solution_count: string;
   is_new: boolean;
+  /** §13.2 Home pin (curation; never bumps updated_at). */
+  featured_at: Date | null;
+  featured_by_name: string | null;
 }
 
 interface SolutionRow {
@@ -164,7 +170,7 @@ interface SolutionRow {
   followed_by_viewer: boolean;
 }
 
-const CHALLENGE_SELECT = `
+export const CHALLENGE_SELECT = `
   select c.id, c.number::text, c.title, c.description, c.status, c.visibility,
          c.namespace_id, ns.slug as namespace_slug,
          c.impact_area_id, ia.name as impact_area_name,
@@ -176,7 +182,8 @@ const CHALLENGE_SELECT = `
          exists(select 1 from follows fv where fv.parent_type = 'challenge' and fv.parent_id = c.id and fv.user_id = $viewer) as followed_by_viewer,
          (select count(*) from solutions s where s.challenge_id = c.id
             and s.status not in ('rejected','not_selected','withdrawn','proposed')) as solution_count,
-         (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new
+         (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new,
+         c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name
     from challenges c
     join users u on u.id = c.author_id
     left join users au on au.id = c.assignee_id
@@ -184,7 +191,7 @@ const CHALLENGE_SELECT = `
     join impact_areas ia on ia.id = c.impact_area_id
 `;
 
-function toListItem(row: ChallengeRow): ChallengeListItem {
+export function toListItem(row: ChallengeRow): ChallengeListItem {
   return {
     id: row.id,
     number: formatChallengeNumber(row.number),
@@ -283,6 +290,12 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     canDelete: viewer.roles.isPlatformAdmin,
     solutions,
     attachments,
+    ...featuredDetailFields({
+      isPlatformAdmin: viewer.roles.isPlatformAdmin,
+      status: row.status,
+      featuredAt: row.featured_at,
+      featuredByName: row.featured_by_name,
+    }),
   };
 }
 
@@ -758,6 +771,8 @@ async function applyChallengeStatusChange(
   mode: TransitionMode,
 ): Promise<void> {
   if (current.status === newStatus) return;
+  // §13.2: a move out of valid/solved clears any Home pin first (same transaction, audited).
+  await unpinOnStatusChange(client, actor.userId, current.id, newStatus);
   const resolvedAtClause = newStatus === "solved" ? `, resolved_at = coalesce(resolved_at, now())` : "";
   await client.query(`update challenges set status = $2, updated_at = now(), status_changed_at = now()${resolvedAtClause} where id = $1`, [
     current.id,
@@ -1445,6 +1460,7 @@ export async function withdrawChallenge(pool: Pool, author: Viewer, number: stri
   if (!canAuthorWithdrawChallenge(cur.status as ChallengeStatus)) return { status: "not_withdrawable" };
 
   return inTransaction(pool, async (client) => {
+    await unpinOnStatusChange(client, author.userId, cur.id, "withdrawn"); // §13.2 auto-unpin
     await client.query(`update challenges set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
     await appendAudit(client, {
       actorUserId: author.userId,

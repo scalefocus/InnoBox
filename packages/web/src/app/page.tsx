@@ -12,6 +12,7 @@ import { cachedGet } from "@/lib/ui";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "./challenges/status";
+import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/FeaturedChallenges";
 
 interface SpotlightSolution {
   number: string;
@@ -23,6 +24,7 @@ interface SpotlightSolution {
 }
 
 interface DashboardData {
+  featured: FeaturedChallengeCard[];
   kpis: {
     challenges: Record<string, number>;
     solutions: Record<string, number>;
@@ -74,6 +76,8 @@ export default function HomePage() {
 function Dashboard({ data }: { data: DashboardData | null }) {
   return (
     <>
+      <FeaturedChallenges items={data?.featured ?? []} />
+
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontSize: 16, marginBottom: 12 }}>Challenges</h3>
         <div className="stat-row quad" style={{ marginBottom: 22 }}>

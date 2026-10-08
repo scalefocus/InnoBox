@@ -19,6 +19,7 @@ import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import type { StorageClient } from "../../../lib/storage";
 import type { Viewer } from "./store";
+import { unpinOnDelete, unpinOnStatusChange } from "./featured-unpin";
 
 export interface DeleteDeps {
   pool: Pool;
@@ -164,6 +165,8 @@ export async function deleteChallenge(deps: DeleteDeps, admin: Viewer, number: s
     // A challenge's scope covers its own link plus every `#SOL-<n>` link beneath it.
     const notifications = await deleteNotifications(client, notificationLinkScope({ challengeNumber: challenge.number }));
 
+    // §13.2: a featured challenge's pin is closed out in the audit trail before the row goes.
+    await unpinOnDelete(client, admin.userId, challenge.id);
     await client.query(`delete from solutions where challenge_id = $1`, [challenge.id]);
     await client.query(`delete from challenges where id = $1`, [challenge.id]);
 
@@ -233,6 +236,7 @@ export async function deleteSolution(deps: DeleteDeps, admin: Viewer, number: st
     await client.query(`delete from solutions where id = $1`, [solution.id]);
 
     if (revertTo !== null) {
+      await unpinOnStatusChange(client, admin.userId, solution.challenge_id, revertTo); // §13.2 (solved → valid keeps it)
       await client.query(
         `update challenges set status = $2, resolved_at = null, updated_at = now(), status_changed_at = now() where id = $1`,
         [solution.challenge_id, revertTo],

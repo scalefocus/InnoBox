@@ -1,6 +1,7 @@
 // Pure request-shape parsing for /api/admin/settings (INNOBOX_SPEC.md §14.3).
 import { isDateFormat } from "@innobox/shared";
 import type { AttachmentLimits } from "./store";
+import { parseFeaturedLimit } from "../../challenges/featured-rules";
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -11,6 +12,8 @@ function fail(error: string): { ok: false; error: string } {
 export interface SettingsPatch {
   dateFormat?: "eu" | "us";
   attachmentLimits?: AttachmentLimits;
+  /** §13.2/§14.3 Featured challenges cap (1–6). */
+  featuredLimit?: number;
 }
 
 const MAX_ATTACHMENTS_PER_ITEM = 50;
@@ -59,8 +62,14 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.attachmentLimits = { maxPerItem: l.maxPerItem, maxUploadSizeMb: l.maxUploadSizeMb, chunkSizeMb: l.chunkSizeMb };
   }
 
-  if (value.dateFormat === undefined && value.attachmentLimits === undefined) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits");
+  if (rec.featuredLimit !== undefined) {
+    const limit = parseFeaturedLimit(rec.featuredLimit);
+    if (!limit.ok) return fail(limit.error);
+    value.featuredLimit = limit.value;
+  }
+
+  if (value.dateFormat === undefined && value.attachmentLimits === undefined && value.featuredLimit === undefined) {
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit");
   }
 
   return { ok: true, value };

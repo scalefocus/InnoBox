@@ -5,7 +5,8 @@
 // special-hidden set, so no extra author/admin carve-out is needed here.
 import type { Pool } from "pg";
 import { formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeStatus, type MaskedAuthor, type SolutionStatus } from "@innobox/shared";
-import type { Viewer } from "../challenges/store";
+import type { ChallengeListItem, Viewer } from "../challenges/store";
+import { listFeaturedForViewer } from "../challenges/featured";
 
 export const CHALLENGE_KPI_STATUSES: ChallengeStatus[] = ["in_review", "valid", "solved", "rejected"];
 export const SOLUTION_KPI_STATUSES: SolutionStatus[] = ["in_review", "valid", "in_implementation", "implemented"];
@@ -25,6 +26,8 @@ export interface SpotlightSolution {
 }
 
 export interface DashboardData {
+  /** §13.2 Featured: the viewer's VISIBLE pins only, newest first (empty → no section). */
+  featured: ChallengeListItem[];
   kpis: DashboardKpis;
   spotlights: {
     lastImplemented: SpotlightSolution | null;
@@ -106,10 +109,11 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
     };
   };
 
-  const [lastImplemented, lastInImplementation] = await Promise.all([
+  const [lastImplemented, lastInImplementation, featured] = await Promise.all([
     spotlight("implemented"),
     spotlight("in_implementation"),
+    listFeaturedForViewer(pool, viewer),
   ]);
 
-  return { kpis: { challenges, solutions }, spotlights: { lastImplemented, lastInImplementation } };
+  return { featured, kpis: { challenges, solutions }, spotlights: { lastImplemented, lastInImplementation } };
 }
