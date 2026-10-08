@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.26.2",
+    date: "2026-10-08",
+    summary:
+      "Behind the scenes: an image-processing component that InnoBox never used is no longer installed, keeping the software's licensing simple. Nothing changes in how InnoBox looks or works.",
+  },
+  {
     version: "0.26.1",
     date: "2026-10-08",
     summary:
