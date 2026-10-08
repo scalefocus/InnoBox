@@ -109,6 +109,9 @@ function SystemLogBrowser() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // The instant the relative "3m ago" labels are measured from — captured when a page of events
+  // loads, so rendering stays pure (no clock read during render).
+  const [now, setNow] = useState(() => Date.now());
   const sentinelRef = useRef<HTMLDivElement>(null);
   const requestSeq = useRef(0);
 
@@ -137,6 +140,7 @@ function SystemLogBrowser() {
         .then((j) => {
           if (seq !== requestSeq.current) return; // a newer filter change superseded this page
           const page = j as unknown as SystemLogPage;
+          setNow(Date.now());
           setEvents((cur) => (offset === 0 || !cur ? page.events : [...cur, ...page.events]));
           setTotal(page.total);
           setHasMore(page.hasMore);
@@ -283,7 +287,7 @@ function SystemLogBrowser() {
                     {e.message}
                   </span>
                   <span className="sub mono" title={fmt.dateTime(e.createdAt)}>
-                    {relativeActive(e.createdAt, Date.now())}
+                    {relativeActive(e.createdAt, now)}
                   </span>
                 </button>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

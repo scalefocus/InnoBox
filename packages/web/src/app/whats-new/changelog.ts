@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.35.1",
+    date: "2026-10-08",
+    summary:
+      "Behind the scenes: small code-quality fixes to the system log, the duplicate warning and the Challenges menu counter so they follow React's rendering rules. Nothing changes in how InnoBox looks or works.",
+  },
+  {
     version: "0.35.0",
     date: "2026-10-08",
     summary:

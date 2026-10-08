@@ -157,10 +157,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // card tags stay stable for the whole visit. A tab closed while on the surface counts as a
   // leave too (a beacon survives page hide where a fetch would not).
   useEffect(() => {
-    if (!authed) {
-      setNewChallenges(0);
-      return;
-    }
+    if (!authed) return;
     let live = true;
     const fetchCount = () => {
       fetch("/api/challenges/new-count", { headers: { accept: "application/json" } })
@@ -203,7 +200,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const baseNav: NavItem[] = BASE_NAV.map((item) =>
     item.href === "/challenges"
-      ? { ...item, badge: newChallenges, badgeLabel: (n) => `${n} new challenge${n === 1 ? "" : "s"} since your last visit` }
+      ? { ...item, badge: authed ? newChallenges : 0, badgeLabel: (n) => `${n} new challenge${n === 1 ? "" : "s"} since your last visit` }
       : item,
   );
 

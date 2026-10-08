@@ -58,14 +58,12 @@ export default function NewChallengePage() {
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // §6.1: the matches shown in the warning; non-null means the next click is "Submit anyway".
-  const [similar, setSimilar] = useState<SimilarChallenge[] | null>(null);
+  // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
+  // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
+  const formSignature = JSON.stringify([title, description, impactAreaId, clientName, namespaceId, visibility, isAnonymous]);
+  const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[] } | null>(null);
+  const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
-
-  // Any edit after the warning re-arms the check: the banner clears and the next click re-checks.
-  useEffect(() => {
-    setSimilar(null);
-  }, [title, description, impactAreaId, clientName, namespaceId, visibility, isAnonymous]);
 
   useEffect(() => {
     titleInputRef.current?.focus();
@@ -99,7 +97,7 @@ export default function NewChallengePage() {
           .then((json) => (json.similar ?? []) as SimilarChallenge[])
           .catch(() => [] as SimilarChallenge[]);
         if (found.length > 0) {
-          setSimilar(found);
+          setWarning({ signature: formSignature, matches: found });
           setSubmitting(false);
           return;
         }
