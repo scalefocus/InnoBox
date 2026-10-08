@@ -18,6 +18,9 @@
 // JOB CONFIGURATION: build `main` only. Never discover or build pull requests from forks — this
 // agent holds the production credentials and a public repository accepts PRs from anyone. The
 // Deploy stage additionally refuses to run on any change-request build (see its `when`).
+// Use a Multibranch Pipeline (GitHub branch source) filtered to `main`, with every pull-request
+// discovery behaviour removed. Not a plain Pipeline job: it leaves BRANCH_NAME unset, so
+// `branch 'main'` never matches and main would not deploy unless DEPLOY were ticked by hand.
 //
 // Deploy model: Docker remote context over SSH.
 //   Jenkins SSHes into the deploy host, clones the repo on first deploy (fast-forwards the
@@ -230,6 +233,8 @@ pipeline {
             # REPO_URL comes from the innobox-repo-url credential (with or without the https://
             # prefix — it is normalized here). The repository is public: clone and fetch are
             # anonymous, so no token reaches the deploy host.
+            # origin is re-pointed on every run, so a checkout cloned from an earlier remote
+            # follows the credential. Never re-clone to switch remotes — see clean -x below.
             # checkout --force + clean -fd make the tree byte-exact to the commit: local edits
             # to tracked files are discarded and untracked leftovers from earlier runs removed.
             # Deliberately NOT clean -x: gitignored paths must survive — deploy/.env (secrets)
