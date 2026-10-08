@@ -81,6 +81,9 @@ async function fireCommentNotification(parentType: "challenge" | "solution", par
       message: `New comment on ${formatChallengeNumber(item.challengeNumber)} "${item.challengeTitle}".`,
       link: `/challenges/${item.challengeNumber}`,
     },
+    // §12.1: mutable for every recipient route — an author who mutes it hears no comments on
+    // their own item either.
+    { preference: "followedComments" },
   );
 }
 

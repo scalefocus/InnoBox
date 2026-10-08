@@ -57,3 +57,7 @@ export * from "./audit-browser.js";
 // §14.6 system banner: validation, the fixed durations, lazy-expiry check. Client-safe, also
 // exposed at `@innobox/shared/system-banner`.
 export * from "./system-banner.js";
+
+// §12.1 per-event notification preferences: the three follower-event toggles, the mute, and the
+// PATCH parser. Client-safe, also exposed at `@innobox/shared/notification-preferences`.
+export * from "./notification-preferences.js";

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.34.0",
+    date: "2026-10-08",
+    summary:
+      "Your profile has three new notification switches: comments on items you follow, status changes on items you follow, and new solutions on challenges you follow. Turning one off stops those notifications altogether — no bell, no e-mail — while keeping everything else. Messages that need you to act, such as a rejection, a request for improvement or an assignment, always come through, and admins keep hearing about new work to triage.",
+  },
+  {
     version: "0.33.0",
     date: "2026-10-08",
     summary:

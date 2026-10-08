@@ -71,6 +71,9 @@ async function fireSolutionProposedNotification(challengeNumber: string, propose
       message: `A new solution was proposed on CH-${challengeNumber} "${challenge.title}".`,
       link: `/challenges/${challengeNumber}`,
     },
+    // §12.1: mutable for the challenge author and followers; for admins and the committee it is
+    // an attention event (triage is a duty), so they are exempt.
+    { preference: "followedSolutions", exempt: [...admins, ...committee] },
   );
 }
 

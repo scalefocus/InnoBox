@@ -7,7 +7,14 @@
 // challenge's). Messages must never leak an anonymous author's identity (§9) — callers pass
 // already-masked display names.
 import type { Pool, PoolClient } from "pg";
-import { finalizeRecipients, type NotificationPayload, type NotificationType } from "@innobox/shared";
+import {
+  NOTIFICATION_PREFERENCE_COLUMN,
+  applyPreferenceMute,
+  finalizeRecipients,
+  type NotificationPayload,
+  type NotificationPreference,
+  type NotificationType,
+} from "@innobox/shared";
 import { isParentVisible, type Viewer } from "../app/api/challenges/store";
 
 type Db = Pool | PoolClient;
@@ -67,6 +74,21 @@ export interface NotifyContext {
   resolveRoles: (userId: string) => Promise<Viewer["roles"]>;
 }
 
+/** §12.1 per-event preferences: which mutable event this dispatch is, and who it is a duty for
+ *  (never filtered — admins/committee on a new solution, the assignee on a status change). */
+export interface PreferenceMute {
+  preference: NotificationPreference;
+  exempt?: string[];
+}
+
+/** The recipients who switched this preference off. The column comes from a fixed map. */
+async function optedOutOf(db: Db, preference: NotificationPreference, userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const column = NOTIFICATION_PREFERENCE_COLUMN[preference];
+  const { rows } = await db.query<{ id: string }>(`select id from users where id = any($1::uuid[]) and not ${column}`, [userIds]);
+  return new Set(rows.map((r) => r.id));
+}
+
 /**
  * Compute the final recipient list for an event (§12.1: actors never notify themselves,
  * recipients deduplicated, recipients outside the item's visibility dropped) and write both
@@ -79,15 +101,19 @@ export async function dispatchEvent(
   candidates: string[],
   type: NotificationType,
   payload: NotificationPayload,
+  mute?: PreferenceMute,
 ): Promise<void> {
   const deduped = finalizeRecipients(candidates, ctx.actorId);
-  const recipients: string[] = [];
+  const visible: string[] = [];
   for (const userId of deduped) {
     const roles = await ctx.resolveRoles(userId);
     if (await isParentVisible(ctx.pool, { userId, roles }, visibilityScope.parentType, visibilityScope.parentId)) {
-      recipients.push(userId);
+      visible.push(userId);
     }
   }
+  // §12.1: row-level, at insert time — an opted-out recipient gets neither the inbox row nor the
+  // outbox row, so there is nothing for the bell or the e-mail sweep to deliver.
+  const recipients = mute ? applyPreferenceMute(visible, await optedOutOf(ctx.pool, mute.preference, visible), new Set(mute.exempt ?? [])) : visible;
   if (recipients.length === 0) return;
   await writeNotifications(ctx.pool, recipients, type, payload);
 }

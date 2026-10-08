@@ -8,6 +8,12 @@ import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import {
+  NOTIFICATION_PREFERENCES,
+  NOTIFICATION_PREFERENCE_LABEL,
+  type NotificationPreference,
+  type NotificationPreferences,
+} from "@innobox/shared/notification-preferences";
 
 interface OwnProfile {
   user: {
@@ -19,6 +25,7 @@ interface OwnProfile {
     officeLocation: string | null;
   };
   emailNotificationsEnabled: boolean;
+  notificationPreferences: NotificationPreferences;
   challengesByStatus: Record<string, number>;
   solutionsByStatus: Record<string, number>;
   likesReceived: number;
@@ -33,6 +40,7 @@ export default function ProfilePage() {
   const fmt = useDateFmt();
   const [profile, setProfile] = useState<OwnProfile | null>(null);
   const [emailPrefError, setEmailPrefError] = useState<string | null>(null);
+  const [prefErrors, setPrefErrors] = useState<Partial<Record<NotificationPreference, string>>>({});
 
   const refresh = () => {
     fetch("/api/profile", { headers: { accept: "application/json" } })
@@ -65,6 +73,30 @@ export default function ProfilePage() {
     } catch (err) {
       setProfile((current) => (current ? { ...current, emailNotificationsEnabled: previous } : current));
       setEmailPrefError(err instanceof Error ? err.message : "Could not update preference");
+    }
+  };
+
+  // §12.1 per-event preferences: the same optimistic flip + slide-back-with-reason as the e-mail
+  // switch, one row per toggle.
+  const togglePref = async (key: NotificationPreference) => {
+    if (!profile) return;
+    const previous = profile.notificationPreferences[key];
+    const next = !previous;
+    setPrefErrors((cur) => ({ ...cur, [key]: undefined }));
+    setProfile({ ...profile, notificationPreferences: { ...profile.notificationPreferences, [key]: next } });
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ [key]: next }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not update preference");
+    } catch (err) {
+      setProfile((current) =>
+        current ? { ...current, notificationPreferences: { ...current.notificationPreferences, [key]: previous } } : current,
+      );
+      setPrefErrors((cur) => ({ ...cur, [key]: err instanceof Error ? err.message : "Could not update preference" }));
     }
   };
 
@@ -108,6 +140,33 @@ export default function ProfilePage() {
             </button>
           </div>
         </div>
+        {NOTIFICATION_PREFERENCES.map((key) => {
+          const on = profile.notificationPreferences[key];
+          const label = NOTIFICATION_PREFERENCE_LABEL[key];
+          return (
+            <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }} key={key}>
+              <div className="grow">
+                <div className="ttl">{label.title}</div>
+                <div className="sub">{label.sub}</div>
+                {prefErrors[key] && (
+                  <div className="sub" style={{ color: "var(--danger)" }} role="status">
+                    {prefErrors[key]}
+                  </div>
+                )}
+              </div>
+              <div className="toggle-field">
+                <span className={`toggle-state${on ? " is-on" : ""}`} aria-hidden="true">
+                  {on ? "On" : "Off"}
+                </span>
+                <button type="button" className="toggle toggle-pref" role="switch" aria-checked={on} aria-label={label.title} onClick={() => togglePref(key)}>
+                  <span className="toggle-knob" aria-hidden="true">
+                    {on ? "🔔" : "🔕"}
+                  </span>
+                </button>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>

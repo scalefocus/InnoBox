@@ -41,6 +41,10 @@
     "./system-banner": {
       "types": "./dist/system-banner.d.ts",
       "default": "./dist/system-banner.js"
+    },
+    "./notification-preferences": {
+      "types": "./dist/notification-preferences.d.ts",
+      "default": "./dist/notification-preferences.js"
     }
   },
   "scripts": {

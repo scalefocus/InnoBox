@@ -152,6 +152,8 @@ async function fireSolutionStatusNotifications(
     recipients,
     type,
     { message, link: `/challenges/${row.challenge_number}#SOL-${solutionNumber}` },
+    // §12.1: event 3 is mutable; rejected/needs-improvement (4/5) always reach the author.
+    type === "status_changed" ? { preference: "followedStatus" } : undefined,
   );
 
   if (autoClose) {

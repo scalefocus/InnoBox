@@ -170,6 +170,9 @@ async function fireStatusChangedNotification(
     recipients,
     type,
     { message, link: `/challenges/${numberDigits}` },
+    // §12.1: only a plain status change (event 3) is mutable — rejected/needs-improvement are
+    // actionable author events and always arrive. The assignee holds per-item duty: exempt.
+    type === "status_changed" ? { preference: "followedStatus", exempt: row.assignee_id ? [row.assignee_id] : [] } : undefined,
   );
 }
 
