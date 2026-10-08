@@ -5,7 +5,7 @@
 // comment's actual parent (a solution's own commenters/followers).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds, getOtherCommenterUserIds } from "@/lib/notify";
+import { dispatchCoalescedComment, getFollowerUserIds, getOtherCommenterUserIds } from "@/lib/notify";
 import { formatChallengeNumber } from "@innobox/shared";
 import { parseCommentCreate, parseParentQuery } from "./validation";
 import { createComment, listComments } from "./store";
@@ -58,27 +58,40 @@ async function fireCommentNotification(parentType: "challenge" | "solution", par
             `select id, number::text, title, author_id from challenges where id = $1`,
             [parentId],
           )
-          .then((r) => (r.rows[0] ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title } : null))
+          .then((r) =>
+            r.rows[0]
+              ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeId: r.rows[0].id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title }
+              : null,
+          )
       : await pool
-          .query<{ id: string; author_id: string; challenge_number: string; challenge_title: string }>(
-            `select s.id, s.author_id, c.number::text as challenge_number, c.title as challenge_title
+          .query<{ id: string; author_id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+            `select s.id, s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title
                from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
             [parentId],
           )
-          .then((r) => (r.rows[0] ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeNumber: r.rows[0].challenge_number, challengeTitle: r.rows[0].challenge_title } : null));
+          .then((r) =>
+            r.rows[0]
+              ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeId: r.rows[0].challenge_id, challengeNumber: r.rows[0].challenge_number, challengeTitle: r.rows[0].challenge_title }
+              : null,
+          );
   if (!item) return;
+  const { rows: who } = await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [commenterId]);
 
   const [otherCommenters, followers] = await Promise.all([
     getOtherCommenterUserIds(pool, parentType, item.id),
     getFollowerUserIds(pool, parentType, item.id),
   ]);
-  await dispatchEvent(
+  // §12.1 event 6, coalesced: one unread row per recipient per item — at most one e-mail until read.
+  await dispatchCoalescedComment(
     { pool, actorId: commenterId, resolveRoles: resolveRolesForUser },
-    { parentType, parentId: item.id },
     [item.authorId, ...otherCommenters, ...followers],
-    "comment_posted",
     {
-      message: `New comment on ${formatChallengeNumber(item.challengeNumber)} "${item.challengeTitle}".`,
+      parentType,
+      parentId: item.id,
+      challengeId: item.challengeId,
+      challengeNumber: formatChallengeNumber(item.challengeNumber),
+      challengeTitle: item.challengeTitle,
+      latestBy: who[0]?.display_name ?? "Someone",
       link: `/challenges/${item.challengeNumber}`,
     },
     // §12.1: mutable for every recipient route — an author who mutes it hears no comments on

@@ -6,7 +6,7 @@
 import { isChallengeStatus, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds } from "@/lib/notify";
+import { dispatchEvent, getFollowerUserIds, markCommentNotificationsReadForChallenge } from "@/lib/notify";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
@@ -25,6 +25,9 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
 
   const challenge = await getChallengeByNumber(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   if (!challenge) return Response.json({ error: "challenge not found" }, { status: 404 });
+  // §12.1: opening the item's page is a read action for its coalesced comment rows (the
+  // challenge's and its solutions'). Best-effort — never fails the page.
+  await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
   return Response.json({ challenge });
 }
 

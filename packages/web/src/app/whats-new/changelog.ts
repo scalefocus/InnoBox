@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.35.0",
+    date: "2026-10-08",
+    summary:
+      "A busy comment thread no longer floods your inbox. Comments on the same challenge or solution now gather into a single notification — \"3 new comments on CH-412 … latest by Alice\" — that moves back to the top with each new one, and you get at most one e-mail about it until you have read it. Opening the challenge, opening the notification, or marking everything read counts as reading it; the next comment after that starts afresh.",
+  },
+  {
     version: "0.34.0",
     date: "2026-10-08",
     summary:

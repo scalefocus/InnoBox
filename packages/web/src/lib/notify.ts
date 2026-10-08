@@ -10,6 +10,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   NOTIFICATION_PREFERENCE_COLUMN,
   applyPreferenceMute,
+  commentNotificationMessage,
   finalizeRecipients,
   type NotificationPayload,
   type NotificationPreference,
@@ -103,6 +104,20 @@ export async function dispatchEvent(
   payload: NotificationPayload,
   mute?: PreferenceMute,
 ): Promise<void> {
+  const recipients = await finalRecipients(ctx, visibilityScope, candidates, mute);
+  if (recipients.length === 0) return;
+  await writeNotifications(ctx.pool, recipients, type, payload);
+}
+
+/** Dedup + actor exclusion, then the visibility drop (invariant 2), then the §12.1 preference
+ *  mute — row-level, at insert time: an opted-out recipient gets neither the inbox row nor the
+ *  outbox row, so there is nothing for the bell or the e-mail sweep to deliver. */
+async function finalRecipients(
+  ctx: NotifyContext,
+  visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
+  candidates: string[],
+  mute?: PreferenceMute,
+): Promise<string[]> {
   const deduped = finalizeRecipients(candidates, ctx.actorId);
   const visible: string[] = [];
   for (const userId of deduped) {
@@ -111,11 +126,89 @@ export async function dispatchEvent(
       visible.push(userId);
     }
   }
-  // §12.1: row-level, at insert time — an opted-out recipient gets neither the inbox row nor the
-  // outbox row, so there is nothing for the bell or the e-mail sweep to deliver.
-  const recipients = mute ? applyPreferenceMute(visible, await optedOutOf(ctx.pool, mute.preference, visible), new Set(mute.exempt ?? [])) : visible;
-  if (recipients.length === 0) return;
-  await writeNotifications(ctx.pool, recipients, type, payload);
+  return mute ? applyPreferenceMute(visible, await optedOutOf(ctx.pool, mute.preference, visible), new Set(mute.exempt ?? [])) : visible;
+}
+
+// ── §12.1 event 6: coalesced comment notifications ──────────────────────────────────────
+
+export interface CommentNotification {
+  /** The item the comment was posted on — the coalescing key. */
+  parentType: "challenge" | "solution";
+  parentId: string;
+  /** The challenge whose page shows it (itself, or a solution's parent) — opening it reads the row. */
+  challengeId: string;
+  challengeNumber: string; // "CH-412"
+  challengeTitle: string;
+  /** The commenter's display name. Comments are never anonymous (§9). */
+  latestBy: string;
+  link: string;
+}
+
+/** The refreshed message, rendered in SQL with the same text as `commentNotificationMessage` for
+ *  count ≥ 2 (a dbtest pins the two together). `n` is the NEW count. */
+const COALESCED_MESSAGE_SQL = (n: string, p: string) =>
+  `format('%s new comments on %s "%s" — latest by %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'challengeTitle', ${p}->>'latestBy')`;
+
+/**
+ * Event 6 delivery: one UNREAD inbox row per recipient per item. The first comment inserts the
+ * row and its outbox row (one e-mail); every further comment on the same item while that row is
+ * unread refreshes it IN PLACE — count + 1, latest commenter, created_at bumped so it re-sorts to
+ * the top — through a single atomic upsert against the migration-0024 partial unique index, and
+ * writes no outbox row, so the recipient is e-mailed at most once per item until they read it.
+ * Once read, the next comment starts a fresh row (and a fresh e-mail).
+ */
+export async function dispatchCoalescedComment(
+  ctx: NotifyContext,
+  candidates: string[],
+  comment: CommentNotification,
+  mute?: PreferenceMute,
+): Promise<void> {
+  const recipients = await finalRecipients(ctx, { parentType: comment.parentType, parentId: comment.parentId }, candidates, mute);
+  for (const userId of recipients) {
+    const payload = {
+      message: commentNotificationMessage(1, comment.challengeNumber, comment.challengeTitle, comment.latestBy),
+      link: comment.link,
+      parentType: comment.parentType,
+      parentId: comment.parentId,
+      challengeId: comment.challengeId,
+      challengeNumber: comment.challengeNumber,
+      challengeTitle: comment.challengeTitle,
+      latestBy: comment.latestBy,
+      latestAt: new Date().toISOString(),
+      count: 1,
+    };
+    const newCount = `(coalesce((notifications.payload->>'count')::int, 1) + 1)`;
+    const { rows } = await ctx.pool.query<{ inserted: boolean }>(
+      `insert into notifications (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb)
+       on conflict (user_id, (payload->>'parentType'), (payload->>'parentId'))
+         where read_at is null and type = 'comment_posted'
+       do update set
+         payload = notifications.payload
+           || jsonb_build_object(
+                'count', ${newCount},
+                'latestBy', excluded.payload->>'latestBy',
+                'latestAt', excluded.payload->>'latestAt',
+                'challengeTitle', excluded.payload->>'challengeTitle',
+                'message', ${COALESCED_MESSAGE_SQL(newCount, "excluded.payload")}),
+         created_at = now()
+       returning (xmax = 0) as inserted`,
+      [userId, JSON.stringify(payload)],
+    );
+    // A refresh preserves the delivery bookkeeping: the e-mail went out with the first comment.
+    if (rows[0]?.inserted) {
+      await ctx.pool.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb)`, [userId, JSON.stringify(payload)]);
+    }
+  }
+}
+
+/** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows for the
+ *  challenge itself AND its solutions (the page shows both). */
+export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
+  await db.query(
+    `update notifications set read_at = now()
+      where user_id = $1 and type = 'comment_posted' and read_at is null and payload->>'challengeId' = $2`,
+    [userId, challengeId],
+  );
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by

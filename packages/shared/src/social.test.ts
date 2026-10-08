@@ -51,3 +51,9 @@ test("finalizeRecipients: actorId null keeps everyone (system-triggered events)"
   const result = finalizeRecipients([AUTHOR, OTHER], null);
   assert.deepEqual(result, [AUTHOR, OTHER]);
 });
+
+test("commentNotificationMessage: singular, then the coalesced count with the latest commenter", async () => {
+  const { commentNotificationMessage } = await import("./social.js");
+  assert.equal(commentNotificationMessage(1, "CH-412", "Warehouse pick-path", "Alice"), 'New comment on CH-412 "Warehouse pick-path" — by Alice.');
+  assert.equal(commentNotificationMessage(3, "CH-412", "Warehouse pick-path", "Bob"), '3 new comments on CH-412 "Warehouse pick-path" — latest by Bob.');
+});
