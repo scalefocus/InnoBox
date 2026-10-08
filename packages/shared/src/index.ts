@@ -53,3 +53,7 @@ export * from "./system-log.js";
 // §15 audit browser: category chips (action prefixes), page size and export cap. Client-safe,
 // also exposed at `@innobox/shared/audit-browser`.
 export * from "./audit-browser.js";
+
+// §14.6 system banner: validation, the fixed durations, lazy-expiry check. Client-safe, also
+// exposed at `@innobox/shared/system-banner`.
+export * from "./system-banner.js";

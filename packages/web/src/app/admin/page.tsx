@@ -11,6 +11,7 @@ import { cachedGet, invalidateApi } from "@/lib/ui";
 import { deleteReq, patchJson, postJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CurrentlyOnline } from "./CurrentlyOnline";
+import { SystemBannerCard } from "./SystemBannerCard";
 
 const NAMESPACES_URL = "/api/admin/namespaces";
 const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
@@ -18,7 +19,7 @@ const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
 // The admin console's collapsible cards remember their open/closed state per browser
 // (localStorage) so a chosen layout survives reloads. Default: everything expanded.
 const ADMIN_CARDS_STORAGE_KEY = "innobox:admin-cards-open";
-const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { presence: true, namespaces: true, mappings: true };
+const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true };
 const ADMIN_CARD_IDS = Object.keys(DEFAULT_ADMIN_CARDS);
 
 function loadAdminCardState(): Record<string, boolean> {
@@ -171,6 +172,7 @@ function AdminConsole() {
   const [mappings, setMappings] = useState<RoleMappingRecord[] | null>(null);
   const [openCards, setOpenCards] = useState<Record<string, boolean>>(loadAdminCardState);
   const [onlineTotal, setOnlineTotal] = useState<number | null>(null);
+  const [bannerActive, setBannerActive] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = (message: string) => {
@@ -218,6 +220,16 @@ function AdminConsole() {
           {allOpen ? "Collapse all" : "Expand all"}
         </button>
       </div>
+
+      <AdminCard
+        id="banner"
+        title="System banner"
+        summary={bannerActive ? "showing" : "none"}
+        open={openCards.banner ?? true}
+        onToggle={() => toggleCard("banner")}
+      >
+        <SystemBannerCard onNotify={notify} onActiveChange={setBannerActive} />
+      </AdminCard>
 
       <AdminCard
         id="presence"

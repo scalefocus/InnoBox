@@ -37,6 +37,10 @@
     "./audit-browser": {
       "types": "./dist/audit-browser.d.ts",
       "default": "./dist/audit-browser.js"
+    },
+    "./system-banner": {
+      "types": "./dist/system-banner.d.ts",
+      "default": "./dist/system-banner.js"
     }
   },
   "scripts": {

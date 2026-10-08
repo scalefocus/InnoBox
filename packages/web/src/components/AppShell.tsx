@@ -15,6 +15,8 @@ import { APP_VERSION } from "@innobox/shared/version";
 import { cachedGet } from "../lib/ui";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
+import { SystemBanner } from "./SystemBanner";
+import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
 
@@ -57,6 +59,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   // §14.4 attention count for the Triage/Administration nav bubbles — polled while an admin is
   // signed in (see the effect below).
   const [attention, setAttention] = useState(0);
+  // §14.6 system banner — delivered on the bell's poll, rendered in the topbar.
+  const [banner, setBanner] = useState<Banner | null>(null);
 
   // Navigating closes the mobile drawer.
   useEffect(() => setDrawerOpen(false), [pathname]);
@@ -232,7 +236,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
           {authed && <TopbarSearch ref={searchRef} />}
           <div className="topbar-spacer" />
-          {authed && <NotificationBell />}
+          {authed && <SystemBanner banner={banner} />}
+          {authed && <NotificationBell onBanner={setBanner} />}
           <ThemeToggle />
         </header>
         <main className="content">{children}</main>

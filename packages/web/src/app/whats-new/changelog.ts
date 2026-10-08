@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.31.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can post a system banner — a short announcement that every signed-in person sees in the header, for things like a planned maintenance window. It takes an info or warning tone, an optional \"Learn more\" link and a fixed duration from one hour to 30 days, then disappears on its own (or when an admin clears it). Saving a new one replaces the old. It is not a notification: nobody is e-mailed and nothing lands in the inbox.",
+  },
+  {
     version: "0.30.0",
     date: "2026-10-08",
     summary:
