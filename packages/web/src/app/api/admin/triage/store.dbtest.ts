@@ -270,10 +270,14 @@ test(
       await assertAudited(pool, "impact_area.deleted", srcArea.area.id);
       assert.ok(!(await listAllImpactAreas(pool)).some((a) => a.id === srcArea.area.id));
 
+      // Attachment limits are a platform-wide setting shared with attachments/store.dbtest.ts
+      // (whose cap loop reads it) — restore the original so the change can't leak across suites.
+      const originalLimits = await getAttachmentLimits(pool);
       await setAttachmentLimits(pool, { maxPerItem: 3, maxUploadSizeMb: 7, chunkSizeMb: 5 }, adminId);
       const limits = await getAttachmentLimits(pool);
       assert.deepEqual(limits, { maxPerItem: 3, maxUploadSizeMb: 7, chunkSizeMb: 5 });
       await assertAudited(pool, "settings.attachment_limits_changed", "attachment_limits");
+      await setAttachmentLimits(pool, originalLimits, adminId);
 
       await setDateFormat(pool, "us", adminId);
       assert.equal(await getDateFormat(pool), "us");
