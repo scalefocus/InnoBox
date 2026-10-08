@@ -193,11 +193,18 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    stays mounted. Close is instant: the element simply unmounts, with no exit animation.
    `--menu-pop-y` is the ~6 px travel toward the trigger and `transform-origin` the point it grows
    from; each popover sets both for the side it opens on. Nothing animates under reduced motion.
+   `.menu-pop` also owns the CHROME — `--surface` fill, `--line-strong` border, `--radius-sm`,
+   `--shadow`, 5 px inner padding — so no popover restates it: each popover's own rule carries only
+   placement, layout and its motion origin, and its rows bring the rounded per-row hover.
    `sheet-slide-up` is the mobile notification sheet's own entrance (the sheet has no anchor to
    scale from, an explicit exception to the shared treatment). */
 @keyframes menu-pop-in { from { opacity: 0; transform: scale(.96) translateY(var(--menu-pop-y, -6px)); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes sheet-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.menu-pop { animation: menu-pop-in .12s ease-out; }
+.menu-pop {
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); padding: 5px;
+  animation: menu-pop-in .12s ease-out;
+}
 @media (prefers-reduced-motion: reduce) {
   .menu-pop { animation: none; }
 }
@@ -212,8 +219,7 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .user-trigger:hover { background: var(--surface-2); }
 .user-menu {
   position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow); padding: 5px; display: flex; flex-direction: column; gap: 2px; z-index: 40;
+  display: flex; flex-direction: column; gap: 2px; z-index: 40;
   transform-origin: bottom center; --menu-pop-y: 6px; /* opens upward, above its trigger */
 }
 .user-menu-item {
@@ -225,13 +231,12 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 
 /* Assignee-search popover + result rows (INNOBOX_SPEC.md §7.3, §13.6). Shared by the
    challenge-detail assignment control and the triage filter/bulk/per-row assign controls.
-   `.user-search-pop` gives the popover the same chrome as the account menu (soft shadow,
-   inner padding, rounded rows); each `.user-result-item` is an avatar bubble + a stacked
+   `.user-search-pop` lays out the rows; the chrome is the shared `.menu-pop` one (§2.2). Each
+   `.user-result-item` is an avatar bubble + a stacked
    name/e-mail column that TRUNCATES with an ellipsis (`min-width:0` on the text column is
    what lets the flex child shrink), so long values never spill outside the box. */
 .user-search-pop {
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow); padding: 5px; display: flex; flex-direction: column; gap: 2px;
+  display: flex; flex-direction: column; gap: 2px;
   overflow: hidden;
   transform-origin: top center; --menu-pop-y: -6px; /* opens below its anchor */
 }
@@ -258,15 +263,17 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    Portaled to <body> and positioned with `position: fixed` in viewport coordinates (the component
    clamps and flips it), so it is never clipped by a scrolling table, a popover or the sidebar.
    Values WRAP rather than ellipsing — Entra job titles are routinely long and a truncated title is
-   useless (unlike the assignee rows above, which must stay inside their popover). Animation reuses
-   the shared `.menu-pop` treatment, which is silent under reduced motion. */
+   useless (unlike the assignee rows above, which must stay inside their popover). Chrome and
+   animation are the shared `.menu-pop` treatment (5 px inner padding like every popover), silent
+   under reduced motion; the card's blocks carry row-level insets, as menu rows do. */
 .dir-card {
   position: fixed; z-index: 60; max-width: 280px; min-width: 190px;
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow); padding: 11px 13px 12px;
   display: flex; flex-direction: column; gap: 9px;
   transform-origin: top left; --menu-pop-y: -6px; /* opens below its trigger */
 }
+.dir-card > * { margin-inline: 8px; }
+.dir-card > :first-child { margin-top: 6px; }
+.dir-card > :last-child { margin-bottom: 7px; }
 .dir-card-head { display: flex; align-items: center; gap: 9px; }
 .dir-card-name {
   min-width: 0; font-family: var(--font-display); font-size: 14px; font-weight: 600;
@@ -395,9 +402,8 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    chrome and motion (INNOBOX_SPEC.md §2.2, §13.4). */
 .search-ac {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 70;
-  margin: 0; padding: 5px; list-style: none;
-  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow); max-height: 60vh; overflow-y: auto;
+  margin: 0; list-style: none;
+  max-height: 60vh; overflow-y: auto;
   transform-origin: top center; --menu-pop-y: -6px; /* opens below the search box */
 }
 .search-ac-item {
@@ -520,7 +526,8 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    the base; when the user has a cached Entra photo, an <img> from the authenticated gateway
    (/api/users/:id/photo) is layered on top (object-fit: cover) and simply hides on 404, leaving
    the initials. Anonymous authors (§9) get the fixed neutral --anon bubble — no photo, initials,
-   or per-user color. Deactivated / deleted users get the grey --off bubble. Colors are built
+   or per-user color. Deactivated users get the grey --off bubble (greyed initials); a scrubbed
+   "Deleted User" gets --off + --deleted, the neutral glyph with no initials. Colors are built
    with color-mix against brand tokens so they adapt to light/dark with no per-theme overrides. */
 .avatar {
   position: relative; flex: 0 0 auto; display: inline-grid; place-items: center; overflow: hidden;
@@ -532,19 +539,25 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .avatar-lg { width: 96px; height: 96px; font-size: 32px; }
 .avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .avatar-anon { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
-.avatar-anon svg { width: 60%; height: 60%; }
+.avatar-anon svg, .avatar-deleted svg { width: 60%; height: 60%; }
 .avatar-off { background: var(--surface-2); color: var(--faint); border: 1px dashed var(--line); }
-/* 8 deterministic fallback colors (avatarColorIndex → avatar-c0…c7). Each is a soft brand-mixed
-   fill with a saturated same-hue foreground; color-mix keeps them legible in both themes. Keep
-   the count in sync with AVATAR_COLOR_COUNT in packages/shared/src/avatars.ts. */
-.avatar-c0 { background: color-mix(in oklab, #16b6e6 20%, var(--surface)); color: color-mix(in oklab, #16b6e6 72%, var(--ink)); }
-.avatar-c1 { background: color-mix(in oklab, #6c5ce7 20%, var(--surface)); color: color-mix(in oklab, #6c5ce7 72%, var(--ink)); }
-.avatar-c2 { background: color-mix(in oklab, #e0559b 20%, var(--surface)); color: color-mix(in oklab, #e0559b 72%, var(--ink)); }
-.avatar-c3 { background: color-mix(in oklab, #2fa84f 20%, var(--surface)); color: color-mix(in oklab, #2fa84f 74%, var(--ink)); }
-.avatar-c4 { background: color-mix(in oklab, #e08a1e 20%, var(--surface)); color: color-mix(in oklab, #e08a1e 74%, var(--ink)); }
-.avatar-c5 { background: color-mix(in oklab, #2f7de0 20%, var(--surface)); color: color-mix(in oklab, #2f7de0 72%, var(--ink)); }
-.avatar-c6 { background: color-mix(in oklab, #a24fd0 20%, var(--surface)); color: color-mix(in oklab, #a24fd0 72%, var(--ink)); }
-.avatar-c7 { background: color-mix(in oklab, #5a7688 22%, var(--surface)); color: color-mix(in oklab, #5a7688 76%, var(--ink)); }
+/* 8 deterministic fallback colors (avatarColorIndex → avatar-c0…c7), drawn ONLY from the §2.2
+   brand tokens — accent, accent-2, anchor, ok, warn, danger, muted, and an accent/anchor mix —
+   never an off-palette hex. Each is a soft token-mixed fill under a same-hue foreground; because
+   the tokens themselves are theme-swapped, color-mix keeps every pair legible in light and dark
+   with no per-theme overrides. Keep the count in sync with AVATAR_COLOR_COUNT in
+   packages/shared/src/avatars.ts. */
+.avatar-c0 { background: color-mix(in oklab, var(--accent) 20%, var(--surface)); color: color-mix(in oklab, var(--accent) 72%, var(--ink)); }
+.avatar-c1 { background: color-mix(in oklab, var(--accent-2) 20%, var(--surface)); color: color-mix(in oklab, var(--accent-2) 72%, var(--ink)); }
+.avatar-c2 { background: color-mix(in oklab, var(--anchor) 20%, var(--surface)); color: color-mix(in oklab, var(--anchor) 72%, var(--ink)); }
+.avatar-c3 { background: color-mix(in oklab, var(--ok) 20%, var(--surface)); color: color-mix(in oklab, var(--ok) 74%, var(--ink)); }
+.avatar-c4 { background: color-mix(in oklab, var(--warn) 20%, var(--surface)); color: color-mix(in oklab, var(--warn) 74%, var(--ink)); }
+.avatar-c5 { background: color-mix(in oklab, var(--danger) 20%, var(--surface)); color: color-mix(in oklab, var(--danger) 72%, var(--ink)); }
+.avatar-c6 { background: color-mix(in oklab, var(--muted) 22%, var(--surface)); color: color-mix(in oklab, var(--muted) 76%, var(--ink)); }
+.avatar-c7 {
+  background: color-mix(in oklab, color-mix(in oklab, var(--accent) 50%, var(--anchor)) 20%, var(--surface));
+  color: color-mix(in oklab, color-mix(in oklab, var(--accent) 50%, var(--anchor)) 72%, var(--ink));
+}
 
 /* ── Chips & pills ─────────────────────────────────────────────────────── */
 .chip {
@@ -850,12 +863,13 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .msg-menu { position: relative; display: inline-flex; }
 /* Messages dropdown: an anchored panel on desktop; a full-screen sheet on mobile (so it can
    never spill off-screen), both with an explicit close (✕) button. */
-.msg-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: 380px; max-width: 92vw; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transform-origin: top right; --menu-pop-y: -6px; /* opens below the bell */ }
+.msg-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: 380px; max-width: 92vw; overflow: hidden; display: flex; flex-direction: column; transform-origin: top right; --menu-pop-y: -6px; /* opens below the bell */ }
 .msg-panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .msg-close { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font-size: 12px; flex-shrink: 0; transition: color 0.15s, border-color 0.15s; }
 .msg-close:hover { color: var(--ink); border-color: var(--accent); }
 @media (max-width: 880px) {
-  .msg-panel { position: fixed; inset: 0; width: 100%; max-width: none; height: 100dvh; border: 0; border-radius: 0; z-index: 60; }
+  /* The sheet is an explicit exception to the popover chrome (§2.2): edge to edge, no frame. */
+  .msg-panel { position: fixed; inset: 0; width: 100%; max-width: none; height: 100dvh; border: 0; border-radius: 0; box-shadow: none; padding: 0; z-index: 60; }
   /* On the full-screen sheet, slide up from the bottom edge instead of the desktop fade + scale
      (the sheet has no anchor to scale from); close stays instant, like every popover. */
   .msg-panel.menu-pop { animation: sheet-slide-up .22s ease-out; }
@@ -867,7 +881,7 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 
 /* ── Ratings (§18) ─────────────────────────────────────────────────────── */
 .rating-badge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: 11px; color: var(--ink); }
-.rating-star { color: #e0a01e; font-size: 12px; line-height: 1; }
+.rating-star { color: var(--warn); font-size: 12px; line-height: 1; }
 .rating-n { color: var(--muted); }
 
 /* Sort toggle (catalog) */
@@ -881,19 +895,20 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .rating-hist-row { display: flex; align-items: center; gap: 8px; }
 .rating-hist-label { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); width: 20px; text-align: right; }
 .rating-hist-track { flex: 1; height: 7px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
-.rating-hist-fill { display: block; height: 100%; background: #e0a01e; border-radius: 999px; transition: width 0.3s; }
+.rating-hist-fill { display: block; height: 100%; background: var(--warn); border-radius: 999px; transition: width 0.3s; }
 .rating-hist-n { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); width: 18px; }
 
 /* Interactive star input */
 .star-input { display: inline-flex; gap: 2px; }
 /* Empty stars use --faint so the unselected control reads clearly on both themes
-   (var(--line) was near-invisible on dark). Dark theme gets an extra-visible tone. */
+   (var(--line) was near-invisible on dark). Dark theme gets an extra-visible tone, mixed from the
+   §2.2 tokens (a warn-tinted muted) — never an off-palette hex. */
 .star { border: 0; background: none; cursor: pointer; font-size: 26px; line-height: 1; padding: 0 1px; color: var(--faint); transition: color 0.12s, transform 0.12s; }
-[data-theme="dark"] .star { color: #8a7c5f; }
+[data-theme="dark"] .star { color: color-mix(in oklab, var(--warn) 35%, var(--muted)); }
 .star:hover:not(:disabled) { transform: scale(1.12); }
-.star:hover:not(:disabled), [data-theme="dark"] .star:hover:not(:disabled) { color: #e0a01e; }
+.star:hover:not(:disabled), [data-theme="dark"] .star:hover:not(:disabled) { color: var(--warn); }
 .star:disabled { cursor: default; }
-.star-on, [data-theme="dark"] .star-on { color: #e0a01e; }
+.star-on, [data-theme="dark"] .star-on { color: var(--warn); }
 
 /* ── Rendered SKILL.md (Markdown component) ────────────────────────────── */
 .md { color: var(--ink); font-size: 14.5px; line-height: 1.65; }

@@ -10,6 +10,7 @@ interface CommentRecord {
   id: string;
   authorId: string;
   authorDisplayName: string;
+  authorActive?: boolean;
   body: string;
   createdAt: string;
   editedAt: string | null;
@@ -104,6 +105,7 @@ export function CommentThread({
                   userId={c.deleted ? null : c.authorId}
                   displayName={c.deleted ? "" : c.authorDisplayName}
                   anonymous={c.deleted}
+                  deactivated={!c.deleted && c.authorActive === false}
                   title={c.deleted ? "Comment removed" : c.authorDisplayName}
                 />
                 <span className="ttl" style={{ fontSize: 13.5 }}>

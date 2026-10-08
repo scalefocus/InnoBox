@@ -32,12 +32,18 @@ export type ChallengeTab = (typeof CHALLENGE_TABS)[number];
 export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions"] as const;
 export type ChallengeSort = (typeof CHALLENGE_SORTS)[number];
 
-export interface ChallengeListFilters {
-  tab: ChallengeTab;
+/** The §13.1 gallery filters (status / impact area / namespace / author name). Shared by the
+ *  gallery (`/api/challenges`) and search (`/api/search`, §13.4), which narrows its results by
+ *  the same four filters. */
+export interface GalleryFilters {
   status?: ChallengeStatus;
   impactAreaId?: string;
   namespaceId?: string;
   authorName?: string;
+}
+
+export interface ChallengeListFilters extends GalleryFilters {
+  tab: ChallengeTab;
   sort: ChallengeSort;
 }
 
@@ -53,8 +59,14 @@ export function parseChallengeListFilters(params: URLSearchParams): Parsed<Chall
   if (!(CHALLENGE_SORTS as readonly string[]).includes(sortRaw)) {
     return fail(`sort must be one of: ${CHALLENGE_SORTS.join(", ")}`);
   }
+  const gallery = parseGalleryFilters(params);
+  if (!gallery.ok) return gallery;
+  return { ok: true, value: { tab: tabRaw as ChallengeTab, sort: sortRaw as ChallengeSort, ...gallery.value } };
+}
 
-  const value: ChallengeListFilters = { tab: tabRaw as ChallengeTab, sort: sortRaw as ChallengeSort };
+/** Parses just the four §13.1 gallery filters, failing closed exactly like the gallery does. */
+export function parseGalleryFilters(params: URLSearchParams): Parsed<GalleryFilters> {
+  const value: GalleryFilters = {};
 
   const status = params.get("status");
   if (status !== null) {

@@ -14,7 +14,7 @@ import { useDateFmt } from "@/components/DateFormat";
 export interface ChallengeBadgeData {
   createdAt: string;
   isNew: boolean;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
 }
 
 /** §13.1: created since this viewer last left the Challenges surface — exactly the items the

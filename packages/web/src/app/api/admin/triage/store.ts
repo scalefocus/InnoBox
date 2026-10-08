@@ -22,11 +22,15 @@ export interface TriageRow {
   authorAnonymous: boolean;
   /** Anonymity-safe (§9/§13.6): null when the author is anonymous — never the real id. */
   authorId: string | null;
+  /** §13.6 greyed bubble: the author's `users.active`. Absent when anonymous (invariant 3). */
+  authorActive?: boolean;
   status: ChallengeStatus;
   impactAreaName: string;
   namespaceSlug: string;
   assigneeDisplayName: string | null;
   assigneeId: string | null;
+  /** §13.6: the assignee's `users.active`; null when unassigned. */
+  assigneeActive: boolean | null;
   createdAt: string;
 }
 
@@ -88,12 +92,14 @@ interface TriageQueryRow {
   title: string;
   author_id: string;
   author_display_name: string;
+  author_active: boolean;
   is_anonymous: boolean;
   status: ChallengeStatus;
   impact_area_name: string;
   namespace_slug: string;
   assignee_id: string | null;
   assignee_display_name: string | null;
+  assignee_active: boolean | null;
   created_at: Date;
 }
 
@@ -103,20 +109,25 @@ function toTriageRow(row: TriageQueryRow): TriageRow {
     title: row.title,
     authorDisplayName: row.is_anonymous ? "Anonymous" : row.author_display_name,
     authorAnonymous: row.is_anonymous,
-    // Anonymity-safe: never expose the real author id for an anonymous item (§9, invariant 3).
+    // Anonymity-safe: never expose the real author id — nor their account state — for an
+    // anonymous item (§9, invariant 3).
     authorId: row.is_anonymous ? null : row.author_id,
+    ...(row.is_anonymous ? {} : { authorActive: row.author_active }),
     status: row.status,
     impactAreaName: row.impact_area_name,
     namespaceSlug: row.namespace_slug,
     assigneeDisplayName: row.assignee_display_name,
     assigneeId: row.assignee_id,
+    assigneeActive: row.assignee_id === null ? null : row.assignee_active,
     createdAt: row.created_at.toISOString(),
   };
 }
 
 const TRIAGE_SELECT = `
-  select c.number::text, c.title, c.author_id, u.display_name as author_display_name, c.is_anonymous, c.status,
+  select c.number::text, c.title, c.author_id, u.display_name as author_display_name, u.active as author_active,
+         c.is_anonymous, c.status,
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
+         au.active as assignee_active,
          c.created_at
     from challenges c
     join users u on u.id = c.author_id
@@ -332,6 +343,8 @@ export interface TriageSolutionRow {
   authorAnonymous: boolean;
   /** Anonymity-safe (§9/§13.6): null when the solution author is anonymous. */
   authorId: string | null;
+  /** §13.6 greyed bubble: the author's `users.active`. Absent when anonymous (invariant 3). */
+  authorActive?: boolean;
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
@@ -343,6 +356,7 @@ interface TriageSolutionQueryRow {
   challenge_title: string;
   author_id: string;
   author_display_name: string;
+  author_active: boolean;
   is_anonymous: boolean;
   impact_area_name: string;
   namespace_slug: string;
@@ -357,6 +371,7 @@ function toTriageSolutionRow(row: TriageSolutionQueryRow): TriageSolutionRow {
     authorDisplayName: row.is_anonymous ? "Anonymous" : row.author_display_name,
     authorAnonymous: row.is_anonymous,
     authorId: row.is_anonymous ? null : row.author_id,
+    ...(row.is_anonymous ? {} : { authorActive: row.author_active }),
     impactAreaName: row.impact_area_name,
     namespaceSlug: row.namespace_slug,
     createdAt: row.created_at.toISOString(),
@@ -392,7 +407,7 @@ export async function listTriageSolutions(
   const { rows } = await pool.query<TriageSolutionQueryRow & { total_count: string }>(
     `select *, count(*) over()::text as total_count from (
        select s.number::text as number, c.number::text as challenge_number, c.title as challenge_title,
-              s.author_id, u.display_name as author_display_name, s.is_anonymous,
+              s.author_id, u.display_name as author_display_name, u.active as author_active, s.is_anonymous,
               ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at
          from solutions s
          join challenges c on c.id = s.challenge_id

@@ -16,9 +16,11 @@ test("first sign-in redirects to /quick-start; Continue marks it seen and return
   await expect(page.getByRole("heading", { name: "Quick start" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Submit a challenge" })).toBeVisible();
 
-  // Any other authenticated route bounces back here too, while still unseen.
-  await page.goto("/challenges");
+  // Any other authenticated route bounces back here too, while still unseen — and it does so
+  // BEFORE rendering: the navigation is an HTTP redirect, so the requested page never paints.
+  const res = await page.goto("/challenges/42");
   await expect(page).toHaveURL(/\/quick-start$/);
+  expect(res?.request().redirectedFrom()?.url(), "a server-side redirect, not a client bounce").toMatch(/\/challenges\/42$/);
 
   await page.goto("/quick-start");
   await page.getByRole("button", { name: "Continue to InnoBox" }).click();

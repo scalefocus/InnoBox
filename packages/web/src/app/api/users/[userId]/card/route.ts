@@ -26,7 +26,9 @@ async function handleGET(_req: Request, context: { params: Promise<{ userId: str
 
   const card = await getUserCard(pool, userId);
   if (!card) return Response.json({ error: "not found" }, { status: 404 });
-  return Response.json({ card });
+  // §13.8: the body IS the card — `{ userId, displayName, jobTitle, officeLocation, department,
+  // deactivated, scrubbed }`, flat, with no wrapper key.
+  return Response.json(card);
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

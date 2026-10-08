@@ -22,6 +22,7 @@ interface MaskedAuthor {
   userId: string | null;
   displayName: string;
   anonymous: boolean;
+  active?: boolean;
 }
 
 interface AttachmentItem {
@@ -75,6 +76,7 @@ interface ChallengeDetail {
   resolvedAt: string | null;
   assigneeId: string | null;
   assigneeDisplayName: string | null;
+  assigneeActive?: boolean | null;
   likeCount: number;
   likedByViewer: boolean;
   followedByViewer: boolean;
@@ -450,7 +452,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
         <div className="row" style={{ border: 0, padding: 0, marginBottom: 16 }}>
-          <AvatarBubble size="md" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} />
+          <AvatarBubble
+            size="md"
+            userId={challenge.author.userId}
+            displayName={challenge.author.displayName}
+            anonymous={challenge.author.anonymous}
+            deactivated={challenge.author.active === false}
+          />
           <div className="grow">
             <div className="ttl">{challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}</div>
             <div className="sub mono">
@@ -460,7 +468,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             </div>
             {challenge.assigneeDisplayName && (
               <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                assignee: <AvatarBubble size="sm" userId={challenge.assigneeId} displayName={challenge.assigneeDisplayName} /> {challenge.assigneeDisplayName}
+                assignee:{" "}
+                <AvatarBubble
+                  size="sm"
+                  userId={challenge.assigneeId}
+                  displayName={challenge.assigneeDisplayName}
+                  deactivated={challenge.assigneeActive === false}
+                />{" "}
+                {challenge.assigneeDisplayName}
               </div>
             )}
           </div>
@@ -588,7 +603,12 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               {challenge.assigneeId && challenge.assigneeDisplayName ? (
                 <>
-                  <AvatarBubble size="sm" userId={challenge.assigneeId} displayName={challenge.assigneeDisplayName} />
+                  <AvatarBubble
+                    size="sm"
+                    userId={challenge.assigneeId}
+                    displayName={challenge.assigneeDisplayName}
+                    deactivated={challenge.assigneeActive === false}
+                  />
                   <span style={{ fontSize: 14 }}>{challenge.assigneeDisplayName}</span>
                   <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => assign(null)}>
                     Unassign
@@ -656,7 +676,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span className="chip mono">{s.number}</span>
                 <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} />
+                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
                 <span className="sub" style={{ flex: 1 }}>
                   {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
                 </span>
