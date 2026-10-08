@@ -198,7 +198,19 @@ test("renderWrappedEmailHtml: only same-origin links in the message become ancho
   );
   assert.ok(html.includes(`<a href="${BASE}/challenges/7">`));
   assert.doesNotMatch(html, /<a href="https:\/\/phish/);
-  assert.ok(html.includes("https://phish.example/reset"));
+  // The foreign URL survives as plain text, in place, right after the words that preceded it.
+  assert.match(html, /New comment: see https:\/\/phish\.example\/reset<br>/);
+});
+
+test("textToHtmlFragment: trailing punctuation is trimmed from links, and a long punctuation run stays fast", () => {
+  const html = textToHtmlFragment(`Open ${BASE}/challenges/7!).`, BASE);
+  assert.ok(html.startsWith(`Open <a href="${BASE}/challenges/7">${BASE}/challenges/7</a>`));
+  assert.ok(html.endsWith("!)."));
+
+  const hostile = `${BASE}/x${"!".repeat(50_000)}y`;
+  const started = Date.now();
+  textToHtmlFragment(hostile, BASE);
+  assert.ok(Date.now() - started < 1000, "linear in the input length");
 });
 
 test("renderEmailText: appends the manage line (absolute when base URL known)", () => {

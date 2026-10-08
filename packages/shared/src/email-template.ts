@@ -158,6 +158,16 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+const TRAILING_URL_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")"]);
+
+/** Drop trailing sentence punctuation from a matched URL. A plain backwards scan rather than a
+ *  `[…]+$` regex, which backtracks quadratically on a long run of punctuation mid-URL. */
+function trimTrailingPunctuation(url: string): string {
+  let end = url.length;
+  while (end > 0 && TRAILING_URL_PUNCTUATION.has(url[end - 1]!)) end--;
+  return url.slice(0, end);
+}
+
 function originOf(url: string): string | null {
   try {
     const u = new URL(url);
@@ -182,7 +192,7 @@ export function textToHtmlFragment(text: string, baseUrl: string): string {
   for (const m of text.matchAll(/https?:\/\/[^\s<>"]+/g)) {
     const start = m.index ?? 0;
     // Trailing sentence punctuation is not part of the link.
-    const url = m[0].replace(/[.,;:!?)]+$/, "");
+    const url = trimTrailingPunctuation(m[0]);
     out += escapeHtml(text.slice(cursor, start));
     const safe = escapeHtml(url);
     out += appOrigin !== null && originOf(url) === appOrigin ? `<a href="${safe}">${safe}</a>` : safe;

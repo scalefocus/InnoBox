@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.27.1",
+    date: "2026-10-08",
+    summary:
+      "A notification whose text contains an unusually long run of punctuation inside a link no longer slows down e-mail rendering.",
+  },
+  {
     version: "0.27.0",
     date: "2026-10-08",
     summary:
