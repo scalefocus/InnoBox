@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.42.0",
+    date: "2026-10-08",
+    summary:
+      "The Challenges page can now show challenges as a compact list instead of cards — number, title, status, namespace, author, likes, solutions and date on one row, with the same \"new\" tags. Your choice is remembered on this browser.",
+  },
+  {
     version: "0.41.0",
     date: "2026-10-08",
     summary:

@@ -1224,3 +1224,56 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .audit-verify-intact { color: var(--ok); font-weight: 600; }
 .audit-verify-broken { color: var(--danger); font-weight: 600; }
 .audit-verify-error { color: var(--warn); }
+
+/* ── Challenges gallery: Cards / List view toggle (§13.1) ───────────────── */
+/* The list view reuses the §14.1 `.rows`/`.row` pattern as a fixed-column grid:
+   number · title · status · namespace · author · likes · solutions · date. */
+.ch-view-toggle { margin-left: auto; }
+.ch-rows .ch-row {
+  display: grid; position: relative;
+  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 76px 96px;
+  gap: 14px; padding: 12px 20px;
+}
+.ch-rows .ch-row.row-head {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--faint); padding-top: 10px; padding-bottom: 10px;
+}
+.ch-rows .ch-row.row-head:hover { background: none; }
+.ch-row > span { min-width: 0; }
+.ch-c-num { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.ch-c-title { display: flex; align-items: center; gap: 8px; }
+.ch-title-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
+.ch-title-link:hover { color: var(--accent-2); }
+.ch-c-ns { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-c-author { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
+.ch-author-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-c-likes, .ch-c-sol, .ch-c-date { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.ch-c-date { font-size: 12px; }
+.ch-sol-label { display: none; }
+/* "new": the same tag as the card, drawn as a full-height tab flush to the row's right edge;
+   the row reserves right padding so its content never slides under it. */
+.ch-rows .ch-row.has-new { padding-right: 64px; }
+.ch-row > .chip-new {
+  top: 0; bottom: 0; padding-top: 0; padding-bottom: 0;
+  border-left: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
+}
+@media (max-width: 880px) {
+  .ch-view-toggle { margin-left: 0; }
+  .ch-rows .ch-row.row-head { display: none; }
+  /* Stacked row: number + status; title; then a muted meta line
+     (namespace · author · date · likes · solutions). */
+  .ch-rows .ch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 13px 16px; }
+  .ch-c-num { order: 1; }
+  .ch-c-status { order: 2; }
+  .ch-c-title { order: 3; flex-basis: 100%; }
+  .ch-c-ns { order: 4; }
+  .ch-c-author { order: 5; }
+  .ch-c-date { order: 6; }
+  .ch-c-likes { order: 7; }
+  .ch-c-sol { order: 8; }
+  .ch-c-ns, .ch-c-author, .ch-c-date, .ch-c-likes, .ch-c-sol { font-size: 12px; color: var(--muted); }
+  .ch-c-author::before, .ch-c-date::before, .ch-c-likes::before, .ch-c-sol::before { content: "·"; color: var(--faint); margin-right: 4px; }
+  .ch-sol-n { display: none; }
+  .ch-sol-label { display: inline; }
+}
+/* ── end Challenges list view ───────────────────────────────────────────── */
