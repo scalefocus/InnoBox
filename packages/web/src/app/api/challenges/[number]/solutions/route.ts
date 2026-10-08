@@ -7,25 +7,27 @@ import { pool } from "@/lib/db";
 import { dispatchEvent, getFollowerUserIds, getNamespaceAdminUserIds, getNamespaceCommitteeUserIds } from "@/lib/notify";
 import { autoFollow } from "../../../follows/store";
 import { createSolution } from "../../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
+import { isEntityNumber } from "../../validation";
 
 export async function POST(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "create");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const rec = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
 
   const result = await createSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
-    description: rec.description,
-    costVsBenefits: rec.costVsBenefits,
-    isAnonymous: rec.isAnonymous,
-    draftKey: rec.draftKey,
+    description: body.description,
+    costVsBenefits: body.costVsBenefits,
+    isAnonymous: body.isAnonymous,
+    draftKey: body.draftKey,
   });
 
   switch (result.status) {

@@ -17,11 +17,13 @@ function makeFakeStorage() {
   const storage = {
     putObject: async () => {},
     getObject: async () => new Uint8Array(),
+    getObjectStream: async () => ({ body: new Blob([]).stream(), contentLength: 0 }),
     deleteObject: async (key: string) => {
       deletedObjects.push(key);
     },
     createMultipartUpload: async () => "mpu-1",
     uploadPart: async () => {},
+    listParts: async () => [],
     completeMultipartUpload: async () => {},
     abortMultipartUpload: async (key: string, uploadId: string) => {
       abortedUploads.push({ key, uploadId });

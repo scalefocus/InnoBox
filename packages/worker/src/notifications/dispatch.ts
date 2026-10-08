@@ -13,6 +13,7 @@ import {
   renderEmailText,
   renderWrappedEmailHtml,
   sendGraphMail,
+  textToHtmlFragment,
   type GraphMailEnv,
 } from "@innobox/shared";
 
@@ -92,7 +93,11 @@ export async function runNotificationSweep(
 
       const subject = `innobox: ${row.payload.message}`.slice(0, 200);
       const text = renderEmailText(`${row.payload.message}\n\n${opts.baseUrl}${row.payload.link}`, opts.baseUrl);
-      const html = wrapper ? renderWrappedEmailHtml(wrapper, `${row.payload.message}\n\n${opts.baseUrl}${row.payload.link}`, opts.baseUrl) : `<p>${text}</p>`;
+      // §12 e-mail content safety: the message text is escaped and only links to the app's own
+      // origin (PUBLIC_BASE_URL) become anchors — with or without an admin wrapper.
+      const html = wrapper
+        ? renderWrappedEmailHtml(wrapper, `${row.payload.message}\n\n${opts.baseUrl}${row.payload.link}`, opts.baseUrl)
+        : `<p>${textToHtmlFragment(text, opts.baseUrl)}</p>`;
 
       let delivered = false;
       let lastError: string | null = null;

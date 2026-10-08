@@ -6,20 +6,21 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { deleteImpactArea, patchImpactArea } from "../../store";
 import { parseImpactAreaPatch } from "../../validation";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
   const { id } = await params;
   if (!isUuid(id)) return Response.json({ error: "not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
   const parsed = parseImpactAreaPatch(body);
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
@@ -37,6 +38,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
   const { id } = await params;
   if (!isUuid(id)) return Response.json({ error: "not found" }, { status: 404 });

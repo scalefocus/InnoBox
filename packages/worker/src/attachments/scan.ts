@@ -1,19 +1,26 @@
-// The §11 ClamAV scan sweep: drains `pending` attachment rows, streams each object from MinIO
-// to clamd over the INSTREAM protocol, and records the verdict. Clean → audited; infected →
-// the object is purged from MinIO (the row stays as an `infected` tombstone), the uploader is
-// notified (§12.1 event 11), and it is audited. Transient errors (can't reach clamd / S3)
-// leave the row `pending` for the next sweep. The S3 client and the scan function are injected
+// The §11 ClamAV scan sweep: drains `pending` attachment rows that are due (`next_scan_at` null
+// or past — a row backing off after a per-file error waits its turn), oldest first, streams
+// each object to clamd over the INSTREAM protocol, and hands the result to the SHARED verdict
+// handler `applyScanResult` (@innobox/shared) — the same code the web tier's on-demand scan
+// runs, so behaviour is identical whichever fires first: clean → audited; infected → object
+// purged (the row stays an `infected` tombstone), uploader notified (§12.1 event 11), audited;
+// an outage (clamd/S3 unreachable) leaves the row untouched; a per-file error (clamd answered
+// with an error, or the object is unreadable) backs off and, at the attempt cap, makes the row
+// `unscannable` — purged, notified, audited. The S3 client and the scan function are injected
 // so the sweep is unit-testable without a live MinIO/clamd (the pure INSTREAM framing/parsing
-// live in @innobox/shared and are unit-tested there).
+// and the retry policy live in @innobox/shared and are unit-tested there).
 import net from "node:net";
 import type { Pool } from "pg";
 import {
-  appendAudit,
+  applyScanResult,
   CLAMD_INSTREAM_COMMAND,
   CLAMD_INSTREAM_TERMINATOR,
   frameInstreamChunk,
   parseClamdResponse,
+  ScanObjectReadError,
+  type AttachmentParentType,
   type ClamdVerdict,
+  type ScanResult,
 } from "@innobox/shared";
 import {
   AbortMultipartUploadCommand,
@@ -34,8 +41,9 @@ export interface WorkerS3Client extends ScanS3Client {
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
 }
 
-/** A scan function: given the object bytes, return clamd's verdict (or throw on a transient
- *  engine/connection error, which leaves the row pending). */
+/** A scan function: given the object bytes, return clamd's verdict, or throw — a
+ *  `ClamdErrorReply` when clamd answered with an error for this stream (per-file), anything
+ *  else when clamd could not be reached (outage). */
 export type ScanFn = (bytes: Uint8Array) => Promise<ClamdVerdict>;
 
 export interface ScanDeps {
@@ -48,57 +56,33 @@ export interface ScanSummary {
   scanned: number;
   clean: number;
   infected: number;
+  /** Rows that reached the terminal `unscannable` state this sweep. */
+  unscannable: number;
+  /** Outages and counted per-file retries — the row stays `pending` either way. */
   errors: number;
 }
 
 interface PendingRow {
   id: string;
-  parent_type: "challenge" | "solution";
-  parent_id: string;
+  parent_type: AttachmentParentType;
+  parent_id: string | null;
   object_key: string;
   filename: string;
   uploaded_by: string;
+  scan_attempts: number;
 }
 
 function log(level: "info" | "warn" | "error", msg: string, extra?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, msg, ...extra }));
 }
 
-/** The relative deep link to an attachment's parent (§12.1), or null when it has vanished. */
-async function resolveParentLink(pool: Pool, parentType: "challenge" | "solution", parentId: string): Promise<string | null> {
-  if (parentType === "challenge") {
-    const { rows } = await pool.query<{ number: string }>(`select number::text as number from challenges where id = $1`, [parentId]);
-    return rows[0] ? `/challenges/${rows[0].number}` : null;
-  }
-  const { rows } = await pool.query<{ challenge_number: string; number: string }>(
-    `select c.number::text as challenge_number, s.number::text as number
-       from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
-    [parentId],
-  );
-  return rows[0] ? `/challenges/${rows[0].challenge_number}#SOL-${rows[0].number}` : null;
-}
-
-/** §12.1 event 11: notify the uploader (only) that their attachment failed its scan. The
- *  message references the uploader's own filename (safe — they are the sole recipient) and
- *  links to the parent; no other user is exposed (anonymity-safe). Writes both the in-app row
- *  and the outbox row, exactly like lib/notify.ts. */
-async function enqueueScanFailedNotification(pool: Pool, row: PendingRow): Promise<void> {
-  const link = await resolveParentLink(pool, row.parent_type, row.parent_id);
-  if (!link) return;
-  const payload = JSON.stringify({
-    message: `Your attachment "${row.filename}" failed its virus scan and was removed.`,
-    link,
-  });
-  await pool.query(`insert into notifications (user_id, type, payload) values ($1, 'attachment_scan_failed', $2)`, [row.uploaded_by, payload]);
-  await pool.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'attachment_scan_failed', $2)`, [row.uploaded_by, payload]);
-}
-
 export async function runScanSweep(pool: Pool, deps: ScanDeps): Promise<ScanSummary> {
-  const summary: ScanSummary = { scanned: 0, clean: 0, infected: 0, errors: 0 };
+  const summary: ScanSummary = { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 0 };
   const { rows } = await pool.query<PendingRow>(
-    `select id, parent_type, parent_id, object_key, filename, uploaded_by
+    `select id, parent_type, parent_id, object_key, filename, uploaded_by, scan_attempts
        from attachments
       where scan_status = 'pending' and removed_at is null
+        and (next_scan_at is null or next_scan_at <= now())
       order by created_at asc
       limit $1`,
     [deps.batchSize ?? 20],
@@ -107,65 +91,40 @@ export async function runScanSweep(pool: Pool, deps: ScanDeps): Promise<ScanSumm
 
   for (const row of rows) {
     try {
-      let bytes: Uint8Array;
+      let result: ScanResult;
       try {
-        bytes = await deps.s3.getObject(row.object_key);
+        let bytes: Uint8Array;
+        try {
+          bytes = await deps.s3.getObject(row.object_key);
+        } catch (err) {
+          throw new ScanObjectReadError(err);
+        }
+        result = { verdict: await deps.scan(bytes) };
       } catch (err) {
-        // Transient object-store error — leave the row pending for the next sweep.
-        log("warn", "scan: could not fetch object, leaving pending", { attachmentId: row.id, error: String(err) });
-        summary.errors += 1;
-        continue;
+        result = { error: err };
       }
 
-      let verdict: ClamdVerdict;
-      try {
-        verdict = await deps.scan(bytes);
-      } catch (err) {
-        // clamd unreachable / engine error — leave pending, retry next sweep.
-        log("warn", "scan: clamd unavailable or errored, leaving pending", { attachmentId: row.id, error: String(err) });
+      const outcome = await applyScanResult(
+        { db: pool, purgeObject: (key) => deps.s3.deleteObject(key), log },
+        {
+          id: row.id,
+          parentType: row.parent_type,
+          parentId: row.parent_id,
+          objectKey: row.object_key,
+          filename: row.filename,
+          uploadedBy: row.uploaded_by,
+          scanAttempts: Number(row.scan_attempts ?? 0),
+        },
+        result,
+      );
+      // `noop`: the web tier's on-demand scan resolved the row first, or it was permanently
+      // deleted with its parent mid-sweep (§10.3) — nothing was written, nothing to count.
+      if (outcome === "clean" || outcome === "infected" || outcome === "unscannable") {
+        summary[outcome] += 1;
+        summary.scanned += 1;
+      } else if (outcome === "retry" || outcome === "unavailable") {
         summary.errors += 1;
-        continue;
       }
-
-      if (verdict.clean) {
-        const applied = await pool.query(
-          `update attachments set scan_status = 'clean', scanned_at = now() where id = $1 and scan_status = 'pending'`,
-          [row.id],
-        );
-        // Nothing to apply the verdict to: the web tier's on-demand scan got there first, or the
-        // row was permanently deleted with its parent mid-sweep (§10.3). Either way this is a
-        // no-op — no audit row, no notification for an attachment that isn't there.
-        if (applied.rowCount === 0) continue;
-        await appendAudit(pool, {
-          actorUserId: null,
-          action: "attachment.scan_clean",
-          targetType: "attachment",
-          targetId: row.id,
-          after: { objectKey: row.object_key },
-        });
-        summary.clean += 1;
-      } else {
-        const applied = await pool.query(
-          `update attachments set scan_status = 'infected', scanned_at = now() where id = $1 and scan_status = 'pending'`,
-          [row.id],
-        );
-        if (applied.rowCount === 0) continue; // resolved elsewhere, or deleted mid-sweep (§10.3)
-        // Purge the object; the row stays as an infected tombstone (§11). A failed purge is
-        // logged but not fatal — the row's infected status already blocks all downloads.
-        await deps.s3.deleteObject(row.object_key).catch((err) =>
-          log("error", "scan: infected object purge failed", { attachmentId: row.id, error: String(err) }),
-        );
-        await appendAudit(pool, {
-          actorUserId: null,
-          action: "attachment.scan_infected",
-          targetType: "attachment",
-          targetId: row.id,
-          after: { signature: verdict.signature ?? null, objectKey: row.object_key },
-        });
-        await enqueueScanFailedNotification(pool, row);
-        summary.infected += 1;
-      }
-      summary.scanned += 1;
     } catch (err) {
       // Never let one bad row abort the sweep (mirrors reconciliation/notification isolation).
       log("error", "scan: row failed", { attachmentId: row.id, error: String(err) });
@@ -197,7 +156,12 @@ async function streamToUint8Array(body: unknown): Promise<Uint8Array> {
 }
 
 /** Build a `ScanFn` that streams the bytes to clamd via INSTREAM over a TCP socket, using the
- *  shared protocol helpers. Rejects on connect/timeout/engine errors so the row stays pending. */
+ *  shared protocol helpers. Writes honour socket backpressure. clamd may answer EARLY and close
+ *  — `INSTREAM size limit exceeded. ERROR` when a stream passes its StreamMaxLength — while we
+ *  are still writing, which surfaces here as EPIPE/ECONNRESET; a reply already received always
+ *  wins over that socket error, so the limit reply is a per-file error (counted toward
+ *  `unscannable`), never mistaken for an outage that would leave the row pending forever.
+ *  Rejects with the socket/timeout error only when clamd gave no reply at all (outage). */
 export function createClamavScanner(opts: { host: string; port: number; timeoutMs?: number }): ScanFn {
   return (bytes: Uint8Array) =>
     new Promise<ClamdVerdict>((resolve, reject) => {
@@ -210,27 +174,46 @@ export function createClamavScanner(opts: { host: string; port: number; timeoutM
         socket.destroy();
         fn();
       };
-      socket.setTimeout(opts.timeoutMs ?? 120_000);
+      const settleFromReply = (fallback?: Error): void =>
+        finish(() => {
+          if (fallback && response.replace(/\0/g, "").trim() === "") return reject(fallback);
+          try {
+            resolve(parseClamdResponse(response));
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      // Idle timeout: longer than clamd's own MaxScanTime, so a slow scan is answered (or
+      // flagged by clamd) before we give up on the connection.
+      socket.setTimeout(opts.timeoutMs ?? 180_000);
       socket.on("connect", () => {
-        socket.write(CLAMD_INSTREAM_COMMAND);
-        const CHUNK = 64 * 1024;
-        for (let off = 0; off < bytes.length; off += CHUNK) {
-          socket.write(frameInstreamChunk(bytes.subarray(off, Math.min(off + CHUNK, bytes.length))));
-        }
-        socket.write(CLAMD_INSTREAM_TERMINATOR);
+        void (async () => {
+          const write = (chunk: Uint8Array | string): Promise<void> =>
+            new Promise((ok) => {
+              if (socket.write(chunk)) return ok();
+              const done = (): void => {
+                socket.off("drain", done);
+                socket.off("close", done);
+                ok();
+              };
+              socket.on("drain", done);
+              socket.on("close", done);
+            });
+          await write(CLAMD_INSTREAM_COMMAND);
+          const CHUNK = 64 * 1024;
+          for (let off = 0; off < bytes.length && !settled && !socket.destroyed; off += CHUNK) {
+            await write(frameInstreamChunk(bytes.subarray(off, Math.min(off + CHUNK, bytes.length))));
+          }
+          if (!settled && !socket.destroyed) socket.write(CLAMD_INSTREAM_TERMINATOR);
+        })();
       });
       socket.on("data", (d) => {
         response += d.toString("utf8");
       });
-      socket.on("end", () => finish(() => {
-        try {
-          resolve(parseClamdResponse(response));
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      }));
+      socket.on("end", () => settleFromReply());
+      socket.on("close", () => settleFromReply(new Error("clamd closed the connection without a reply")));
       socket.on("timeout", () => finish(() => reject(new Error("clamd scan timed out"))));
-      socket.on("error", (err) => finish(() => reject(err)));
+      socket.on("error", (err) => settleFromReply(err));
     });
 }
 

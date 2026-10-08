@@ -277,6 +277,8 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 const TITLE_MAX = 120;
 const DESCRIPTION_MAX = 10_000;
 const COST_VS_BENEFITS_MAX = 5_000;
+/** §2.4/§6.1: every free-text field has a ceiling; the challenge client name is capped at 200. */
+export const CLIENT_NAME_MAX = 200;
 
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
@@ -324,6 +326,7 @@ export function validateChallengeFields(input: {
   const rawClientName = typeof input.clientName === "string" ? input.clientName.trim() : "";
   if (input.impactAreaIsClient) {
     if (rawClientName === "") return fail("clientName is required when impact area is Client");
+    if (rawClientName.length > CLIENT_NAME_MAX) return fail(`clientName must be at most ${CLIENT_NAME_MAX} characters`);
     clientName = rawClientName;
   } else if (rawClientName !== "") {
     return fail("clientName must be empty unless impact area is Client");

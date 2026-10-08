@@ -1,13 +1,22 @@
 // Live-DB integration test (gated) for the §11 attachment data layer. Exercises the real SQL
-// for author-only + edit-window gating, the §14.3 limits, the allowlist, the anonymity-safe
-// list projection (never emits uploaded_by), author removal (soft + object purge + idempotent
-// guard), and the download gateway (clean+visible → bytes; every other case → identical denial
-// + audit). MinIO/ClamAV are NOT reachable from the host, so an in-memory fake StorageClient is
+// for author-only + edit-window gating, the §14.3 limits (incl. the per-item cap under
+// concurrent uploads), the allowlist + content check, the anonymity-safe list projection (never
+// emits uploaded_by), author removal (soft + object purge + idempotent guard), the download
+// gateway (clean+visible → a byte stream; every other case → identical denial + audit), the
+// chunked-upload size binding (part range/size, assembly verification → size_mismatch abort),
+// and the scan-retry path to the terminal `unscannable` state. MinIO/ClamAV are NOT reachable from the host, so an in-memory fake StorageClient is
 // injected. Self-skips when DATABASE_URL is unset. Mirrors challenges/store.dbtest.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const url = process.env.DATABASE_URL;
+
+/** The on-demand scan fired by every upload uses this stand-in for clamd: unreachable, so the
+ *  shared verdict handler leaves rows untouched (an outage never counts) and each test decides
+ *  verdicts itself — even on a machine where CLAMAV_HOST happens to point at a live clamd. */
+async function scannerOffline(): Promise<never> {
+  throw Object.assign(new Error("clamd unreachable (test)"), { code: "ECONNREFUSED" });
+}
 
 function makeFakeStorage() {
   const objects = new Map<string, Uint8Array>();
@@ -25,6 +34,21 @@ function makeFakeStorage() {
       if (!b) throw new Error(`no such object: ${key}`);
       return b;
     },
+    getObjectStream: async (key: string) => {
+      const b = objects.get(key);
+      if (!b) throw new Error(`no such object: ${key}`);
+      // Two pulls, so the consumer genuinely reads a stream rather than one buffer.
+      const mid = Math.floor(b.length / 2);
+      const pieces = [b.subarray(0, mid), b.subarray(mid)];
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = pieces.shift();
+          if (next) controller.enqueue(next);
+          else controller.close();
+        },
+      });
+      return { body, contentLength: b.length };
+    },
     deleteObject: async (key: string) => {
       objects.delete(key);
       deleted.push(key);
@@ -39,10 +63,22 @@ function makeFakeStorage() {
       if (!s) throw new Error(`no such multipart upload: ${uploadId}`);
       s.parts.set(partNumber, body);
     },
-    completeMultipartUpload: async (key: string, uploadId: string) => {
+    listParts: async (_key: string, uploadId: string) => {
       const s = multipart.get(uploadId);
       if (!s) throw new Error(`no such multipart upload: ${uploadId}`);
-      const ordered = [...s.parts.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+      return [...s.parts.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([partNumber, body]) => ({ partNumber, size: body.length, etag: `etag-${partNumber}-${body.length}` }));
+    },
+    completeMultipartUpload: async (key: string, uploadId: string, parts: readonly { partNumber: number; etag: string }[]) => {
+      const s = multipart.get(uploadId);
+      if (!s) throw new Error(`no such multipart upload: ${uploadId}`);
+      // Like S3: assemble exactly the listed parts, and refuse one whose ETag no longer matches.
+      for (const p of parts) {
+        const body = s.parts.get(p.partNumber);
+        if (!body || p.etag !== `etag-${p.partNumber}-${body.length}`) throw new Error(`InvalidPart ${p.partNumber}`);
+      }
+      const ordered = [...parts].sort((a, b) => a.partNumber - b.partNumber).map((p) => s.parts.get(p.partNumber)!);
       const total = ordered.reduce((n, c) => n + c.length, 0);
       const out = new Uint8Array(total);
       let off = 0;
@@ -114,7 +150,7 @@ test(
       };
 
       const { storage, objects, deleted } = makeFakeStorage();
-      const deps = { pool, storage };
+      const deps = { pool, storage, scan: scannerOffline };
       const limits = await getAttachmentLimits(pool);
 
       const ch = await mkChallenge("Attachment subject"); // starts awaiting_triage (author-edit window)
@@ -130,6 +166,13 @@ test(
         (await uploadAttachment(deps, author, { ...goodFile, size: limits.maxUploadSizeMb * 1024 * 1024 + 1 })).status,
         "too_large",
       );
+      // Content check (415): an allowlisted name + MIME whose bytes are something else.
+      assert.equal(
+        (await uploadAttachment(deps, author, { ...goodFile, filename: "report.pdf", mime: "application/pdf" })).status,
+        "content_mismatch",
+        "text bytes named .pdf are refused",
+      );
+      assert.equal(objects.size, 0, "a refused upload writes nothing to storage");
 
       // ── Happy path upload → pending, audited, object written ───────────────────────────
       const up1 = await uploadAttachment(deps, author, goodFile);
@@ -162,7 +205,9 @@ test(
       const { rows: keyRows } = await pool.query<{ object_key: string }>(`select object_key from attachments where id = $1`, [att2.id]);
       const att2Key = keyRows[0]!.object_key;
 
-      assert.equal((await removeAttachment(deps, member, att2.id)).status, "forbidden", "only the uploader may remove");
+      // §2.4: the member can't see this pending attachment (nor its awaiting_triage parent), so a
+      // removal attempt is the same 404 as a nonexistent id — never a 403 existence oracle.
+      assert.equal((await removeAttachment(deps, member, att2.id)).status, "not_found", "a non-uploader who can't see it gets not_found");
       assert.equal((await removeAttachment(deps, author, att2.id)).status, "ok");
       await assertAudited(pool, "attachment.removed", att2.id);
       assert.ok(deleted.includes(att2Key), "the object is purged from storage on removal");
@@ -180,7 +225,12 @@ test(
       const cleanDownload = await getAttachmentForDownload(deps, author, att1.id);
       assert.equal(cleanDownload.status, "ok");
       if (cleanDownload.status !== "ok") return;
-      assert.deepEqual(cleanDownload.bytes, bytes, "the gateway returns the stored bytes for a clean, visible attachment");
+      assert.deepEqual(
+        new Uint8Array(await new Response(cleanDownload.body).arrayBuffer()),
+        bytes,
+        "the gateway streams the stored bytes for a clean, visible attachment",
+      );
+      assert.equal(cleanDownload.sizeBytes, bytes.byteLength);
       assert.equal(cleanDownload.filename, "notes.txt");
       // The challenge is still awaiting_triage & namespace-only → outsider can't see the parent.
       assert.equal((await getAttachmentForDownload(deps, outsider, att1.id)).status, "denied", "not-visible parent → denied");
@@ -209,6 +259,21 @@ test(
       // Freeing a slot via removal lets a new upload through (removed rows are not counted).
       assert.equal((await removeAttachment(deps, author, capIds[0]!)).status, "ok");
       assert.equal((await uploadAttachment(deps, author, capFile)).status, "ok", "a removed row frees a cap slot");
+
+      // The cap holds under concurrency: uploads racing for the free slots cannot overshoot it,
+      // and every loser's object is purged (§11).
+      const race = await mkChallenge("Cap race subject");
+      const raceFile = { ...capFile, parentId: race.id };
+      const objectsBefore = objects.size;
+      const raced = await Promise.all(Array.from({ length: limits.maxPerItem + 3 }, () => uploadAttachment(deps, author, raceFile)));
+      assert.equal(raced.filter((r) => r.status === "ok").length, limits.maxPerItem, "exactly the cap wins the race");
+      assert.equal(raced.filter((r) => r.status === "too_many").length, 3);
+      const { rows: raceCount } = await pool.query<{ n: string }>(
+        `select count(*)::text as n from attachments where parent_id = $1 and removed_at is null`,
+        [race.id],
+      );
+      assert.equal(Number(raceCount[0]!.n), limits.maxPerItem, "the table never exceeds the cap");
+      assert.equal(objects.size - objectsBefore, limits.maxPerItem, "losing uploads leave no orphaned objects");
 
       // ── Infected rows are also never served ────────────────────────────────────────────
       await pool.query(`update attachments set scan_status = 'infected', scanned_at = now() where id = $1`, [capIds[1]!]);
@@ -241,7 +306,7 @@ test(
       const st2 = await stageAttachment(deps, outsider, { ...stageInput, filename: "draft2.txt" });
       assert.equal(st2.status, "ok");
       if (st2.status !== "ok") return;
-      assert.equal((await removeAttachment(deps, member, st2.attachment.id)).status, "forbidden", "only the uploader may remove a staged row");
+      assert.equal((await removeAttachment(deps, member, st2.attachment.id)).status, "not_found", "a staged row is invisible to everyone but its uploader");
       assert.equal((await removeAttachment(deps, outsider, st2.attachment.id)).status, "ok");
       assert.equal((await listStagedAttachments(pool, outsider, draftKey)).some((a) => a.id === st2.attachment.id), false);
 
@@ -250,6 +315,12 @@ test(
       const capStage = { parentType: "challenge" as const, draftKey: capKey, filename: "cap.txt", mime: "text/plain", size: bytes.byteLength, bytes };
       for (let i = 0; i < limits.maxPerItem; i++) assert.equal((await stageAttachment(deps, author, capStage)).status, "ok");
       assert.equal((await stageAttachment(deps, author, capStage)).status, "too_many", "staging honors the per-item cap");
+      // …atomically, too.
+      const raceKey = randomUUID();
+      const stageRace = await Promise.all(
+        Array.from({ length: limits.maxPerItem + 2 }, () => stageAttachment(deps, author, { ...capStage, draftKey: raceKey })),
+      );
+      assert.equal(stageRace.filter((r) => r.status === "ok").length, limits.maxPerItem, "concurrent staging cannot overshoot the cap");
 
       // ── Binding at submit: createChallenge(draftKey) re-parents the caller's staged rows ─
       const bindKey = randomUUID();
@@ -299,12 +370,15 @@ test(
     const {
       abortChunkedUpload,
       completeChunkedUpload,
+      getAttachmentForDownload,
       hasUncleanStagedAttachments,
       initiateChunkedUpload,
       listAttachmentsForParent,
       stageAttachment,
       uploadChunkPart,
     } = await import("./store");
+    const { scanAttachmentNow } = await import("./scan");
+    const { ClamdErrorReply, SCAN_MAX_ATTEMPTS } = await import("@innobox/shared");
 
     const pool = new Pool({ connectionString: url });
     try {
@@ -337,12 +411,16 @@ test(
       if (c.status !== "ok") return;
       const parentId = c.challenge.id;
 
-      const { storage, objects } = makeFakeStorage();
-      const deps = { pool, storage };
+      const { storage, objects, multipart } = makeFakeStorage();
+      const deps = { pool, storage, scan: scannerOffline };
       const enc = new TextEncoder();
       const part1 = enc.encode("A".repeat(64));
       const part2 = enc.encode("B".repeat(48));
       const total = part1.length + part2.length;
+      // The configured chunk size has a 5 MB floor; shrink a session's negotiated size to 64 bytes
+      // so the size-binding rules can be exercised with tiny parts.
+      const useTinyChunks = async (uploadId: string) =>
+        pool.query(`update attachment_uploads set chunk_size_bytes = $2 where id = $1`, [uploadId, part1.length]);
 
       // ── Initiate validation (fail-fast) ────────────────────────────────────────────────
       assert.equal(
@@ -363,14 +441,26 @@ test(
       const init = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "big.txt", mime: "text/plain", size: total });
       assert.equal(init.status, "ok");
       if (init.status !== "ok") return;
+      await useTinyChunks(init.uploadId);
       // A session row exists while the upload is in flight.
       const { rows: sess } = await pool.query<{ n: string }>(`select count(*)::text as n from attachment_uploads where id = $1`, [init.uploadId]);
       assert.equal(sess[0]!.n, "1");
 
       // Only the owner may send parts.
       assert.equal((await uploadChunkPart(deps, other, init.uploadId, 1, part1)).status, "not_found");
-      // Reject an over-size chunk (larger than the negotiated chunk size).
-      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 1, enc.encode("z".repeat(init.chunkSizeBytes + 1)))).status, "bad_request");
+      // The declared size is binding (400, nothing relayed): an over-size chunk, a short non-final
+      // part, a final part that isn't exactly the remainder, a part number outside 1…N.
+      const relayedBefore = multipart.get([...multipart.keys()].at(-1)!)!.parts.size;
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 1, enc.encode("z".repeat(part1.length + 1)))).status, "bad_request");
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 1, enc.encode("z".repeat(part1.length - 1)))).status, "bad_request", "short non-final part");
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 2, enc.encode("z".repeat(part2.length + 1)))).status, "bad_request", "over-long final part");
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 3, part2)).status, "bad_request", "part number beyond N");
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 0, part2)).status, "bad_request", "part number below 1");
+      assert.equal(multipart.get([...multipart.keys()].at(-1)!)!.parts.size, relayedBefore, "rejected parts never reach the store");
+      // Content check on part 1 (415): the first bytes of a ".txt" contain a NUL.
+      const binary = new Uint8Array(part1.length).fill(0x41);
+      binary[3] = 0;
+      assert.equal((await uploadChunkPart(deps, author, init.uploadId, 1, binary)).status, "content_mismatch");
 
       assert.equal((await uploadChunkPart(deps, author, init.uploadId, 1, part1)).status, "ok");
       assert.equal((await uploadChunkPart(deps, author, init.uploadId, 2, part2)).status, "ok");
@@ -394,14 +484,15 @@ test(
       expected.set(part1, 0);
       expected.set(part2, part1.length);
       assert.deepEqual(assembled, expected, "complete reassembles the parts in order");
-      assert.equal(keyRows[0]!.size_bytes, String(total), "the row records the declared size");
+      assert.equal(keyRows[0]!.size_bytes, String(total), "the row records the verified size");
       assert.equal((await listAttachmentsForParent(pool, author, "challenge", parentId)).length, 1);
 
       // ── Abort discards the session (no attachments row) ────────────────────────────────
       const init2 = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "abandon.txt", mime: "text/plain", size: total });
       assert.equal(init2.status, "ok");
       if (init2.status !== "ok") return;
-      await uploadChunkPart(deps, author, init2.uploadId, 1, part1);
+      await useTinyChunks(init2.uploadId);
+      assert.equal((await uploadChunkPart(deps, author, init2.uploadId, 1, part1)).status, "ok");
       assert.equal((await abortChunkedUpload(deps, author, init2.uploadId)).status, "ok");
       const { rows: sess2 } = await pool.query<{ n: string }>(`select count(*)::text as n from attachment_uploads where id = $1`, [init2.uploadId]);
       assert.equal(sess2[0]!.n, "0", "the session row is deleted on abort");
@@ -409,6 +500,25 @@ test(
         `select count(*)::text as n from audit_log where action = 'attachment.upload_aborted'`,
       );
       assert.ok(Number(abortAudit[0]!.n) >= 1, "abort is audited attachment.upload_aborted");
+
+      // ── Complete verifies the assembly: a missing part → size_mismatch abort ─────────────
+      const init3 = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "partial.txt", mime: "text/plain", size: total });
+      assert.equal(init3.status, "ok");
+      if (init3.status !== "ok") return;
+      await useTinyChunks(init3.uploadId);
+      assert.equal((await uploadChunkPart(deps, author, init3.uploadId, 1, part1)).status, "ok");
+      const rowsBefore = (await listAttachmentsForParent(pool, author, "challenge", parentId)).length;
+      const incomplete = await completeChunkedUpload(deps, author, init3.uploadId);
+      assert.equal(incomplete.status, "upload_incomplete", "a missing final part fails the assembly check");
+      const { rows: sess3 } = await pool.query<{ n: string }>(`select count(*)::text as n from attachment_uploads where id = $1`, [init3.uploadId]);
+      assert.equal(sess3[0]!.n, "0", "the session row is dropped");
+      assert.equal((await listAttachmentsForParent(pool, author, "challenge", parentId)).length, rowsBefore, "no attachments row is created");
+      const { rows: mismatchAudit } = await pool.query<{ after: { reason?: string } }>(
+        `select after from audit_log where action = 'attachment.upload_aborted' and after->>'objectKey' like $1 order by id desc limit 1`,
+        [`%${parentId}%`],
+      );
+      assert.equal(mismatchAudit[0]?.after.reason, "size_mismatch", "audited with reason size_mismatch");
+      assert.equal((await completeChunkedUpload(deps, author, init3.uploadId)).status, "not_found", "the client must start a new upload");
 
       // ── Submit scan gate helper: unclean staged rows block; clean ones don't ───────────
       const gateKey = randomUUID();
@@ -422,6 +532,46 @@ test(
       assert.equal(await hasUncleanStagedAttachments(pool, author, "challenge", gateKey), true, "an infected staged row blocks submit");
       // The gate is scoped to the caller: another user's key isn't consulted.
       assert.equal(await hasUncleanStagedAttachments(pool, other, "challenge", gateKey), false, "gate is per-uploader");
+
+      // ── Scan retries → the terminal `unscannable` state (shared verdict handler) ─────────
+      const failing = async () => {
+        throw new ClamdErrorReply("Can't allocate memory ERROR");
+      };
+      const odd = await stageAttachment(deps, author, { parentType: "challenge", draftKey: randomUUID(), filename: "odd.txt", mime: "text/plain", size: part1.length, bytes: part1 });
+      assert.equal(odd.status, "ok");
+      if (odd.status !== "ok") return;
+      // A per-file error counts an attempt and backs the row off; it stays pending.
+      await scanAttachmentNow({ ...deps, scan: failing }, odd.attachment.id);
+      const { rows: afterOne } = await pool.query<{ scan_status: string; scan_attempts: number; due_later: boolean }>(
+        `select scan_status, scan_attempts, next_scan_at > now() as due_later from attachments where id = $1`,
+        [odd.attachment.id],
+      );
+      assert.deepEqual(afterOne[0], { scan_status: "pending", scan_attempts: 1, due_later: true });
+      // An outage counts nothing.
+      await scanAttachmentNow({ ...deps, scan: async () => { throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" }); } }, odd.attachment.id);
+      const { rows: afterOutage } = await pool.query<{ scan_attempts: number }>(`select scan_attempts from attachments where id = $1`, [odd.attachment.id]);
+      assert.equal(afterOutage[0]!.scan_attempts, 1, "an outage never condemns a file");
+      // The attempt that reaches the cap makes the row unscannable: purged, audited, gate-blocking.
+      await pool.query(`update attachments set scan_attempts = $2 where id = $1`, [odd.attachment.id, SCAN_MAX_ATTEMPTS - 1]);
+      await scanAttachmentNow({ ...deps, scan: failing }, odd.attachment.id);
+      const { rows: oddRow } = await pool.query<{ scan_status: string; object_key: string; draft_key: string }>(
+        `select scan_status, object_key, draft_key from attachments where id = $1`,
+        [odd.attachment.id],
+      );
+      assert.equal(oddRow[0]!.scan_status, "unscannable");
+      assert.equal(objects.has(oddRow[0]!.object_key), false, "the unscannable object is purged");
+      await assertAudited(pool, "attachment.scan_unscannable", odd.attachment.id);
+      assert.equal(await hasUncleanStagedAttachments(pool, author, "challenge", oddRow[0]!.draft_key), true, "an unscannable staged row blocks submit");
+
+      // On a bound parent: listed only to the uploader, never downloadable.
+      const bound = await stageAttachment(deps, author, { parentType: "challenge", draftKey: randomUUID(), filename: "b.txt", mime: "text/plain", size: part1.length, bytes: part1 });
+      assert.equal(bound.status, "ok");
+      if (bound.status !== "ok") return;
+      await pool.query(`update attachments set parent_id = $2, draft_key = null, scan_status = 'unscannable' where id = $1`, [bound.attachment.id, parentId]);
+      const authorView = (await listAttachmentsForParent(pool, author, "challenge", parentId)).find((a) => a.id === bound.attachment.id);
+      assert.equal(authorView?.status, "unscannable", "the uploader sees the unscannable row");
+      assert.equal((await listAttachmentsForParent(pool, other, "challenge", parentId)).some((a) => a.id === bound.attachment.id), false, "nobody else does");
+      assert.equal((await getAttachmentForDownload(deps, author, bound.attachment.id)).status, "denied", "unscannable is never served");
     } finally {
       await pool.end();
     }

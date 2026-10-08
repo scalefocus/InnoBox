@@ -66,6 +66,23 @@ services:
     image: clamav/clamav:latest
     restart: always
     # Signature updates require outbound network (INNOBOX_SPEC.md §11).
+    # Scanner limits (§11): the image's entrypoint writes every CLAMD_CONF_<Option> into its
+    # clamd.conf, so these override just the options named and keep the image's other defaults
+    # (socket, port 3310, user). Stream/file/scan limits sit at or above the 200 MB maximum upload
+    # (MaxScanSize higher, for an archive's extracted members), so a permitted upload is never
+    # refused for size. AlertExceedsMax + AlertEncrypted* make content the engine cannot inspect
+    # (limits exceeded in an archive, encrypted archives/documents) a detection — `infected`, not
+    # a silent pass. MaxScanTime (ms) stays below the scanners' 180 s socket timeout, so a slow
+    # file is answered by clamd (a detection) rather than timing out as an outage.
+    environment:
+      CLAMD_CONF_StreamMaxLength: 210M
+      CLAMD_CONF_MaxFileSize: 210M
+      CLAMD_CONF_MaxScanSize: 420M
+      CLAMD_CONF_MaxScanTime: "120000"
+      CLAMD_CONF_AlertExceedsMax: "yes"
+      CLAMD_CONF_AlertEncrypted: "yes"
+      CLAMD_CONF_AlertEncryptedArchive: "yes"
+      CLAMD_CONF_AlertEncryptedDoc: "yes"
     volumes:
       - ./data/clamav:/var/lib/clamav
     healthcheck:

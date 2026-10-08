@@ -25,7 +25,7 @@ interface AttachmentItem {
   filename: string;
   sizeBytes: number;
   mime: string;
-  status: "pending" | "clean" | "infected";
+  status: "pending" | "clean" | "infected" | "unscannable";
   isUploader: boolean;
   createdAt: string;
 }
@@ -863,9 +863,10 @@ function formatBytes(n: number): string {
 }
 
 // §11 Attachments section for a challenge or a solution: a list with per-status affordances
-// (download link for clean; "Scanning…" / "Removed — failed scan" for the uploader's
-// pending/infected), an upload control shown only within the author-edit window (canUpload),
-// and a Remove button on the uploader's own not-yet-failed attachments while still editable.
+// (download link for clean; "Scanning…" / "Removed — failed scan" / "Removed — couldn't be
+// scanned" for the uploader's pending/infected/unscannable), an upload control shown only within
+// the author-edit window (canUpload), and a Remove button on the uploader's own attachments while
+// still editable (a failed one included, so its slot can be freed for another file).
 function AttachmentsSection({
   parentType,
   parentId,
@@ -968,7 +969,8 @@ function AttachmentsSection({
               </span>
               {a.status === "pending" && <span className="chip">Scanning…</span>}
               {a.status === "infected" && <span className="pill pill-danger">Removed — failed scan</span>}
-              {canUpload && a.isUploader && a.status !== "infected" && (
+              {a.status === "unscannable" && <span className="pill pill-danger">Removed — couldn&apos;t be scanned</span>}
+              {canUpload && a.isUploader && (
                 <button type="button" className="btn btn-sm btn-danger" disabled={busy || uploading} onClick={() => remove(a.id)}>
                   Remove
                 </button>
@@ -1081,7 +1083,7 @@ function ChallengeEditForm({
       {isClient && (
         <>
           <label style={EDIT_LABEL}>Client name</label>
-          <input className="field" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={120} required />
+          <input className="field" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={200} required />
         </>
       )}
       <div style={{ display: "flex", gap: 10 }}>

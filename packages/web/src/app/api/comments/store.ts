@@ -7,6 +7,7 @@ import { canEditOwnComment, validateCommentBody } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { getParentNamespaceId, isParentVisible, type Viewer } from "../challenges/store";
+import { isUuid } from "./validation";
 
 const MODERATION_PLACEHOLDER = "Comment removed by a moderator";
 
@@ -150,12 +151,15 @@ export async function createComment(
 export type EditCommentResult = { status: "ok"; comment: CommentRecord } | { status: "not_found" } | { status: "forbidden" } | { status: "invalid"; error: string };
 
 export async function editComment(pool: Pool, viewer: Viewer, commentId: string, rawBody: unknown): Promise<EditCommentResult> {
+  if (!isUuid(commentId)) return { status: "not_found" };
   const { rows } = await pool.query<{ id: string; author_id: string; created_at: Date; deleted_at: Date | null; parent_type: "challenge" | "solution"; parent_id: string }>(
     `select id, author_id, created_at, deleted_at, parent_type, parent_id from comments where id = $1`,
     [commentId],
   );
   const row = rows[0];
   if (!row || row.deleted_at !== null) return { status: "not_found" };
+  // §2.4: a comment on a challenge/solution the viewer cannot see is "not found", never "forbidden".
+  if (!(await isParentVisible(pool, viewer, row.parent_type, row.parent_id))) return { status: "not_found" };
   if (!canEditOwnComment({ authorId: row.author_id, createdAt: row.created_at }, viewer.userId, new Date())) {
     return { status: "forbidden" };
   }
@@ -185,12 +189,14 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
 export type DeleteCommentResult = { status: "ok" } | { status: "not_found" } | { status: "forbidden" };
 
 export async function deleteComment(pool: Pool, viewer: Viewer, commentId: string): Promise<DeleteCommentResult> {
+  if (!isUuid(commentId)) return { status: "not_found" };
   const { rows } = await pool.query<{ id: string; author_id: string; created_at: Date; deleted_at: Date | null; parent_type: "challenge" | "solution"; parent_id: string }>(
     `select id, author_id, created_at, deleted_at, parent_type, parent_id from comments where id = $1`,
     [commentId],
   );
   const row = rows[0];
   if (!row || row.deleted_at !== null) return { status: "not_found" };
+  if (!(await isParentVisible(pool, viewer, row.parent_type, row.parent_id))) return { status: "not_found" };
 
   const namespaceId = await getParentNamespaceId(pool, row.parent_type, row.parent_id);
   const isModerator = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);

@@ -4,6 +4,7 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../validation";
 import { deleteRoleMapping } from "../../store";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function DELETE(
   _req: Request,
@@ -11,6 +12,8 @@ export async function DELETE(
 ): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { id } = await context.params;
   // Non-uuid ids can't exist — 404 without risking a Postgres cast error.
   if (!isUuid(id)) return Response.json({ error: "role mapping not found" }, { status: 404 });

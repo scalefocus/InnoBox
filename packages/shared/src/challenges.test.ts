@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildRoleSet } from "./rbac.js";
 import {
+  CLIENT_NAME_MAX,
   blocksAcceptedInternally,
   canAuthorEditChallenge,
   canAuthorEditSolution,
@@ -340,6 +341,18 @@ test("validateChallengeFields: clientName required when impact area is Client", 
   });
   assert.equal(present.ok, true);
   if (present.ok) assert.equal(present.value.clientName, "Acme Corp");
+});
+
+test("validateChallengeFields: clientName is capped at CLIENT_NAME_MAX (200) characters, measured trimmed", () => {
+  const base = { title: "t", description: "d", visibility: "org", isAnonymous: false, impactAreaIsClient: true } as const;
+  assert.equal(CLIENT_NAME_MAX, 200);
+  const atCap = validateChallengeFields({ ...base, clientName: "x".repeat(CLIENT_NAME_MAX) });
+  assert.equal(atCap.ok, true);
+  const padded = validateChallengeFields({ ...base, clientName: `  ${"x".repeat(CLIENT_NAME_MAX)}  ` });
+  assert.equal(padded.ok, true);
+  const over = validateChallengeFields({ ...base, clientName: "x".repeat(CLIENT_NAME_MAX + 1) });
+  assert.equal(over.ok, false);
+  if (!over.ok) assert.match(over.error, /at most 200/);
 });
 
 test("validateChallengeFields: clientName must be empty when impact area is not Client", () => {

@@ -1,8 +1,11 @@
 // The §12 email HTML wrapper: sanitization, the [SYSTEM MESSAGE] placeholder contract, and
 // the pure renderers that turn a notification's plain text into the wrapped HTML + text parts.
-// Client-safe (no node imports) — the admin WYSIWYG editor shares the placeholder constant and
-// validation so the save error is predictable before the server re-validates authoritatively.
-// INNOBOX_SPEC.md §12 (HTML message wrapper).
+// Server-only: the sanitizer is a real HTML parser (sanitize-html over htmlparser2) with an
+// explicit e-mail-safe allowlist, run when the wrapper is saved AND again when it is rendered.
+// INNOBOX_SPEC.md §12 (HTML message wrapper, *E-mail content safety*).
+import { randomBytes } from "node:crypto";
+import sanitizeHtml from "sanitize-html";
+import { Parser } from "htmlparser2";
 
 /** The literal, case-sensitive token the wrapper must contain exactly once. */
 export const EMAIL_WRAPPER_PLACEHOLDER = "[SYSTEM MESSAGE]";
@@ -12,83 +15,129 @@ export function countWrapperPlaceholders(html: string): number {
   return html.split(EMAIL_WRAPPER_PLACEHOLDER).length - 1;
 }
 
-// Tags removed together with their content — active content that must never survive a save.
-const DROP_WITH_CONTENT = ["script", "iframe", "object", "embed"];
-// Tags whose open/close markers are stripped but whose children are kept (§12 strips `form`).
-const DROP_TAG_ONLY = ["form"];
-// URL-bearing attributes checked for javascript:/data: payloads.
-const URL_ATTRS = new Set(["href", "src", "action", "formaction", "xlink:href", "background"]);
+// ── Wrapper sanitizer (§12 *E-mail content safety*) ─────────────────────────────────────────
 
-function safeUrlValue(raw: string): boolean {
-  // Strip quotes, whitespace and control characters before checking the scheme — defeats
-  // "java\nscript:" style obfuscation.
-  const unquoted = raw.replace(/^["']|["']$/g, "");
-  let v = "";
-  for (const ch of unquoted) {
-    const c = ch.charCodeAt(0);
-    if (c > 32 && c !== 127) v += ch; // drop whitespace + ASCII control chars
+/** E-mail-safe elements: document skeleton, layout tables, block/inline text formatting,
+ *  lists, images, and links. Everything else is dropped (its text kept, except NON_TEXT). */
+const ALLOWED_TAGS = [
+  "html", "head", "body", "title",
+  "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
+  "div", "span", "p", "br", "hr", "center", "blockquote", "pre", "code",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "b", "strong", "i", "em", "u", "s", "strike", "small", "big", "sub", "sup", "font", "abbr",
+  "ul", "ol", "li", "dl", "dt", "dd",
+  "a", "img",
+];
+
+/** Disallowed elements removed together with their content (active or hidden content that
+ *  must never leak as text either). */
+const NON_TEXT_TAGS = [
+  "script", "style", "textarea", "option", "xmp", "noscript", "template",
+  "iframe", "frame", "frameset", "noframes", "object", "embed", "applet",
+  "select", "svg", "math",
+];
+
+const GLOBAL_ATTRS = ["style", "class", "id", "align", "valign", "dir", "lang", "title", "width", "height", "bgcolor", "role"];
+
+const ALLOWED_ATTRS: Record<string, string[]> = {
+  "*": GLOBAL_ATTRS,
+  table: ["border", "cellpadding", "cellspacing", "summary"],
+  td: ["colspan", "rowspan", "nowrap"],
+  th: ["colspan", "rowspan", "nowrap", "scope"],
+  col: ["span"],
+  colgroup: ["span"],
+  a: ["href", "name", "target", "rel"],
+  img: ["src", "alt", "border"],
+  font: ["color", "face", "size"],
+  ol: ["start", "type"],
+  ul: ["type"],
+};
+
+/** A style attribute carrying script-ish or off-scheme URL content is dropped whole (CSS
+ *  `url(...)` must be https or cid, matching the URL-attribute rule). */
+function unsafeStyle(style: string): boolean {
+  const s = style.replace(/\\/g, "").replace(/\s+/g, "").toLowerCase();
+  if (/expression\(|javascript:|vbscript:|behavior:|-moz-binding|@import/.test(s)) return true;
+  for (const m of s.matchAll(/url\(['"]?([^'")]*)/g)) {
+    if (!/^(https:|cid:)/.test(m[1] ?? "")) return true;
   }
-  v = v.toLowerCase();
-  return !v.startsWith("javascript:") && !v.startsWith("vbscript:") && !v.startsWith("data:text/html");
+  return false;
 }
 
-/** Rebuild one tag keeping only safe attributes (drops on* handlers and js: URLs). */
-function sanitizeTag(tag: string): string {
-  const m = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)(\/?)>$/.exec(tag);
-  if (!m) return ""; // malformed pseudo-tag — drop it rather than guess
-  const [, close, name, rawAttrs, selfClose] = m;
-  // Belt-and-suspenders: a drop-tag that reaches this pass (e.g. reassembled by an earlier
-  // removal) is dropped here too — the fixpoint loop in sanitizeWrapperHtml then re-checks.
-  const lower = name!.toLowerCase();
-  if (DROP_WITH_CONTENT.includes(lower) || DROP_TAG_ONLY.includes(lower)) return "";
-  if (close) return `</${name!.toLowerCase()}>`;
-  let attrs = "";
-  // Each match starts with a mandatory name character, so the regex always advances —
-  // no zero-width-loop guard needed.
-  const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g;
-  for (let a = attrRe.exec(rawAttrs ?? ""); a; a = attrRe.exec(rawAttrs ?? "")) {
-    const attrName = a[1]!.toLowerCase();
-    if (attrName.startsWith("on")) continue; // event handlers
-    const value = a[3] ?? "";
-    if (URL_ATTRS.has(attrName) && !safeUrlValue(value)) continue;
-    attrs += a[2] ? ` ${attrName}=${value}` : ` ${attrName}`;
-  }
-  return `<${name!.toLowerCase()}${attrs}${selfClose ? " /" : ""}>`;
-}
+const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: ALLOWED_TAGS,
+  allowedAttributes: ALLOWED_ATTRS,
+  nonTextTags: NON_TEXT_TAGS,
+  disallowedTagsMode: "discard",
+  allowedSchemes: ["https", "mailto", "cid"],
+  allowedSchemesByTag: {},
+  allowedSchemesAppliedToAttributes: ["href", "src", "cite", "background"],
+  allowProtocolRelative: false,
+  allowVulnerableTags: false,
+  transformTags: {
+    "*": (tagName, attribs) => {
+      if (attribs.style !== undefined && unsafeStyle(attribs.style)) {
+        const { style: _dropped, ...rest } = attribs;
+        return { tagName, attribs: rest };
+      }
+      return { tagName, attribs };
+    },
+  },
+};
 
-function sanitizePass(html: string): string {
-  let out = html;
-  for (const t of DROP_WITH_CONTENT) {
-    out = out.replace(new RegExp(`<${t}\\b[\\s\\S]*?</${t}\\s*>`, "gi"), "");
-    out = out.replace(new RegExp(`</?${t}\\b[^>]*>`, "gi"), ""); // unclosed opens + orphan closers
+/** HTML comments are kept as-is (§12): the conditional comments HTML e-mail layouts depend on
+ *  are inert in browsers. sanitize-html drops comments, so they are lifted out first — located
+ *  by the SAME parser sanitize-html uses (so a `<!--` inside an attribute value is never
+ *  mistaken for one) — replaced by unforgeable text tokens, and put back after sanitizing.
+ *  Only a well-formed `<!-- … -->` is restored; anything else the parser calls a comment
+ *  (bogus comments, CDATA, `--!>`-terminated) is dropped. */
+function liftComments(html: string): { text: string; comments: string[]; token: (i: number) => string } {
+  let nonce = randomBytes(12).toString("hex");
+  while (html.includes(nonce)) nonce = randomBytes(12).toString("hex");
+  const token = (i: number) => `innoboxcmt${nonce}n${i}e`;
+
+  const ranges: { start: number; end: number }[] = [];
+  const parser = new Parser({
+    oncomment() {
+      ranges.push({ start: parser.startIndex, end: parser.endIndex });
+    },
+  });
+  parser.write(html);
+  parser.end();
+
+  const comments: string[] = [];
+  let out = "";
+  let cursor = 0;
+  for (const r of ranges) {
+    if (r.start < cursor || r.end < r.start) continue; // defensive: overlapping/odd range
+    const raw = html.slice(r.start, r.end + 1);
+    out += html.slice(cursor, r.start);
+    cursor = r.end + 1;
+    const inner = raw.slice(4, -3);
+    const wellFormed =
+      raw.startsWith("<!--") && raw.endsWith("-->") && raw.length >= 7 && !inner.includes("-->") && !inner.includes("--!>");
+    if (!wellFormed) continue; // dropped
+    out += token(comments.length);
+    comments.push(raw);
   }
-  for (const t of DROP_TAG_ONLY) {
-    out = out.replace(new RegExp(`</?${t}\\b[^>]*>`, "gi"), "");
-  }
-  // Rewrite every remaining tag through the attribute filter (comments pass through —
-  // conditional comments are load-bearing in HTML email).
-  return out.replace(/<!--[\s\S]*?-->|<[^>]+>/g, (tok) => (tok.startsWith("<!--") ? tok : sanitizeTag(tok)));
+  out += html.slice(cursor);
+  return { text: out, comments, token };
 }
 
 /**
- * Allowlist-flavoured sanitizer for the ADMIN-authored wrapper (§12): removes
- * script/iframe/object/embed with their content, strips form tags, drops every `on*`
- * attribute and javascript:-style URL. Defense-in-depth for the in-app editor/preview —
- * the author is a platform admin, but stored HTML should still never carry active content.
- *
- * Removing or rewriting a token can reassemble the surrounding characters into a NEW tag
- * (`<scr<iframe></iframe>ipt>` → `<script>`), so a single pass is bypassable — iterate to a
- * fixpoint and refuse pathological input that won't converge (empty output then fails the
- * placeholder validation, so the save is rejected).
+ * Sanitize the ADMIN-authored wrapper (§12) with a real HTML parser against an explicit
+ * allowlist: e-mail-safe layout/text elements, images, and links survive; script, style,
+ * meta, base, link, forms, frames and every `on*` attribute are dropped, as is any URL whose
+ * scheme isn't https, mailto, or cid. HTML comments are kept as-is.
  */
 export function sanitizeWrapperHtml(html: string): string {
-  let out = html;
-  for (let i = 0; i < 25; i++) {
-    const next = sanitizePass(out);
-    if (next === out) return out;
-    out = next;
-  }
-  return "";
+  if (typeof html !== "string" || html === "") return "";
+  const { text, comments, token } = liftComments(html);
+  let out = sanitizeHtml(text, SANITIZE_OPTIONS);
+  comments.forEach((raw, i) => {
+    out = out.split(token(i)).join(raw);
+  });
+  return out;
 }
 
 export type WrapperValidation = { ok: true; sanitized: string } | { ok: false; error: string };
@@ -103,19 +152,44 @@ export function validateWrapperHtml(html: string): WrapperValidation {
   return { ok: true, sanitized };
 }
 
+// ── Message rendering ─────────────────────────────────────────────────────────────────────
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+function originOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Turn a notification's rendered plain text into an HTML fragment: escaped, URLs as clickable
- * anchors (the email always carries the same links as the in-app notification, §12), newlines
- * as <br>.
+ * Turn a notification's rendered plain text into an HTML fragment: escaped, newlines as <br>.
+ * A URL becomes a clickable anchor ONLY when its origin equals `baseUrl`'s (the app's own
+ * PUBLIC_BASE_URL — the deep link every notification carries, §12). Any other URL — one a user
+ * wrote into a title or comment — stays escaped plain text: readable and copyable, never a
+ * link lent the service mailbox's trust (§12 *E-mail content safety*). With no usable base URL,
+ * nothing is linked.
  */
-export function textToHtmlFragment(text: string): string {
-  const escaped = escapeHtml(text);
-  const linked = escaped.replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}">${url}</a>`);
-  return linked.replace(/\n/g, "<br>\n");
+export function textToHtmlFragment(text: string, baseUrl: string): string {
+  const appOrigin = baseUrl ? originOf(baseUrl) : null;
+  let out = "";
+  let cursor = 0;
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"]+/g)) {
+    const start = m.index ?? 0;
+    // Trailing sentence punctuation is not part of the link.
+    const url = m[0].replace(/[.,;:!?)]+$/, "");
+    out += escapeHtml(text.slice(cursor, start));
+    const safe = escapeHtml(url);
+    out += appOrigin !== null && originOf(url) === appOrigin ? `<a href="${safe}">${safe}</a>` : safe;
+    cursor = start + url.length;
+  }
+  out += escapeHtml(text.slice(cursor));
+  return out.replace(/\n/g, "<br>\n");
 }
 
 /** The always-appended opt-out pointer (§12). Absolute when the base URL is known. */
@@ -132,14 +206,21 @@ export function manageEmailFooterText(baseUrl: string): string {
     : "\n\n—\nManage email notifications in your innobox profile.";
 }
 
+/** The minimal wrapper used when a stored one no longer satisfies the placeholder contract
+ *  after re-sanitizing (e.g. a row saved before a sanitizer change hid it in dropped markup). */
+const FALLBACK_WRAPPER = `<div>${EMAIL_WRAPPER_PLACEHOLDER}</div>`;
+
 /**
- * Render the HTML part of a notification email: the plain-text message becomes an HTML
- * fragment substituted for [SYSTEM MESSAGE] in the (already-sanitized, validated) wrapper,
- * and the manage-preferences footer is appended even when the template omits it.
+ * Render the HTML part of a notification email: the stored wrapper is sanitized again (so a
+ * row stored before a sanitizer change is still cleaned on use), the plain-text message
+ * becomes an HTML fragment substituted for [SYSTEM MESSAGE], and the manage-preferences footer
+ * is appended even when the template omits it.
  */
 export function renderWrappedEmailHtml(wrapperHtml: string, messageText: string, baseUrl: string): string {
-  const fragment = textToHtmlFragment(messageText);
-  return wrapperHtml.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragment) + manageEmailFooterHtml(baseUrl);
+  let wrapper = sanitizeWrapperHtml(wrapperHtml);
+  if (countWrapperPlaceholders(wrapper) !== 1) wrapper = FALLBACK_WRAPPER;
+  const fragment = textToHtmlFragment(messageText, baseUrl);
+  return wrapper.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragment) + manageEmailFooterHtml(baseUrl);
 }
 
 /** Render the plain-text alternative part: the existing text rendering + the manage line. */

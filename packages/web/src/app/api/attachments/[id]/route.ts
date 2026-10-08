@@ -2,10 +2,13 @@
 //   GET    — the authenticated download gateway (invariant 4): streams bytes only when the row
 //            is clean, not removed, and the viewer can see the parent; any denial is an identical
 //            404 (no not-found / not-visible / not-clean oracle) and is audited. No presigned/
-//            direct MinIO URLs are ever emitted.
+//            direct MinIO URLs are ever emitted. The bytes are streamed (never buffered whole)
+//            under `nosniff` + a sandboxing CSP.
 //   DELETE — author removal: uploader-only, only within the parent's §10.1 edit window.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
+import { ATTACHMENT_DOWNLOAD_CSP } from "@/lib/security-headers";
 import { getStorage } from "@/lib/storage";
 import { getAttachmentForDownload, removeAttachment } from "../store";
 
@@ -34,17 +37,22 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
   const headers = new Headers();
   headers.set("content-type", result.mime || "application/octet-stream");
   headers.set("content-disposition", contentDisposition(result.filename));
-  headers.set("content-length", String(result.bytes.byteLength));
+  headers.set("content-length", String(result.sizeBytes));
   // Attachments inherit parent visibility and are user-scoped — never cache in shared caches.
   headers.set("cache-control", "private, no-store");
-  // Copy into a fresh ArrayBuffer-backed view so the body is an unambiguous BodyInit (the
-  // storage client's Uint8Array is generic over ArrayBufferLike).
-  return new Response(new Blob([new Uint8Array(result.bytes)]), { status: 200, headers });
+  // §11 download gateway: even if the file were opened in place, or pulled in by a
+  // <script>/<link> tag on another page, it can never run as script or style in our origin.
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("content-security-policy", ATTACHMENT_DOWNLOAD_CSP);
+  // Streamed straight from the object store — the file is never buffered whole in memory.
+  return new Response(result.body, { status: 200, headers });
 }
 
 export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { id } = await context.params;
 
   const result = await removeAttachment(

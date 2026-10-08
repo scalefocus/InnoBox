@@ -156,6 +156,7 @@ export default function NewChallengePage() {
               className="field" style={{ width: "100%" }}
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
+              maxLength={200}
               required
             />
           </div>

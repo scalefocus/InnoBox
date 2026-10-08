@@ -1,7 +1,10 @@
 // Minimal Prometheus text-exposition helpers (INNOBOX_SPEC.md §2, observability). The format is
-// trivial, so we hand-roll it rather than pull in a dependency — this stays client-safe (pure, no
-// `process`/node APIs; each service composes its own samples, including process gauges) and is
-// fully unit-testable. Web (/metrics route) and worker (/metrics express handler) both use it.
+// trivial, so we hand-roll it rather than pull in a dependency. Pure (no `process` reads — each
+// service composes its own samples, including process gauges, and passes its env in) and fully
+// unit-testable. Server-only: the token gate uses node:crypto, and this module is reached only
+// through the server-side root barrel. Web (/metrics route) and worker (/metrics express handler)
+// both use it.
+import { createHash, timingSafeEqual } from "node:crypto";
 
 export type MetricType = "gauge" | "counter";
 
@@ -49,9 +52,28 @@ export function renderMetrics(samples: MetricSample[]): string {
   return lines.join("\n") + "\n";
 }
 
-/** §2 observability: `/metrics` requires the bearer token when `METRICS_TOKEN` is set (401
- *  otherwise); when the token is unset the endpoint is open (local dev convenience). */
-export function metricsAuthorized(authorizationHeader: string | null | undefined, token: string | undefined | null): boolean {
-  if (!token) return true; // unset → open (dev)
-  return authorizationHeader === `Bearer ${token}`;
+/** The outcome of the §2 `/metrics` gate: serve the samples, answer 401, or answer 404. */
+export type MetricsAccess = "allow" | "unauthorized" | "disabled";
+
+/** Constant-time string equality. Both sides are hashed to fixed-length SHA-256 digests first,
+ *  so neither the comparison time nor an early length mismatch reveals how long the secret is. */
+function constantTimeEqual(provided: string, expected: string): boolean {
+  const a = createHash("sha256").update(provided, "utf8").digest();
+  const b = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(a, b);
+}
+
+/** §2 observability: the `/metrics` gate shared by web and worker.
+ *  - `METRICS_TOKEN` set → the request must carry exactly `Authorization: Bearer <token>`,
+ *    compared in constant time (`unauthorized` → 401 otherwise).
+ *  - unset outside production → open (local dev convenience).
+ *  - unset in a production build (`NODE_ENV=production`) → `disabled` (404), so a forgotten
+ *    variable can never publish process details through the public proxy. */
+export function metricsAccess(opts: {
+  authorization: string | null | undefined;
+  token: string | null | undefined;
+  nodeEnv: string | null | undefined;
+}): MetricsAccess {
+  if (!opts.token) return opts.nodeEnv === "production" ? "disabled" : "allow";
+  return constantTimeEqual(opts.authorization ?? "", `Bearer ${opts.token}`) ? "allow" : "unauthorized";
 }

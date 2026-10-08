@@ -62,7 +62,7 @@ comments) and doc-only edits — but if in doubt, it's gated. The `cp`/`mm` shor
 never bypass the gate: they assume steps 1–4 already happened.
 
 ## Commands / dev workflow
-Node ≥ 20, pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
+Node 24 LTS (`.tool-versions`), pnpm 9.15.x (pinned via `packageManager`). Workspace packages:
 `@innobox/shared`, `@innobox/web`, `@innobox/worker`. Shell commands below are
 **bash syntax** — on Windows run them in Git Bash (or adapt for PowerShell).
 

@@ -1,10 +1,12 @@
 // Unit tests for the §11 scan sweep against a fake Pool + injected fake S3/scanner. Asserts the
 // pending → clean/infected transitions (scanned_at stamped), the infected-path object purge +
-// event-11 notification + audits, and that transient S3/clamd errors leave the row pending.
+// event-11 notification + audits, that outages (S3/clamd unreachable) leave the row untouched,
+// and that per-file errors back off and, at the attempt cap, make the row `unscannable`.
 // The pure INSTREAM framing/parsing is covered by the @innobox/shared attachment tests, so the
 // socket plumbing is not exercised here (it is not pure). Mirrors notifications/dispatch.test.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ClamdErrorReply, SCAN_MAX_ATTEMPTS } from "@innobox/shared";
 import { runScanSweep, type ScanFn, type ScanS3Client } from "./scan.js";
 
 interface Row {
@@ -15,6 +17,7 @@ interface Row {
  *  either the web tier's on-demand scan resolved it first, or it was permanently deleted with its
  *  parent mid-sweep (§10.3). */
 function makeFakePool(pending: Row[], opts: { updateRowCount?: number } = {}) {
+  const selects: string[] = [];
   const updates: { sql: string; params: unknown[] }[] = [];
   const audits: unknown[][] = [];
   const notifications: unknown[][] = [];
@@ -22,6 +25,7 @@ function makeFakePool(pending: Row[], opts: { updateRowCount?: number } = {}) {
   const pool = {
     query: async (sql: string, params: unknown[] = []) => {
       if (sql.includes("from attachments") && sql.includes("scan_status = 'pending'")) {
+        selects.push(sql);
         return { rows: pending, rowCount: pending.length };
       }
       if (sql.startsWith("update attachments")) {
@@ -49,7 +53,7 @@ function makeFakePool(pending: Row[], opts: { updateRowCount?: number } = {}) {
       throw new Error(`unexpected query: ${sql}`);
     },
   };
-  return { pool, updates, audits, notifications, outbox };
+  return { pool, selects, updates, audits, notifications, outbox };
 }
 
 const KNOWN_BYTES = new Uint8Array([1, 2, 3, 4]);
@@ -73,6 +77,7 @@ const challengeRow: Row = {
   object_key: "challenge/chal-1/att-1",
   filename: "clean.pdf",
   uploaded_by: "user-1",
+  scan_attempts: 0,
 };
 
 test("runScanSweep: no pending rows returns a zeroed summary", async () => {
@@ -80,7 +85,15 @@ test("runScanSweep: no pending rows returns a zeroed summary", async () => {
   const { s3 } = fakeS3();
   const scan: ScanFn = async () => ({ clean: true });
   const summary = await runScanSweep(pool as never, { s3, scan });
-  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, errors: 0 });
+  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 0 });
+});
+
+test("runScanSweep: selects only due pending rows (next_scan_at null or past), oldest first", async () => {
+  const { pool, selects } = makeFakePool([]);
+  const { s3 } = fakeS3();
+  await runScanSweep(pool as never, { s3, scan: async () => ({ clean: true }) });
+  assert.match(selects[0]!, /next_scan_at is null or next_scan_at <= now\(\)/);
+  assert.match(selects[0]!, /order by created_at asc/);
 });
 
 test("runScanSweep: clean verdict → row set clean + scanned_at, audited, no delete, no notification", async () => {
@@ -89,7 +102,7 @@ test("runScanSweep: clean verdict → row set clean + scanned_at, audited, no de
   const scan: ScanFn = async () => ({ clean: true });
   const summary = await runScanSweep(pool as never, { s3, scan });
 
-  assert.deepEqual(summary, { scanned: 1, clean: 1, infected: 0, errors: 0 });
+  assert.deepEqual(summary, { scanned: 1, clean: 1, infected: 0, unscannable: 0, errors: 0 });
   assert.equal(updates.length, 1);
   assert.match(updates[0]!.sql, /scan_status = 'clean'/);
   assert.match(updates[0]!.sql, /scanned_at = now\(\)/);
@@ -105,7 +118,7 @@ test("runScanSweep: infected verdict → row set infected, object purged, upload
   const scan: ScanFn = async () => ({ clean: false, signature: "Eicar-Test-Signature" });
   const summary = await runScanSweep(pool as never, { s3, scan });
 
-  assert.deepEqual(summary, { scanned: 1, clean: 0, infected: 1, errors: 0 });
+  assert.deepEqual(summary, { scanned: 1, clean: 0, infected: 1, unscannable: 0, errors: 0 });
   assert.match(updates[0]!.sql, /scan_status = 'infected'/);
   assert.match(updates[0]!.sql, /scanned_at = now\(\)/);
   assert.deepEqual(deleted, ["challenge/chal-1/att-1"], "infected object is purged from MinIO");
@@ -128,6 +141,7 @@ test("runScanSweep: infected solution attachment links to the parent challenge w
     object_key: "solution/sol-2/att-2",
     filename: "bad.zip",
     uploaded_by: "user-9",
+    scan_attempts: 0,
   };
   const { pool, notifications } = makeFakePool([solutionRow]);
   const { s3 } = fakeS3();
@@ -137,27 +151,27 @@ test("runScanSweep: infected solution attachment links to the parent challenge w
   assert.equal(payload.link, "/challenges/5#SOL-7");
 });
 
-test("runScanSweep: transient clamd error leaves the row pending (no update), counted as an error", async () => {
+test("runScanSweep: clamd unreachable leaves the row untouched (no attempt counted), counted as an error", async () => {
   const { pool, updates, audits, notifications } = makeFakePool([challengeRow]);
   const { s3, deleted } = fakeS3();
   const scan: ScanFn = async () => {
-    throw new Error("clamd unreachable");
+    throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
   };
   const summary = await runScanSweep(pool as never, { s3, scan });
 
-  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, errors: 1 });
+  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 1 });
   assert.equal(updates.length, 0, "row must stay pending — no status update");
   assert.equal(audits.length, 0);
   assert.equal(notifications.length, 0);
   assert.equal(deleted.length, 0);
 });
 
-test("runScanSweep: transient S3 fetch error leaves the row pending and never calls the scanner", async () => {
+test("runScanSweep: an object store outage leaves the row untouched and never calls the scanner", async () => {
   const { pool, updates } = makeFakePool([challengeRow]);
   let scanned = false;
   const s3: ScanS3Client = {
     getObject: async () => {
-      throw new Error("minio down");
+      throw Object.assign(new Error("minio down"), { code: "ECONNREFUSED" });
     },
     deleteObject: async () => {},
   };
@@ -167,7 +181,7 @@ test("runScanSweep: transient S3 fetch error leaves the row pending and never ca
   };
   const summary = await runScanSweep(pool as never, { s3, scan });
 
-  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, errors: 1 });
+  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 1 });
   assert.equal(updates.length, 0);
   assert.equal(scanned, false, "the scanner is never invoked when the object can't be fetched");
 });
@@ -187,6 +201,59 @@ test("runScanSweep: a verdict for a row that is no longer pending (resolved else
     assert.deepEqual(notifications, [], "no notification for a vanished attachment");
     assert.deepEqual(outbox, []);
     assert.deepEqual(deleted, [], "no object purge for a row that is not ours to resolve");
-    assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, errors: 0 });
+    assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 0 });
   }
+});
+
+test("runScanSweep: a per-file error (clamd error reply) counts an attempt and backs off — the row stays pending", async () => {
+  const { pool, updates, audits, notifications } = makeFakePool([{ ...challengeRow, scan_attempts: 2 }]);
+  const { s3, deleted } = fakeS3();
+  const scan: ScanFn = async () => {
+    throw new ClamdErrorReply("INSTREAM size limit exceeded. ERROR");
+  };
+  const summary = await runScanSweep(pool as never, { s3, scan });
+
+  assert.deepEqual(summary, { scanned: 0, clean: 0, infected: 0, unscannable: 0, errors: 1 });
+  assert.equal(updates.length, 1);
+  assert.match(updates[0]!.sql, /scan_attempts = \$2, next_scan_at = now\(\) \+ make_interval/);
+  assert.doesNotMatch(updates[0]!.sql, /scan_status = 'unscannable'/);
+  assert.deepEqual(updates[0]!.params, ["att-1", 3, 4, 2], "attempt 3 waits 4 minutes");
+  assert.deepEqual(audits, [], "a retry is not audited");
+  assert.deepEqual(notifications, []);
+  assert.deepEqual(deleted, []);
+});
+
+test("runScanSweep: an unreadable object (not an outage) is a per-file error too", async () => {
+  const { pool, updates } = makeFakePool([challengeRow]);
+  const s3: ScanS3Client = {
+    getObject: async () => {
+      throw Object.assign(new Error("The specified key does not exist."), { name: "NoSuchKey", $metadata: { httpStatusCode: 404 } });
+    },
+    deleteObject: async () => {},
+  };
+  await runScanSweep(pool as never, { s3, scan: async () => ({ clean: true }) });
+  assert.equal(updates.length, 1);
+  assert.match(updates[0]!.sql, /scan_attempts = \$2/);
+});
+
+test("runScanSweep: the attempt-cap per-file error makes the row unscannable — purged, uploader notified (event 11), audited with the error class", async () => {
+  const { pool, updates, audits, notifications, outbox } = makeFakePool([{ ...challengeRow, filename: "odd.pdf", scan_attempts: SCAN_MAX_ATTEMPTS - 1 }]);
+  const { s3, deleted } = fakeS3();
+  const scan: ScanFn = async () => {
+    throw new ClamdErrorReply("Can't allocate memory ERROR");
+  };
+  const summary = await runScanSweep(pool as never, { s3, scan });
+
+  assert.deepEqual(summary, { scanned: 1, clean: 0, infected: 0, unscannable: 1, errors: 0 });
+  assert.match(updates[0]!.sql, /scan_status = 'unscannable', scanned_at = now\(\)/);
+  assert.deepEqual(deleted, ["challenge/chal-1/att-1"], "the unscannable object is purged");
+  const audit = audits.find((p) => p[1] === "attachment.scan_unscannable");
+  assert.ok(audit, "unscannable is audited");
+  assert.deepEqual(JSON.parse(audit![5] as string), { errorClass: "clamd_error_reply", attempts: SCAN_MAX_ATTEMPTS, objectKey: "challenge/chal-1/att-1" });
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0]![0], "user-1");
+  assert.equal(outbox.length, 1);
+  const payload = JSON.parse(notifications[0]![1] as string) as { message: string; link: string };
+  assert.match(payload.message, /couldn't be scanned/);
+  assert.equal(payload.link, "/challenges/5");
 });

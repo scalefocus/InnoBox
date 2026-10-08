@@ -3,9 +3,12 @@
 // /api/attachments. Validates the §14.3 cap, size, and allowlist UP FRONT (fail-fast), opens a
 // server-proxied MinIO multipart upload, and returns { uploadId, chunkSizeBytes }. Chunks are
 // then PUT to /uploads/:uploadId/parts/:n and assembled by POST /uploads/:uploadId/complete —
-// no presigned/direct-store URLs are ever emitted (invariant 4).
+// no presigned/direct-store URLs are ever emitted (invariant 4). Rate-limited per user as an
+// upload start; the JSON body goes through the §2.4 reader (415/413/400, never a 500).
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { isUuid } from "../../challenges/validation";
 import { initiateChunkedUpload } from "../store";
@@ -15,14 +18,12 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "upload");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const rec = body as Record<string, unknown>;
+  const body = await readJsonObject(req);
+  if (!body.ok) return body.response;
+  const rec = body.value;
   const parentType = rec.parentType;
   const filename = rec.filename;
   const mime = rec.mime;

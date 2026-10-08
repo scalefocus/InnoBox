@@ -1,6 +1,6 @@
 # InnoBox worker: SCIM 2.0 endpoints + Entra reconciliation + ClamAV scan pipeline +
 # notification dispatch. Singleton, leader-locked via Postgres advisory lock. (INNOBOX_SPEC.md §2)
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN pnpm --filter @innobox/worker build
 RUN pnpm --filter @innobox/worker --prod deploy /deploy && \
     chmod -R a+rX /deploy
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 # ca-certificates explicitly so outbound HTTPS (Entra, Graph mail) has a CA trust store.
 RUN apk add --no-cache ca-certificates
 WORKDIR /app

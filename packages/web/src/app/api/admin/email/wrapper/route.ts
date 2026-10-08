@@ -3,18 +3,19 @@
 // validated (exactly one [SYSTEM MESSAGE] placeholder), and audited.
 import { requirePlatformAdmin } from "@/lib/auth";
 import { saveEmailWrapper } from "@/lib/email";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const html = (body as Record<string, unknown>).html;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const html = body.html;
   if (typeof html !== "string") return Response.json({ error: "html must be a string" }, { status: 400 });
 
   const result = await saveEmailWrapper(html, gate.user.id);

@@ -40,3 +40,39 @@ test(
     }
   },
 );
+
+test(
+  "audit_log refuses TRUNCATE (statement-level guard trigger, §15)",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: url });
+    try {
+      // The guard is present: a BEFORE TRUNCATE, statement-level trigger on audit_log.
+      // pg_trigger.tgtype bits: 1 = ROW (must be clear), 2 = BEFORE, 32 = TRUNCATE.
+      const { rows: trig } = await pool.query<{ tgtype: number }>(
+        `select t.tgtype from pg_trigger t
+           where t.tgrelid = 'audit_log'::regclass and t.tgname = 'audit_log_no_truncate' and not t.tgisinternal`,
+      );
+      assert.equal(trig.length, 1, "audit_log_no_truncate trigger exists");
+      const tgtype = Number(trig[0]!.tgtype);
+      assert.equal(tgtype & 1, 0, "statement-level, not row-level");
+      assert.equal(tgtype & 2, 2, "fires BEFORE");
+      assert.equal(tgtype & 32, 32, "fires on TRUNCATE");
+
+      // And it bites, whichever role the suite runs as: innobox_app lacks the grant
+      // ("permission denied"), the owner/superuser hits the trigger ("append-only"). Wrapped in
+      // a transaction that is always rolled back, so even a regression could not empty the table.
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await assert.rejects(client.query("truncate audit_log"), /append-only|permission denied/);
+      } finally {
+        await client.query("rollback");
+        client.release();
+      }
+    } finally {
+      await pool.end();
+    }
+  },
+);

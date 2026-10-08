@@ -3,11 +3,16 @@
 //          • bound   (parentId): the store enforces author-only + edit-window (§10.1);
 //          • staged  (draftKey): the submission forms attach files before the parent exists
 //            (§6.1/§6.2) — any authenticated user may stage under their own draftKey.
-//          Both enforce the §14.3 limits (over-count 409, over-size 413) and the allowlist (415).
-//          A hard size cap is applied here before the whole file is buffered into memory.
+//          Both enforce the §14.3 limits (over-count 409, over-size 413), the allowlist (415), and
+//          the content check (415). Single-shot is for files up to the chunk size, so the request
+//          body is capped at the chunk size plus multipart overhead (§2.4) — refused from
+//          Content-Length before anything is read, else by a running byte count — and only then
+//          parsed as form data. Rate-limited per user as an upload start (§2.4).
 //   GET  — ?draftKey=<uuid>: list the caller's OWN staged attachments (status only, no bytes).
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { declaredLengthExceeds, MULTIPART_OVERHEAD_BYTES, readBytesLimited } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { isUuid } from "../challenges/validation";
@@ -30,10 +35,24 @@ export async function GET(req: Request): Promise<Response> {
 export async function POST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "upload");
+  if (limited) return limited;
+
+  // §2.4 body limit, enforced BEFORE the body is buffered: anything larger than one chunk (plus
+  // multipart framing) must use the chunked protocol. Content-Length is checked first; a body
+  // without one is cut off by the running count in readBytesLimited.
+  const limits = await getAttachmentLimits(pool);
+  const maxBodyBytes = limits.chunkSizeMb * 1024 * 1024 + MULTIPART_OVERHEAD_BYTES;
+  if (declaredLengthExceeds(req, maxBodyBytes)) {
+    return Response.json({ error: "request body is too large" }, { status: 413 });
+  }
+  const raw = await readBytesLimited(req, maxBodyBytes);
+  if (!raw.ok) return raw.response;
 
   let form: FormData;
   try {
-    form = await req.formData();
+    const contentType = req.headers.get("content-type") ?? "";
+    form = await new Response(new Blob([new Uint8Array(raw.value)]), { headers: { "content-type": contentType } }).formData();
   } catch {
     return Response.json({ error: "expected multipart/form-data with a file" }, { status: 400 });
   }
@@ -56,9 +75,8 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "parentId or draftKey is required" }, { status: 400 });
   }
 
-  // Hard size cap up front (using the declared size) so an oversized upload is rejected before
-  // it is buffered fully into memory. The store re-checks the actual byte length authoritatively.
-  const limits = await getAttachmentLimits(pool);
+  // The §14.3 max-upload size (the body cap above already bounds what was read). The store
+  // re-checks the actual byte length authoritatively.
   const maxBytes = limits.maxUploadSizeMb * 1024 * 1024;
   if (file.size > maxBytes) {
     return Response.json({ error: `file exceeds the ${limits.maxUploadSizeMb} MB limit` }, { status: 413 });
@@ -85,6 +103,8 @@ export async function POST(req: Request): Promise<Response> {
         return Response.json({ error: `file exceeds the ${limits.maxUploadSizeMb} MB limit` }, { status: 413 });
       case "unsupported_type":
         return Response.json({ error: "that file type is not allowed" }, { status: 415 });
+      case "content_mismatch":
+        return Response.json({ error: "The file's contents don't match its type." }, { status: 415 });
     }
   }
 
@@ -104,5 +124,7 @@ export async function POST(req: Request): Promise<Response> {
       return Response.json({ error: `file exceeds the ${limits.maxUploadSizeMb} MB limit` }, { status: 413 });
     case "unsupported_type":
       return Response.json({ error: "that file type is not allowed" }, { status: 415 });
+    case "content_mismatch":
+      return Response.json({ error: "The file's contents don't match its type." }, { status: 415 });
   }
 }

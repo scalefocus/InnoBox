@@ -210,6 +210,11 @@ provisioning contract, including the Entra dialect quirks:
 
 - **Auth**: `Authorization: Bearer` compared to `SCIM_BEARER_TOKEN` in constant time
   (`crypto.timingSafeEqual`); failures → 401 SCIM error; the header/token is never logged.
+  The token must be at least **32 characters**: the worker **refuses to start** with a
+  shorter (or empty) `SCIM_BEARER_TOKEN`, logging a fatal error that names the variable
+  but never its value. This is the only secret guarding a public endpoint that can create
+  users and change group membership, so a guessable value is a configuration error, not
+  a preference. (`openssl rand -base64 48` yields a suitable value.)
 - **Endpoints**: `/Users` GET(filter)+POST, `/Users/{id}` GET+PUT+PATCH+DELETE, `/Groups`
   GET(filter)+POST, `/Groups/{id}` GET+PUT+PATCH+DELETE, `/ServiceProviderConfig`,
   `/ResourceTypes`, `/Schemas` (static; `patch.supported=true`, `filter.supported=true`).

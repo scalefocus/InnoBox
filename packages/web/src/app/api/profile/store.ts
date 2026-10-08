@@ -172,6 +172,9 @@ export async function getPublicProfile(pool: Pool, userId: string): Promise<Publ
          from solutions s join challenges c on c.id = s.challenge_id
         where s.author_id = $1 and s.is_anonymous = false and c.visibility = 'org'
           and s.status not in ('proposed', 'withdrawn')
+          -- §13.5: a solution inherits its parent challenge's visibility (§4.3), so the parent
+          -- must pass the same public test as a listed challenge.
+          and c.status not in ('awaiting_triage', 'withdrawn')
         order by s.created_at desc limit 50`,
       [userId],
     ),

@@ -8,6 +8,8 @@ import { dispatchEvent, getNamespaceAdminUserIds } from "@/lib/notify";
 import { autoFollow } from "../follows/store";
 import { parseChallengeCreateIds, parseChallengeListFilters } from "./validation";
 import { createChallenge, listChallenges } from "./store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -26,30 +28,28 @@ export async function GET(req: Request): Promise<Response> {
 export async function POST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "create");
+  if (limited) return limited;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
 
   const ids = parseChallengeCreateIds(body);
   if (!ids.ok) return Response.json({ error: ids.error }, { status: 400 });
 
-  const rec = body as Record<string, unknown>;
   const result = await createChallenge(
     pool,
     { userId: gate.user.id, roles: gate.user.roles },
     {
       impactAreaId: ids.value.impactAreaId,
       namespaceId: ids.value.namespaceId,
-      title: rec.title,
-      description: rec.description,
-      clientName: rec.clientName,
-      visibility: rec.visibility,
-      isAnonymous: rec.isAnonymous,
-      draftKey: rec.draftKey,
+      title: body.title,
+      description: body.description,
+      clientName: body.clientName,
+      visibility: body.visibility,
+      isAnonymous: body.isAnonymous,
+      draftKey: body.draftKey,
     },
   );
 

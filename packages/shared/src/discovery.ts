@@ -39,9 +39,21 @@ export const SEARCH_QUERY_MAX = 200;
 
 // ── CSV export (§14.1) ───────────────────────────────────────────────────────────────────
 
-/** RFC 4180 field escaping: quote whenever the value contains a comma, quote, or newline;
- *  embedded quotes double up. */
-export function escapeCsvField(value: string): string {
+/** Leading characters a spreadsheet application treats as the start of a formula (§14.1
+ *  *CSV formula neutralization*). Tab and carriage return are included because some
+ *  spreadsheets strip them and then evaluate what follows. */
+const CSV_FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+
+/** Neutralize a would-be formula by prefixing a single quote (§14.1). Applied to every cell,
+ *  header included, before RFC 4180 quoting — no per-column exceptions. */
+export function neutralizeCsvFormula(value: string): string {
+  return CSV_FORMULA_TRIGGER.test(value) ? `'${value}` : value;
+}
+
+/** One CSV cell: formula-neutralized (§14.1), then RFC 4180 escaped — quoted whenever the
+ *  value contains a comma, quote, or newline; embedded quotes double up. */
+export function escapeCsvField(raw: string): string {
+  const value = neutralizeCsvFormula(raw);
   if (/[",\n\r]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }

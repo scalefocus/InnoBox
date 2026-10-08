@@ -3,20 +3,22 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { deleteComment, editComment } from "../store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
+import { isUuid } from "../validation";
 
 export async function PATCH(req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { id } = await context.params;
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const rec = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  if (!isUuid(id)) return Response.json({ error: "comment not found" }, { status: 404 });
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
 
-  const result = await editComment(pool, { userId: gate.user.id, roles: gate.user.roles }, id, rec.body);
+  const result = await editComment(pool, { userId: gate.user.id, roles: gate.user.roles }, id, body.body);
   switch (result.status) {
     case "ok":
       return Response.json({ comment: result.comment });
@@ -32,7 +34,10 @@ export async function PATCH(req: Request, context: { params: Promise<{ id: strin
 export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { id } = await context.params;
+  if (!isUuid(id)) return Response.json({ error: "comment not found" }, { status: 404 });
 
   const result = await deleteComment(pool, { userId: gate.user.id, roles: gate.user.roles }, id);
   switch (result.status) {

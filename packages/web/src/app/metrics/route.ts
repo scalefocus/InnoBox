@@ -1,15 +1,20 @@
 // GET /metrics (INNOBOX_SPEC.md §2, observability): Prometheus text exposition for the web
-// service. Bearer-token-guarded when METRICS_TOKEN is set (open in local dev when unset). Emits
+// service. Bearer-token-guarded (constant time) when METRICS_TOKEN is set; when it is unset the
+// route is open in local dev but disabled (404) in a production build. Emits
 // build/up/process gauges; the worker exposes the queue/sweep counters (its /metrics handler).
 import { APP_VERSION } from "@innobox/shared/version";
-import { renderMetrics, metricsAuthorized, type MetricSample } from "@innobox/shared";
+import { renderMetrics, metricsAccess, type MetricSample } from "@innobox/shared";
 
 export const dynamic = "force-dynamic";
 
 export function GET(req: Request): Response {
-  if (!metricsAuthorized(req.headers.get("authorization"), process.env.METRICS_TOKEN)) {
-    return new Response("unauthorized\n", { status: 401 });
-  }
+  const access = metricsAccess({
+    authorization: req.headers.get("authorization"),
+    token: process.env.METRICS_TOKEN,
+    nodeEnv: process.env.NODE_ENV,
+  });
+  if (access === "disabled") return new Response("not found\n", { status: 404 });
+  if (access === "unauthorized") return new Response("unauthorized\n", { status: 401 });
 
   const mem = process.memoryUsage();
   const samples: MetricSample[] = [

@@ -25,16 +25,30 @@ import {
  *  (invariant 4). */
 export interface StorageClient {
   putObject(key: string, body: Uint8Array, contentType: string): Promise<void>;
+  /** Buffer a whole object — for the on-demand scan, which streams it to clamd. */
   getObject(key: string): Promise<Uint8Array>;
+  /** Open an object for streaming (the download gateway, §11): the bytes are never buffered
+   *  whole. Rejects when the object is missing/unreadable, BEFORE any byte is sent. */
+  getObjectStream(key: string): Promise<{ body: ReadableStream<Uint8Array>; contentLength: number | null }>;
   deleteObject(key: string): Promise<void>;
   /** Open a multipart upload for `key`; returns the object-store upload id. */
   createMultipartUpload(key: string, contentType: string): Promise<string>;
   /** Relay one chunk as part `partNumber` (1-based) of an open multipart upload. */
   uploadPart(key: string, uploadId: string, partNumber: number, body: Uint8Array): Promise<void>;
-  /** Assemble all uploaded parts into the final object (parts are enumerated server-side). */
-  completeMultipartUpload(key: string, uploadId: string): Promise<void>;
+  /** The parts the store holds for an open multipart upload, with their sizes — the store is
+   *  authoritative (parts can land on any replica), so complete verifies against this. */
+  listParts(key: string, uploadId: string): Promise<StoredPart[]>;
+  /** Assemble exactly `parts` (as returned by `listParts`, ascending) into the final object. */
+  completeMultipartUpload(key: string, uploadId: string, parts: readonly StoredPart[]): Promise<void>;
   /** Discard an open multipart upload and free its already-uploaded parts. */
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
+}
+
+/** One uploaded part of a multipart upload, as the store reports it. */
+export interface StoredPart {
+  partNumber: number;
+  size: number;
+  etag: string;
 }
 
 function env(name: string): string | undefined {
@@ -124,6 +138,14 @@ class S3StorageClient implements StorageClient {
     return streamToUint8Array(res.Body);
   }
 
+  async getObjectStream(key: string): Promise<{ body: ReadableStream<Uint8Array>; contentLength: number | null }> {
+    await this.ensureBucket();
+    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const body = res.Body as { transformToWebStream?: () => ReadableStream<Uint8Array> } | undefined;
+    if (!body || typeof body.transformToWebStream !== "function") throw new Error("object store returned no body");
+    return { body: body.transformToWebStream(), contentLength: typeof res.ContentLength === "number" ? res.ContentLength : null };
+  }
+
   async deleteObject(key: string): Promise<void> {
     await this.ensureBucket();
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
@@ -140,17 +162,36 @@ class S3StorageClient implements StorageClient {
     await this.client.send(new UploadPartCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body }));
   }
 
-  async completeMultipartUpload(key: string, uploadId: string): Promise<void> {
-    // Enumerate the parts the daemon already holds (their ETags) rather than tracking them in
-    // the web tier — part uploads can land on any replica, so the store is authoritative. Our
-    // files split into at most ~40 parts (200 MB / 5 MB), well within a single ListParts page.
-    const listed = await this.client.send(new ListPartsCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId }));
-    const parts = (listed.Parts ?? [])
-      .filter((p) => p.PartNumber != null)
-      .sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
-      .map((p) => ({ PartNumber: p.PartNumber, ETag: p.ETag }));
+  async listParts(key: string, uploadId: string): Promise<StoredPart[]> {
+    // Our files split into at most ~40 parts (200 MB / 5 MB) and out-of-range part numbers are
+    // refused before they reach the store, but follow the pagination anyway — the verification
+    // at complete must see every part the store holds.
+    const parts: StoredPart[] = [];
+    let marker: string | undefined;
+    for (;;) {
+      const page = await this.client.send(
+        new ListPartsCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker }),
+      );
+      for (const p of page.Parts ?? []) {
+        if (p.PartNumber == null) continue;
+        parts.push({ partNumber: p.PartNumber, size: p.Size ?? 0, etag: p.ETag ?? "" });
+      }
+      if (!page.IsTruncated || !page.NextPartNumberMarker) break;
+      marker = page.NextPartNumberMarker;
+    }
+    return parts.sort((a, b) => a.partNumber - b.partNumber);
+  }
+
+  async completeMultipartUpload(key: string, uploadId: string, parts: readonly StoredPart[]): Promise<void> {
+    // Complete with exactly the parts that were verified (by ETag) — a part replaced after the
+    // verification no longer matches and the store refuses the completion.
     await this.client.send(
-      new CompleteMultipartUploadCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, MultipartUpload: { Parts: parts } }),
+      new CompleteMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: { Parts: [...parts].sort((a, b) => a.partNumber - b.partNumber).map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })) },
+      }),
     );
   }
 

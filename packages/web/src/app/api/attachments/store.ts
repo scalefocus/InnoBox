@@ -1,21 +1,27 @@
 // Data layer for attachments (INNOBOX_SPEC.md §11). Enforces the author-only + edit-window
-// upload/remove rules (§10.1), the §14.3 limits, the content-type allowlist, and the download
-// gateway's parent-visibility + clean-scan gate (invariant 4). Anonymity is preserved here:
+// upload/remove rules (§10.1), the §14.3 limits (the per-item cap atomically, under
+// concurrency), the content-type allowlist + content (magic-byte) check, the chunked-upload size
+// binding, and the download gateway's parent-visibility + clean-scan gate (invariant 4). Anonymity is preserved here:
 // list projections never emit `uploaded_by` (invariant 3). Object bytes live in MinIO, injected
 // as a `StorageClient` so this module is unit-testable without live object storage. Imports stay
 // relative (not @/) so the gated dbtest runs under the plain node test runner.
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
+  attachmentContentMatchesType,
   attachmentObjectKey,
+  checkChunkPart,
   isAllowedAttachmentType,
   isAttachmentDownloadable,
   parentAcceptsAttachmentChanges,
   projectAttachmentForViewer,
   stagedAttachmentObjectKey,
+  verifyChunkAssembly,
   type AttachmentParentType,
   type AttachmentRecord,
+  type AttachmentScanStatus,
   type AttachmentView,
+  type ClamdVerdict,
 } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -28,11 +34,13 @@ import { scanAttachmentNow } from "./scan";
  *  worker backstop) — INNOBOX_SPEC.md §11 *Upload-session GC*. */
 export const UPLOAD_SESSION_TTL_HOURS = 2;
 
-/** Dependencies threaded into the write/download paths — the DB pool and the (injectable)
- *  object store. Tests pass an in-memory fake `storage`. */
+/** Dependencies threaded into the write/download paths — the DB pool, the (injectable)
+ *  object store, and optionally a stand-in for clamd. Tests pass an in-memory fake `storage`
+ *  (and a fake `scan` where the on-demand verdict matters). */
 export interface AttachmentDeps {
   pool: Pool;
   storage: StorageClient;
+  scan?: (bytes: Uint8Array) => Promise<ClamdVerdict>;
 }
 
 interface AttachmentDbRow {
@@ -43,7 +51,7 @@ interface AttachmentDbRow {
   size_bytes: string; // bigint → string from pg
   mime: string;
   object_key: string;
-  scan_status: "pending" | "clean" | "infected";
+  scan_status: AttachmentScanStatus;
   removed_at: Date | null;
   uploaded_by: string;
   created_at: Date;
@@ -94,6 +102,39 @@ async function auditDownloadDenied(pool: Pool, viewerId: string, attachmentId: s
   }).catch(() => {});
 }
 
+// ── Per-item cap (§11 / §14.3), atomic under concurrency ─────────────────────────────────
+
+/** Where an upload lands: a bound parent, or the caller's staged draft. The §14.3 cap counts
+ *  that target's non-removed rows (a staged draft counts only the uploader's own rows). */
+type CapTarget =
+  | { kind: "parent"; parentType: AttachmentParentType; parentId: string }
+  | { kind: "draft"; draftKey: string; uploaderId: string };
+
+async function countLiveAttachments(db: Pool | PoolClient, target: CapTarget): Promise<number> {
+  const { rows } =
+    target.kind === "parent"
+      ? await db.query<{ n: string }>(
+          `select count(*)::text as n from attachments where parent_type = $1 and parent_id = $2 and removed_at is null`,
+          [target.parentType, target.parentId],
+        )
+      : await db.query<{ n: string }>(
+          `select count(*)::text as n from attachments where draft_key = $1 and uploaded_by = $2 and removed_at is null`,
+          [target.draftKey, target.uploaderId],
+        );
+  return Number(rows[0]!.n);
+}
+
+/** Serialize every upload into one target for the rest of the transaction: a transaction-scoped
+ *  advisory lock keyed on the parent (or draft + uploader), so "count, then insert" is atomic —
+ *  two uploads racing for the last slot cannot both succeed (§11). Released at COMMIT/ROLLBACK. */
+async function lockCapTarget(client: PoolClient, target: CapTarget): Promise<void> {
+  const key =
+    target.kind === "parent"
+      ? `innobox.attachments:${target.parentType}:${target.parentId}`
+      : `innobox.attachments:draft:${target.draftKey}:${target.uploaderId}`;
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [key]);
+}
+
 // ── List (anonymity-safe projection) ──────────────────────────────────────────────────────
 
 /** The visible attachments for a parent, for a viewer who can already see the parent (§4.3).
@@ -127,7 +168,8 @@ export type UploadAttachmentResult =
   | { status: "not_editable" }
   | { status: "too_many" }
   | { status: "too_large" }
-  | { status: "unsupported_type" };
+  | { status: "unsupported_type" }
+  | { status: "content_mismatch" };
 
 export async function uploadAttachment(
   deps: AttachmentDeps,
@@ -147,25 +189,27 @@ export async function uploadAttachment(
   if (parent.authorId !== viewer.userId) return { status: "forbidden" };
   if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
 
-  // Allowlist (415) — both extension AND declared MIME must be in the set.
+  // Allowlist (415) — both extension AND declared MIME must be in the set — and the content
+  // check (415): the leading bytes must match the extension (§11).
   if (!isAllowedAttachmentType(input.filename, input.mime)) return { status: "unsupported_type" };
+  if (!attachmentContentMatchesType(input.filename, input.bytes)) return { status: "content_mismatch" };
 
-  // §14.3 limits: over-size → 413, over-count → 409 (only non-removed rows count).
+  // §14.3 limits: over-size → 413, over-count → 409 (only non-removed rows count). This first
+  // count is a fast-fail; the authoritative one runs under the cap lock below.
   const limits = await getAttachmentLimits(deps.pool);
   if (input.size > limits.maxUploadSizeMb * 1024 * 1024) return { status: "too_large" };
-  const { rows: countRows } = await deps.pool.query<{ n: string }>(
-    `select count(*)::text as n from attachments where parent_type = $1 and parent_id = $2 and removed_at is null`,
-    [input.parentType, input.parentId],
-  );
-  if (Number(countRows[0]!.n) >= limits.maxPerItem) return { status: "too_many" };
+  const capTarget: CapTarget = { kind: "parent", parentType: input.parentType, parentId: input.parentId };
+  if ((await countLiveAttachments(deps.pool, capTarget)) >= limits.maxPerItem) return { status: "too_many" };
 
   // Write the bytes BEFORE the DB row so a committed row always has an object; compensate by
-  // purging the orphan object if the insert fails (§11 implementation design).
+  // purging the orphan object if the insert fails or loses the race for the last slot (§11).
   const id = randomUUID();
   const objectKey = attachmentObjectKey(input.parentType, input.parentId, id);
   await deps.storage.putObject(objectKey, input.bytes, input.mime);
   try {
-    const result = await inTransaction(deps.pool, async (client) => {
+    const result = await inTransaction(deps.pool, async (client): Promise<UploadAttachmentResult> => {
+      await lockCapTarget(client, capTarget);
+      if ((await countLiveAttachments(client, capTarget)) >= limits.maxPerItem) return { status: "too_many" };
       const { rows } = await client.query<AttachmentDbRow>(
         `insert into attachments (id, parent_type, parent_id, filename, size_bytes, mime, object_key, uploaded_by)
          values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -190,6 +234,10 @@ export async function uploadAttachment(
       // status surfaces to them immediately.
       return { status: "ok" as const, attachment: projectAttachmentForViewer(toRecord(row), viewer.userId)! };
     });
+    if (result.status !== "ok") {
+      await deps.storage.deleteObject(objectKey).catch(() => {});
+      return result;
+    }
     // On-demand scan (§11): fire-and-forget so the response stays fast and the UI shows the
     // distinct "Scanning…" phase; we already hold the bytes, so no re-read. The worker sweep is
     // the fallback if this process is interrupted before the verdict lands.
@@ -207,7 +255,8 @@ export type StageAttachmentResult =
   | { status: "ok"; attachment: AttachmentView }
   | { status: "too_many" }
   | { status: "too_large" }
-  | { status: "unsupported_type" };
+  | { status: "unsupported_type" }
+  | { status: "content_mismatch" };
 
 /** Stage a file under a submission form's `draftKey` (no parent yet, §6.1/§6.2). Any
  *  authenticated user may stage; the §14.3 cap + size/type limits apply to the caller's own
@@ -225,24 +274,26 @@ export async function stageAttachment(
     bytes: Uint8Array;
   },
 ): Promise<StageAttachmentResult> {
-  // Allowlist (415) — both extension AND declared MIME must be in the set.
+  // Allowlist (415) — both extension AND declared MIME must be in the set — and the content
+  // check (415): the leading bytes must match the extension (§11).
   if (!isAllowedAttachmentType(input.filename, input.mime)) return { status: "unsupported_type" };
+  if (!attachmentContentMatchesType(input.filename, input.bytes)) return { status: "content_mismatch" };
 
-  // §14.3 limits: over-size → 413; over-count (per draftKey + uploader) → 409.
+  // §14.3 limits: over-size → 413; over-count (per draftKey + uploader) → 409, re-checked
+  // atomically under the cap lock below.
   const limits = await getAttachmentLimits(deps.pool);
   if (input.size > limits.maxUploadSizeMb * 1024 * 1024) return { status: "too_large" };
-  const { rows: countRows } = await deps.pool.query<{ n: string }>(
-    `select count(*)::text as n from attachments where draft_key = $1 and uploaded_by = $2 and removed_at is null`,
-    [input.draftKey, viewer.userId],
-  );
-  if (Number(countRows[0]!.n) >= limits.maxPerItem) return { status: "too_many" };
+  const capTarget: CapTarget = { kind: "draft", draftKey: input.draftKey, uploaderId: viewer.userId };
+  if ((await countLiveAttachments(deps.pool, capTarget)) >= limits.maxPerItem) return { status: "too_many" };
 
   // Write bytes BEFORE the row (as with bound uploads), compensating on insert failure.
   const id = randomUUID();
   const objectKey = stagedAttachmentObjectKey(input.draftKey, id);
   await deps.storage.putObject(objectKey, input.bytes, input.mime);
   try {
-    const result = await inTransaction(deps.pool, async (client) => {
+    const result = await inTransaction(deps.pool, async (client): Promise<StageAttachmentResult> => {
+      await lockCapTarget(client, capTarget);
+      if ((await countLiveAttachments(client, capTarget)) >= limits.maxPerItem) return { status: "too_many" };
       const { rows } = await client.query<AttachmentDbRow>(
         `insert into attachments (id, parent_type, parent_id, draft_key, filename, size_bytes, mime, object_key, uploaded_by)
          values ($1, $2, null, $3, $4, $5, $6, $7, $8)
@@ -259,6 +310,10 @@ export async function stageAttachment(
       });
       return { status: "ok" as const, attachment: projectAttachmentForViewer(toRecord(row), viewer.userId)! };
     });
+    if (result.status !== "ok") {
+      await deps.storage.deleteObject(objectKey).catch(() => {});
+      return result;
+    }
     // On-demand scan (§11), fire-and-forget — same as bound uploads.
     void scanAttachmentNow(deps, id, { bytes: input.bytes });
     return result;
@@ -340,15 +395,25 @@ export async function removeAttachment(
     parent_type: AttachmentParentType;
     parent_id: string | null;
     uploaded_by: string;
+    scan_status: string;
     removed_at: Date | null;
     object_key: string;
   }>(
-    `select id, parent_type, parent_id, uploaded_by, removed_at, object_key from attachments where id = $1`,
+    `select id, parent_type, parent_id, uploaded_by, scan_status, removed_at, object_key from attachments where id = $1`,
     [attachmentId],
   );
   const att = rows[0];
   if (!att) return { status: "not_found" };
-  if (att.uploaded_by !== viewer.userId) return { status: "forbidden" };
+  if (att.uploaded_by !== viewer.userId) {
+    // §2.4: 403 only for an attachment this viewer can actually see (bound, clean, not removed,
+    // parent visible) — anything else is the same 404 as a nonexistent id.
+    const seen =
+      att.parent_id !== null &&
+      att.scan_status === "clean" &&
+      att.removed_at === null &&
+      (await isParentVisible(deps.pool, viewer, att.parent_type, att.parent_id));
+    return { status: seen ? "forbidden" : "not_found" };
+  }
   if (att.removed_at !== null) return { status: "already_removed" };
 
   // Unbound staged rows (§11): the uploader may remove them at any time — no parent, no
@@ -381,13 +446,14 @@ export async function removeAttachment(
 // ── Download gateway (invariant 4) ────────────────────────────────────────────────────────
 
 export type DownloadAttachmentResult =
-  | { status: "ok"; filename: string; mime: string; bytes: Uint8Array }
+  | { status: "ok"; filename: string; mime: string; sizeBytes: number; body: ReadableStream<Uint8Array> }
   | { status: "denied" };
 
 /** Serve bytes ONLY when the row is clean, not removed, and the viewer can see the parent.
  *  Every other outcome is folded into a single `denied` (mapped to an identical 404 by the
  *  route) and audited `attachment.download_denied` — no not-found / not-visible / not-clean
- *  oracle. Never emits a presigned/direct MinIO URL. */
+ *  oracle. Never emits a presigned/direct MinIO URL. The object is opened as a STREAM (§11):
+ *  the route pipes it to the client, never buffering the whole file in memory. */
 export async function getAttachmentForDownload(
   deps: AttachmentDeps,
   viewer: Viewer,
@@ -418,8 +484,8 @@ export async function getAttachmentForDownload(
     return { status: "denied" };
   }
   try {
-    const bytes = await deps.storage.getObject(att.object_key);
-    return { status: "ok", filename: att.filename, mime: att.mime, bytes };
+    const { body, contentLength } = await deps.storage.getObjectStream(att.object_key);
+    return { status: "ok", filename: att.filename, mime: att.mime, sizeBytes: contentLength ?? Number(att.size_bytes), body };
   } catch {
     // A missing/unreadable object is a denial too — identical 404, no 500 oracle.
     await auditDownloadDenied(deps.pool, viewer.userId, attachmentId);
@@ -429,9 +495,10 @@ export async function getAttachmentForDownload(
 
 // ── Submit scan gate (§11 → §6.1/§6.2) ─────────────────────────────────────────────────────
 
-/** True when any of the caller's own non-removed staged rows for `draftKey` is still `pending`
- *  or `infected`. The create path consults this only when a scanner is available (§11): if so it
- *  refuses to bind, so a submitted item is only ever born with `clean` attachments. */
+/** True when any of the caller's own non-removed staged rows for `draftKey` is still `pending`,
+ *  `infected`, or `unscannable`. The create path consults this only when a scanner is available
+ *  (§11): if so it refuses to bind, so a submitted item is only ever born with `clean`
+ *  attachments. */
 export async function hasUncleanStagedAttachments(
   pool: Pool,
   viewer: Viewer,
@@ -442,7 +509,7 @@ export async function hasUncleanStagedAttachments(
   const { rows } = await pool.query<{ n: string }>(
     `select count(*)::text as n from attachments
       where draft_key = $1 and uploaded_by = $2 and parent_type = $3 and removed_at is null
-        and scan_status in ('pending','infected')`,
+        and scan_status in ('pending','infected','unscannable')`,
     [draftKey, viewer.userId, parentType],
   );
   return Number(rows[0]!.n) > 0;
@@ -528,11 +595,9 @@ export async function initiateChunkedUpload(
   if (staged) {
     const draftKey = input.draftKey!;
     if (!isUuid(draftKey)) return { status: "not_found" };
-    const { rows } = await deps.pool.query<{ n: string }>(
-      `select count(*)::text as n from attachments where draft_key = $1 and uploaded_by = $2 and removed_at is null`,
-      [draftKey, viewer.userId],
-    );
-    if (Number(rows[0]!.n) >= limits.maxPerItem) return { status: "too_many" };
+    if ((await countLiveAttachments(deps.pool, { kind: "draft", draftKey, uploaderId: viewer.userId })) >= limits.maxPerItem) {
+      return { status: "too_many" };
+    }
     objectKey = stagedAttachmentObjectKey(draftKey, attachmentId);
   } else {
     const parentId = input.parentId;
@@ -541,11 +606,9 @@ export async function initiateChunkedUpload(
     if (!parent) return { status: "not_found" };
     if (parent.authorId !== viewer.userId) return { status: "forbidden" };
     if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
-    const { rows } = await deps.pool.query<{ n: string }>(
-      `select count(*)::text as n from attachments where parent_type = $1 and parent_id = $2 and removed_at is null`,
-      [input.parentType, parentId],
-    );
-    if (Number(rows[0]!.n) >= limits.maxPerItem) return { status: "too_many" };
+    if ((await countLiveAttachments(deps.pool, { kind: "parent", parentType: input.parentType, parentId })) >= limits.maxPerItem) {
+      return { status: "too_many" };
+    }
     objectKey = attachmentObjectKey(input.parentType, parentId, attachmentId);
   }
 
@@ -591,9 +654,23 @@ async function loadOwnUploadSession(pool: Pool, viewer: Viewer, uploadId: string
   return rows[0] ?? null;
 }
 
-export type UploadChunkResult = { status: "ok" } | { status: "not_found" } | { status: "bad_request"; error: string };
+/** The negotiated chunk size of a session the caller owns, or null when there is no such
+ *  session — the parts route caps the request body at this BEFORE reading it (§2.4). */
+export async function getOwnUploadChunkSize(pool: Pool, viewer: Viewer, uploadId: string): Promise<number | null> {
+  const session = await loadOwnUploadSession(pool, viewer, uploadId);
+  return session ? Number(session.chunk_size_bytes) : null;
+}
 
-/** Relay one chunk to the open MinIO multipart upload as part `partNumber` (1-based, §11). */
+export type UploadChunkResult =
+  | { status: "ok" }
+  | { status: "not_found" }
+  | { status: "bad_request"; error: string }
+  | { status: "content_mismatch" };
+
+/** Relay one chunk to the open MinIO multipart upload as part `partNumber` (1-based, §11). The
+ *  declared size is binding: the part number must be in 1…N and the part exactly the size the
+ *  binding requires (`checkChunkPart`), else 400 with nothing relayed. Part 1 carries the file's
+ *  first bytes, so the content check runs on it (415). Re-sending a part number replaces it. */
 export async function uploadChunkPart(
   deps: AttachmentDeps,
   viewer: Viewer,
@@ -604,8 +681,17 @@ export async function uploadChunkPart(
   if (!Number.isInteger(partNumber) || partNumber < 1) return { status: "bad_request", error: "partNumber must be a positive integer" };
   const session = await loadOwnUploadSession(deps.pool, viewer, uploadId);
   if (!session) return { status: "not_found" };
-  if (bytes.byteLength === 0) return { status: "bad_request", error: "empty chunk" };
-  if (bytes.byteLength > Number(session.chunk_size_bytes)) return { status: "bad_request", error: "chunk exceeds the negotiated chunk size" };
+  const check = checkChunkPart(Number(session.declared_size_bytes), Number(session.chunk_size_bytes), partNumber, bytes.byteLength);
+  if (!check.ok) {
+    return {
+      status: "bad_request",
+      error:
+        check.reason === "out_of_range"
+          ? "that part number is outside this upload"
+          : "the part's size does not match the upload's declared size",
+    };
+  }
+  if (partNumber === 1 && !attachmentContentMatchesType(session.filename, bytes)) return { status: "content_mismatch" };
   await deps.storage.uploadPart(session.object_key, session.s3_upload_id, partNumber, bytes);
   return { status: "ok" };
 }
@@ -615,12 +701,17 @@ export type CompleteUploadResult =
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "not_editable" }
-  | { status: "too_many" };
+  | { status: "too_many" }
+  | { status: "upload_incomplete" };
 
 /** Assemble the parts into the immutable object and materialize the `pending` attachments row
- *  (§11). Re-checks the bound edit-window + the per-item cap right before committing (the parent
- *  may have transitioned, or a sibling upload completed, since initiate); on failure the multipart
- *  is aborted and nothing is inserted. On success fires the on-demand scan. */
+ *  (§11). First VERIFIES the assembly against the store: it must hold exactly parts 1…N with the
+ *  sizes the declared-size binding requires — on any mismatch the upload is aborted, the session
+ *  dropped, `attachment.upload_aborted` audited (reason `size_mismatch`), and the result is
+ *  `upload_incomplete`. Then re-checks the bound edit-window + the per-item cap (the parent may
+ *  have transitioned, or a sibling upload completed, since initiate); on failure the multipart is
+ *  aborted and nothing is inserted. The final cap check + insert run under the cap lock. On
+ *  success the row records the verified size and the on-demand scan fires. */
 export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer, uploadId: string): Promise<CompleteUploadResult> {
   const session = await loadOwnUploadSession(deps.pool, viewer, uploadId);
   if (!session) return { status: "not_found" };
@@ -632,29 +723,44 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
     return result;
   };
 
-  if (session.draft_key) {
-    const { rows } = await deps.pool.query<{ n: string }>(
-      `select count(*)::text as n from attachments where draft_key = $1 and uploaded_by = $2 and removed_at is null`,
-      [session.draft_key, viewer.userId],
-    );
-    if (Number(rows[0]!.n) >= limits.maxPerItem) return abortAnd({ status: "too_many" });
-  } else {
-    const parent = await loadParent(deps.pool, session.parent_type, session.parent_id!);
+  // Verify the assembly before anything is made permanent (§11 *the declared size is binding*).
+  const storedParts = await deps.storage.listParts(session.object_key, session.s3_upload_id);
+  const verifiedSize = verifyChunkAssembly(Number(session.declared_size_bytes), Number(session.chunk_size_bytes), storedParts);
+  if (verifiedSize === null) {
+    const result = await abortAnd({ status: "upload_incomplete" });
+    await appendAudit(deps.pool, {
+      actorUserId: viewer.userId,
+      action: "attachment.upload_aborted",
+      targetType: "attachment",
+      targetId: session.attachment_id,
+      after: { objectKey: session.object_key, reason: "size_mismatch" },
+    }).catch(() => {});
+    return result;
+  }
+
+  const capTarget: CapTarget = session.draft_key
+    ? { kind: "draft", draftKey: session.draft_key, uploaderId: viewer.userId }
+    : { kind: "parent", parentType: session.parent_type, parentId: session.parent_id! };
+  if (capTarget.kind === "parent") {
+    const parent = await loadParent(deps.pool, capTarget.parentType, capTarget.parentId);
     if (!parent) return abortAnd({ status: "not_found" });
     if (parent.authorId !== viewer.userId) return abortAnd({ status: "forbidden" });
     if (!parentAcceptsAttachmentChanges(session.parent_type, parent.status)) return abortAnd({ status: "not_editable" });
-    const { rows } = await deps.pool.query<{ n: string }>(
-      `select count(*)::text as n from attachments where parent_type = $1 and parent_id = $2 and removed_at is null`,
-      [session.parent_type, session.parent_id],
-    );
-    if (Number(rows[0]!.n) >= limits.maxPerItem) return abortAnd({ status: "too_many" });
   }
+  if ((await countLiveAttachments(deps.pool, capTarget)) >= limits.maxPerItem) return abortAnd({ status: "too_many" });
 
-  // Reassemble the object from its parts. After this the object exists and the s3 upload id is
-  // consumed (it can no longer be aborted), so a later insert failure compensates by deleting it.
-  await deps.storage.completeMultipartUpload(session.object_key, session.s3_upload_id);
+  // Reassemble the object from exactly the verified parts. After this the object exists and the
+  // s3 upload id is consumed (it can no longer be aborted), so a later insert failure — or losing
+  // the race for the last slot — compensates by deleting it.
+  await deps.storage.completeMultipartUpload(session.object_key, session.s3_upload_id, storedParts);
+  const dropAssembled = async (): Promise<void> => {
+    await deps.storage.deleteObject(session.object_key).catch(() => {});
+    await deps.pool.query(`delete from attachment_uploads where id = $1`, [session.id]).catch(() => {});
+  };
   try {
-    const result = await inTransaction(deps.pool, async (client) => {
+    const result = await inTransaction(deps.pool, async (client): Promise<CompleteUploadResult> => {
+      await lockCapTarget(client, capTarget);
+      if ((await countLiveAttachments(client, capTarget)) >= limits.maxPerItem) return { status: "too_many" };
       const { rows } = await client.query<AttachmentDbRow>(
         `insert into attachments (id, parent_type, parent_id, draft_key, filename, size_bytes, mime, object_key, uploaded_by)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -665,7 +771,7 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
           session.parent_id,
           session.draft_key,
           session.filename,
-          Number(session.declared_size_bytes),
+          verifiedSize,
           session.mime,
           session.object_key,
           viewer.userId,
@@ -682,6 +788,7 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
           parentId: session.parent_id,
           draftKey: session.draft_key,
           filename: session.filename,
+          sizeBytes: verifiedSize,
           mime: session.mime,
           chunked: true,
         },
@@ -689,13 +796,16 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
       await client.query(`delete from attachment_uploads where id = $1`, [session.id]);
       return { status: "ok" as const, attachment: projectAttachmentForViewer(toRecord(row), viewer.userId)! };
     });
+    if (result.status !== "ok") {
+      await dropAssembled();
+      return result;
+    }
     // On-demand scan (§11): no bytes in hand (they went straight to the store), so scan fetches
     // the reassembled object. Fire-and-forget; the worker sweep is the fallback.
     void scanAttachmentNow(deps, session.attachment_id);
     return result;
   } catch (err) {
-    await deps.storage.deleteObject(session.object_key).catch(() => {});
-    await deps.pool.query(`delete from attachment_uploads where id = $1`, [session.id]).catch(() => {});
+    await dropAssembled();
     throw err;
   }
 }

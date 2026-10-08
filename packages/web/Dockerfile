@@ -1,5 +1,5 @@
 # Next.js standalone build for the InnoBox web tier. Self-hosted; never Vercel. (INNOBOX_SPEC.md §2)
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN pnpm --filter @innobox/shared build
 RUN pnpm --filter @innobox/web build
 
 # --- runtime (standalone output) ---
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # ca-certificates explicitly so outbound HTTPS (Entra, Graph mail) has a CA trust store.

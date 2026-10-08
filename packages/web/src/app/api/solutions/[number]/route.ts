@@ -8,23 +8,25 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchEvent, getFollowerUserIds } from "@/lib/notify";
 import { getStorage } from "@/lib/storage";
-import { parseStatusOverride } from "../../challenges/validation";
+import { isEntityNumber, parseStatusOverride } from "../../challenges/validation";
 import { deleteSolution } from "../../challenges/delete";
 import { editSolution, setSolutionStatus } from "../../challenges/store";
+import { readJsonObject } from "@/lib/http";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 export async function PATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "solution not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
   const parsed = parseStatusOverride(body, (s) => isSolutionStatus(s));
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
@@ -57,19 +59,18 @@ export async function PATCH(req: Request, context: { params: Promise<{ number: s
 export async function PUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "solution not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const b = (body ?? {}) as Record<string, unknown>;
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
 
   const result = await editSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
-    description: b.description,
-    costVsBenefits: b.costVsBenefits,
+    description: body.description,
+    costVsBenefits: body.costVsBenefits,
   });
   switch (result.status) {
     case "ok":
@@ -94,15 +95,15 @@ export async function PUT(req: Request, context: { params: Promise<{ number: str
 export async function DELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "mutation");
+  if (limited) return limited;
   const { number } = await context.params;
+  if (!isEntityNumber(number)) return Response.json({ error: "solution not found" }, { status: 404 });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
-  }
-  const reason = validateDeleteReason((body as Record<string, unknown> | null)?.reason);
+  const read = await readJsonObject(req);
+  if (!read.ok) return read.response;
+  const body = read.value;
+  const reason = validateDeleteReason(body.reason);
   if (!reason.ok) return Response.json({ error: reason.error }, { status: 422 });
 
   const result = await deleteSolution(

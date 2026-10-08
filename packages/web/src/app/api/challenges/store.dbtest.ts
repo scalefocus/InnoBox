@@ -117,9 +117,10 @@ test(
       assert.ok(await getChallengeByNumber(pool, author, challengeNumber));
       assert.ok(await getChallengeByNumber(pool, admin, challengeNumber));
 
-      // 5. Non-admin cannot override status.
+      // 5. Non-admin cannot override status — and since an awaiting_triage challenge is invisible
+      //    to a mere member, the refusal is "not found", never "forbidden" (§2.4).
       const forbiddenOverride = await setChallengeStatus(pool, member, challengeNumber, "valid");
-      assert.equal(forbiddenOverride.status, "forbidden");
+      assert.equal(forbiddenOverride.status, "not_found");
 
       // 6. Admin override to valid — audited, and now namespace members (not just the
       //    author/admin) can see it since it's no longer awaiting_triage.
@@ -272,10 +273,12 @@ test(
       // ── Part A: committee on a challenge ──────────────────────────────────────────────
       const ch1 = await mkChallenge("SM committee challenge");
 
-      // Triage (leaving awaiting_triage) is admin-only: committee is refused as an illegal arrow.
-      assert.equal((await setChallengeStatus(pool, committee, ch1.number, "in_review")).status, "illegal_transition");
-      // A mere member (no committee/assignee/admin role) is forbidden outright.
-      assert.equal((await setChallengeStatus(pool, member, ch1.number, "in_review")).status, "forbidden");
+      // Triage (leaving awaiting_triage) is admin-only. The committee cannot even SEE an
+      // awaiting_triage challenge (§4.3), so the attempt is not_found rather than an illegal
+      // arrow (§2.4); the illegal-arrow refusal is pinned below on a visible challenge.
+      assert.equal((await setChallengeStatus(pool, committee, ch1.number, "in_review")).status, "not_found");
+      // A mere member cannot even see an awaiting_triage challenge → not_found (§2.4), not forbidden.
+      assert.equal((await setChallengeStatus(pool, member, ch1.number, "in_review")).status, "not_found");
       // Admin triages via free-set override.
       assert.equal((await setChallengeStatus(pool, admin, ch1.number, "in_review")).status, "ok");
       await assertAuditOverride(pool, "challenge.status_changed", ch1.id, true);
@@ -372,8 +375,9 @@ test(
       const num = created.challenge.number.replace("CH-", "");
       const chId = created.challenge.id;
 
-      // Only the author may edit; edit allowed while awaiting_triage.
-      assert.equal((await editChallenge(pool, other, num, { title: "Hijack", description: "x", clientName: null, impactAreaId: internal.id })).status, "forbidden");
+      // Only the author may edit; edit allowed while awaiting_triage. (Another member cannot see
+      // an awaiting_triage challenge at all, so they get not_found — §2.4.)
+      assert.equal((await editChallenge(pool, other, num, { title: "Hijack", description: "x", clientName: null, impactAreaId: internal.id })).status, "not_found");
       const edited = await editChallenge(pool, author, num, { title: "Edited title", description: "Original body", clientName: null, impactAreaId: internal.id });
       assert.equal(edited.status, "ok");
       // edited_at stamped, and a field-level diff audited (only the changed field).
@@ -418,7 +422,8 @@ test(
       const solNum = sol.solution.number.replace("SOL-", "");
       const solId = sol.solution.id;
 
-      assert.equal((await editSolution(pool, other, solNum, { description: "hijack", costVsBenefits: null })).status, "forbidden");
+      // A `proposed` solution is invisible to another member → not_found (§2.4).
+      assert.equal((await editSolution(pool, other, solNum, { description: "hijack", costVsBenefits: null })).status, "not_found");
       assert.equal((await editSolution(pool, author, solNum, { description: "Second draft", costVsBenefits: "cheap" })).status, "ok");
       const { rows: se } = await pool.query<{ after: { description?: string; costVsBenefits?: string } }>(
         `select after from audit_log where action = 'solution.edited' and target_id = $1 order by id desc limit 1`,
@@ -484,8 +489,9 @@ test(
       assert.equal((await setChallengeVisibility(pool, admin, num, "public")).status, "invalid");
       // A non-existent challenge → not_found.
       assert.equal((await setChallengeVisibility(pool, admin, "999999", "org")).status, "not_found");
-      // A mere member (not the namespace admin) cannot change visibility — even the author.
-      assert.equal((await setChallengeVisibility(pool, member, num, "org")).status, "forbidden");
+      // A mere member (not the namespace admin) cannot change visibility — even the author. At
+      // awaiting_triage the member cannot see the challenge, so it is not_found for them (§2.4).
+      assert.equal((await setChallengeVisibility(pool, member, num, "org")).status, "not_found");
       assert.equal((await setChallengeVisibility(pool, author, num, "org")).status, "forbidden");
 
       // Admin flips namespace → org: ok, reflected in the returned detail, audited before→after.
@@ -509,6 +515,143 @@ test(
         [chId],
       );
       assert.equal(cnt[0]!.n, "1", "a no-op visibility set must not append a second audit row");
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  "existence is not disclosed (§2.4): hidden items answer not_found before any forbidden/conflict; malformed numbers too",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool, randomUUID } = await importDeps();
+    const { buildRoleSet } = await import("@innobox/shared");
+    const store = await import("./store");
+    const { createComment, deleteComment, editComment } = await import("../comments/store");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const globalId = g[0]!.id;
+      const mkNs = async (label: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into namespaces (slug, display_name) values ($1, 'Dbtest Hidden NS') returning id`,
+          [`dbtest-hidden-${label}-${stamp}`],
+        );
+        return rows[0]!.id;
+      };
+      const nsId = await mkNs("a");
+      const otherNsId = await mkNs("b");
+      const mkUser = async (label: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name) values ($1, $2, $3) returning id`,
+          [`dbtest-hidden-${label}-${stamp}`, `dbtest-hidden-${label}-${stamp}@example.test`, `Dbtest ${label}`],
+        );
+        return rows[0]!.id;
+      };
+      const roles = (grants: { role: "platform_admin" | "namespace_admin" | "committee" | "member"; namespaceId: string | null }[]) =>
+        buildRoleSet(grants, { globalNamespaceId: globalId });
+      const author = { userId: await mkUser("author"), roles: roles([{ role: "member", namespaceId: nsId }]) };
+      const admin = { userId: await mkUser("admin"), roles: roles([{ role: "namespace_admin", namespaceId: nsId }]) };
+      const member = { userId: await mkUser("member"), roles: roles([{ role: "member", namespaceId: nsId }]) };
+      const outsider = { userId: await mkUser("outsider"), roles: roles([]) };
+      // An admin of a DIFFERENT namespace: admin powers, but none over (or visibility into) namespace A.
+      const foreignAdmin = { userId: await mkUser("foreign-admin"), roles: roles([{ role: "namespace_admin", namespaceId: otherNsId }]) };
+      const internal = (await store.listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
+
+      const mk = async (title: string, visibility: "org" | "namespace", isAnonymous: boolean) => {
+        const c = await store.createChallenge(pool, author, { impactAreaId: internal.id, namespaceId: nsId, title, description: "d", clientName: null, visibility, isAnonymous });
+        if (c.status !== "ok") throw new Error("setup failed");
+        const num = c.challenge.number.replace("CH-", "");
+        assert.equal((await store.setChallengeStatus(pool, admin, num, "valid")).status, "ok");
+        return { id: c.challenge.id, num };
+      };
+      // Namespace-restricted, anonymous, valid, with an anonymous solution moved past `proposed`.
+      const hidden = await mk("Hidden from outsiders", "namespace", true);
+      const sol = await store.createSolution(pool, author, hidden.num, { description: "hidden sol", costVsBenefits: null, isAnonymous: true });
+      if (sol.status !== "ok") throw new Error("setup failed");
+      const solNum = sol.solution.number.replace("SOL-", "");
+      assert.equal((await store.setSolutionStatus(pool, admin, solNum, "in_review")).status, "ok");
+
+      // Every by-number action: a viewer who cannot see the item gets not_found, never the
+      // forbidden / not_anonymous / conflict answer that would confirm the item exists.
+      type V = typeof author;
+      const actions = (v: V, chNum: string, sNum: string): Record<string, () => Promise<{ status: string }>> => ({
+        revealChallenge: () => store.revealChallengeAuthor(pool, v, chNum),
+        selfRevealChallenge: () => store.selfRevealChallenge(pool, v, chNum),
+        withdrawChallenge: () => store.withdrawChallenge(pool, v, chNum),
+        resubmitChallenge: () => store.resubmitChallenge(pool, v, chNum),
+        assign: () => store.setChallengeAssignee(pool, v, chNum, v.userId),
+        visibility: () => store.setChallengeVisibility(pool, v, chNum, "org"),
+        transition: () => store.setChallengeStatus(pool, v, chNum, "rejected"),
+        edit: () => store.editChallenge(pool, v, chNum, { title: "x", description: "x", clientName: null, impactAreaId: internal.id }),
+        propose: () => store.createSolution(pool, v, chNum, { description: "x", costVsBenefits: null, isAnonymous: false }),
+        solutionTransition: () => store.setSolutionStatus(pool, v, sNum, "rejected"),
+        editSolution: () => store.editSolution(pool, v, sNum, { description: "x", costVsBenefits: null }),
+        withdrawSolution: () => store.withdrawSolution(pool, v, sNum),
+        resubmitSolution: () => store.resubmitSolution(pool, v, sNum),
+        revealSolution: () => store.revealSolutionAuthor(pool, v, sNum),
+        selfRevealSolution: () => store.selfRevealSolution(pool, v, sNum),
+      });
+      const probers: [string, V][] = [
+        ["foreign admin", foreignAdmin],
+        ["outsider", outsider],
+      ];
+      for (const [viewerName, viewer] of probers) {
+        for (const [name, run] of Object.entries(actions(viewer, hidden.num, solNum))) {
+          assert.equal((await run()).status, "not_found", `${name} by ${viewerName} on a hidden item`);
+        }
+      }
+      // …indistinguishable from a number that does not exist, or is not a well-formed number at all.
+      const badNumbers: [string, string][] = [
+        ["999999999", "999999999"],
+        ["abc", "1.5"],
+        ["-1", "0"],
+        ["01", "1e3"],
+      ];
+      for (const [badCh, badSol] of badNumbers) {
+        for (const [name, run] of Object.entries(actions(admin, badCh, badSol))) {
+          assert.equal((await run()).status, "not_found", `${name} with ${badCh}/${badSol}`);
+        }
+      }
+      assert.equal(await store.getChallengeByNumber(pool, admin, "abc"), null);
+
+      // Nothing was mutated or revealed by the probes above.
+      const { rows: unchanged } = await pool.query<{ status: string; visibility: string; is_anonymous: boolean; assignee_id: string | null }>(
+        `select status, visibility, is_anonymous, assignee_id from challenges where id = $1`,
+        [hidden.id],
+      );
+      assert.deepEqual({ ...unchanged[0] }, { status: "valid", visibility: "namespace", is_anonymous: true, assignee_id: null });
+      const { rows: reveals } = await pool.query(`select 1 from audit_log where action = 'anonymity.revealed' and target_id = $1`, [hidden.id]);
+      assert.equal(reveals.length, 0, "no reveal was audited for a hidden probe");
+
+      // Once the item IS visible, the permission check answers as before: 403 for a viewer who
+      // can see it but lacks the role. (Org-visible now, so the foreign admin sees it too.)
+      assert.equal((await store.setChallengeVisibility(pool, admin, hidden.num, "org")).status, "ok");
+      assert.equal((await store.revealChallengeAuthor(pool, foreignAdmin, hidden.num)).status, "forbidden");
+      assert.equal((await store.setChallengeAssignee(pool, foreignAdmin, hidden.num, member.userId)).status, "forbidden");
+      assert.equal((await store.revealSolutionAuthor(pool, member, solNum)).status, "forbidden");
+      assert.equal((await store.withdrawChallenge(pool, member, hidden.num)).status, "forbidden");
+      assert.equal((await store.selfRevealSolution(pool, member, solNum)).status, "forbidden");
+      // A `proposed` solution stays hidden from a mere member even on a visible challenge.
+      const proposed = await store.createSolution(pool, author, hidden.num, { description: "still proposed", costVsBenefits: null, isAnonymous: true });
+      if (proposed.status !== "ok") throw new Error("setup failed");
+      const proposedNum = proposed.solution.number.replace("SOL-", "");
+      assert.equal((await store.revealSolutionAuthor(pool, member, proposedNum)).status, "not_found");
+      assert.equal((await store.withdrawSolution(pool, member, proposedNum)).status, "not_found");
+
+      // Comments: edit/delete of a comment under an item the caller cannot see → not_found.
+      const restricted = await mk("Restricted thread", "namespace", false);
+      const comment = await createComment(pool, member, "challenge", restricted.id, "members only");
+      if (comment.status !== "ok") throw new Error("setup failed");
+      assert.equal((await editComment(pool, foreignAdmin, comment.comment.id, "probe")).status, "not_found");
+      assert.equal((await deleteComment(pool, foreignAdmin, comment.comment.id)).status, "not_found");
+      assert.equal((await editComment(pool, foreignAdmin, "not-a-uuid", "probe")).status, "not_found");
+      assert.equal((await deleteComment(pool, foreignAdmin, "not-a-uuid")).status, "not_found");
+      // A visible comment that is not yours still answers forbidden.
+      assert.equal((await editComment(pool, author, comment.comment.id, "hijack")).status, "forbidden");
     } finally {
       await pool.end();
     }
