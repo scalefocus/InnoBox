@@ -28,6 +28,7 @@ import {
   recordScanSweep,
   setLeader,
 } from "./metrics.js";
+import { createScimRateLimit, parseTrustProxy } from "./ratelimit.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -42,6 +43,10 @@ const scimToken = scimTokenCheck.token;
 const port = Number(process.env.WORKER_PORT ?? 4000);
 const app = express();
 app.disable("x-powered-by"); // §2.4: no X-Powered-By on the worker either
+// Behind the proxy (deploy/Caddyfile) the client address arrives in X-Forwarded-For; TRUST_PROXY
+// (deploy/.env.example) decides how much of it to believe, so the §2.4 SCIM rate limiter keys the
+// real caller and never the proxy itself. Unset → not trusted (safe default off-compose).
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
 // DB pool (phase 1): used by SCIM endpoints, leader election, and reconciliation.
 const dbUrl = process.env.DATABASE_URL;
@@ -61,6 +66,9 @@ app.get("/readyz", createReadyzHandler({ pingDb: () => pool.query("select 1"), i
 app.get("/metrics", createMetricsHandler());
 
 // Mount SCIM 2.0 server (phase 1) at /scim/v2 per ENTRA_AUTH_SPEC.md §3.
+// §2.4 SCIM rate limiting — keyed per client IP; the operational endpoints above are
+// deliberately outside the limiter so probe/scrape cadence can never be throttled.
+app.use("/scim/v2", createScimRateLimit());
 app.use("/scim/v2", createScimRouter(pool, { bearerToken: scimToken }));
 
 // Start the server before leader election (health checks must work immediately).

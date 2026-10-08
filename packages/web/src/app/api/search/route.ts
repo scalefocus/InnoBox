@@ -3,6 +3,7 @@
 import { SEARCH_QUERY_MAX } from "@innobox/shared";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
 import { search } from "./store";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "search");
+  if (limited) return limited;
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q") ?? "";

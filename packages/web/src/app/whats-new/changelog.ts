@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.28.0",
+    date: "2026-10-08",
+    summary:
+      "Searching is now part of the protection against runaway or automated traffic: each person can run up to 120 searches a minute, which normal use never comes close to, and anything over that is simply asked to wait a moment and retry. The identity sync endpoint gets the same kind of protection for each caller.",
+  },
+  {
     version: "0.27.1",
     date: "2026-10-08",
     summary:

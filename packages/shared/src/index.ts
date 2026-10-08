@@ -41,3 +41,7 @@ export * from "./metrics.js";
 // §3.1/§13.6 avatars: pure initials + deterministic fallback-color helpers (also exposed at the
 // client-safe `@innobox/shared/avatars` subpath for the <AvatarBubble> component).
 export * from "./avatars.js";
+
+// §2.4 rate limiting: the worker's SCIM per-IP rule + the pure sliding-window limiter, and the
+// RATE_LIMIT_MULTIPLIER resolver the web tier's token buckets also honour.
+export * from "./ratelimit.js";

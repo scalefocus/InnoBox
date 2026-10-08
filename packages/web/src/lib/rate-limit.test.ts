@@ -1,7 +1,7 @@
 // Unit tests for the §2.4 per-user token buckets (INNOBOX_SPEC.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RATE_LIMITS, rateLimit, resetRateLimits, takeToken } from "./rate-limit";
+import { RATE_LIMITS, effectiveLimit, rateLimit, resetRateLimits, takeToken } from "./rate-limit";
 
 test("a bucket allows exactly its limit, then refuses with a Retry-After", () => {
   resetRateLimits();
@@ -48,4 +48,22 @@ test("rateLimit returns null when allowed and a 429 with Retry-After when not", 
   } finally {
     console.warn = original;
   }
+});
+
+test("search is the one limited read: 120 per minute, its own bucket", () => {
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  assert.deepEqual(RATE_LIMITS.search, { limit: 120, windowMs: 60_000 });
+  for (let i = 0; i < 120; i++) assert.equal(takeToken("u1", "search", t0, 1).ok, true);
+  assert.equal(takeToken("u1", "search", t0, 1).ok, false);
+  assert.equal(takeToken("u1", "mutation", t0, 1).ok, true, "search does not drain the mutation bucket");
+});
+
+test("RATE_LIMIT_MULTIPLIER scales every bucket's limit", () => {
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  assert.equal(effectiveLimit("create", 50), 1_500);
+  assert.equal(effectiveLimit("create", 1), RATE_LIMITS.create.limit);
+  for (let i = 0; i < RATE_LIMITS.create.limit * 2; i++) assert.equal(takeToken("u1", "create", t0, 2).ok, true);
+  assert.equal(takeToken("u1", "create", t0, 2).ok, false);
 });
