@@ -1,10 +1,17 @@
 "use client";
 // Challenge submission form (INNOBOX_SPEC.md §6.1). On submit, the challenge is created
 // at `awaiting_triage` and the user is taken to its detail page.
+//
+// Duplicate warning (§6.1): the first Submit click runs the similarity check before anything is
+// created. With matches, an advisory banner lists them and the button becomes "Submit anyway";
+// the next click submits and records which numbers were acknowledged. Editing any field after
+// the warning clears it, so a changed challenge is never posted on a stale acknowledgement.
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { StagedAttachments } from "@/components/StagedAttachments";
+import { CHALLENGE_STATUS_LABEL } from "../status";
 
 interface ImpactArea {
   id: string;
@@ -16,6 +23,13 @@ interface NamespaceOption {
   id: string;
   slug: string;
   displayName: string;
+}
+
+interface SimilarChallenge {
+  number: string;
+  title: string;
+  status: string;
+  author: { displayName: string; anonymous: boolean };
 }
 
 const labelStyle: React.CSSProperties = {
@@ -44,6 +58,11 @@ export default function NewChallengePage() {
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
+  // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
+  const formSignature = JSON.stringify([title, description, impactAreaId, clientName, namespaceId, visibility, isAnonymous]);
+  const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[] } | null>(null);
+  const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -67,6 +86,22 @@ export default function NewChallengePage() {
     setSubmitting(true);
     setError(null);
     try {
+      // First click: check for similar challenges. Advisory — a failed check never blocks.
+      if (similar === null) {
+        const found = await fetch("/api/challenges/similar", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title, description }),
+        })
+          .then((res) => (res.ok ? res.json() : { similar: [] }))
+          .then((json) => (json.similar ?? []) as SimilarChallenge[])
+          .catch(() => [] as SimilarChallenge[]);
+        if (found.length > 0) {
+          setWarning({ signature: formSignature, matches: found });
+          setSubmitting(false);
+          return;
+        }
+      }
       const res = await fetch("/api/challenges", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -79,6 +114,7 @@ export default function NewChallengePage() {
           visibility,
           isAnonymous,
           draftKey,
+          similarAcknowledged: similar?.map((m) => m.number) ?? [],
         }),
       });
       const json = await res.json();
@@ -197,6 +233,31 @@ export default function NewChallengePage() {
           Submit anonymously
         </label>
 
+        {similar && similar.length > 0 && (
+          <div
+            role="alert"
+            data-testid="similar-warning"
+            style={{ border: "1px solid color-mix(in oklab, var(--warn) 40%, var(--line))", background: "var(--warn-soft)", borderRadius: "var(--radius)", padding: "14px 16px" }}
+          >
+            <strong style={{ display: "block", marginBottom: 8 }}>These challenges look similar — is yours one of them?</strong>
+            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+              {similar.map((m) => (
+                <li key={m.number}>
+                  <Link href={`/challenges/${m.number.replace("CH-", "")}`} target="_blank" rel="noopener noreferrer">
+                    <span className="mono">{m.number}</span> {m.title}
+                  </Link>{" "}
+                  <span className="sub">
+                    · {CHALLENGE_STATUS_LABEL[m.status] ?? m.status} · {m.author.anonymous ? "Anonymous" : m.author.displayName}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="sub" style={{ margin: "10px 0 0" }}>
+              If yours is different, submit it anyway — a namespace admin will triage it like any other.
+            </p>
+          </div>
+        )}
+
         {error && (
           <p className="muted" style={{ color: "var(--danger)" }}>
             {error}
@@ -205,7 +266,15 @@ export default function NewChallengePage() {
 
         <div>
           <button type="submit" className="btn btn-primary" disabled={submitting || attachmentsBusy}>
-            {submitting ? "Submitting…" : attachmentsBusy ? "Waiting for attachments…" : "Submit challenge"}
+            {submitting
+              ? similar === null
+                ? "Checking…"
+                : "Submitting…"
+              : attachmentsBusy
+                ? "Waiting for attachments…"
+                : similar && similar.length > 0
+                  ? "Submit anyway"
+                  : "Submit challenge"}
           </button>
         </div>
       </form>

@@ -4,10 +4,11 @@ import { isUuid } from "../../challenges/validation";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getPublicProfile } from "../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, { params }: { params: Promise<{ userId: string }> }): Promise<Response> {
+async function handleGET(_req: Request, { params }: { params: Promise<{ userId: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -18,3 +19,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ userId:
   if (!profile) return Response.json({ error: "not found" }, { status: 404 });
   return Response.json({ profile });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/profile/[userId]", handleGET);

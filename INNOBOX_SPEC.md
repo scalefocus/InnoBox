@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.8 — draft for review** (2026-07-08; v0.2 added the UI and CI/CD
+> Status: **v0.9 — draft for review** (2026-10-08; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -16,7 +16,12 @@
 > repository" rule for open-source readiness; v0.8 pinned the actual open-source
 > release in **§21** — Apache-2.0, the brand as a removable default, GitHub as the
 > new home, and the reframing of §2.2's attribution rule from a mention count into a
-> fork-removability guarantee). Derived from the legacy
+> fork-removability guarantee; v0.9 added eight operability and engagement features,
+> each shipped as its own minor release in this order: rate limiting for search and SCIM (§2.4), the system
+> log (§14.7), audit browser filters + CSV export (§15), the system banner (§14.6),
+> "new since your last visit" markers (§13.1), the duplicate warning on submit (§6.1),
+> per-event notification preferences and coalesced comment notifications (§12.1)).
+> Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
 > development**: it serves the same business process but carries **no backwards
@@ -208,7 +213,8 @@ including theme-aware scrollbars and form controls. Pinned values:
     the account menu
     (display name + initials avatar, with Profile / Quick start / What's new /
     Sign out) in the sidebar foot, and the topbar search + notification bell +
-    theme toggle.
+    theme toggle — plus the §14.6 **system banner** pill between search and bell
+    while one is active.
   - **Unauthenticated** — the wordmark and version colophon only, **no nav links**,
     and a primary **"Sign in with Entra ID"** button occupying the exact sidebar-foot
     slot the account menu uses when signed in; the topbar shows only the theme toggle
@@ -412,11 +418,26 @@ these rules close the generic web-platform paths by which it could.
   - posting a comment — **60 per hour**;
   - starting an upload (single-shot or chunked initiate; parts are bounded by the
     declared size instead) — **60 per hour**;
+  - search, autocomplete, and the §6.1 similarity check — **120 per minute** (the
+    one limited read: each is a full-text query a script could hammer);
   - every other state-changing API request — **120 per minute**.
   An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
   requests — try again shortly."). Rate-limit rejections are **logged** (structured
   warning with user id and bucket), **not audited** — a flood must not become an audit
-  flood. The limits apply to every role; a bulk triage action is one request.
+  flood — and, like any web-tier 429, are recorded in the system log (§14.7), which is
+  operational telemetry, not the audit log. The limits apply to every role; a bulk
+  triage action is one request.
+- **SCIM rate limiting** — the worker's SCIM endpoints are limited per **client IP**:
+  **2 000 requests per 15 minutes**, sized so an initial Entra sync of a few thousand
+  users never trips it (Entra honours a 429 with `Retry-After` if it does). The worker
+  sits behind the proxy and trusts the forwarded address for a configured number of
+  hops (`TRUST_PROXY`), so the real client is keyed, never the proxy itself.
+  `/healthz`, `/readyz`, and `/metrics` are **exempt**, so probe and scrape cadence
+  can never be throttled. Like the web buckets, the counters are in memory per
+  instance.
+- **Dev and e2e scaling** — local dev and e2e may scale every limit above via
+  `RATE_LIMIT_MULTIPLIER`, honoured **only when `NODE_ENV !== "production"`** (the
+  same guard as the dev-auth bypass, §2.3); a production build ignores the variable.
 - **Existence is not disclosed.** Any request about a challenge, solution, comment, or
   attachment the caller **cannot see** (§4.3) answers **404**, indistinguishable from a
   number or id that does not exist. Permission (**403**) and state (**409**) checks
@@ -480,7 +501,11 @@ Entra runbook); on conflict this document wins.
   and is scrubbed exactly like the photo.** It **also erases all presence data**
   (`last_seen_at`, `last_route`, and every `user_activity_days` row for that user,
   §14.5): a retained "Deleted User was last online at 14:32" would defeat the erasure.
-  A scrubbed user therefore never appears in the Currently online panel.
+  A scrubbed user therefore never appears in the Currently online panel. It likewise
+  **scrubs the user's system-log rows** (§14.7 — `actor_name`/`actor_email` cleared,
+  `user_id` nulled; that table is mutable and so, unlike `audit_log`, not exempt) and
+  nulls the per-user seen markers and notification preferences, which live on the
+  `users` row and go with it.
 
 ### §3.1 Profile photos (avatars)
 
@@ -577,7 +602,11 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **last_seen_at** (nullable timestamptz; last user-initiated request, throttled to one
   write per 60 s — §14.5), **last_route** (nullable text; the route category/entity the
   user was last on, masked per §14.5 — current value only, never a history),
-  deactivated_at.
+  **challenges_seen_at** (nullable timestamptz; the §13.1 "new since your last visit"
+  marker, backfilled to the migration's run time), **system_log_seen_at** (nullable;
+  platform admins' §14.7 nav badge), **notify_followed_comments** /
+  **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
+  default true — the §12.1 per-event preferences), deactivated_at.
 - **`role_mappings`** — entra group id → (namespace_id | null for platform) + role.
 - **`impact_areas`** — id, name, active flag. Seeded: **Client, Internal,
   Accelerator**. Platform-admin managed (§14.3); retiring an area keeps it on
@@ -617,14 +646,27 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`notifications`** — id, user_id, type, payload (jsonb), read_at, created_at
   (in-app inbox, §12.2); plus an **outbox** table driving e-mail dispatch from the
   worker. Rows targeting a challenge/solution are deleted with it (§10.3), so no
-  inbox item ever points at a vanished entity.
+  inbox item ever points at a vanished entity. **Comment rows coalesce** (§12.1): a
+  partial unique index on `(user_id, payload->>'parentType', payload->>'parentId')
+  WHERE read_at IS NULL AND type = 'comment_posted'` lets the insert become an atomic
+  update-in-place while the row is unread; the payload carries `count`, `latestBy`,
+  `latestAt`, and the parent `challengeId` (so opening the challenge page can read
+  the rows for the challenge and its solutions).
+- **`system_events`** — the §14.7 operational error log: id, created_at, status,
+  method, route (matched template), path (concrete, no query string; the template
+  only when the target is anonymous), user_id (nullable), actor_name, actor_email
+  (point-in-time snapshot), error_code, message (one sanitized line), request_id,
+  duration_ms, source (`web | worker`). **Mutable** working data (no append-only
+  trigger): trimmed at 90 days by the worker, scrubbed by GDPR erasure (§3). Trigram
+  GIN index for substring search.
 - **`user_activity_days`** — (user_id, day) unique; the transient per-person day set
   that makes "distinct users per day" computable (§14.5). **Deleted by the worker once
   older than 3 days** — long-lived presence history is aggregate-only.
 - **`presence_daily`** — (day) unique, active_users int; the rolled-up daily
   distinct-active-user count behind the §14.5 chart. Carries **no user ids** and is
   retained indefinitely.
-- **`settings`** — key/value platform configuration (§14.3).
+- **`settings`** — key/value platform configuration (§14.3); also holds the
+  `system_banner` singleton (§14.6) and the `system_log_notify_at` watermark (§14.7).
 - **`audit_log`** — append-only (§15).
 
 Dropped from the legacy model (never used by any screen): `Portfolio`,
@@ -654,6 +696,25 @@ files staged during the form **bound** to it in the same transaction (§11) — 
 is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — author auto-follows it (§12.3),
 notifications fire (§12.1 event 1), audit entry.
+
+**Duplicate warning.** The first **Submit** click runs a server-side similarity check
+before anything is created: `POST /api/challenges/similar { title, description }`
+ranks the caller's **visible** challenges — the same visibility predicate as search
+(invariant 2), so another author's `awaiting_triage` item is never a candidate (an
+accepted gap: two people submitting the same idea in the same hour will not see each
+other; the triage queue is where that surfaces) — with the §13.4 full-text index over
+title + description, **excluding `rejected` and `withdrawn`** and keeping `solved` (a
+solved duplicate is the most useful hit), and returns at most **5** matches above a
+minimum rank, each as number, title, status and the author **masked per §9**. With
+matches, the form shows an advisory banner (*"These challenges look similar — is yours
+one of them?"*) listing them as links, and the button flips to **Submit anyway**; the
+next click submits. **Editing any field after the warning re-arms the check** — the
+banner clears and the next click re-checks — so a changed challenge is never posted
+on a stale acknowledgement. With no matches the first click submits directly. The
+check is **advisory, always on, never a hard block**, and has no platform setting.
+When the author submitted past a warning, the `challenge.created` audit payload
+records `similarAcknowledged: [<numbers>]` (absent otherwise) — no new column. The
+endpoint shares the search rate limit (§2.4). **Solutions get no duplicate check in v1.**
 
 ### §6.2 Solution proposal (any user who can see the challenge)
 
@@ -1307,7 +1368,47 @@ Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
 rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`
 (`<PUBLIC_BASE_URL>/challenges/:number`, `…/solutions/:number`).
-Delivery is immediate (no digest in v1).
+Delivery is immediate — there is no scheduled digest (§19); the one batching
+mechanism is the per-item coalescing of comment notifications below.
+
+**Per-event preferences (follower-derived events).** Three profile toggles (§13.5),
+all default **on**, stored on `users` as `notify_followed_comments`,
+`notify_followed_status`, `notify_followed_solutions` (boolean, not null, default
+true; existing users backfilled on):
+
+- *Comments on items I follow* — gates **event 6** for **every** recipient route
+  (item author, other commenters, followers). A mute is a mute: an author who turns
+  it off hears no comments on their own item either.
+- *Status changes on items I follow* — gates **event 3** for followers **and**
+  authors. It does **not** touch the actionable author/assignee events — 4 (rejected),
+  5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed) — which stay
+  non-mutable.
+- *New solutions on challenges I follow* — gates **event 2** for the challenge author
+  and followers; the admin/committee recipients of event 2 are unaffected.
+
+These are **row-level, applied at insert time**: an opted-out recipient is removed
+from the recipient set before either the inbox row or the outbox row is written — no
+bell, no e-mail, nothing to deliver. The e-mail switch (§13.5) stays **channel-level**
+and orthogonal: it suppresses e-mail for rows that *do* exist. The four **admin
+attention events** (1, 2, 9, 10 to namespace/platform admins) are **never mutable** —
+triage is a duty, and the §14.4 badge is not a substitute for a muted mail. Toggling is
+silent (not audited, like the e-mail switch) and forward-only: flipping off deletes
+nothing already delivered, flipping on backfills nothing missed.
+
+**Coalesced comment notifications (event 6).** Comment notifications are **one inbox
+row per recipient per item**, not one per comment. The first comment inserts the row
+(`type = comment_posted`, payload: parent, `count: 1`, `latestBy`, `latestAt`); every
+further comment on the same item **while that row is unread** updates it in place
+(an atomic upsert against the §5 partial unique index): `count` incremented,
+`latestBy`/`latestAt` refreshed, `created_at` bumped so it re-sorts to the top. The
+update **preserves the row's outbox/delivery bookkeeping** — the e-mail went out with
+the first comment and is **not re-sent** on refresh — so a recipient receives **at most
+one e-mail per item until they read it**; once read, the next comment starts a fresh
+row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
+(comments carry no anonymity option, so the commenter's name is safe; the item's own
+author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
+**or opening the item's detail page** all mark that item's row read. **Only event 6
+coalesces**; every other event remains one row per occurrence.
 
 **E-mail content safety.** A notification e-mail comes from the organization's trusted
 service mailbox, so it must not lend that trust to links a user wrote:
@@ -1343,7 +1444,11 @@ no delete event, by design.
 
 Bell icon with unread count; inbox lists notifications newest-first with read/unread
 state, mark-read and mark-all-read. In-app notifications are always on; the per-user
-opt-out (§13.5 profile) affects e-mail only.
+opt-out (§13.5 profile) affects e-mail only, and the §12.1 per-event preferences
+remove a recipient before any row exists. A coalesced comment row (§12.1) renders its
+count and latest commenter; the platform admins' `system.error` alert (§14.7) is an
+ordinary inbox row that is never e-mailed. The 30-second unread poll also carries the
+active §14.6 system banner, so no second poll exists for it.
 
 ### §12.3 Follows
 
@@ -1368,6 +1473,21 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
   date, impact area, status, like count, and a solution count that excludes
   `rejected`/`not_selected`/`withdrawn`/`proposed`.
 - Strictly visibility-filtered, including counts (invariant 2, §4.3).
+
+**New since your last visit.** Each user carries `users.challenges_seen_at` (§5;
+the migration **backfills it to its run time**, so nobody lands on a bubble at
+roll-out). A challenge is **new to the viewer** when `created_at >
+challenges_seen_at` **and** it is visible to them (invariant 2). A new solution or
+comment on an existing challenge does **not** make it new, and the viewer's own
+just-submitted items count like anyone else's. The **Challenges** nav item shows a
+superscript `1`–`9` / `9+` count of new items (hidden at zero; the §14.4 bubble
+style), polled on the 30-second bell cadence via `GET /api/challenges/new-count →
+{ count }` — a bare integer, no titles or namespaces. Each matching card, on **any**
+tab, carries a small **"new" corner tag**, so the tagged cards are exactly the ones
+the count refers to. The marker **advances when the user leaves the Challenges
+surface** — `/challenges` and its `/challenges/:number` detail pages share it — via
+`POST /api/me/challenges-seen`, never on entry: the count and tags stay stable for the
+whole visit, and the next visit flags only genuinely newer items.
 
 **Detail page (`/challenges/:number`):**
 - Full fields: number, title, description, impact area, client name (if
@@ -1500,8 +1620,11 @@ Own profile shows: identity (from Entra — display name, e-mail, department, jo
 title, **office location**); **my challenges by
 status** (incl. awaiting triage); **my solutions by status**; **likes received**;
 items I follow; latest activity (newest first, any status — fixing the legacy
-"oldest in-review only" bug); notification preference (the e-mail opt-out
-**switch**, below).
+"oldest in-review only" bug); notification preferences (the e-mail opt-out
+**switch**, below, followed by the three §12.1 per-event toggles — *Comments on items
+I follow*, *Status changes on items I follow*, *New solutions on challenges I
+follow* — rendered as the same pill switch with the same on-left travel, optimistic
+flip and inline-error revert).
 Other users' profiles show display name, department, job title, **office location**,
 photo, and their **non-anonymous** org-visible contributions. "Org-visible" is the full
 §4.3 test that an arbitrary authenticated viewer would pass, applied to **both** the item
@@ -1738,9 +1861,10 @@ Top to bottom, in a fixed max-width (~280 px) card:
 ## §14 Administration
 
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
-admins land here (platform-admin-only cards — settings, audit — are hidden from
-namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform settings
-(§14.3), and the audit browser (§15) — each render a **breadcrumb** above the page
+admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
+system log §14.7 — are hidden from namespace admins, §4). Its sub-pages — the triage
+queue (§14.1), platform settings (§14.3), the audit browser (§15), and the system log
+(§14.7) — each render a **breadcrumb** above the page
 title, via a shared component: **Administration** (a link back to `/admin`) › *current
 page* (the trailing crumb is plain text, not a link). Every present and future
 `/admin/*` sub-page carries it, so the way back to the console is consistent. The
@@ -2007,6 +2131,107 @@ Each row shows where that user last was: a **route category** (`Challenges`, `Tr
   can see it. Covert monitoring is not on the table; the wider DPIA / works-council
   position is an organizational decision outside this spec.
 
+### §14.6 System banner (platform admin)
+
+A single, platform-wide announcement a platform admin posts, shown to **every
+authenticated user** as a pill in the topbar between the search box and the bell
+(§2.2). Deliberately **not** built on the notifications/outbox pipeline — it never
+creates an inbox row and never sends e-mail, so "excluded from notifications" is
+structural rather than a filter.
+
+- **Storage:** one `settings` key, `system_banner` → `{ message, tone, url, expiresAt }`;
+  the row's `updated_by`/`updated_at` record who set it and when. `message` is plain
+  UTF-8, **≤ 120 characters**, escaped on render, no markup. `tone` ∈ `info | warning`
+  (accent pill vs the warn token). `url` is **optional** — `https:` only, or a path
+  relative to `PUBLIC_BASE_URL` — validated server-side and rendered as a trailing
+  **"Learn more →"** link.
+- **Set / replace** — `PUT /api/admin/system-banner`, platform admin only: an
+  unconditional upsert. Text, tone, link and duration replace whatever is active and
+  the countdown **always restarts from the save** (`expiresAt = now() + duration`),
+  whether the new duration is longer or shorter than the time that was left.
+  **Duration** is exactly one of **1h / 4h / 8h / 1d (24 h) / 1w (168 h) / 30d (720 h)**
+  — fixed options, no custom value. Audited `system_banner.set` (actor, message, tone,
+  url, duration).
+- **Clear** — `DELETE /api/admin/system-banner`, platform admin only: removes the
+  banner immediately. Audited `system_banner.cleared`.
+- **Expiry is lazy** — the banner is active iff `expiresAt > now()`, computed at read
+  time by every reader; no worker sweep. **Singleton**: at most one banner; saving over
+  an active one replaces it; there is no queue and no history beyond the audit rows.
+- **Audience & scope:** every authenticated user, org-wide. No namespace scoping
+  (namespace admins have no authority here), **no per-user dismiss**, and the
+  unauthenticated Home (§13.2) never shows it.
+- **Delivery:** folded into the existing 30-second bell poll — the unread-count
+  response gains `banner: { message, tone, url, expiresAt } | null` (§12.2) — so an
+  open tab picks up a new, replaced or cleared banner within one poll and no second
+  transport exists.
+- **Rendering:** desktop — a width-capped pill that truncates on one line with an
+  ellipsis (full text via `title`) and **never** grows under the bell/theme controls;
+  mobile (the §2.2 narrow topbar) — its own full-width line below the search row,
+  **wrapping** the full text, because touch has no hover and an ellipsis would hide the
+  announcement. Hidden entirely when nothing is active (never an empty row).
+- **Administration card:** a collapsible platform-admin card — text input with a live
+  character counter, tone selector, optional link field, duration selector, **Save**;
+  while a banner is active it also shows the live message, the remaining time and a
+  **Clear now** button, and reverts to the empty state on its own once expired.
+
+### §14.7 System log (platform admin)
+
+An operational view of the **user-facing HTTP errors** the platform returned — the
+issues users hit, and who hit them. This is **not the audit log**: it is high-volume,
+**mutable** operational telemetry with retention, no append-only trigger and no
+provenance guarantee. **Platform admins only** — linked from the Administration
+console directly under Audit, never shown to namespace admins, and the API answers
+**403** to anyone else.
+
+- **What is recorded.** Every **5xx**; of 4xx only **403 / 409 / 413 / 422 / 429**
+  (a 429 from the §2.4 rate limiter included). **401 never** (expired-session poll
+  noise) and `/api/*` **404 never**. The web tier, plus one worker carve-out: the SCIM
+  endpoints' **401 / 403** (`source = worker`) — a wrong provisioning token or SCIM URL
+  is the first symptom of an Entra misconfiguration and is worth surfacing. Scan-
+  pipeline failures are **not** recorded here (already audited, §11).
+- **Capture.** A `withSystemLog(routeTemplate, handler)` wrapper records, in the
+  route's own context, both the error responses a handler returns and the errors it
+  throws (stack to stdout, a JSON 500 to the client, a 500 row here). Next's
+  `instrumentation.ts` `onRequestError` catches uncaught 500s on unwrapped routes (no
+  overlap: a wrapped handler's throw never reaches it). **Fire-and-forget** — the
+  insert is never awaited, a logging failure can never turn a response into a 500,
+  and the 2xx path pays nothing.
+- **Data** — `system_events` (§5): `status`, `method`, `route` (matched template),
+  `path` (concrete, **no query string**), `user_id` (null = anonymous) plus a
+  point-in-time `actor_name` / `actor_email` snapshot, `error_code`, a one-line
+  sanitized `message` (**no stack trace**), `request_id`, `duration_ms`, `source`.
+  Never the body, the headers or the query string.
+- **Anonymity (invariant 3 — the §14.5 rule).** When the request targeted an
+  anonymous challenge or solution, `path` stores the **route template only**
+  (`/challenges/[number]`), never the concrete number: a named user paired with an
+  anonymous item outside the audited reveal is exactly the correlation §9 closes. The
+  wrapper resolves this at insert from the route's already-loaded entity and
+  **defaults to masking when it cannot tell**.
+- **GDPR erasure (§3)** scrubs `actor_name`/`actor_email` and nulls `user_id` on the
+  erased user's rows — the table is mutable, so unlike `audit_log` it is not exempt.
+- **Surface — `/admin/system-log`.** Status chips (All / 5xx / 403 / 413 / 422 /
+  429; 409 and the worker 401s have no chip and appear under All), a debounced search
+  box (trigram substring over path, error code, message, actor name/e-mail), a
+  **From/To** date range (local day → UTC; To is inclusive end-of-day), a **`✕ clear
+  filters`** control shown while any filter is active, and infinite scroll in pages
+  of 100. Rows show a colour-coded status pill, `METHOD path`, the error code, the
+  user (click to filter by them) and a relative time; clicking a row expands the full
+  record. `GET /api/admin/system-log?q&status&from&to&limit&offset`.
+- **CSV export** — `GET /api/admin/system-log/export`, same gate: honours the active
+  filters (exports what is on screen), capped at **50 000** rows newest-first;
+  `X-Total-Matching` / `X-Exported-Count` headers drive an in-app *"exported N of M —
+  narrow the range"* notice when the filtered set exceeds the cap. RFC 4180 quoting,
+  UTF-8 BOM. Audited `system_log.exported` (actor, filters, row count).
+- **Retention.** The worker's hourly housekeeping sweep (§14.5) deletes rows older
+  than **90 days**, so the date range only ever spans that window.
+- **Nav badge & alert.** The System log entry shows a `1`–`9` / `9+` superscript of
+  events recorded since the admin last opened the page (`users.system_log_seen_at`,
+  stamped on visit — the §14.4 mechanism). A leader-only worker sweep (every 5 min)
+  posts a **coalesced** `system.error` inbox row to each platform admin — one unread
+  item whose count accumulates until read, watermarked in `settings.system_log_notify_at`
+  so nothing double-counts. **In-app only, never e-mailed**, and exempt from the §12.1
+  preferences.
+
 ---
 
 ## §15 Audit
@@ -2036,6 +2261,38 @@ grant in any case; the trigger closes the path for the owner role too, so emptyi
 table requires deliberately dropping the trigger first (itself a DDL change visible in
 migrations), never an accidental `TRUNCATE`.
 
+**Audit browser (`/admin/audit`, platform admin).** The default view is the newest
+100 rows, infinite scroll in pages of 100 over all history. Layered on top, all
+optional and composable (each an additional `AND`):
+
+- **Category chips** by action prefix — All / Challenges (`challenge.*`) / Solutions
+  (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
+  (`user.*`, `scim.*`, `role_mapping.*`) / Admin (`settings.*`, `namespace.*`,
+  `impact_area.*`, `system_banner.*`, `presence.*`, every `*.exported`).
+- **Search box** (debounced) — a plain `ILIKE` over the human-meaningful fields:
+  action, target type, target number, actor name, actor e-mail (joined live). The
+  JSON payload is deliberately **not** searched and there is no trigram index — the
+  query is bounded by `ORDER BY created_at DESC LIMIT 100` on the existing index.
+- **Date range** — two native date inputs; the picked **local** day resolves to UTC
+  instants, From = start of day, To = **inclusive** end of day.
+- **`✕ clear filters`** — shown only while any filter is active; resets to the default
+  view.
+
+`GET /api/admin/audit` gains `q`, `category`, `from`, `to` beside `limit`/`offset`.
+
+**CSV export** — `GET /api/admin/audit/export`, platform admin only (the only role
+that sees the browser at all): honours the same active filters, so it downloads
+exactly what is on screen; capped at **50 000** rows newest-first, with
+`X-Total-Matching` / `X-Exported-Count` headers driving the in-app *"exported N of M —
+narrow the range"* notice; every column of the row, with `before`/`after` as their raw
+JSON strings (lossless, matching the viewer); RFC 4180 quoting, UTF-8 BOM. **Rows are
+not anonymity-masked.** The audit log is the provenance record: it already shows the
+true actor of an anonymous submission to platform admins in the browser, and those
+same admins hold the §9 reveal power — a masked export would be lossy while leaving the
+browser as the unmasked path. The compensating control is that **every export is
+itself audited** — `audit.exported` with actor, active filters and row count — so a
+bulk download of identities is never silent.
+
 ---
 
 ## §16 API surface (contract level)
@@ -2043,13 +2300,16 @@ migrations), never an accidental `TRUNCATE`.
 REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource groups:
 
 - `challenges` (list/search/detail/create/edit/withdraw/transition/assign/visibility/
-  **delete**)
+  **delete**; `challenges/similar` — the §6.1 duplicate check; `challenges/new-count`
+  — the §13.1 bare integer)
 - `challenges/:id/solutions`, `solutions` (detail/create/edit/withdraw/transition/
   **delete**) — `DELETE` on either is the platform-admin hard delete (§10.3): reason
   required in the body, cascading, irreversible, **404 (not 403)** to anyone else
 - `comments`, `likes`, `follows` (create/delete on either parent type)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
-- `notifications` (inbox, mark read), `me` (profile, preferences)
+- `notifications` (inbox, mark read; the unread poll carries the §14.6 banner), `me`
+  (profile, preferences incl. the three §12.1 toggles; `me/challenges-seen` advances
+  the §13.1 marker)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
   malformed id, §13.8)
@@ -2057,7 +2317,10 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
   and `admin/presence/history?range=7d|30d|90d|all` → `{ points[] }`** — platform admin
-  only (**403** for namespace admins), anonymity-masked locations, §14.5)
+  only (**403** for namespace admins), anonymity-masked locations, §14.5;
+  **`admin/audit` with `q`/`category`/`from`/`to` + `admin/audit/export`** (§15);
+  **`admin/system-banner` `PUT`/`DELETE`** (§14.6); **`admin/system-log` +
+  `admin/system-log/export` + mark-seen** (§14.7) — all platform admin only)
 
 Exact shapes are defined during implementation and documented alongside the code;
 any change to a shipped shape is a spec change first (§17). Responses apply
@@ -2115,7 +2378,8 @@ anything the caller can't see, and 400 (never 500) for malformed input.
 
 No data migration from SharePoint; no Power Apps/old-link compatibility; no links to
 the legacy SharePoint site; no campaigns/challenge deadlines; no reward points; no
-comment threading; no digest e-mails; no undelete, trash, or restore for a deleted
+comment threading; no scheduled digest e-mails (the per-item coalescing of comment
+notifications, §12.1, is in scope and is not a digest); no undelete, trash, or restore for a deleted
 challenge or solution (§10.3 is permanent by design); no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app.
 

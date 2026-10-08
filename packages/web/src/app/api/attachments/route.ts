@@ -17,10 +17,11 @@ import { getStorage } from "@/lib/storage";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { isUuid } from "../challenges/validation";
 import { listStagedAttachments, stageAttachment, uploadAttachment } from "./store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -32,7 +33,7 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ attachments });
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "upload");
@@ -128,3 +129,7 @@ export async function POST(req: Request): Promise<Response> {
       return Response.json({ error: "The file's contents don't match its type." }, { status: 415 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/attachments", handleGET);
+export const POST = withSystemLog("/api/attachments", handlePOST);

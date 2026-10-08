@@ -4,8 +4,9 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { searchActiveUsers } from "./store";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
@@ -14,3 +15,6 @@ export async function GET(req: Request): Promise<Response> {
   const users = await searchActiveUsers(pool, q);
   return Response.json({ users });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/users", handleGET);

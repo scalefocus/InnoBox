@@ -41,3 +41,23 @@ export * from "./metrics.js";
 // §3.1/§13.6 avatars: pure initials + deterministic fallback-color helpers (also exposed at the
 // client-safe `@innobox/shared/avatars` subpath for the <AvatarBubble> component).
 export * from "./avatars.js";
+
+// §2.4 rate limiting: the worker's SCIM per-IP rule + the pure sliding-window limiter, and the
+// RATE_LIMIT_MULTIPLIER resolver the web tier's token buckets also honour.
+export * from "./ratelimit.js";
+
+// §14.7 system log: which statuses are recorded, message sanitizing, the status chips, and the
+// entity-in-path extraction behind anonymity masking. DB access lives in each tier.
+export * from "./system-log.js";
+
+// §15 audit browser: category chips (action prefixes), page size and export cap. Client-safe,
+// also exposed at `@innobox/shared/audit-browser`.
+export * from "./audit-browser.js";
+
+// §14.6 system banner: validation, the fixed durations, lazy-expiry check. Client-safe, also
+// exposed at `@innobox/shared/system-banner`.
+export * from "./system-banner.js";
+
+// §12.1 per-event notification preferences: the three follower-event toggles, the mute, and the
+// PATCH parser. Client-safe, also exposed at `@innobox/shared/notification-preferences`.
+export * from "./notification-preferences.js";

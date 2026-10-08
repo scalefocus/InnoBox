@@ -30,6 +30,11 @@ const webServer =
         // NEXTAUTH_* from the environment (locally via .env.local; in CI via job variables).
         reuseExistingServer: true,
         timeout: 180_000,
+        // The suites submit far more than the §2.4 per-user budgets allow in an hour, so a server
+        // Playwright starts itself runs with the limits scaled up (non-production only — the
+        // variable is ignored under NODE_ENV=production). A reused dev server needs the same
+        // variable in its own environment (.env.local).
+        env: { ...process.env, RATE_LIMIT_MULTIPLIER: process.env.RATE_LIMIT_MULTIPLIER ?? "50" },
       };
 
 export default defineConfig({

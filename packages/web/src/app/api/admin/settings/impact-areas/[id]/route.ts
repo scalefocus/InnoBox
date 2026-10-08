@@ -8,8 +8,9 @@ import { deleteImpactArea, patchImpactArea } from "../../store";
 import { parseImpactAreaPatch } from "../../validation";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handlePATCH(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -35,7 +36,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 }
 
-export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handleDELETE(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -65,3 +66,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       return Response.json({ error: "the reassignment area must be a different active area, and cannot be Client" }, { status: 400 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PATCH = withSystemLog("/api/admin/settings/impact-areas/[id]", handlePATCH);
+export const DELETE = withSystemLog("/api/admin/settings/impact-areas/[id]", handleDELETE);

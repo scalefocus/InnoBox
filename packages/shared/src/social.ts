@@ -47,6 +47,8 @@ export const NOTIFICATION_TYPES = [
   "challenge_unassigned",
   "solution_implemented",
   "attachment_scan_failed",
+  // §14.7: the platform admins' coalesced system-log alert — in-app only, never e-mailed.
+  "system_error",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -71,4 +73,17 @@ export function finalizeRecipients(candidates: string[], actorId: string | null)
     out.push(id);
   }
   return out;
+}
+
+// ── Coalesced comment notifications (§12.1 event 6) ──────────────────────────────────────
+
+/**
+ * The inbox/e-mail line for a coalesced comment row. The write path renders the SAME text in SQL
+ * when it refreshes an unread row (lib/notify.ts `COALESCED_MESSAGE_SQL`); a dbtest pins the two
+ * together. Comments carry no anonymity option (§9), so naming the commenter is safe; the item's
+ * own author is never named here.
+ */
+export function commentNotificationMessage(count: number, challengeNumber: string, challengeTitle: string, latestBy: string): string {
+  if (count <= 1) return `New comment on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`;
+  return `${count} new comments on ${challengeNumber} "${challengeTitle}" — latest by ${latestBy}.`;
 }

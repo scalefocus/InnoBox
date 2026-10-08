@@ -5,6 +5,7 @@
 import type { Pool } from "pg";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
+import { scrubSystemEventsForUser } from "../admin/system-log/store";
 
 export interface UserSearchResult {
   id: string;
@@ -133,6 +134,9 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string)
     // The transient per-day activity detail is personal data too (§14.5). Only the aggregate
     // presence_daily counts survive, and those carry no user ids — nothing to erase there.
     await client.query(`delete from user_activity_days where user_id = $1`, [userId]);
+    // §14.7: the system log is mutable operational telemetry, so — unlike audit_log — the
+    // user's actor snapshots are scrubbed and their rows detached from the user id.
+    await scrubSystemEventsForUser(client, userId);
     await appendAudit(client, {
       actorUserId: adminUserId,
       action: "user.scrubbed",

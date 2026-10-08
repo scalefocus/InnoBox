@@ -7,8 +7,9 @@ import { getDateFormat } from "@/app/api/admin/settings/store";
 import { markQuickStartSeen } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
@@ -41,7 +42,7 @@ export async function GET(): Promise<Response> {
   });
 }
 
-export async function PATCH(req: Request): Promise<Response> {
+async function handlePATCH(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -58,3 +59,7 @@ export async function PATCH(req: Request): Promise<Response> {
   await markQuickStartSeen(pool, gate.user.id);
   return Response.json({ quickStartSeen: true });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/me", handleGET);
+export const PATCH = withSystemLog("/api/me", handlePATCH);

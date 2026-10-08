@@ -3,13 +3,15 @@
 // their own profile.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { getOwnProfile, setEmailNotificationsEnabled } from "./store";
+import { parsePreferencePatch, NOTIFICATION_PREFERENCES } from "@innobox/shared";
+import { getOwnProfile, setEmailNotificationsEnabled, setNotificationPreferences } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -18,7 +20,7 @@ export async function GET(): Promise<Response> {
   return Response.json({ profile });
 }
 
-export async function PATCH(req: Request): Promise<Response> {
+async function handlePATCH(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -26,12 +28,19 @@ export async function PATCH(req: Request): Promise<Response> {
 
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
-  const body = read.value;
-  const enabled = body.emailNotificationsEnabled;
-  if (typeof enabled !== "boolean") {
-    return Response.json({ error: "emailNotificationsEnabled must be a boolean" }, { status: 400 });
-  }
+  // §13.5 + §12.1: the e-mail switch and/or any of the three per-event toggles.
+  const parsed = parsePreferencePatch(read.value);
+  if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
-  await setEmailNotificationsEnabled(pool, gate.user.id, enabled);
-  return Response.json({ emailNotificationsEnabled: enabled });
+  if (parsed.value.emailNotificationsEnabled !== undefined) {
+    await setEmailNotificationsEnabled(pool, gate.user.id, parsed.value.emailNotificationsEnabled);
+  }
+  if (NOTIFICATION_PREFERENCES.some((k) => parsed.value[k] !== undefined)) {
+    await setNotificationPreferences(pool, gate.user.id, parsed.value);
+  }
+  return Response.json(parsed.value);
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/profile", handleGET);
+export const PATCH = withSystemLog("/api/profile", handlePATCH);

@@ -6,10 +6,11 @@ import { pool } from "@/lib/db";
 import { scrubUser } from "../../../../users/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isUuid } from "../../../../challenges/validation";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_req: Request, context: { params: Promise<{ userId: string }> }): Promise<Response> {
+async function handlePOST(_req: Request, context: { params: Promise<{ userId: string }> }): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -27,3 +28,6 @@ export async function POST(_req: Request, context: { params: Promise<{ userId: s
       return Response.json({ error: "this user's info has already been deleted" }, { status: 409 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/admin/users/[userId]/scrub", handlePOST);

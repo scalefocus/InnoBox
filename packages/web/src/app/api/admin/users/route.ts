@@ -4,10 +4,11 @@
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { searchUsersForAdmin } from "../../users/store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
@@ -15,3 +16,6 @@ export async function GET(req: Request): Promise<Response> {
   const users = await searchUsersForAdmin(pool, q);
   return Response.json({ users });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/users", handleGET);

@@ -5,10 +5,11 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, exportTriageCsv } from "../store";
 import { parseTriageFilters } from "../validation";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const admin = { userId: gate.user.id, roles: gate.user.roles };
@@ -38,3 +39,6 @@ export async function GET(req: Request): Promise<Response> {
     },
   });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/triage/export", handleGET);

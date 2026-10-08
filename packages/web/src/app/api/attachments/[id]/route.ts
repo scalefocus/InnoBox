@@ -11,6 +11,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { ATTACHMENT_DOWNLOAD_CSP } from "@/lib/security-headers";
 import { getStorage } from "@/lib/storage";
 import { getAttachmentForDownload, removeAttachment } from "../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ function contentDisposition(filename: string): string {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-export async function GET(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handleGET(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { id } = await context.params;
@@ -48,7 +49,7 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
   return new Response(result.body, { status: 200, headers });
 }
 
-export async function DELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handleDELETE(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -73,3 +74,7 @@ export async function DELETE(_req: Request, context: { params: Promise<{ id: str
       return Response.json({ error: "attachment already removed" }, { status: 409 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/attachments/[id]", handleGET);
+export const DELETE = withSystemLog("/api/attachments/[id]", handleDELETE);

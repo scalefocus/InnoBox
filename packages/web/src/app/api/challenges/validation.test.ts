@@ -111,3 +111,26 @@ test("isEntityNumber: canonical positive integers only (a malformed path number 
     assert.equal(isEntityNumber(bad), false, JSON.stringify(bad));
   }
 });
+
+// ── §6.1 duplicate warning ───────────────────────────────────────────────────────────────
+
+test("parseSimilarRequest trims, caps, and needs at least one of title/description", async () => {
+  const { parseSimilarRequest } = await import("./validation.js");
+  const ok = parseSimilarRequest({ title: "  Slow builds  ", description: "x".repeat(5_000) });
+  assert.ok(ok.ok);
+  if (ok.ok) {
+    assert.equal(ok.value.title, "Slow builds");
+    assert.equal(ok.value.description.length, 2_000, "the description is ranked on its first 2 000 characters");
+  }
+  assert.equal(parseSimilarRequest({ title: "", description: "  " }).ok, false);
+  assert.equal(parseSimilarRequest(null).ok, false);
+  assert.equal(parseSimilarRequest({ title: 42, description: "only this" }).ok, true, "a wrong-typed field is just empty");
+});
+
+test("parseSimilarAcknowledged keeps well-formed numbers only, deduped, at most five", async () => {
+  const { parseSimilarAcknowledged } = await import("./validation.js");
+  assert.deepEqual(parseSimilarAcknowledged(["CH-12", "ch-7", " CH-12 ", "SOL-3", 5, "CH-x", "CH-0012"]), ["CH-12", "CH-7"]);
+  assert.deepEqual(parseSimilarAcknowledged(["CH-1", "CH-2", "CH-3", "CH-4", "CH-5", "CH-6"]), ["CH-1", "CH-2", "CH-3", "CH-4", "CH-5"]);
+  assert.deepEqual(parseSimilarAcknowledged("CH-1"), []);
+  assert.deepEqual(parseSimilarAcknowledged(undefined), []);
+});

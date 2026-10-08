@@ -13,8 +13,11 @@ import { signIn, signOut, useSession } from "next-auth/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APP_VERSION } from "@innobox/shared/version";
 import { cachedGet } from "../lib/ui";
+import { isChallengesSurface, leavesChallengesSurface } from "../lib/challenges-surface";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
+import { SystemBanner } from "./SystemBanner";
+import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
 
@@ -30,8 +33,11 @@ interface NavItem {
   href: string;
   label: string;
   icon: ReactNode;
-  /** §14.4 attention count — rendered as a 1–9+ bubble on the Triage & Administration items. */
+  /** §14.4 attention count — rendered as a 1–9+ bubble on the Triage & Administration items;
+   *  §13.1 new-challenge count on the Challenges item. */
   badge?: number;
+  /** Accessible label for the bubble; defaults to the attention wording. */
+  badgeLabel?: (count: number) => string;
 }
 
 const BASE_NAV: NavItem[] = [
@@ -57,6 +63,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // §14.4 attention count for the Triage/Administration nav bubbles — polled while an admin is
   // signed in (see the effect below).
   const [attention, setAttention] = useState(0);
+  // §14.6 system banner — delivered on the bell's poll, rendered in the topbar.
+  const [banner, setBanner] = useState<Banner | null>(null);
+  // §13.1 "new since your last visit" — the count behind the Challenges nav bubble.
+  const [newChallenges, setNewChallenges] = useState(0);
+  const previousPath = useRef<string | null>(null);
 
   // Navigating closes the mobile drawer.
   useEffect(() => setDrawerOpen(false), [pathname]);
@@ -140,17 +151,70 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [authed, isAdmin]);
 
+  // §13.1: poll the new-challenge count on the bell's 30 s cadence while signed in. Leaving the
+  // Challenges surface (gallery or a detail page → anywhere else) advances the marker, then the
+  // bubble is refreshed so it clears at once; entering never touches it, so the count and the
+  // card tags stay stable for the whole visit. A tab closed while on the surface counts as a
+  // leave too (a beacon survives page hide where a fetch would not).
+  useEffect(() => {
+    if (!authed) return;
+    let live = true;
+    const fetchCount = () => {
+      fetch("/api/challenges/new-count", { headers: { accept: "application/json" } })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (live && json) setNewChallenges(json.count ?? 0);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = window.setInterval(fetchCount, 30_000);
+    const onSeen = () => fetchCount();
+    window.addEventListener("innobox:challenges-seen", onSeen);
+    return () => {
+      live = false;
+      window.clearInterval(interval);
+      window.removeEventListener("innobox:challenges-seen", onSeen);
+    };
+  }, [authed]);
+
+  useEffect(() => {
+    if (!authed) return;
+    const prev = previousPath.current;
+    previousPath.current = pathname;
+    if (leavesChallengesSurface(prev, pathname)) {
+      fetch("/api/me/challenges-seen", { method: "POST" })
+        .then(() => window.dispatchEvent(new Event("innobox:challenges-seen")))
+        .catch(() => {});
+    }
+  }, [authed, pathname]);
+
+  useEffect(() => {
+    if (!authed) return;
+    const onPageHide = () => {
+      if (isChallengesSurface(previousPath.current)) navigator.sendBeacon("/api/me/challenges-seen");
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [authed]);
+
+  const baseNav: NavItem[] = BASE_NAV.map((item) =>
+    item.href === "/challenges"
+      ? { ...item, badge: authed ? newChallenges : 0, badgeLabel: (n) => `${n} new challenge${n === 1 ? "" : "s"} since your last visit` }
+      : item,
+  );
+
   // No nav links unless signed in — the signed-out shell is wordmark + colophon + sign-in only.
   // Triage and Administration (admins only) both carry the §14.4 attention bubble (shared count).
   const nav: NavItem[] = !authed
     ? []
     : isAdmin
       ? [
-          ...BASE_NAV,
+          ...baseNav,
           { href: "/admin/triage", label: "Triage", icon: <TriageIcon />, badge: attention },
           { href: "/admin", label: "Administration", icon: <ShieldIcon />, badge: attention },
         ]
-      : BASE_NAV;
+      : baseNav;
 
   return (
     <div className="shell">
@@ -199,7 +263,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </span>
                     {item.label}
                     {typeof item.badge === "number" && item.badge > 0 && (
-                      <span className="nav-badge" aria-label={`${item.badge} item${item.badge === 1 ? "" : "s"} need attention`}>
+                      <span className="nav-badge" aria-label={item.badgeLabel ? item.badgeLabel(item.badge) : `${item.badge} item${item.badge === 1 ? "" : "s"} need attention`}>
                         {item.badge > 9 ? "9+" : item.badge}
                       </span>
                     )}
@@ -232,7 +296,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
           {authed && <TopbarSearch ref={searchRef} />}
           <div className="topbar-spacer" />
-          {authed && <NotificationBell />}
+          {authed && <SystemBanner banner={banner} />}
+          {authed && <NotificationBell onBanner={setBanner} />}
           <ThemeToggle />
         </header>
         <main className="content">{children}</main>

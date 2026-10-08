@@ -29,6 +29,22 @@
     "./email-template": {
       "types": "./dist/email-template.d.ts",
       "default": "./dist/email-template.js"
+    },
+    "./system-log": {
+      "types": "./dist/system-log.d.ts",
+      "default": "./dist/system-log.js"
+    },
+    "./audit-browser": {
+      "types": "./dist/audit-browser.d.ts",
+      "default": "./dist/audit-browser.js"
+    },
+    "./system-banner": {
+      "types": "./dist/system-banner.d.ts",
+      "default": "./dist/system-banner.js"
+    },
+    "./notification-preferences": {
+      "types": "./dist/notification-preferences.d.ts",
+      "default": "./dist/notification-preferences.js"
     }
   },
   "scripts": {

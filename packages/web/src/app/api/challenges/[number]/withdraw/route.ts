@@ -11,10 +11,11 @@ import { dispatchToUser, getFollowerUserIds, getNamespaceAdminUserIds } from "@/
 import { withdrawChallenge } from "../../store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../validation";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePOST(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -50,3 +51,6 @@ export async function POST(_req: Request, context: { params: Promise<{ number: s
       return Response.json({ error: "this challenge is already in a terminal status" }, { status: 409 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/challenges/[number]/withdraw", handlePOST);

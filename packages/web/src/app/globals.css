@@ -438,6 +438,18 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .search-clear:hover { color: var(--ink); background: color-mix(in oklab, var(--muted) 26%, transparent); }
 .search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .topbar-spacer { flex: 1; }
+/* System banner (INNOBOX_SPEC.md §14.6): a width-capped pill between the search box and the bell.
+   Desktop truncates on one line (full text via title) and never slides under the control cluster —
+   min-width:0 on the text is what lets the flex child shrink instead of overflowing. */
+.system-banner {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 320px; min-width: 0; flex-shrink: 1;
+  padding: 6px 12px; border-radius: 999px; font-size: 12.5px; line-height: 1.3;
+  border: 1px solid transparent;
+}
+.system-banner-info { background: var(--accent-soft); color: var(--accent-2); }
+.system-banner-warning { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in oklab, var(--warn) 35%, transparent); }
+.system-banner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.system-banner-link { flex-shrink: 0; font-weight: 600; color: inherit; text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
 
 .content { padding: 38px 34px 80px; max-width: 1180px; width: 100%; }
 
@@ -1145,6 +1157,10 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .bell { order: 2; flex-shrink: 0; }
   .topbar .toggle { order: 3; flex-shrink: 0; }
   .search { order: 4; flex-basis: 100%; max-width: none; }
+  /* §14.6: the banner drops onto its own full-width line BELOW the search and wraps the whole
+     message — touch has no hover, so an ellipsis would permanently hide the announcement. */
+  .system-banner { order: 5; flex-basis: 100%; max-width: none; border-radius: var(--radius-sm); flex-wrap: wrap; }
+  .system-banner-text { white-space: normal; overflow: visible; }
   /* No physical keyboard on the mobile layout, so the shortcut hint is meaningless (§13.4). */
   .search kbd { display: none; }
   /* Clear button is suppressed on mobile too (INNOBOX_SPEC.md §13.4). */

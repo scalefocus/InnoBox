@@ -10,8 +10,9 @@ import { createSolution } from "../../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../validation";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function POST(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePOST(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "create");
@@ -70,5 +71,11 @@ async function fireSolutionProposedNotification(challengeNumber: string, propose
       message: `A new solution was proposed on CH-${challengeNumber} "${challenge.title}".`,
       link: `/challenges/${challengeNumber}`,
     },
+    // §12.1: mutable for the challenge author and followers; for admins and the committee it is
+    // an attention event (triage is a duty), so they are exempt.
+    { preference: "followedSolutions", exempt: [...admins, ...committee] },
   );
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/challenges/[number]/solutions", handlePOST);

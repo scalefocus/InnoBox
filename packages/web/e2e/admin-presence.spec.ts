@@ -110,7 +110,8 @@ test("presence panel: opening it writes one presence.view audit row (§14.5, §1
   // Reads are normally unaudited in InnoBox; this one is the deliberate exception, because
   // "an admin looked at who is online" is the access a DPO asks about.
   await admin.goto("/admin/audit");
-  await admin.getByPlaceholder("Action (e.g. challenge.status_changed)").fill("presence.view");
+  await admin.getByRole("tab", { name: "Admin" }).click();
+  await admin.getByLabel("Search").fill("presence.view");
   const row = admin.locator(".rows .row").first();
   await expect(row.locator(".chip.chip-accent.mono", { hasText: "presence.view" })).toBeVisible();
   await row.getByRole("button", { name: "Details" }).click();

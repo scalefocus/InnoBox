@@ -6,8 +6,9 @@ import { createImpactArea } from "../store";
 import { parseImpactAreaCreate } from "../validation";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -23,3 +24,6 @@ export async function POST(req: Request): Promise<Response> {
   if (result.status === "duplicate") return Response.json({ error: "an impact area with that name already exists" }, { status: 409 });
   return Response.json({ area: result.area }, { status: 201 });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/admin/settings/impact-areas", handlePOST);

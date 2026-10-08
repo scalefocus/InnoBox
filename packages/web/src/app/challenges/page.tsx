@@ -22,6 +22,7 @@ interface ChallengeListItem {
   likeCount: number;
   likedByViewer: boolean;
   solutionCount: number;
+  isNew: boolean;
 }
 
 interface ImpactArea {
@@ -208,6 +209,13 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
   const fmt = useDateFmt();
   return (
     <Link href={`/challenges/${challenge.number.replace("CH-", "")}`} className="card skill-card">
+      {/* §13.1: created since this viewer last left the Challenges surface — exactly the cards
+          the nav bubble counts. The tooltip carries when it appeared. */}
+      {challenge.isNew && (
+        <span className="chip-new" title={`New since your last visit — submitted ${fmt.dateTime(challenge.createdAt)}`} aria-label="New since your last visit">
+          new
+        </span>
+      )}
       <div className="meta">
         <span className="chip mono">{challenge.number}</span>
         <span className={statusPillClass(challenge.status)}>{CHALLENGE_STATUS_LABEL[challenge.status] ?? challenge.status}</span>

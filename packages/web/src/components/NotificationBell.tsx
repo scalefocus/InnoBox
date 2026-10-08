@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { SystemBanner } from "@innobox/shared/system-banner";
 
 interface NotificationItem {
   id: string;
@@ -15,7 +16,9 @@ interface NotificationItem {
   createdAt: string;
 }
 
-export function NotificationBell() {
+/** `onBanner` receives the §14.6 system banner (or null) that rides every inbox poll, so the
+ *  shell can render the topbar pill without a second poller. */
+export function NotificationBell({ onBanner }: { onBanner?: (banner: SystemBanner | null) => void } = {}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[] | null>(null);
@@ -28,6 +31,7 @@ export function NotificationBell() {
       .then((json) => {
         setItems(json.notifications);
         setUnreadCount(json.unreadCount);
+        onBanner?.((json.banner as SystemBanner | null | undefined) ?? null);
       })
       .catch(() => {});
   };
@@ -35,7 +39,14 @@ export function NotificationBell() {
   useEffect(() => {
     refresh();
     const interval = window.setInterval(refresh, 30_000);
-    return () => window.clearInterval(interval);
+    // The Administration card dispatches this after a save/clear so the admin's own header
+    // reflects the change at once instead of at the next tick.
+    window.addEventListener("innobox:banner-changed", refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("innobox:banner-changed", refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

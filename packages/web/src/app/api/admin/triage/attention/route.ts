@@ -4,10 +4,11 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, countTriageAttention } from "../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
@@ -20,3 +21,6 @@ export async function GET(): Promise<Response> {
   const count = await countTriageAttention(pool, viewer);
   return Response.json({ count });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/triage/attention", handleGET);

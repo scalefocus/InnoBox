@@ -27,10 +27,10 @@ test("audit log: an audited status change is filterable and its before/after is 
   await admin.goto("/admin/audit");
   await expect(admin.getByRole("heading", { name: "Audit log" })).toBeVisible();
 
-  // Filter to challenge status changes for THIS challenge (by target id) — isolating the single
-  // transition we made, regardless of unrelated audit noise from other tests.
-  await admin.getByPlaceholder("Action (e.g. challenge.status_changed)").fill("challenge.status_changed");
-  await admin.getByPlaceholder("Target id").fill(challenge.id);
+  // Narrow to the Challenges category and search for THIS challenge's number — isolating the
+  // single transition we made, regardless of unrelated audit noise from other tests.
+  await admin.getByRole("tab", { name: "Challenges" }).click();
+  await admin.getByLabel("Search").fill(challenge.number);
 
   const row = admin.locator(".rows .row").first();
   await expect(row.locator(".chip.chip-accent.mono", { hasText: "challenge.status_changed" })).toBeVisible();

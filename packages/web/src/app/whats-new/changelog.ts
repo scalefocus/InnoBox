@@ -11,6 +11,60 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.35.1",
+    date: "2026-10-08",
+    summary:
+      "Behind the scenes: small code-quality fixes to the system log, the duplicate warning and the Challenges menu counter so they follow React's rendering rules. Nothing changes in how InnoBox looks or works.",
+  },
+  {
+    version: "0.35.0",
+    date: "2026-10-08",
+    summary:
+      "A busy comment thread no longer floods your inbox. Comments on the same challenge or solution now gather into a single notification — \"3 new comments on CH-412 … latest by Alice\" — that moves back to the top with each new one, and you get at most one e-mail about it until you have read it. Opening the challenge, opening the notification, or marking everything read counts as reading it; the next comment after that starts afresh.",
+  },
+  {
+    version: "0.34.0",
+    date: "2026-10-08",
+    summary:
+      "Your profile has three new notification switches: comments on items you follow, status changes on items you follow, and new solutions on challenges you follow. Turning one off stops those notifications altogether — no bell, no e-mail — while keeping everything else. Messages that need you to act, such as a rejection, a request for improvement or an assignment, always come through, and admins keep hearing about new work to triage.",
+  },
+  {
+    version: "0.33.0",
+    date: "2026-10-08",
+    summary:
+      "Before a new challenge is submitted, InnoBox now checks for challenges that look similar — among the ones you can already see — and lists up to five of them, so you can join an existing conversation instead of starting a duplicate. It is only a suggestion: \"Submit anyway\" goes ahead, and changing anything on the form simply checks again. Rejected and withdrawn challenges are left out; solved ones are included, since they may already hold your answer.",
+  },
+  {
+    version: "0.32.0",
+    date: "2026-10-08",
+    summary:
+      "The Challenges menu item now shows how many challenges have appeared since you last looked, and each of those cards carries a small \"new\" tag so you can spot them at a glance. The count and the tags stay put while you browse and reset when you leave the Challenges page — a new solution or comment on an old challenge does not make it new again. Only challenges you are allowed to see are ever counted.",
+  },
+  {
+    version: "0.31.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can post a system banner — a short announcement that every signed-in person sees in the header, for things like a planned maintenance window. It takes an info or warning tone, an optional \"Learn more\" link and a fixed duration from one hour to 30 days, then disappears on its own (or when an admin clears it). Saving a new one replaces the old. It is not a notification: nobody is e-mailed and nothing lands in the inbox.",
+  },
+  {
+    version: "0.30.0",
+    date: "2026-10-08",
+    summary:
+      "The audit log is easier to work with: category chips (Challenges, Solutions, Comments, Attachments, Identity, Admin), a search box that matches actions, challenge or solution numbers and the acting person, a From/To date range, and a one-click way to clear every filter. The list now scrolls on endlessly instead of paging, and platform admins can export exactly the entries they are looking at as a CSV file — capped at 50,000 rows, and every export is itself recorded in the audit log.",
+  },
+  {
+    version: "0.29.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins get a System log: a view of the errors InnoBox returned to people — server failures and refused requests — with who hit them, searchable, filterable by status and date, exportable to CSV, and kept for 90 days. New entries light up a badge on the Administration console and a single in-app alert that keeps counting until it is read. It is operational telemetry, separate from the audit log, and it never stores request contents; entries that concern an anonymous challenge or solution never name the item.",
+  },
+  {
+    version: "0.28.0",
+    date: "2026-10-08",
+    summary:
+      "Searching is now part of the protection against runaway or automated traffic: each person can run up to 120 searches a minute, which normal use never comes close to, and anything over that is simply asked to wait a moment and retry. The identity sync endpoint gets the same kind of protection for each caller.",
+  },
+  {
     version: "0.27.1",
     date: "2026-10-08",
     summary:

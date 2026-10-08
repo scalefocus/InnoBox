@@ -5,8 +5,9 @@ import { pool } from "@/lib/db";
 import { isUuid } from "../../validation";
 import { deleteRoleMapping } from "../../store";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function DELETE(
+async function handleDELETE(
   _req: Request,
   context: { params: Promise<{ id: string }> },
 ): Promise<Response> {
@@ -21,3 +22,6 @@ export async function DELETE(
   if (!deleted) return Response.json({ error: "role mapping not found" }, { status: 404 });
   return new Response(null, { status: 204 });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const DELETE = withSystemLog("/api/admin/role-mappings/[id]", handleDELETE);

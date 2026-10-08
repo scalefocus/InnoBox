@@ -7,8 +7,9 @@ import { parseLikeToggle } from "../challenges/validation";
 import { toggleLike } from "../challenges/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -31,3 +32,6 @@ export async function POST(req: Request): Promise<Response> {
   }
   return Response.json({ liked: result.liked, count: result.count });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/likes", handlePOST);

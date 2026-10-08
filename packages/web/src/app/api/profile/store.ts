@@ -4,11 +4,21 @@
 // non-anonymous, org-visible contributions — the same invariant-2/3 rules applied elsewhere,
 // just scoped to "authored by this other user" instead of "matches this filter".
 import type { Pool } from "pg";
-import { formatChallengeNumber, formatSolutionNumber, type ChallengeStatus, type SolutionStatus } from "@innobox/shared";
+import {
+  NOTIFICATION_PREFERENCE_COLUMN,
+  NOTIFICATION_PREFERENCES,
+  formatChallengeNumber,
+  formatSolutionNumber,
+  type ChallengeStatus,
+  type NotificationPreferences,
+  type SolutionStatus,
+} from "@innobox/shared";
 
 export interface OwnProfile {
   user: { id: string; displayName: string; email: string | null; department: string | null; jobTitle: string | null; officeLocation: string | null };
   emailNotificationsEnabled: boolean;
+  /** §12.1 per-event preferences. */
+  notificationPreferences: NotificationPreferences;
   challengesByStatus: Record<string, number>;
   solutionsByStatus: Record<string, number>;
   likesReceived: number;
@@ -28,7 +38,15 @@ export async function getOwnProfile(pool: Pool, userId: string): Promise<OwnProf
     job_title: string | null;
     office_location: string | null;
     email_notifications_enabled: boolean;
-  }>(`select id, display_name, email, department, job_title, office_location, email_notifications_enabled from users where id = $1`, [userId]);
+    notify_followed_comments: boolean;
+    notify_followed_status: boolean;
+    notify_followed_solutions: boolean;
+  }>(
+    `select id, display_name, email, department, job_title, office_location, email_notifications_enabled,
+            notify_followed_comments, notify_followed_status, notify_followed_solutions
+       from users where id = $1`,
+    [userId],
+  );
   const userRow = userRows[0];
   if (!userRow) return null;
 
@@ -114,6 +132,11 @@ export async function getOwnProfile(pool: Pool, userId: string): Promise<OwnProf
       officeLocation: userRow.office_location,
     },
     emailNotificationsEnabled: userRow.email_notifications_enabled,
+    notificationPreferences: {
+      followedComments: userRow.notify_followed_comments,
+      followedStatus: userRow.notify_followed_status,
+      followedSolutions: userRow.notify_followed_solutions,
+    },
     challengesByStatus,
     solutionsByStatus,
     likesReceived: Number(likeRows.rows[0]?.count ?? 0),
@@ -132,6 +155,21 @@ export async function getOwnProfile(pool: Pool, userId: string): Promise<OwnProf
 
 export async function setEmailNotificationsEnabled(pool: Pool, userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set email_notifications_enabled = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
+/** §12.1: writes any subset of the three per-event toggles. Silent (not audited, like the e-mail
+ *  switch) and forward-only — nothing already delivered is deleted, nothing missed is replayed. */
+export async function setNotificationPreferences(pool: Pool, userId: string, prefs: Partial<NotificationPreferences>): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [userId];
+  for (const key of NOTIFICATION_PREFERENCES) {
+    const v = prefs[key];
+    if (typeof v !== "boolean") continue;
+    params.push(v);
+    sets.push(`${NOTIFICATION_PREFERENCE_COLUMN[key]} = $${params.length}`); // column from the fixed map
+  }
+  if (sets.length === 0) return;
+  await pool.query(`update users set ${sets.join(", ")}, updated_at = now() where id = $1`, params);
 }
 
 export interface PublicProfile {

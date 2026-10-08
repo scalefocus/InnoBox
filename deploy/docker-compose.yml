@@ -158,6 +158,9 @@ services:
       DATABASE_URL: postgres://innobox_app:${INNOBOX_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-innobox}
       WORKER_PORT: "4000"
       SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set in .env}
+      # The bundled Caddy proxy is one hop, so the SCIM rate limiter (INNOBOX_SPEC.md §2.4) keys the
+      # real client address; override in .env if another proxy sits in front of Caddy.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
       # ClamAV daemon address. Host = the compose service name; port 3310 is clamd's default.
       CLAMAV_HOST: clamav
       CLAMAV_PORT: "3310"

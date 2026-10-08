@@ -132,8 +132,9 @@ touched.**
    `pnpm typecheck` + touched tests pass.
 3. **Version** — bump `APP_VERSION` in `packages/shared/src/version.ts` (rules below).
 4. **Changelog** — prepend the matching entry to `changelog.ts` (rules below).
-5. **Commit** — subject `type(scope): summary (vX.Y.Z)`, body as needed, ending with
-   the `Co-Authored-By` trailer. Then push.
+5. **Commit** — subject `type(scope): summary (vX.Y.Z)`, body as needed. **No AI
+   attribution:** no `Co-Authored-By: Claude …` trailer on commits and no "Generated
+   with Claude Code" footer in pull-request descriptions. Then push.
 
 Steps 3–4 are skipped only when the change is doc-only/infra-only (no bump → no
 changelog entry → no `(vX.Y.Z)` suffix).
@@ -169,11 +170,11 @@ an existing entry, only prepend.
   `APP_VERSION` as suffix. **The suffix is load-bearing** (changelog backfill parses
   it). Omit only on no-bump commits.
 - **Shortcut: "cp" = commit and push.** Stage all, commit with a descriptive message
-  ending in the `Co-Authored-By` trailer, push (rebase onto `origin/main` and retry if
+  (no AI attribution trailer), push (rebase onto `origin/main` and retry if
   rejected). Bump `APP_VERSION` + changelog first, as usual.
 - **Shortcut: "mm" = merge into main.** Run these steps in order, every time:
   1. Commit as `cp` would (stage all, bump `APP_VERSION` + changelog first, commit
-     with the `Co-Authored-By` trailer).
+     without an AI attribution trailer).
   2. **Get the latest code** — `git fetch origin` and rebase the branch onto
      `origin/main` (`git pull --rebase origin main`).
   3. **Resolve any conflicts** from the rebase, then continue it.

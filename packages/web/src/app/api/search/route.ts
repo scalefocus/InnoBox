@@ -3,13 +3,17 @@
 import { SEARCH_QUERY_MAX } from "@innobox/shared";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
 import { search } from "./store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "search");
+  if (limited) return limited;
 
   const url = new URL(req.url);
   const q = url.searchParams.get("q") ?? "";
@@ -21,3 +25,6 @@ export async function GET(req: Request): Promise<Response> {
   const results = await search(pool, { userId: gate.user.id, roles: gate.user.roles }, q);
   return Response.json(results);
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/search", handleGET);

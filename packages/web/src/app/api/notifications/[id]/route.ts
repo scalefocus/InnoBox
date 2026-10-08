@@ -4,8 +4,9 @@ import { pool } from "@/lib/db";
 import { markOneRead } from "../store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isUuid } from "../../challenges/validation";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function PATCH(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+async function handlePATCH(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -16,3 +17,6 @@ export async function PATCH(_req: Request, context: { params: Promise<{ id: stri
   if (!found) return Response.json({ error: "notification not found" }, { status: 404 });
   return Response.json({ ok: true });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const PATCH = withSystemLog("/api/notifications/[id]", handlePATCH);

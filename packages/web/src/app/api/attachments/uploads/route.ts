@@ -12,10 +12,11 @@ import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { isUuid } from "../../challenges/validation";
 import { initiateChunkedUpload } from "../store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "upload");
@@ -69,3 +70,6 @@ export async function POST(req: Request): Promise<Response> {
       return Response.json({ error: "that file type is not allowed" }, { status: 415 });
   }
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/attachments/uploads", handlePOST);

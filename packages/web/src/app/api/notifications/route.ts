@@ -5,18 +5,22 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getInbox, markAllRead } from "./store";
 import { rateLimit } from "@/lib/rate-limit";
+import { getActiveSystemBanner } from "../admin/system-banner/store";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
-  const inbox = await getInbox(pool, gate.user.id);
-  return Response.json(inbox);
+  // §14.6: the active system banner rides the bell's 30-second poll — one round trip, no second
+  // transport. Null when none is active (lazy expiry judged here, at read time).
+  const [inbox, banner] = await Promise.all([getInbox(pool, gate.user.id), getActiveSystemBanner(pool)]);
+  return Response.json({ ...inbox, banner });
 }
 
-export async function PATCH(): Promise<Response> {
+async function handlePATCH(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -24,3 +28,7 @@ export async function PATCH(): Promise<Response> {
   await markAllRead(pool, gate.user.id);
   return Response.json({ ok: true });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/notifications", handleGET);
+export const PATCH = withSystemLog("/api/notifications", handlePATCH);

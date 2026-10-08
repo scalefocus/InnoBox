@@ -6,17 +6,18 @@
 import { isChallengeStatus, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds } from "@/lib/notify";
+import { dispatchEvent, getFollowerUserIds, markCommentNotificationsReadForChallenge } from "@/lib/notify";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
 import { editChallenge, getChallengeByNumber, setChallengeStatus } from "../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handleGET(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const { number } = await context.params;
@@ -24,10 +25,13 @@ export async function GET(_req: Request, context: { params: Promise<{ number: st
 
   const challenge = await getChallengeByNumber(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   if (!challenge) return Response.json({ error: "challenge not found" }, { status: 404 });
+  // §12.1: opening the item's page is a read action for its coalesced comment rows (the
+  // challenge's and its solutions'). Best-effort — never fails the page.
+  await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
   return Response.json({ challenge });
 }
 
-export async function PATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -63,7 +67,7 @@ export async function PATCH(req: Request, context: { params: Promise<{ number: s
   }
 }
 
-export async function PUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handlePUT(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -108,7 +112,7 @@ export async function PUT(req: Request, context: { params: Promise<{ number: str
  * admin — and any caller asking about an item they cannot see — gets the same 404 as a
  * genuinely missing challenge, so this is no existence oracle (invariant 2).
  */
-export async function DELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
+async function handleDELETE(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -169,5 +173,14 @@ async function fireStatusChangedNotification(
     recipients,
     type,
     { message, link: `/challenges/${numberDigits}` },
+    // §12.1: only a plain status change (event 3) is mutable — rejected/needs-improvement are
+    // actionable author events and always arrive. The assignee holds per-item duty: exempt.
+    type === "status_changed" ? { preference: "followedStatus", exempt: row.assignee_id ? [row.assignee_id] : [] } : undefined,
   );
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/challenges/[number]", handleGET);
+export const PATCH = withSystemLog("/api/challenges/[number]", handlePATCH);
+export const PUT = withSystemLog("/api/challenges/[number]", handlePUT);
+export const DELETE = withSystemLog("/api/challenges/[number]", handleDELETE);

@@ -6,8 +6,9 @@ import { parseFollowToggle } from "./validation";
 import { toggleFollow } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -22,3 +23,6 @@ export async function POST(req: Request): Promise<Response> {
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
   return Response.json({ following: result.following });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const POST = withSystemLog("/api/follows", handlePOST);

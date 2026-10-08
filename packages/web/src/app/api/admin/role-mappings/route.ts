@@ -8,17 +8,18 @@ import { parseRoleMappingCreate } from "../validation";
 import { createRoleMapping, listRoleMappings } from "../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
+import { withSystemLog } from "@/lib/system-log";
 
 // Admin lists must never be prerendered or cached — always hit the DB per request.
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<Response> {
+async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   return Response.json({ mappings: await listRoleMappings(pool) });
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePOST(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
@@ -37,3 +38,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   return Response.json({ mapping: result.mapping }, { status: 201 });
 }
+
+// §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.
+export const GET = withSystemLog("/api/admin/role-mappings", handleGET);
+export const POST = withSystemLog("/api/admin/role-mappings", handlePOST);

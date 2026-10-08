@@ -14,3 +14,28 @@ export async function register(): Promise<void> {
     process.exit(1);
   }
 }
+
+// onRequestError (INNOBOX_SPEC.md §14.7 "Capture — net"): records uncaught 500s on
+// anything the `withSystemLog` route wrapper does not cover (page renders, server actions).
+// Loaded once at boot; best-effort — a failure here is swallowed, never re-thrown into the
+// request.
+//
+// Next compiles this file for BOTH runtimes. The database path (pg, next-auth) exists only in
+// Node, so the import sits inside the documented `NEXT_RUNTIME === "nodejs"` block: the edge
+// build sees `if (false) { … }` and drops the import entirely instead of failing to resolve
+// `crypto`. A plain early return does not get that treatment (register() above can use one only
+// because its import is edge-safe).
+export async function onRequestError(
+  err: unknown,
+  request: { path: string; method: string; headers: Record<string, string | string[] | undefined> },
+  context: { routerKind: string; routePath: string; routeType: string },
+): Promise<void> {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    try {
+      const { recordUncaughtRequestError } = await import("./lib/system-log");
+      await recordUncaughtRequestError(err, request, context);
+    } catch {
+      /* telemetry must never fail the request */
+    }
+  }
+}
