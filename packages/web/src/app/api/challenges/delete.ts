@@ -36,6 +36,8 @@ export interface CascadeCounts {
   notifications: number;
   outbox: number;
   uploadSessions: number;
+  /** §12.4 channel-webhook deliveries targeting the subtree (any status). */
+  webhookDeliveries: number;
 }
 
 export type DeleteChallengeResult = { status: "ok"; counts: CascadeCounts } | { status: "not_found" };
@@ -82,6 +84,12 @@ async function deleteChildren(
     params,
   );
 
+  // §12.4: every webhook delivery row targeting the subtree (polymorphic entity id, no FK).
+  const webhookDeliveries = await client.query(
+    `delete from webhook_deliveries where (entity_type = 'challenge' and entity_id = any($1::uuid[])) or (entity_type = 'solution' and entity_id = any($2::uuid[]))`,
+    params,
+  );
+
   return {
     counts: {
       comments: comments.rowCount ?? 0,
@@ -89,6 +97,7 @@ async function deleteChildren(
       follows: follows.rowCount ?? 0,
       attachments: attachments.rowCount ?? 0,
       uploadSessions: sessions.rowCount ?? 0,
+      webhookDeliveries: webhookDeliveries.rowCount ?? 0,
     },
     purge: {
       objectKeys: attachments.rows.map((r) => r.object_key),

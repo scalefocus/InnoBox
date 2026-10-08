@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.43.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can connect a namespace to a Teams or other chat channel: when a challenge in that namespace opens for solutions, a solution is implemented, or a challenge is solved, a short post with the title, status and a link appears in the channel. Only organization-wide items are ever posted, and nobody's name is included.",
+  },
+  {
     version: "0.42.0",
     date: "2026-10-08",
     summary:

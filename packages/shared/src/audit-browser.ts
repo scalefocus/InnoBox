@@ -23,7 +23,7 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
   comments: ["comment.%"],
   attachments: ["attachment.%"],
   identity: ["user.%", "scim.%", "role_mapping.%", "recon.%"],
-  admin: ["settings.%", "namespace.%", "impact_area.%", "system_banner.%", "presence.%", "email.%", "audit.%", "%.exported"],
+  admin: ["settings.%", "namespace.%", "impact_area.%", "system_banner.%", "presence.%", "email.%", "audit.%", "webhook.%", "%.exported"],
 };
 
 export function parseAuditCategory(raw: string | null | undefined): AuditCategory {

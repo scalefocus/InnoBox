@@ -38,6 +38,7 @@ import {
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { isScanAvailable } from "../../../lib/clamav";
+import { onChallengeStatusChanged, onSolutionImplemented } from "../../../lib/webhooks";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, hasUncleanStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
@@ -762,6 +763,8 @@ async function applyChallengeStatusChange(
     current.id,
     newStatus,
   ]);
+  // §12.4: stamp first_valid_at on the first `valid`, enqueue channel-webhook milestones.
+  await onChallengeStatusChanged(client, current.id, newStatus);
   await appendAudit(client, {
     actorUserId: actor.userId,
     action: "challenge.status_changed",
@@ -985,6 +988,8 @@ export async function setSolutionStatus(
             // solution plus every sibling just closed as not_selected.
             solutionIds: [current.id, ...toClose],
           };
+          // §12.4: solution.implemented, then challenge.solved (when the parent really transitioned).
+          await onSolutionImplemented(client, current.id, current.challenge_id, current.challenge_status === "solved");
         }
       }
       const solutionRows = await fetchSolutionRows(client, current.challenge_id, actor.userId);

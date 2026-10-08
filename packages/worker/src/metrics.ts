@@ -14,6 +14,8 @@ const counters = {
   scansUnscannable: 0,
   scanErrors: 0,
 };
+/** §12.4 channel-webhook delivery outcomes, by `outcome` label. */
+const webhookDeliveries = { sent: 0, failed: 0, skipped: 0 };
 let leader = false;
 
 export function setLeader(isLeader: boolean): void {
@@ -23,6 +25,12 @@ export function setLeader(isLeader: boolean): void {
 export function recordNotificationSweep(summary: { sent?: number; failed?: number }): void {
   counters.notificationsSent += summary.sent ?? 0;
   counters.notificationsFailed += summary.failed ?? 0;
+}
+
+export function recordWebhookSweep(summary: { sent?: number; failed?: number; skipped?: number }): void {
+  webhookDeliveries.sent += summary.sent ?? 0;
+  webhookDeliveries.failed += summary.failed ?? 0;
+  webhookDeliveries.skipped += summary.skipped ?? 0;
 }
 
 export function recordScanSweep(summary: { clean?: number; infected?: number; unscannable?: number; errors?: number }): void {
@@ -40,6 +48,9 @@ export function resetWorkerMetrics(): void {
   counters.scansInfected = 0;
   counters.scansUnscannable = 0;
   counters.scanErrors = 0;
+  webhookDeliveries.sent = 0;
+  webhookDeliveries.failed = 0;
+  webhookDeliveries.skipped = 0;
   leader = false;
 }
 
@@ -58,6 +69,13 @@ export function workerMetricsSamples(): MetricSample[] {
     { name: "innobox_attachment_scans_infected_total", help: "Attachments the scan sweep marked infected", type: "counter", value: counters.scansInfected },
     { name: "innobox_attachment_scans_unscannable_total", help: "Attachments the scan sweep gave up on as unscannable", type: "counter", value: counters.scansUnscannable },
     { name: "innobox_attachment_scan_errors_total", help: "Attachment scan sweep transient errors", type: "counter", value: counters.scanErrors },
+    ...(["sent", "failed", "skipped"] as const).map((outcome) => ({
+      name: "innobox_webhook_deliveries_total",
+      help: "Channel-webhook deliveries by final outcome",
+      type: "counter" as const,
+      value: webhookDeliveries[outcome],
+      labels: { outcome },
+    })),
   ];
 }
 
