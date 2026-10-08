@@ -276,6 +276,54 @@ export function frameInstreamChunk(chunk: Uint8Array): Uint8Array {
   return framed;
 }
 
+/** What a scanner reads: the object's bytes already in memory (single-shot upload), or a
+ *  stream of chunks read from the object store — scanned without ever holding the whole file. */
+export type ScanSource = Uint8Array | AsyncIterable<Uint8Array>;
+
+/** The INSTREAM chunk size: each framed chunk carries at most this many bytes. */
+export const CLAMD_INSTREAM_CHUNK_BYTES = 64 * 1024;
+
+/** Turns a scan source into INSTREAM-framed chunks of at most `maxChunk` bytes each (a larger
+ *  incoming chunk is split; nothing is accumulated, so memory stays at one chunk whatever the
+ *  file size). Does NOT emit the command or the terminator — the caller owns the socket.
+ *  A failure READING the source (the object-store stream broke mid-file) is rethrown as a
+ *  `ScanObjectReadError`, so the §11 retry policy classifies it like a failed object fetch.
+ *  Breaking out of the iteration early (clamd answered before the end) returns the source's
+ *  iterator, which closes the underlying stream. */
+export async function* instreamFrames(source: ScanSource, maxChunk: number = CLAMD_INSTREAM_CHUNK_BYTES): AsyncGenerator<Uint8Array> {
+  const split = function* (chunk: Uint8Array): Generator<Uint8Array> {
+    for (let off = 0; off < chunk.length; off += maxChunk) {
+      yield frameInstreamChunk(chunk.subarray(off, Math.min(off + maxChunk, chunk.length)));
+    }
+  };
+  if (source instanceof Uint8Array) {
+    yield* split(source);
+    return;
+  }
+  const it = source[Symbol.asyncIterator]();
+  let finished = false;
+  try {
+    for (;;) {
+      let next: IteratorResult<Uint8Array>;
+      try {
+        next = await it.next();
+      } catch (err) {
+        finished = true; // a failed iterator is already closed
+        throw new ScanObjectReadError(err);
+      }
+      if (next.done) {
+        finished = true;
+        return;
+      }
+      const chunk = next.value instanceof Uint8Array ? next.value : new Uint8Array(next.value as ArrayBufferLike);
+      yield* split(chunk);
+    }
+  } finally {
+    // Early exit by the consumer (break / return): close the source stream.
+    if (!finished) await it.return?.().catch(() => undefined);
+  }
+}
+
 export interface ClamdVerdict {
   clean: boolean;
   /** The matched signature name, present only when `clean === false`. */
@@ -488,7 +536,7 @@ export interface ScanEffects {
 }
 
 /** The relative deep link to a bound attachment's parent (§12.1), or null when it is unbound
- *  (a staged row has no parent yet) or has vanished. */
+ *  (a staged row has no parent yet — see stagedScanFailedLink) or has vanished. */
 async function scanParentLink(db: DbClient, parentType: AttachmentParentType, parentId: string | null): Promise<string | null> {
   if (!parentId) return null;
   if (parentType === "challenge") {
@@ -503,13 +551,23 @@ async function scanParentLink(db: DbClient, parentType: AttachmentParentType, pa
   return rows[0] ? `/challenges/${rows[0].challenge_number}#SOL-${rows[0].number}` : null;
 }
 
+/** Where an unbound staged upload's notification points (§12.1 event 11): the submission form
+ *  the file was staged on. A challenge draft lives on the new-challenge page; a solution draft
+ *  lives on its challenge's page, which an unbound row does not record, so it points to the
+ *  challenge list. Carries nothing about any item, so it cannot leak one. */
+export function stagedScanFailedLink(parentType: AttachmentParentType): string {
+  return parentType === "challenge" ? "/challenges/new" : "/challenges";
+}
+
 /** §12.1 event 11: notify the uploader (only) that their attachment failed its scan or
- *  couldn't be scanned. The message names only the uploader's own filename — they are the sole
- *  recipient, so it is anonymity-safe. Writes the in-app row and the outbox row, exactly like
- *  the web notify helper. Skips unbound staged rows (no parent link yet): the submission form
- *  shows the file's state instead. */
+ *  couldn't be scanned — bound OR staged (§11: "uploader notified", no exception for a file
+ *  still on a submission form). The message names only the uploader's own filename — they are
+ *  the sole recipient, so it is anonymity-safe. Writes the in-app row and the outbox row,
+ *  exactly like the web notify helper. A bound row links to its parent; an unbound staged row
+ *  links to its submission form (stagedScanFailedLink); a bound row whose parent has since
+ *  vanished is skipped (nothing to link to, and the attachment went with it). */
 async function enqueueScanFailedNotification(db: DbClient, target: ScanTarget, reason: "infected" | "unscannable"): Promise<void> {
-  const link = await scanParentLink(db, target.parentType, target.parentId);
+  const link = target.parentId === null ? stagedScanFailedLink(target.parentType) : await scanParentLink(db, target.parentType, target.parentId);
   if (!link) return;
   const message =
     reason === "infected"

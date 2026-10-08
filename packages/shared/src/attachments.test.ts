@@ -31,6 +31,7 @@ import {
   projectAttachmentForViewer,
   shouldChunkUpload,
   stagedAttachmentObjectKey,
+  stagedScanFailedLink,
   type AttachmentRecord,
 } from "./attachments.js";
 
@@ -487,9 +488,47 @@ test("applyScanResult: a row resolved elsewhere is a no-op for every outcome", a
   }
 });
 
-test("applyScanResult: a staged (unbound) unscannable row is audited but not notified — the form shows it", async () => {
-  const { fx, notifications, audits } = fakeScanDb();
+test("applyScanResult: a staged (unbound) unscannable row is audited AND its uploader notified, linking to the form", async () => {
+  const { fx, queries, notifications, audits } = fakeScanDb();
   await applyScanResult(fx, { ...scanTarget, parentId: null, scanAttempts: SCAN_MAX_ATTEMPTS - 1 }, { error: new ClamdErrorReply("x ERROR") });
   assert.equal(audits().length, 1);
-  assert.deepEqual(notifications(), []);
+  assert.equal(notifications().length, 1);
+  assert.equal(notifications()[0]![0], "user-1", "the uploader is the sole recipient");
+  const payload = JSON.parse(notifications()[0]![1] as string) as { message: string; link: string };
+  assert.match(payload.message, /"odd\.pdf" couldn't be scanned and was removed/);
+  assert.equal(payload.link, "/challenges/new", "a challenge draft links to the submission form");
+  assert.equal(queries.filter((q) => q.sql.includes("insert into notification_outbox")).length, 1, "and is e-mailed (outbox row)");
+  assert.equal(queries.some((q) => q.sql.includes("from challenges")), false, "no parent lookup for an unbound row");
+});
+
+test("applyScanResult: a staged (unbound) infected solution file notifies the uploader with a neutral link", async () => {
+  const { fx, notifications } = fakeScanDb();
+  await applyScanResult(fx, { ...scanTarget, parentType: "solution", parentId: null }, { verdict: { clean: false, signature: "Eicar" } });
+  assert.equal(notifications().length, 1);
+  const payload = JSON.parse(notifications()[0]![1] as string) as { message: string; link: string };
+  assert.match(payload.message, /failed its virus scan and was removed/);
+  assert.doesNotMatch(payload.message, /Eicar/, "the signature is not part of the message");
+  assert.equal(payload.link, "/challenges");
+});
+
+test("stagedScanFailedLink: challenge drafts → the new-challenge form; solution drafts → the challenge list", () => {
+  assert.equal(stagedScanFailedLink("challenge"), "/challenges/new");
+  assert.equal(stagedScanFailedLink("solution"), "/challenges");
+});
+
+test("applyScanResult: a bound row whose parent vanished is audited but not notified", async () => {
+  const queries: { sql: string }[] = [];
+  const fx = {
+    db: {
+      query: async (sql: string) => {
+        queries.push({ sql });
+        if (sql.startsWith("update attachments")) return { rows: [] as never[], rowCount: 1 };
+        return { rows: [] as never[], rowCount: 0 }; // parent lookup finds nothing
+      },
+    },
+    purgeObject: async () => {},
+  };
+  await applyScanResult(fx, scanTarget, { verdict: { clean: false, signature: "X" } });
+  assert.equal(queries.filter((q) => q.sql.includes("insert into audit_log")).length, 1);
+  assert.equal(queries.filter((q) => q.sql.includes("insert into notifications")).length, 0);
 });

@@ -22,6 +22,7 @@ import {
   type AttachmentScanStatus,
   type AttachmentView,
   type ClamdVerdict,
+  type ScanSource,
 } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -40,7 +41,8 @@ export const UPLOAD_SESSION_TTL_HOURS = 2;
 export interface AttachmentDeps {
   pool: Pool;
   storage: StorageClient;
-  scan?: (bytes: Uint8Array) => Promise<ClamdVerdict>;
+  /** Stand-in for clamd (tests): given the bytes or the object stream, the verdict. */
+  scan?: (source: ScanSource) => Promise<ClamdVerdict>;
 }
 
 interface AttachmentDbRow {
