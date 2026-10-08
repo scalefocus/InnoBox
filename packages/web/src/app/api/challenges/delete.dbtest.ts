@@ -2,7 +2,8 @@
 // one hard-delete path in the app, so the things worth proving are all SQL-level: the RBAC gate
 // answers 404 (never 403), the cascade leaves ZERO orphans across every child table, the
 // implemented-solution delete un-solves its challenge while leaving not_selected siblings
-// closed, already-sent outbox rows survive while pending ones go, pre-existing audit rows are
+// closed, already-sent outbox rows survive while unsent (pending/failed) ones go — comment rows
+// included, matched by their payload parent — pre-existing audit rows are
 // untouched, and the audit payload carries metadata + reason but no content. MinIO is not
 // reachable from the host, so an in-memory fake StorageClient records the purge.
 // Self-skips when DATABASE_URL is unset. Mirrors challenges/store.dbtest.ts.
@@ -137,7 +138,7 @@ test(
 
       // Notifications: one on the challenge, one on the winner, one on an UNRELATED challenge
       // whose number shares a prefix (CH-<chNum>0) — the '#'-anchored prefix must not eat it.
-      const mkNotification = async (link: string, status: "pending" | "sent") => {
+      const mkNotification = async (link: string, status: "pending" | "sent" | "failed") => {
         await pool.query(`insert into notifications (user_id, type, payload) values ($1, 'status_changed', $2)`, [
           rivalId,
           JSON.stringify({ message: "m", link }),
@@ -152,6 +153,19 @@ test(
       await mkNotification(`/challenges/${chNum}#SOL-${winnerNum}`, "pending");
       await mkNotification(`/challenges/${chNum}#SOL-${winnerNum}`, "sent");
       await mkNotification(`/challenges/${chNum}0`, "pending"); // a different challenge entirely
+      // A FAILED outbox row is unsent too — it must go with the solution (§10.3 "unsent").
+      await mkNotification(`/challenges/${chNum}#SOL-${winnerNum}`, "failed");
+      // Coalesced comment rows (event 6) carry their parent in the payload. These use the OLD
+      // link shape — the parent challenge page with no `#SOL-<m>` anchor — so only the payload's
+      // parentType/parentId can tie the winner's row to the winner.
+      const mkCommentRow = async (parentType: "challenge" | "solution", parentId: string) => {
+        const payload = JSON.stringify({ message: "c", link: `/challenges/${chNum}`, parentType, parentId, challengeId, count: 1 });
+        await pool.query(`insert into notifications (user_id, type, payload) values ($1, 'comment_posted', $2)`, [rivalId, payload]);
+        await pool.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'comment_posted', $2)`, [rivalId, payload]);
+      };
+      await mkCommentRow("solution", winnerId);
+      await mkCommentRow("solution", loserId);
+      await mkCommentRow("challenge", challengeId);
 
       // Drive the §8.3 auto-close: winner → implemented solves the challenge, sibling closes.
       for (const st of ["in_review", "valid", "accepted_internally", "waiting_for_resources", "in_implementation", "implemented"]) {
@@ -196,8 +210,17 @@ test(
       assert.equal(delSol.counts.follows, 1);
       assert.equal(delSol.counts.attachments, 1);
       assert.equal(delSol.counts.uploadSessions, 1);
-      assert.equal(delSol.counts.notifications, 2, "both inbox rows for this solution's link go");
-      assert.equal(delSol.counts.outbox, 1, "only the PENDING outbox row goes — sent mail is history");
+      assert.equal(delSol.counts.notifications, 4, "the three inbox rows on this solution's link go, plus its comment row on the old link");
+      assert.equal(delSol.counts.outbox, 3, "every UNSENT outbox row goes — pending and failed alike; sent mail is history");
+      const { rows: winnerComments } = await pool.query(
+        `select 1 from notifications where payload->>'parentType' = 'solution' and payload->>'parentId' = $1`,
+        [winnerId],
+      );
+      assert.equal(winnerComments.length, 0, "no comment notification on the deleted solution survives, whatever its link");
+      const { rows: failedLeft } = await pool.query(`select 1 from notification_outbox where status = 'failed' and payload->>'link' = $1`, [
+        `/challenges/${chNum}#SOL-${winnerNum}`,
+      ]);
+      assert.equal(failedLeft.length, 0, "the failed (unsent) outbox row is gone");
 
       assert.equal(await rowExists(pool, `select 1 from solutions where id = $1`, winnerId), false, "the solution row is gone");
       assert.equal(await childCount(pool, "comments", "solution", winnerId), 0);
@@ -244,7 +267,11 @@ test(
       assertNoContent(solAudit.rows[0]!.before, solAudit.rows[0]!.after);
 
       // Only this solution's notifications went: the challenge's own row and the CH-<n>0 row live.
-      assert.equal(await linkCount(pool, "notifications", `/challenges/${chNum}`), 1, "the challenge's own inbox row survives a solution delete");
+      assert.equal(
+        await linkCount(pool, "notifications", `/challenges/${chNum}`),
+        3,
+        "the challenge's own rows survive a solution delete — its status row, its comment row, and the SIBLING's comment row",
+      );
       assert.equal(await linkCount(pool, "notifications", `/challenges/${chNum}0`), 1, "a prefix-sharing challenge is never touched");
       assert.equal(await linkCount(pool, "notification_outbox", `/challenges/${chNum}#SOL-${winnerNum}`), 1, "the sent outbox row survives");
 
@@ -257,7 +284,7 @@ test(
       assert.equal(delCh.counts.likes, 1);
       assert.equal(delCh.counts.follows, 2);
       assert.equal(delCh.counts.attachments, 2);
-      assert.equal(delCh.counts.notifications, 1);
+      assert.equal(delCh.counts.notifications, 3, "the challenge's status row, its comment row, and the sibling's comment row");
 
       assert.equal(await rowExists(pool, `select 1 from challenges where id = $1`, challengeId), false);
       assert.equal(await rowExists(pool, `select 1 from solutions where id = $1`, loserId), false);

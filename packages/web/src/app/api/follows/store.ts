@@ -34,6 +34,20 @@ export async function toggleFollow(
   return { status: "ok", following: true };
 }
 
+/** DELETE /api/follows (§16): the idempotent unfollow. Same visibility gate as the toggle — an
+ *  item the viewer cannot see is "not found" (invariant 2) — and unfollowing something not
+ *  followed is a no-op success. */
+export async function unfollow(
+  pool: Pool,
+  viewer: Viewer,
+  parentType: "challenge" | "solution",
+  parentId: string,
+): Promise<{ status: "ok"; following: false } | { status: "not_found" }> {
+  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+  await pool.query(`delete from follows where user_id = $1 and parent_type = $2 and parent_id = $3`, [viewer.userId, parentType, parentId]);
+  return { status: "ok", following: false };
+}
+
 export async function isFollowing(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
   const { rows } = await pool.query(`select 1 from follows where user_id = $1 and parent_type = $2 and parent_id = $3`, [
     viewer.userId,

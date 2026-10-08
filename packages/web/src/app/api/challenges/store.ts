@@ -970,12 +970,16 @@ export async function setSolutionStatus(
             `update challenges set status = 'solved', resolved_at = coalesce(resolved_at, now()), updated_at = now(), status_changed_at = now() where id = $1`,
             [current.challenge_id],
           );
+          // Invariant 6: audited `from → to` like every transition. The cascade is part of the
+          // actor's one action, so it carries that action's mode: an admin override that set
+          // `implemented` makes the cascade rows overrides too; an enforced move does not.
           await appendAudit(client, {
             actorUserId: actor.userId,
             action: "challenge.status_changed",
             targetType: "challenge",
             targetId: current.challenge_id,
-            after: { status: "solved", trigger: "auto_close", solutionId: current.id },
+            before: { status: current.challenge_status },
+            after: { status: "solved", override: mode === "override", trigger: "auto_close", solutionId: current.id },
           });
 
           const toClose = siblingsToAutoClose(
@@ -991,7 +995,7 @@ export async function setSolutionStatus(
               targetType: "solution",
               targetId: siblingId,
               before: { status: before },
-              after: { status: "not_selected", trigger: "auto_close", implementedSolutionId: current.id },
+              after: { status: "not_selected", override: mode === "override", trigger: "auto_close", implementedSolutionId: current.id },
             });
           }
           autoClose = {

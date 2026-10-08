@@ -108,20 +108,30 @@ async function deleteChildren(
 }
 
 /**
- * Remove the in-app notifications and still-unsent outbox rows that point at the deleted
- * subtree, so no inbox item survives linking to an entity that no longer exists (§10.3,
- * §12.1). Rows are matched on their §12.1 deep link — the only entity reference a payload
- * carries. Already-**sent** outbox rows are dispatch history and are left alone: the mail
- * they describe has already left the building.
+ * Remove the in-app notifications and still-unsent outbox rows that target the deleted
+ * subtree, so no inbox item survives pointing at an entity that no longer exists (§10.3,
+ * §12.1). A row targets the subtree when EITHER
+ *  - its §12.1 deep link is the item's (`/challenges/<n>`, or `…#SOL-<m>` for a solution); or
+ *  - it is a comment row (event 6) whose payload names the item as its `parentType`/`parentId`
+ *    — or, for a challenge delete, names the challenge as its `challengeId`. This is what
+ *    catches a comment notification on a solution whose link carries no `#SOL-<m>` anchor
+ *    (rows written before solution comments were deep-linked to the solution).
+ * "Unsent" is every outbox row that is not `sent` — `pending` and `failed` alike (0006); only
+ * already-sent rows are dispatch history and stay: that mail has already left the building.
  */
 async function deleteNotifications(
   client: PoolClient,
   scope: { exact: string; prefix: string | null },
+  ids: { challengeIds: string[]; solutionIds: string[] },
 ): Promise<{ notifications: number; outbox: number }> {
-  const match = `(payload->>'link' = $1 or ($2::text is not null and payload->>'link' like $2 || '%'))`;
-  const params = [scope.exact, scope.prefix];
+  const match = `(payload->>'link' = $1
+      or ($2::text is not null and payload->>'link' like $2 || '%')
+      or (payload->>'parentType' = 'challenge' and payload->>'parentId' = any($3::text[]))
+      or (payload->>'parentType' = 'solution' and payload->>'parentId' = any($4::text[]))
+      or payload->>'challengeId' = any($3::text[]))`;
+  const params = [scope.exact, scope.prefix, ids.challengeIds, ids.solutionIds];
   const inbox = await client.query(`delete from notifications where ${match}`, params);
-  const outbox = await client.query(`delete from notification_outbox where ${match} and status = 'pending'`, params);
+  const outbox = await client.query(`delete from notification_outbox where ${match} and status <> 'sent'`, params);
   return { notifications: inbox.rowCount ?? 0, outbox: outbox.rowCount ?? 0 };
 }
 
@@ -163,7 +173,10 @@ export async function deleteChallenge(deps: DeleteDeps, admin: Viewer, number: s
 
     const children = await deleteChildren(client, [challenge.id], solutionIds);
     // A challenge's scope covers its own link plus every `#SOL-<n>` link beneath it.
-    const notifications = await deleteNotifications(client, notificationLinkScope({ challengeNumber: challenge.number }));
+    const notifications = await deleteNotifications(client, notificationLinkScope({ challengeNumber: challenge.number }), {
+      challengeIds: [challenge.id],
+      solutionIds,
+    });
 
     // §13.2: a featured challenge's pin is closed out in the audit trail before the row goes.
     await unpinOnDelete(client, admin.userId, challenge.id);
@@ -231,6 +244,7 @@ export async function deleteSolution(deps: DeleteDeps, admin: Viewer, number: st
     const notifications = await deleteNotifications(
       client,
       notificationLinkScope({ challengeNumber: solution.challenge_number, solutionNumber: solution.number }),
+      { challengeIds: [], solutionIds: [solution.id] },
     );
 
     await client.query(`delete from solutions where id = $1`, [solution.id]);

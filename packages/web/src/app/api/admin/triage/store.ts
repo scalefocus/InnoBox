@@ -4,11 +4,16 @@
 // including awaiting_triage/withdrawn, so this view needs no extra visibility gate beyond
 // "is this namespace one the viewer administers") — platform admins see every namespace.
 // Bulk actions delegate to challenges/store.ts's single-item functions so every change is
-// audited individually, exactly as if done one row at a time from the detail page.
+// audited individually, exactly as if done one row at a time from the detail page — and fire the
+// same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
+// through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
 import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, type ChallengeStatus, type RoleSet } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
+import type { NotifyContext } from "../../../../lib/notify";
+import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged } from "../../../../lib/notify-events";
 import { setChallengeAssigneeLean, setChallengeStatusLean, type Viewer } from "../../challenges/store";
+import { isEntityNumber } from "../../challenges/validation";
 
 export interface TriageRow {
   number: string;
@@ -190,9 +195,25 @@ async function runInChunks<T, R>(items: T[], concurrency: number, fn: (item: T) 
   return results;
 }
 
-export async function bulkSetStatus(pool: Pool, admin: Viewer, numbers: string[], newStatus: string): Promise<BulkActionOutcome[]> {
+/** How the bulk actions resolve a recipient's roles for the §12.1 visibility drop — injected (the
+ *  route passes `resolveRolesForUser`) so this module stays free of the session layer. */
+export type ResolveRoles = NotifyContext["resolveRoles"];
+
+export async function bulkSetStatus(
+  pool: Pool,
+  admin: Viewer,
+  numbers: string[],
+  newStatus: string,
+  resolveRoles: ResolveRoles,
+): Promise<BulkActionOutcome[]> {
+  const notify: NotifyContext = { pool, actorId: admin.userId, resolveRoles };
   return runInChunks(numbers, BULK_CONCURRENCY, async (number) => {
     const result = await setChallengeStatusLean(pool, admin, number, newStatus);
+    // §7.2: "a real transition fires the same §12.1 notifications regardless of mode" — the bulk
+    // path included. A no-op (already at that status) is not a transition and fires nothing.
+    if (result.status === "ok" && result.changed) {
+      await notifyChallengeStatusChanged(notify, { number }, newStatus).catch(logNotifyFailure("bulk status notification failed"));
+    }
     // Bulk actions are admin-only, so `illegal_transition` can't occur (admins free-set) — it's
     // folded into "invalid" alongside invalid_status purely to keep the outcome union closed.
     return {
@@ -207,9 +228,29 @@ export async function bulkSetStatus(pool: Pool, admin: Viewer, numbers: string[]
   });
 }
 
-export async function bulkAssign(pool: Pool, admin: Viewer, numbers: string[], assigneeUserId: string | null): Promise<BulkActionOutcome[]> {
+export async function bulkAssign(
+  pool: Pool,
+  admin: Viewer,
+  numbers: string[],
+  assigneeUserId: string | null,
+  resolveRoles: ResolveRoles,
+): Promise<BulkActionOutcome[]> {
+  const notify: NotifyContext = { pool, actorId: admin.userId, resolveRoles };
   return runInChunks(numbers, BULK_CONCURRENCY, async (number) => {
+    // The prior assignee is read first so a reassignment can tell them they were unassigned
+    // (§12.1 event 7). The store's own load below re-checks visibility and RBAC, and nothing read
+    // here reaches the caller unless that check passed.
+    const prior = isEntityNumber(number)
+      ? (await pool.query<{ assignee_id: string | null; title: string }>(`select assignee_id, title from challenges where number = $1`, [number])).rows
+      : [];
     const result = await setChallengeAssigneeLean(pool, admin, number, assigneeUserId);
+    // The new assignee's auto-follow (§12.3) happens inside the store's shared assignment write,
+    // exactly as on the detail page.
+    if (result.status === "ok" && prior[0]) {
+      await notifyAssignmentChanged(notify, { number, title: prior[0].title }, prior[0].assignee_id, assigneeUserId).catch(
+        logNotifyFailure("bulk assignment notification failed"),
+      );
+    }
     return { number: formatChallengeNumber(number), status: result.status === "ok" ? "ok" : result.status };
   });
 }
@@ -234,7 +275,9 @@ export async function exportTriageCsv(pool: Pool, admin: Viewer, filters: Triage
 
   await appendAudit(pool, {
     actorUserId: admin.userId,
-    action: "admin.triage_exported",
+    // `*.exported`, so the audit browser's Admin chip catches it (§15). Rows written under the
+    // legacy name `admin.triage_exported` stay under that chip too — audit rows are immutable.
+    action: "triage.exported",
     targetType: "challenge",
     after: { filters, rowCount: rows.length },
   });
