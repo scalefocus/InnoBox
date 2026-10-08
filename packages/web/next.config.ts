@@ -16,6 +16,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
   images: { unoptimized: true },
   poweredByHeader: false,
+  // `next dev` only. Next 16 answers /_next/* requests whose Origin isn't localhost with a 403, and
+  // the Jenkins e2e drives the dev server at http://127.0.0.1:3000 — so without this every JS chunk
+  // is refused, nothing hydrates, and the whole suite times out. Ignored by production builds.
+  allowedDevOrigins: ["127.0.0.1"],
   async headers() {
     return [{ source: "/:path*", headers: [...STATIC_SECURITY_HEADERS] }];
   },

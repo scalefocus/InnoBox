@@ -52,6 +52,9 @@ export default defineConfig({
   // cold-compiling a route passes on retry once the route is warm. Applied everywhere (dev-mode
   // compile timing bites locally too). A genuinely broken spec still fails every attempt.
   retries: 2,
+  // In CI, stop once the suite is clearly broken rather than retrying every spec until the
+  // Jenkins pipeline timeout aborts the build (which also swallows the error summary).
+  maxFailures: process.env.CI ? 10 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL,

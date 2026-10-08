@@ -163,6 +163,9 @@ pipeline {
           export NEXTAUTH_SECRET="e2e-ci-secret-not-used-in-production-0123456789"
           export NEXTAUTH_URL="http://127.0.0.1:3000"
           export E2E_BASE_URL="http://127.0.0.1:3000"
+          # The suites submit far more than the per-user rate budgets allow; the dev server reads
+          # this to scale them (ignored under NODE_ENV=production).
+          export RATE_LIMIT_MULTIPLIER=50
 
           # Start the dev server on the agent and health-check it before Playwright runs (the
           # config reuses the already-listening server). Kill it on the way out.
@@ -198,7 +201,8 @@ pipeline {
       post {
         always {
           sh 'docker rm -f "innobox-e2e-pg-${BUILD_TAG}" >/dev/null 2>&1 || true'
-          archiveArtifacts artifacts: 'packages/web/playwright-report/**', allowEmptyArchive: true
+          // Kept even when the build is aborted (where the in-step `cat` never runs).
+          archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
         }
       }
     }
