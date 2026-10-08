@@ -11,6 +11,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.44.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can now feature up to a few hand-picked challenges at the top of Home. Featured challenges show only to people allowed to see them, and a challenge drops off the list on its own if it is closed or withdrawn. The number of featured slots is a platform setting.",
+  },
+  {
+    version: "0.43.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins can connect a namespace to a Teams or other chat channel: when a challenge in that namespace opens for solutions, a solution is implemented, or a challenge is solved, a short post with the title, status and a link appears in the channel. Only organization-wide items are ever posted, and nobody's name is included.",
+  },
+  {
+    version: "0.42.0",
+    date: "2026-10-08",
+    summary:
+      "The Challenges page can now show challenges as a compact list instead of cards — number, title, status, namespace, author, likes, solutions and date on one row, with the same \"new\" tags. Your choice is remembered on this browser.",
+  },
+  {
     version: "0.41.0",
     date: "2026-10-08",
     summary:

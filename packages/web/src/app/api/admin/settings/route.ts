@@ -4,6 +4,7 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getAttachmentLimits, getDateFormat, listAllImpactAreas, setAttachmentLimits, setDateFormat } from "./store";
 import { parseSettingsPatch } from "./validation";
+import { getFeaturedLimit, setFeaturedLimit } from "../../challenges/featured";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -14,12 +15,13 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas] = await Promise.all([
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     listAllImpactAreas(pool),
+    getFeaturedLimit(pool),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, impactAreas });
+  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit });
 }
 
 async function handlePATCH(req: Request): Promise<Response> {
@@ -36,9 +38,10 @@ async function handlePATCH(req: Request): Promise<Response> {
 
   if (parsed.value.dateFormat) await setDateFormat(pool, parsed.value.dateFormat, gate.user.id);
   if (parsed.value.attachmentLimits) await setAttachmentLimits(pool, parsed.value.attachmentLimits, gate.user.id);
+  if (parsed.value.featuredLimit !== undefined) await setFeaturedLimit(pool, parsed.value.featuredLimit, gate.user.id);
 
-  const [dateFormat, attachmentLimits] = await Promise.all([getDateFormat(pool), getAttachmentLimits(pool)]);
-  return Response.json({ dateFormat, attachmentLimits });
+  const [dateFormat, attachmentLimits, featuredLimit] = await Promise.all([getDateFormat(pool), getAttachmentLimits(pool), getFeaturedLimit(pool)]);
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

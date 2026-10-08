@@ -140,6 +140,8 @@ services:
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}
+      # §12.4 channel webhooks: URL encryption key (shared with the worker; unset → webhooks off).
+      WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
     restart: always
     expose:
       - "3000"
@@ -179,6 +181,8 @@ services:
       # SMTP the optional plain-text fallback; the in-app inbox always works.
       # ENTRA_EMAIL_CLIENT_ID/SECRET: dedicated "InnoBox Email" app registration (§3.2).
       EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
+      # §12.4 channel-webhook delivery: the same URL encryption key as web (unset → webhooks off).
+      WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}

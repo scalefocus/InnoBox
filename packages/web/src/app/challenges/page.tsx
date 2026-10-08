@@ -4,11 +4,14 @@
 // Strictly visibility-filtered and anonymity-masked server-side — this page only renders
 // what the API already decided the viewer may see.
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { cachedGet } from "@/lib/ui";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
+import { readChallengesView, writeChallengesView, type ChallengesView } from "@/lib/challenges-view";
+import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
+import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 
 interface ChallengeListItem {
   id: string;
@@ -64,6 +67,16 @@ export default function ChallengesPage() {
   const [impactAreas, setImpactAreas] = useState<ImpactArea[]>([]);
   const [namespaces, setNamespaces] = useState<NamespaceOption[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // §13.1 Cards / List toggle: persisted per browser (localStorage), read after mount — the server
+  // snapshot is Cards and results only render once the post-mount fetch lands, so no hydration
+  // mismatch and no flash. A click overrides it for the visit even when storage is blocked.
+  const storedView = useSyncExternalStore(noSubscribe, () => readChallengesView(), () => "cards" as const);
+  const [chosenView, setChosenView] = useState<ChallengesView | null>(null);
+  const view = chosenView ?? storedView;
+  const chooseView = (v: ChallengesView) => {
+    setChosenView(v);
+    writeChallengesView(v);
+  };
 
   useEffect(() => {
     cachedGet<{ impactAreas: ImpactArea[] }>("/api/impact-areas")
@@ -172,6 +185,7 @@ export default function ChallengesPage() {
             </button>
           ))}
         </div>
+        <ChallengesViewToggle view={view} onChange={chooseView} />
       </div>
 
       {error && (
@@ -194,7 +208,9 @@ export default function ChallengesPage() {
         </div>
       )}
 
-      {!error && challenges !== null && challenges.length > 0 && (
+      {!error && challenges !== null && challenges.length > 0 && view === "list" && <ChallengesList challenges={challenges} />}
+
+      {!error && challenges !== null && challenges.length > 0 && view === "cards" && (
         <div className="card-grid">
           {challenges.map((c) => (
             <ChallengeCard key={c.id} challenge={c} />
@@ -209,23 +225,21 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
   const fmt = useDateFmt();
   return (
     <Link href={`/challenges/${challenge.number.replace("CH-", "")}`} className="card skill-card">
-      {/* §13.1: created since this viewer last left the Challenges surface — exactly the cards
-          the nav bubble counts. The tooltip carries when it appeared. */}
-      {challenge.isNew && (
-        <span className="chip-new" title={`New since your last visit — submitted ${fmt.dateTime(challenge.createdAt)}`} aria-label="New since your last visit">
-          new
-        </span>
-      )}
+      {/* §13.1: badges shared with the list view (ChallengeBadges.tsx) — add new ones there. */}
+      <ChallengeNewTag challenge={challenge} />
       <div className="meta">
         <span className="chip mono">{challenge.number}</span>
         <span className={statusPillClass(challenge.status)}>{CHALLENGE_STATUS_LABEL[challenge.status] ?? challenge.status}</span>
         <span className="chip">{challenge.impactAreaName}</span>
+        <ChallengeStateBadges challenge={challenge} />
       </div>
       <h3>{challenge.title}</h3>
       <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-          <span>{challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}</span>
+          <span>
+            <ChallengeAuthorName challenge={challenge} />
+          </span>
           <span className="mono" style={{ fontSize: 11.5, color: "var(--faint)" }}>
             {fmt.date(challenge.createdAt)} · /{challenge.namespaceSlug}
           </span>
@@ -237,4 +251,10 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       </div>
     </Link>
   );
+}
+
+// The view preference has no cross-component change source to subscribe to (the page's own clicks
+// go through state), so the external-store subscription is a no-op.
+function noSubscribe(): () => void {
+  return () => {};
 }
