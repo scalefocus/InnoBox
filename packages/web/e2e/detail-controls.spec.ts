@@ -76,7 +76,7 @@ test("an admin can unassign a challenge from the detail page", async ({ browser 
   const admin = await adminCtx.newPage();
   await admin.goto(`/challenges/${challenge.digits}`);
   await expect(admin.getByText(`assignee:`)).toBeVisible();
-  await admin.getByRole("button", { name: "Unassign" }).click();
+  await admin.getByRole("button", { name: "Unassign", exact: true }).click();
   await expect(admin.getByText("Unassigned", { exact: true })).toBeVisible();
   await expect(admin.getByText(`assignee:`)).toHaveCount(0);
 

@@ -11,6 +11,10 @@ queue sit on top; everything is visibility-filtered, optionally anonymous, and a
 Identity is anchored in **Microsoft Entra ID** — OIDC sign-in, SCIM 2.0 provisioning,
 and group-based RBAC.
 
+![The Home dashboard: challenge and solution counts by status, with spotlight cards below](docs/screenshots/home.png)
+
+![The Challenges gallery: open challenges as cards, with status, impact area, namespace and author filters](docs/screenshots/challenges.png)
+
 ---
 
 ## Before you go further: prerequisites

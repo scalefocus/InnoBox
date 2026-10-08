@@ -103,7 +103,7 @@ test("a solution's anonymous author: admin reveal in the dialog, and one-way sel
   const admin = await adminCtx.newPage();
   await admin.goto(`/challenges/${challenge.digits}`);
   const adminRow = admin.locator(`[id="${solution.number}"]`);
-  await expect(adminRow.getByText("Anonymous")).toBeVisible();
+  await expect(adminRow.getByText(/^Anonymous ·/)).toBeVisible();
   await adminRow.getByRole("button", { name: "Reveal author", exact: true }).click();
   const dialog = admin.getByRole("dialog", { name: proposerName });
   await expect(dialog).toBeVisible();
@@ -111,7 +111,7 @@ test("a solution's anonymous author: admin reveal in the dialog, and one-way sel
   await expect(dialog.getByText("Revealed to you only")).toBeVisible();
   await admin.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(adminRow.getByText("Anonymous")).toBeVisible();
+  await expect(adminRow.getByText(/^Anonymous ·/)).toBeVisible();
 
   // Proposer: no admin reveal, but a one-way self-reveal on their own solution.
   const proposer = await proposerCtx.newPage();

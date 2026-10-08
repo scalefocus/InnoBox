@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.45.0",
+    date: "2026-10-08",
+    summary:
+      "A round of fixes so everything works as designed: likes freeze once a challenge is solved, solutions get their own author-reveal buttons and the reveal opens in a dialog, assignees can be removed, and search now takes the same filters as the Challenges page. Bulk triage actions and reassignments now send notifications, the leaderboard only counts work everyone can see, deactivated people show a greyed avatar everywhere, and new users land on Quick start before any other page loads.",
+  },
+  {
     version: "0.44.0",
     date: "2026-10-08",
     summary:
