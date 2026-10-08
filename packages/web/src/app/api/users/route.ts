@@ -1,0 +1,16 @@
+// GET /api/users?q= (INNOBOX_SPEC.md §7.3): searchable directory of active users, for the
+// namespace admin's assignment picker. Auth-required; returns id/displayName/email only —
+// no role/namespace data (this isn't an admin-only endpoint).
+import { requireUser } from "@/lib/auth";
+import { pool } from "@/lib/db";
+import { searchActiveUsers } from "./store";
+
+export async function GET(req: Request): Promise<Response> {
+  const gate = await requireUser();
+  if (!gate.ok) return gate.response;
+  const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
+  if (q.length < 2) return Response.json({ users: [] });
+
+  const users = await searchActiveUsers(pool, q);
+  return Response.json({ users });
+}

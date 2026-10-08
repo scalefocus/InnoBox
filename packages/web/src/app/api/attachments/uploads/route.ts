@@ -1,0 +1,70 @@
+// POST /api/attachments/uploads — initiate a chunked upload (INNOBOX_SPEC.md §11). For files
+// larger than the configured chunk size only; files ≤ chunk size use single-shot POST
+// /api/attachments. Validates the §14.3 cap, size, and allowlist UP FRONT (fail-fast), opens a
+// server-proxied MinIO multipart upload, and returns { uploadId, chunkSizeBytes }. Chunks are
+// then PUT to /uploads/:uploadId/parts/:n and assembled by POST /uploads/:uploadId/complete —
+// no presigned/direct-store URLs are ever emitted (invariant 4).
+import { requireUser } from "@/lib/auth";
+import { pool } from "@/lib/db";
+import { getStorage } from "@/lib/storage";
+import { isUuid } from "../../challenges/validation";
+import { initiateChunkedUpload } from "../store";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(req: Request): Promise<Response> {
+  const gate = await requireUser();
+  if (!gate.ok) return gate.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
+  }
+  const rec = body as Record<string, unknown>;
+  const parentType = rec.parentType;
+  const filename = rec.filename;
+  const mime = rec.mime;
+  const size = rec.size;
+  if (parentType !== "challenge" && parentType !== "solution") {
+    return Response.json({ error: "parentType must be 'challenge' or 'solution'" }, { status: 400 });
+  }
+  if (typeof filename !== "string" || filename.trim() === "") return Response.json({ error: "filename is required" }, { status: 400 });
+  if (typeof mime !== "string" || mime.trim() === "") return Response.json({ error: "mime is required" }, { status: 400 });
+  if (typeof size !== "number" || !Number.isInteger(size) || size < 0) return Response.json({ error: "size must be a non-negative integer" }, { status: 400 });
+
+  const staged = typeof rec.draftKey === "string" && rec.draftKey !== "";
+  if (staged) {
+    if (!isUuid(rec.draftKey as string)) return Response.json({ error: "draftKey must be a uuid" }, { status: 400 });
+  } else if (typeof rec.parentId !== "string" || rec.parentId === "") {
+    return Response.json({ error: "parentId or draftKey is required" }, { status: 400 });
+  }
+
+  const viewer = { userId: gate.user.id, roles: gate.user.roles };
+  const result = await initiateChunkedUpload({ pool, storage: getStorage() }, viewer, {
+    parentType,
+    parentId: staged ? undefined : (rec.parentId as string),
+    draftKey: staged ? (rec.draftKey as string) : undefined,
+    filename,
+    mime,
+    size,
+  });
+
+  switch (result.status) {
+    case "ok":
+      return Response.json({ uploadId: result.uploadId, chunkSizeBytes: result.chunkSizeBytes }, { status: 201 });
+    case "not_found":
+      return Response.json({ error: "that challenge or solution was not found" }, { status: 404 });
+    case "forbidden":
+      return Response.json({ error: "only the author can attach files to this item" }, { status: 403 });
+    case "not_editable":
+      return Response.json({ error: "attachments can only be added while the item is editable" }, { status: 409 });
+    case "too_many":
+      return Response.json({ error: "attachment limit reached for this item" }, { status: 409 });
+    case "too_large":
+      return Response.json({ error: "file exceeds the maximum upload size" }, { status: 413 });
+    case "unsupported_type":
+      return Response.json({ error: "that file type is not allowed" }, { status: 415 });
+  }
+}

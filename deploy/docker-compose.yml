@@ -1,0 +1,183 @@
+# InnoBox — v1 deployment topology (INNOBOX_SPEC.md §2 / §2.3).
+# Six services: web, worker, postgres, minio, clamav, migrate (+ a dev proxy).
+# Production public URL: the deployment's own PUBLIC_BASE_URL (set in .env; no host is pinned
+# here — §2.3) — TLS terminates at the org reverse proxy; the bundled Caddy handles internal
+# routing on :8080.
+#
+#   cp .env.example .env   # fill secrets
+#   docker compose up --build
+name: innobox
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-innobox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-innobox}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      # Loopback-only: lets `pnpm dev` on the host reach the DB (CLAUDE.md dev workflow).
+      # Not reachable from other machines; production access stays inside the compose network.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-innobox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-innobox}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      PGDATABASE: ${POSTGRES_DB:-innobox}
+      INNOBOX_APP_PASSWORD: ${INNOBOX_APP_PASSWORD:?set in .env}
+    volumes:
+      - ../db/migrations:/migrations:ro
+      - ./migrate.sh:/migrate.sh:ro
+    entrypoint: ["/bin/sh", "/migrate.sh"]
+    restart: "no"
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-innobox}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - ./data/minio:/data
+    ports:
+      - "9001:9001" # console (dev only)
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clamav:
+    image: clamav/clamav:latest
+    restart: always
+    # Signature updates require outbound network (INNOBOX_SPEC.md §11).
+    volumes:
+      - ./data/clamav:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  web:
+    build:
+      context: ..
+      dockerfile: packages/web/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://innobox_app:${INNOBOX_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-innobox}
+      NEXTAUTH_URL: ${PUBLIC_BASE_URL}
+      # Internal URL for server-to-server NextAuth calls — avoids routing back through
+      # the org proxy for session/token operations that stay within the Docker network.
+      NEXTAUTH_URL_INTERNAL: http://web:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set in .env}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      INNOBOX_BOOTSTRAP_ADMIN_GROUP: ${INNOBOX_BOOTSTRAP_ADMIN_GROUP}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-innobox}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # MUST match the worker's S3_BUCKET — web WRITES uploaded attachments here and the
+      # worker READS them for the ClamAV scan pipeline (INNOBOX_SPEC.md §11).
+      S3_BUCKET: ${S3_BUCKET:-innobox-attachments}
+      # §11: the web tier scans uploads ON DEMAND (and probes clamd for the submit gate's
+      # `scanAvailable` signal); the worker sweep is the fallback. Same clamd as the worker.
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # §12 email channel: token encryption key (shared with the worker) + SMTP_HOST so the
+      # admin card's status pill can tell "SMTP fallback" from "email down".
+      # ENTRA_EMAIL_CLIENT_ID/SECRET come from the dedicated "InnoBox Email" app registration
+      # (ENTRA_AUTH_SPEC.md §3.2) — separate from the OIDC app so Mail.Send can't be
+      # exercised on behalf of regular users.
+      EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
+      ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
+      ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+    restart: always
+    expose:
+      - "3000"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: packages/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      # ClamAV is advisory (the scan pipeline degrades gracefully to "engine unavailable"), so we
+      # don't block worker startup on its healthcheck — a cold boot runs freshclam first, which can
+      # take minutes. service_started lets the worker come up; early scans self-heal once clamd is up.
+      clamav:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://innobox_app:${INNOBOX_APP_PASSWORD}@postgres:5432/${POSTGRES_DB:-innobox}
+      WORKER_PORT: "4000"
+      SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set in .env}
+      # ClamAV daemon address. Host = the compose service name; port 3310 is clamd's default.
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-innobox}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-innobox-attachments}
+      # Notification delivery (INNOBOX_SPEC.md §12): Graph is the primary transport,
+      # SMTP the optional plain-text fallback; the in-app inbox always works.
+      # ENTRA_EMAIL_CLIENT_ID/SECRET: dedicated "InnoBox Email" app registration (§3.2).
+      EMAIL_TOKEN_ENC_KEY: ${EMAIL_TOKEN_ENC_KEY:-}
+      ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
+      ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Entra Graph credentials for group-membership reconciliation (INNOBOX_SPEC.md §3).
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET}
+      INNOBOX_BOOTSTRAP_ADMIN_GROUP: ${INNOBOX_BOOTSTRAP_ADMIN_GROUP}
+    restart: always
+    expose:
+      - "4000"
+
+  proxy:
+    # Dev-only sample reverse proxy. In production, terminate TLS at the org proxy.
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      - web
+      - worker
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8080:8080"

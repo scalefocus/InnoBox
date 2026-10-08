@@ -1,0 +1,115 @@
+# InnoBox CI (INNOBOX_SPEC.md §2.3). Mirrors the Jenkins CI stages — this is the one
+# a reader of the public repository can actually see and re-run.
+#
+#   typecheck : type-check every package
+#   test      : hermetic unit tests (the live-DB suites gated-skip here)
+#   db-test   : the gated live-DB suite against a real Postgres service
+#   build     : production build of the UI (proves the standalone server compiles)
+#
+# Deployment is NOT here: Jenkins owns it (Docker-over-SSH to the deploy host), and no
+# deployment-specific value lives in this repository.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 9.15.9
+  NODE_VERSION: 20
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The other packages resolve @innobox/shared through its dist/ (package.json exports),
+      # which a fresh checkout does not have — build it first or typecheck cannot resolve it.
+      - run: pnpm --filter @innobox/shared build
+      - run: pnpm -r typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r test
+
+  # Live-DB integration. The test:db harness (packages/web/scripts/test-db-isolated.mjs)
+  # creates a throwaway database per run, applies every migration to it, runs the web +
+  # worker *.dbtest.ts suites against it as the least-privilege innobox_app role, then
+  # drops it — so a forgotten GRANT on a new table is still caught.
+  db-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: innobox
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: innobox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U innobox"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      INNOBOX_DB_E2E: "1"
+      # Admin conn (creates/drops the per-run DB) and the app-role template the suites run as.
+      TEST_ADMIN_DATABASE_URL: postgres://innobox:test@127.0.0.1:5432/innobox
+      TEST_APP_DATABASE_URL: postgres://innobox_app:apptest@127.0.0.1:5432/innobox
+      # Throwaway server — safe to have the harness set the app role's password here.
+      TEST_SET_APP_PASSWORD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @innobox/shared build
+      - run: pnpm test:db
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @innobox/shared build
+      - run: pnpm --filter @innobox/web build

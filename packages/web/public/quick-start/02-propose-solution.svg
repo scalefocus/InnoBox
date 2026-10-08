@@ -1,0 +1,45 @@
+<svg viewBox="0 0 1280 800" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1280" height="800" rx="18" fill="#F8F9F9"/>
+  <rect x="1" y="1" width="1278" height="798" rx="17" fill="none" stroke="#E2E3E4" stroke-width="2"/>
+
+  <rect x="0" y="0" width="220" height="800" rx="18" fill="#FFFFFF"/>
+  <rect x="18" y="0" width="202" height="800" fill="#FFFFFF"/>
+  <text x="32" y="48" font-size="20" font-weight="700" fill="#082773">innobox<tspan fill="#14ABE3">.</tspan></text>
+  <text x="48" y="114" font-size="13" fill="#58595B">Home</text>
+  <rect x="32" y="132" width="156" height="34" rx="9" fill="#DCF2FB"/>
+  <text x="48" y="154" font-size="13" fill="#082773" font-weight="600">Challenges</text>
+  <text x="48" y="200" font-size="13" fill="#58595B">Leaderboard</text>
+
+  <text x="252" y="62" font-size="11" letter-spacing="2" fill="#0E87B5" font-weight="700">CH-104</text>
+  <rect x="252" y="76" width="272" height="30" rx="15" fill="#D9F7EC"/>
+  <text x="270" y="96" font-size="13" fill="#049C70" font-weight="700">Valid — open for solutions</text>
+
+  <text x="252" y="140" font-size="30" font-weight="700" fill="#082773">Scattered onboarding docs</text>
+  <text x="252" y="168" font-size="14" fill="#58595B">Internal · submitted by Ada L. · 4 comments · 12 likes</text>
+
+  <rect x="944" y="118" width="128" height="42" rx="10" fill="#14ABE3"/>
+  <text x="960" y="145" font-size="13" fill="#FFFFFF" font-weight="600">Propose a solution</text>
+
+  <!-- description card -->
+  <rect x="252" y="196" width="820" height="88" rx="14" fill="#FFFFFF" stroke="#E2E3E4" stroke-width="2"/>
+  <text x="276" y="228" font-size="13" fill="#1A1A1A">New hires bounce between three tools to find onboarding steps —</text>
+  <text x="276" y="250" font-size="13" fill="#1A1A1A">a single source of truth would save everyone time.</text>
+
+  <text x="252" y="322" font-size="13" fill="#58595B" font-weight="600" letter-spacing="1">SOLUTIONS (2)</text>
+
+  <!-- solution 1 -->
+  <rect x="252" y="340" width="820" height="120" rx="14" fill="#FFFFFF" stroke="#E2E3E4" stroke-width="2"/>
+  <rect x="276" y="362" width="96" height="26" rx="13" fill="#FFEDD9"/>
+  <text x="290" y="380" font-size="12" fill="#C97A1F" font-weight="700">Proposed</text>
+  <text x="276" y="416" font-size="14" fill="#1A1A1A">Consolidate everything into a single "Start here" Confluence space</text>
+  <text x="276" y="440" font-size="12" fill="#909193">Proposed by Marta K. · 3 likes</text>
+
+  <!-- solution 2 -->
+  <rect x="252" y="476" width="820" height="120" rx="14" fill="#FFFFFF" stroke="#E2E3E4" stroke-width="2"/>
+  <rect x="276" y="498" width="96" height="26" rx="13" fill="#FFEDD9"/>
+  <text x="290" y="516" font-size="12" fill="#C97A1F" font-weight="700">Proposed</text>
+  <text x="276" y="552" font-size="14" fill="#1A1A1A">Build a short onboarding video series, linked from day-one e-mail</text>
+  <text x="276" y="576" font-size="12" fill="#909193">Proposed by Ivo P. · 1 like</text>
+
+  <text x="252" y="648" font-size="12" fill="#909193">A challenge can have many proposals — only one ever moves forward.</text>
+</svg>

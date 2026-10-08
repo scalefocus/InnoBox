@@ -1,0 +1,48 @@
+name: 💡 Feature request
+description: Propose a new capability or a change to existing behavior.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        InnoBox is **spec-first**: any change to behavior, data, or contracts lands in
+        `INNOBOX_SPEC.md` before code. Framing your request against the spec speeds triage.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: >-
+        What can't you do today? Who is affected — which role (Platform Admin,
+        Namespace Admin, Committee Member, Assignee, or any signed-in employee)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should InnoBox do? Describe the behavior, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: spec-impact
+    attributes:
+      label: Spec / invariant impact
+      description: >-
+        Does this touch a non-negotiable invariant (SCIM-resolved roles, strict visibility
+        filtering, anonymity, append-only audit, scanned-attachment gateway, one solution
+        past `valid` per challenge)? Which INNOBOX_SPEC.md section(s) would change?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true

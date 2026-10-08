@@ -1,0 +1,44 @@
+{
+  "name": "@innobox/shared",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "default": "./dist/version.js"
+    },
+    "./avatars": {
+      "types": "./dist/avatars.d.ts",
+      "default": "./dist/avatars.js"
+    },
+    "./email": {
+      "types": "./dist/email.d.ts",
+      "default": "./dist/email.js"
+    },
+    "./email-template": {
+      "types": "./dist/email-template.d.ts",
+      "default": "./dist/email-template.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && cd dist && node --test",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "eslint": "^9.15.0",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.18.0"
+  }
+}

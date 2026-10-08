@@ -1,0 +1,37 @@
+// GET/POST /api/admin/namespaces — platform-admin only (ENTRA_AUTH_SPEC.md §5 layer 3).
+// Validation 400s and slug-conflict 409s carry a JSON { error }; creation is audited
+// (namespace.created) atomically with the insert in the store.
+import { requirePlatformAdmin } from "@/lib/auth";
+import { pool } from "@/lib/db";
+import { parseNamespaceCreate } from "../validation";
+import { createNamespace, listNamespaces } from "../store";
+
+// Admin lists must never be prerendered or cached — always hit the DB per request.
+export const dynamic = "force-dynamic";
+
+export async function GET(): Promise<Response> {
+  const gate = await requirePlatformAdmin();
+  if (!gate.ok) return gate.response;
+  return Response.json({ namespaces: await listNamespaces(pool) });
+}
+
+export async function POST(req: Request): Promise<Response> {
+  const gate = await requirePlatformAdmin();
+  if (!gate.ok) return gate.response;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
+  }
+  const parsed = parseNamespaceCreate(body);
+  if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
+  const namespace = await createNamespace(pool, parsed.value, gate.user.id);
+  if (!namespace) {
+    return Response.json(
+      { error: `a namespace with slug "${parsed.value.slug}" already exists` },
+      { status: 409 },
+    );
+  }
+  return Response.json({ namespace }, { status: 201 });
+}

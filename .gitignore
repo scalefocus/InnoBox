@@ -1,0 +1,36 @@
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+coverage/
+
+# secrets / local env
+deploy/.env
+.env
+.env.local
+*.pem
+
+# data volumes (dev)
+deploy/data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# Local agent tooling, deliberately not published (INNOBOX_SPEC.md §21.3): scalify-ui
+# IS the organization's brand book and scale-entra is an internal playbook. They stay
+# on disk and keep working locally; they are not part of the repository.
+.claude/skills/
+
+# Claude Code worktrees (one per agent session; never committed)
+.claude/worktrees/
+
+# Playwright artifacts (e2e runs)
+packages/web/test-results/
+packages/web/playwright-report/

@@ -1,0 +1,25 @@
+# Reverse proxy (INNOBOX_SPEC.md §2.3).
+# Production: TLS terminates at the org reverse proxy (public URL = the deployment's
+# PUBLIC_BASE_URL, set in .env); this Caddy instance handles internal routing on
+# port 8080. It forwards X-Forwarded-Proto and X-Forwarded-Host so Next.js and
+# NextAuth can reconstruct the correct public URL.
+:8080 {
+	# SCIM provisioning endpoint -> worker (keep /scim prefix; worker mounts at /scim/v2)
+	handle /scim/* {
+		reverse_proxy worker:4000 {
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+	# everything else -> web app (UI + API)
+	handle {
+		reverse_proxy web:3000 {
+			# Pass the original protocol/host so NextAuth builds correct callback URLs.
+			# The org proxy terminates TLS and must set X-Forwarded-Proto: https upstream.
+			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
+			header_up X-Forwarded-Host  {>X-Forwarded-Host}
+			header_up X-Real-IP         {remote_host}
+		}
+	}
+}

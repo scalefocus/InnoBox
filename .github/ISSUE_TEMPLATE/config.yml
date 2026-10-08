@@ -1,0 +1,5 @@
+# Funnel reporters into the structured templates. Security reports never go in public
+# issues — both templates say so and point at SECURITY.md (private vulnerability
+# reporting). No contact link: it would need this repository's URL, and no
+# deployment-specific value lives in the repository (INNOBOX_SPEC.md §2.3, §21.6).
+blank_issues_enabled: false

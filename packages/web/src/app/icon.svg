@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- InnoBox's own mark: the orange "box" square from the wordmark's 'o' (the terminal box of
+       innob[o]x), with a hollow centre. Vector redraw of the official brand asset — orange
+       #FF5300, hole 42.6% of the mark, evenly centred; the centre is transparent so it reads on
+       any browser-tab / theme background. Deliberately NOT the corporate eye. -->
+  <path fill="#FF5300" fill-rule="evenodd" d="M0 0h100v100H0z M28.7 28.7h42.6v42.6H28.7z"/>
+</svg>

@@ -1,0 +1,11 @@
+-- 0018_user_office_location.sql — the directory profile's third field (INNOBOX_SPEC.md §3, §13.8).
+--
+-- `office_location` mirrors the Entra `officeLocation` attribute and joins the existing
+-- `department` / `job_title` as display-only data behind the profile page (§13.5) and the
+-- directory hover card (§13.8). Nothing in RBAC, visibility or governance reads it (invariant 1).
+--
+-- Reconciliation is the ONLY automatic writer and it overwrites unconditionally — an office move
+-- must propagate, and an absent/empty Graph value writes NULL (ENTRA_AUTH_SPEC.md §5 pass 1).
+-- SCIM carries no office attribute and never touches this column, so the tenant needs no
+-- provisioning-mapping change. GDPR erasure scrubs it like the photo (§3).
+alter table users add column if not exists office_location text;
