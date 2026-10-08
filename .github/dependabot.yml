@@ -28,3 +28,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # One grouped PR for all action bumps (weekly grouped updates, like npm above).
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -259,20 +259,32 @@ pipeline {
             $SSH "${DEPLOY_HOST}" "cd ${DEPLOY_PATH}/deploy && docker compose up --build -d"
 
             # ── 4. Ensure the MinIO attachment bucket exists (idempotent) ──────────────────
+            # mc mb -p is a no-op when the bucket already exists, so any failure here is real
+            # (MinIO down, bad credentials) and must fail the deploy: /readyz checks only the
+            # database, so a missing bucket would otherwise ship silently and break every
+            # upload. MinIO may still be starting right after `compose up`, hence the retry.
             cat > /tmp/_innobox_minio.sh << 'MINIO_SCRIPT'
 #!/bin/sh
-set -e
-cd __DEPLOY_PATH__/deploy
+cd __DEPLOY_PATH__/deploy || exit 1
 set -a; . ./.env; set +a
-docker compose exec -T minio sh -c 'mc alias set s3 http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb -p s3/${S3_BUCKET:-innobox-attachments}'
+for i in $(seq 1 20); do
+  if docker compose exec -T -e S3_BUCKET="${S3_BUCKET:-innobox-attachments}" minio sh -c 'mc alias set s3 http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb -p s3/${S3_BUCKET:-innobox-attachments}'; then
+    exit 0
+  fi
+  sleep 3
+done
+echo "MinIO bucket could not be ensured" >&2
+exit 1
 MINIO_SCRIPT
             sed -i "s|__DEPLOY_PATH__|${DEPLOY_PATH}|g" /tmp/_innobox_minio.sh
             $SCP /tmp/_innobox_minio.sh "${DEPLOY_HOST}:/tmp/_innobox_minio.sh"
-            $SSH "${DEPLOY_HOST}" "sh /tmp/_innobox_minio.sh; rm -f /tmp/_innobox_minio.sh" || true
             rm -f /tmp/_innobox_minio.sh
+            $SSH "${DEPLOY_HOST}" 'rc=0; sh /tmp/_innobox_minio.sh || rc=$?; rm -f /tmp/_innobox_minio.sh; exit $rc'
 
             # ── 5. Smoke-check readiness ──────────────────────────────────────────────────
-            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && break || sleep 3; done'
+            # Exits non-zero when every attempt fails, so a stack that never becomes ready
+            # fails the pipeline instead of going green.
+            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 3; done; echo "readyz never became ready" >&2; exit 1'
 
             # ── 6. Housekeeping: drop docker residue from this and earlier builds ──────────
             # image prune -f removes only DANGLING images (the <none> layers each --build

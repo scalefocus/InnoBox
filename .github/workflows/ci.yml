@@ -10,9 +10,9 @@
 # deployment-specific value lives in this repository.
 name: CI
 
+# Every push (any branch) and every pull request.
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16
         env:
           POSTGRES_USER: innobox
           POSTGRES_PASSWORD: test
