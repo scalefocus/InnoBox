@@ -47,6 +47,24 @@ CREATE TRIGGER audit_log_no_mutation
   FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();
 ```
 
+A statement-level `BEFORE TRUNCATE` trigger (`0022`) refuses `TRUNCATE` for every role.
+
+### Hash chain (`0028_audit_chain.sql`, INNOBOX_SPEC.md §15)
+
+Every audit row written since `0028` is SHA-256 hash-chained (`chain_seq`, `prev_hash`,
+`row_hash`) by the `BEFORE INSERT` trigger `audit_log_chain`. Two rules follow:
+
+- **The chain trigger must never be dropped, disabled or bypassed.** A row inserted without it
+  is reported by "Verify integrity" as an `unchained` break; callers never compute or supply the
+  chain columns (any supplied value is overwritten).
+- **`audit_log` inserts run under `READ COMMITTED`** (the platform default). The trigger raises
+  under any other isolation level. It holds a transaction-scoped advisory lock until commit, so a
+  long transaction that writes an audit row blocks other audited writes — write audit rows last
+  in a transaction where cheap.
+
+Rows written before `0028` stay unchained (`NULL` chain columns); the genesis row
+`audit.chain_started` records their count and highest id.
+
 The schema itself (challenges, solutions, comments, likes, follows, attachments,
 notifications, namespaces, role_mappings, impact_areas, settings, users) is designed
 during Phase 0/2 implementation against INNOBOX_SPEC.md §5 — spec first, then DDL.

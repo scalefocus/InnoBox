@@ -10,6 +10,7 @@ import { cachedGet } from "@/lib/ui";
 import { readJson } from "@/lib/api-client";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
+import { VerifyIntegrity } from "./VerifyIntegrity";
 
 interface MeResponse {
   roles: { platformAdmin: boolean };
@@ -68,6 +69,7 @@ export default function AdminAuditPage() {
           </p>
         </div>
       )}
+      {gate === "ok" && <VerifyIntegrity />}
       {gate === "ok" && <AuditBrowser />}
     </>
   );

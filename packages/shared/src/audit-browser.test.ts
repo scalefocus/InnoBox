@@ -22,6 +22,7 @@ test("the spec's prefixes are covered", () => {
   assert.ok(AUDIT_CATEGORY_PATTERNS.identity.includes("role_mapping.%"));
   assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("%.exported"), "every export lands under Admin");
   assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("system_banner.%"));
+  assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("audit.%"), "audit.chain_started / audit.verified land under Admin");
   assert.equal(AUDIT_PAGE_SIZE, 100);
   assert.equal(AUDIT_EXPORT_CAP, 50_000);
 });

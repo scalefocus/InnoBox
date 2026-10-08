@@ -33,6 +33,10 @@ export interface AuditEntry {
   before: unknown;
   after: unknown;
   createdAt: string;
+  /** Hash-chain columns (§15) — null on rows written before the chain migration. */
+  chainSeq: string | null;
+  prevHash: string | null;
+  rowHash: string | null;
 }
 
 export interface AuditPage {
@@ -55,6 +59,9 @@ interface AuditQueryRow {
   before: unknown;
   after: unknown;
   created_at: Date;
+  chain_seq: string | null;
+  prev_hash: string | null;
+  row_hash: string | null;
   total_count: string;
 }
 
@@ -69,6 +76,7 @@ const SEARCH_SQL = `(a.action || ' ' || a.target_type || ' ' || coalesce(a.targe
 
 const SELECT_SQL = `select a.id::text, a.actor_user_id, u.display_name as actor_display_name, u.email as actor_email, a.action,
             a.target_type, a.target_id, ${TARGET_NUMBER_SQL} as target_number, a.before, a.after, a.created_at,
+            a.chain_seq::text as chain_seq, a.prev_hash, a.row_hash,
             count(*) over()::text as total_count
        from audit_log a
        left join users u on u.id = a.actor_user_id`;
@@ -111,6 +119,9 @@ function mapRow(r: AuditQueryRow): AuditEntry {
     before: r.before,
     after: r.after,
     createdAt: r.created_at.toISOString(),
+    chainSeq: r.chain_seq,
+    prevHash: r.prev_hash,
+    rowHash: r.row_hash,
   };
 }
 

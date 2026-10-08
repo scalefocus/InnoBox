@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.41.0",
+    date: "2026-10-08",
+    summary:
+      "The audit log can now prove it hasn't been tampered with: every new entry is chained to the one before it, and platform admins have a \"Verify integrity\" button that checks the whole chain and points to the first entry that doesn't match. Each check is itself recorded in the audit log.",
+  },
+  {
     version: "0.40.0",
     date: "2026-10-08",
     summary:
