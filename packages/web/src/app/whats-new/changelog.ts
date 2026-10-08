@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.26.1",
+    date: "2026-10-08",
+    summary:
+      "Security maintenance: the web framework, sign-in library and e-mail sender — along with the libraries beneath them — are updated to versions that close known vulnerabilities. Nothing changes in how InnoBox looks or works.",
+  },
+  {
     version: "0.26.0",
     date: "2026-08-26",
     summary:

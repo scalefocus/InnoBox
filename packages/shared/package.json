@@ -6,7 +6,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -36,9 +38,9 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
-    "eslint": "^9.15.0",
-    "typescript": "^6.0.0",
-    "typescript-eslint": "^8.18.0"
+    "@types/node": "^20.19.43",
+    "eslint": "^9.39.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1"
   }
 }

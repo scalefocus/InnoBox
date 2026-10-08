@@ -298,15 +298,14 @@ The delivery pipeline, pinned:
   - **Real values reach production only through the Jenkins credentials vault** —
     the `innobox-deploy-env` secret file (the production `deploy/.env`, carrying
     `PUBLIC_BASE_URL`, `SMTP_FROM`, and every secret) plus the `innobox-deploy-host`,
-    `innobox-deploy-path`, `innobox-repo-url`, and `innobox-deploy-ssh`
-    credentials. Nothing environment-specific is a build parameter or a repo literal.
+    `innobox-deploy-path`, `innobox-repo-url`, and `innobox-deploy-ssh` credentials.
+    Nothing environment-specific is a build parameter or a repo literal.
 - **Source control:** the **public GitHub repository** under the organization's
   GitHub org is the canonical home (§21.4). `main` is the release branch; feature
   branches merge to `main`. The deploy host still clones from the
-  `innobox-repo-url` credential, whose *value* is the GitHub clone URL. The
-  repository is public, so the clone and fetch are anonymous — no git token
-  credential exists. The Jenkins job itself builds from the same GitHub repository:
-  a plain Pipeline job on `main` only, never pull requests (§21.4).
+  `innobox-repo-url` credential, whose *value* is the GitHub clone URL. Because the
+  repository is public the clone and fetch are **anonymous** — the pipeline carries no
+  git token (§21.4) and re-points an existing checkout's `origin` on every deploy.
 - **CI (GitHub Actions — `.github/workflows/ci.yml`):** runs on every push and pull
   request. Mirrors the Jenkins CI stages below (install → build → typecheck → unit
   tests), which is what a reader of the public repository can actually see and what
@@ -324,18 +323,17 @@ The delivery pipeline, pinned:
   ephemeral `postgres:16-alpine` container, least-privilege app role created,
   all `db/migrations/*.sql` applied in order, integration suites run against it,
   container always cleaned up).
-- **Deploy (gated to `main`, or manual trigger):** Docker-over-SSH remote model, no
-  image registry — Jenkins SSHes to the deploy host, fast-forwards the checkout to
-  the exact built commit (anonymous fetch from the public repository; `origin` is
-  re-pointed at `innobox-repo-url` on every run, and the checkout is never re-cloned,
-  because `deploy/.env` and `deploy/data/**` live inside it), copies the production
+- **Deploy (gated to `main`, or manual trigger; never a pull-request build):**
+  Docker-over-SSH remote model, no image registry — Jenkins SSHes to the deploy host,
+  fast-forwards the checkout to the exact built commit (anonymous fetch from the public
+  repository), copies the production
   `deploy/.env` from the **Jenkins credentials vault** (secret-file credential;
   the file is never in git), runs `docker compose up --build -d` on the host,
   idempotently ensures the MinIO bucket, and smoke-checks `/readyz` before the
   pipeline goes green.
 - **Jenkins credentials vault entries:** `innobox-deploy-env` (secret file — the
-  production env), `innobox-deploy-ssh` (SSH key to the deploy host),
-  `innobox-deploy-host`, `innobox-deploy-path`, and `innobox-repo-url`. No secret
+  production env), `innobox-deploy-ssh` (SSH key to the deploy host), and the
+  `innobox-deploy-host` / `innobox-deploy-path` / `innobox-repo-url` strings. No secret
   ever appears in the repo, images, or build logs.
 - **Dev/e2e auth bypass — fail-closed by construction.** The `INNOBOX_DEV_AUTH`
   flag enables the Playwright/dev credentials sign-in locally and in e2e runs. It is
@@ -2072,13 +2070,14 @@ document's token table is the sole brand authority.
   the squash there is one commit; **`packages/web/src/app/whats-new/changelog.ts`
   becomes the sole record** of version history and that rule is rewritten accordingly.
   Existing entries are preserved verbatim through the squash.
-- **Deploy is reconfigured by the operator at switch-over.** Jenkins clones from the
-  `innobox-repo-url` credential, and the deploy stage used to authenticate that clone
-  with a Gitea token credential, so repointing the URL alone was not sufficient: the
-  pipeline drops the token (the public repository is fetched anonymously) and re-points
-  the deploy host's `origin` on every run. Jenkins builds **`main` only** and never
-  builds pull requests from forks — its agent holds the production credentials, and a
-  public repository accepts fork pull requests from anyone.
+- **Deploy is reconfigured by the operator at switch-over.** The pipeline no longer
+  authenticates the deploy-host clone (the Gitea token credential is gone; clone and
+  fetch are anonymous against the public repository), so the operator repoints the
+  `innobox-repo-url` credential at the GitHub clone URL **after** the repository is
+  public, and may delete the old token credential. Jenkins builds **`main` only** and
+  never builds pull requests from forks — its agent holds the production credentials,
+  and a public repository accepts fork pull requests from anyone. The Deploy stage also
+  refuses any change-request build, and its manual `DEPLOY` parameter defaults to off.
 - **Secret scan is a hard gate.** A clean `gitleaks` (or equivalent) run over the
   published tree **and** the full pre-squash history precedes the first public push
   (§21.10). Manual inspection is not sufficient evidence. A deliberate test-only fixture
