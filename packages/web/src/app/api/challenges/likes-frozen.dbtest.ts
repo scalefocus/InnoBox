@@ -1,6 +1,6 @@
 // Live-DB integration test (gated) for the challenge-detail flags and the §8.3 like freeze:
 //   • likes toggle (on/off, audited) on an open challenge and on its solutions;
-//   • once the challenge is `solved`, neither a like nor an unlike lands — on the challenge or
+//   • once the challenge is `solved`, neither a like nor an unlike (POST toggle or DELETE) lands — on the challenge or
 //     on any of its solutions — and the existing counts stay displayed (`likesFrozen`);
 //   • a solved → valid revert unfreezes them;
 //   • the per-viewer RBAC flags the detail page renders from: `canReveal` (namespace admin,
@@ -21,6 +21,7 @@ test(
     const { buildRoleSet } = await import("@innobox/shared");
     const { createChallenge, createSolution, getChallengeByNumber, listActiveImpactAreas, setChallengeStatus, setSolutionStatus, toggleLike } =
       await import("./store");
+    const { removeLike } = await import("../likes/store");
 
     const pool = new Pool({ connectionString: url });
     try {
@@ -122,7 +123,9 @@ test(
       assert.deepEqual(await toggleLike(pool, author, "challenge", chId), { status: "frozen" }, "a new like on a solved challenge is refused");
       assert.deepEqual(await toggleLike(pool, liker, "solution", solId), { status: "frozen" }, "an unlike on a solution of a solved challenge is refused");
       assert.deepEqual(await toggleLike(pool, author, "solution", solId), { status: "frozen" }, "a new like on a solution of a solved challenge is refused");
-      assert.equal(await countLikeAudit(pool, [chId, solId]), likeAuditBefore, "a refused toggle writes no audit row");
+      assert.deepEqual(await removeLike(pool, liker, "challenge", chId), { status: "frozen" }, "the DELETE unlike is refused on a solved challenge");
+      assert.deepEqual(await removeLike(pool, liker, "solution", solId), { status: "frozen" }, "the DELETE unlike is refused on a solution of a solved challenge");
+      assert.equal(await countLikeAudit(pool, [chId, solId]), likeAuditBefore, "a refused toggle or unlike writes no audit row");
 
       const solved = (await getChallengeByNumber(pool, liker, chNum))!;
       assert.equal(solved.status, "solved");
