@@ -7,12 +7,18 @@
 // JENKINS CREDENTIALS (create these in Jenkins → Credentials, then adjust the IDs):
 //   - innobox-deploy-env  : "Secret file"   → the production deploy/.env (secrets; never in git)
 //   - innobox-deploy-ssh  : "SSH Username with private key" → access to the deploy host
-//   - GiteaInnoboxToken   : "Secret text"   → scoped Gitea token for the deploy-host clone/fetch
 //   - innobox-deploy-host : "Secret text"   → SSH target for the Docker remote context (user@host)
 //   - innobox-deploy-path : "Secret text"   → path to the innobox checkout on the deploy host
 //                                             (e.g. /opt/innobox)
-//   - innobox-repo-url    : "Secret text"   → https clone URL of this repo on Gitea
-//                                             (e.g. https://<your-git-host>/<group>/InnoBox.git)
+//   - innobox-repo-url    : "Secret text"   → https clone URL of the public GitHub repository
+//                                             (e.g. https://github.com/<org>/InnoBox.git)
+//
+// JOB CONFIGURATION (INNOBOX_SPEC.md §21.4): a plain Pipeline job ("Pipeline script from SCM")
+// on the public GitHub repository, branch `*/main` only — never a job that discovers pull
+// requests. The agent holds the production credentials, and a public repository accepts fork
+// pull requests from anyone. In a plain Pipeline job BRANCH_NAME is unset, so the Deploy stage
+// runs on the DEPLOY parameter (default true). Trigger: Poll SCM, or a GitHub push webhook when
+// Jenkins is reachable from github.com.
 //
 // Deploy model: Docker remote context over SSH.
 //   Jenkins SSHes into the deploy host, clones the repo on first deploy (fast-forwards the
@@ -208,7 +214,6 @@ pipeline {
         withCredentials([
           file(credentialsId: 'innobox-deploy-env', variable: 'DEPLOY_ENV_FILE'),
           sshUserPrivateKey(credentialsId: 'innobox-deploy-ssh', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER'),
-          string(credentialsId: 'GiteaInnoboxToken', variable: 'GITEA_TOKEN'),
           string(credentialsId: 'innobox-deploy-host', variable: 'DEPLOY_HOST'),
           string(credentialsId: 'innobox-deploy-path', variable: 'DEPLOY_PATH'),
           string(credentialsId: 'innobox-repo-url', variable: 'REPO_URL')
@@ -220,17 +225,16 @@ pipeline {
 
             # ── 1. Clone on first deploy, then fast-forward to this exact commit ──────────
             # REPO_URL comes from the innobox-repo-url credential (with or without the https://
-            # prefix — it is normalized here). The Gitea token is spliced in only for the
-            # network calls and never persisted on the deploy host (after a first-time clone,
-            # origin is reset to the token-less URL).
+            # prefix — it is normalized here). The repository is public, so the clone and fetch
+            # are anonymous: no token reaches the deploy host.
+            # origin is re-pointed on every run, so a checkout cloned from an earlier remote
+            # follows the credential. Never re-clone to switch remotes — see clean -x below.
             # checkout --force + clean -fd make the tree byte-exact to the commit: local edits
             # to tracked files are discarded and untracked leftovers from earlier runs removed.
             # Deliberately NOT clean -x: gitignored paths must survive — deploy/.env (secrets)
             # and deploy/data/** (postgres/minio/clamav volumes) live inside the checkout.
-            REPO_HOSTPATH="${REPO_URL#https://}"
-            REPO_TOKEN_URL="https://x-access-token:${GITEA_TOKEN}@${REPO_HOSTPATH}"
-            REPO_CLEAN_URL="https://${REPO_HOSTPATH}"
-            $SSH "${DEPLOY_HOST}" "if [ ! -d ${DEPLOY_PATH}/.git ]; then git clone ${REPO_TOKEN_URL} ${DEPLOY_PATH} && git -C ${DEPLOY_PATH} remote set-url origin ${REPO_CLEAN_URL}; fi && cd ${DEPLOY_PATH} && git fetch ${REPO_TOKEN_URL} --prune && git checkout --force --detach ${GIT_COMMIT} && git clean -fd"
+            REPO_CLEAN_URL="https://${REPO_URL#https://}"
+            $SSH "${DEPLOY_HOST}" "if [ ! -d ${DEPLOY_PATH}/.git ]; then git clone ${REPO_CLEAN_URL} ${DEPLOY_PATH}; fi && cd ${DEPLOY_PATH} && git remote set-url origin ${REPO_CLEAN_URL} && git fetch origin --prune && git checkout --force --detach ${GIT_COMMIT} && git clean -fd"
 
             # ── 2. Push the secret .env to the deploy host (never in git) ─────────────────
             # Remove-then-copy: a stale .env owned by another user (e.g. root after manual
