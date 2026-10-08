@@ -48,10 +48,17 @@ test("directory card: hover opens it, keyboard reaches it, and an anonymous auth
   // Lazy: nothing is fetched on render, only on hover intent.
   expect(cardRequests, "no card request before any hover").toHaveLength(0);
 
+  const cardResponse = page.waitForResponse((res) => /\/api\/users\/[^/]+\/card(\?|$)/.test(res.url()));
   await authorBubble.hover();
   const card = page.getByRole("dialog", { name: authorName });
   await expect(card).toBeVisible();
   expect(cardRequests.length, "hovering fetches the card exactly once").toBe(1);
+  // §13.8: the body is the flat card — no wrapper key.
+  const body = await (await cardResponse).json();
+  expect(Object.keys(body).sort()).toEqual(
+    ["deactivated", "department", "displayName", "jobTitle", "officeLocation", "scrubbed", "userId"],
+  );
+  expect(body.displayName).toBe(authorName);
 
   await expect(card.getByText(authorName)).toBeVisible();
   // A dev persona has no Entra directory attributes → the degraded state, never an error.

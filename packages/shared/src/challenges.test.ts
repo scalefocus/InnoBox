@@ -57,7 +57,19 @@ test("maskAuthor: anonymous item shows Anonymous and NULL userId (anonymity-safe
 
 test("maskAuthor: non-anonymous item shows the real name and userId", () => {
   const masked = maskAuthor({ isAnonymous: false, authorId: "user-1", authorDisplayName: "Jane Doe" });
-  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false });
+  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: true });
+});
+
+test("maskAuthor: a deactivated non-anonymous author carries active=false (§13.6 greyed bubble)", () => {
+  const masked = maskAuthor({ isAnonymous: false, authorId: "user-1", authorDisplayName: "Jane Doe", authorActive: false });
+  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: false });
+});
+
+test("maskAuthor: an anonymous author's account state never leaks (no active field, identical shapes)", () => {
+  const live = maskAuthor({ isAnonymous: true, authorId: "user-1", authorDisplayName: "Jane Doe", authorActive: true });
+  const gone = maskAuthor({ isAnonymous: true, authorId: "user-2", authorDisplayName: "Deleted User", authorActive: false });
+  assert.deepEqual(live, gone);
+  assert.equal("active" in live, false);
 });
 
 // ── challenge visibility (§4.3) ──────────────────────────────────────────────────────────

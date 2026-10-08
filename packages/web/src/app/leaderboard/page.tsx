@@ -9,6 +9,7 @@ import { AvatarBubble } from "@/components/AvatarBubble";
 interface LeaderboardEntry {
   userId: string;
   displayName: string;
+  active?: boolean;
   count: number;
 }
 
@@ -89,7 +90,7 @@ export default function LeaderboardPage() {
               <span className="chip mono" style={{ minWidth: 32, textAlign: "center" }}>
                 {i + 1}
               </span>
-              <AvatarBubble size="sm" userId={entry.userId} displayName={entry.displayName} />
+              <AvatarBubble size="sm" userId={entry.userId} displayName={entry.displayName} deactivated={entry.active === false} />
               <Link href={`/profile/${entry.userId}`} className="ttl grow">
                 {entry.displayName}
               </Link>

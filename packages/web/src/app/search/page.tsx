@@ -1,17 +1,19 @@
 "use client";
 // Search results (INNOBOX_SPEC.md §13.4): full-text search over challenges/solutions plus
-// exact CH-<n>/SOL-<n> lookup. Results are already visibility-filtered and anonymity-masked
-// server-side — this page only renders what the API returned.
+// exact CH-<n>/SOL-<n> lookup, narrowed by the §13.1 gallery filters. Results are already
+// visibility-filtered and anonymity-masked server-side — this page only renders what the API
+// returned.
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "../challenges/status";
+import { applyGalleryFilters, GalleryFilterFields, type GalleryFilterValues } from "../challenges/GalleryFilters";
 import { AvatarBubble } from "@/components/AvatarBubble";
 
 interface ChallengeResult {
   number: string;
   title: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   status: string;
   namespaceSlug: string;
 }
@@ -19,7 +21,7 @@ interface ChallengeResult {
 interface SolutionResult {
   number: string;
   description: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   status: string;
   challengeNumber: string;
   challengeTitle: string;
@@ -38,10 +40,26 @@ function SearchPageInner() {
   const initialQ = params.get("q") ?? "";
   const [query, setQuery] = useState(initialQ);
   const [submitted, setSubmitted] = useState(initialQ);
+  // §13.4: the §13.1 gallery filters narrow the results alongside the query (seeded from the URL
+  // so a filtered search is linkable).
+  const [filters, setFilters] = useState<GalleryFilterValues>(() => ({
+    status: params.get("status") ?? "",
+    impactAreaId: params.get("impactAreaId") ?? "",
+    namespaceId: params.get("namespaceId") ?? "",
+    authorName: params.get("authorName") ?? "",
+  }));
   const [challenges, setChallenges] = useState<ChallengeResult[] | null>(null);
   const [solutions, setSolutions] = useState<SolutionResult[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const queryString = useMemo(
+    () => applyGalleryFilters(new URLSearchParams({ q: submitted }), filters).toString(),
+    [submitted, filters],
+  );
 
   useEffect(() => {
+    let live = true;
+    setError(null);
     if (submitted.trim() === "") {
       setChallenges([]);
       setSolutions([]);
@@ -49,17 +67,24 @@ function SearchPageInner() {
     }
     setChallenges(null);
     setSolutions(null);
-    fetch(`/api/search?q=${encodeURIComponent(submitted)}`, { headers: { accept: "application/json" } })
-      .then((res) => res.json())
-      .then((json) => {
+    fetch(`/api/search?${queryString}`, { headers: { accept: "application/json" } })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? "Search failed");
+        if (!live) return;
         setChallenges(json.challenges ?? []);
         setSolutions(json.solutions ?? []);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (!live) return;
+        setError(err instanceof Error ? err.message : "Search failed");
         setChallenges([]);
         setSolutions([]);
       });
-  }, [submitted]);
+    return () => {
+      live = false;
+    };
+  }, [submitted, queryString]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,6 +121,11 @@ function SearchPageInner() {
         </button>
       </form>
 
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
+        <GalleryFilterFields value={filters} onChange={setFilters} />
+      </div>
+
+      {error && <p className="muted">{error}</p>}
       {submitted.trim() === "" && <p className="muted">Type something to search.</p>}
 
       {submitted.trim() !== "" && (
@@ -112,7 +142,7 @@ function SearchPageInner() {
                   <span className="chip mono">{c.number}</span>
                   <span className={statusPillClass(c.status)}>{CHALLENGE_STATUS_LABEL[c.status] ?? c.status}</span>
                   <span className="ttl grow">{c.title}</span>
-                  <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} />
+                  <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} deactivated={c.author.active === false} />
                   <span className="sub">{c.author.anonymous ? "Anonymous" : c.author.displayName}</span>
                 </Link>
               ))}
@@ -131,7 +161,7 @@ function SearchPageInner() {
                   <span className="chip mono">{s.number}</span>
                   <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
                   <span className="ttl grow">{s.description}</span>
-                  <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} />
+                  <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
                   <span className="sub">{s.author.anonymous ? "Anonymous" : s.author.displayName}</span>
                 </Link>
               ))}

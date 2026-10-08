@@ -102,6 +102,8 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   namespaceId: string;
   assigneeId: string | null;
   assigneeDisplayName: string | null;
+  /** §13.6: the assignee's `users.active` (greyed bubble when false); null when unassigned. */
+  assigneeActive: boolean | null;
   updatedAt: string;
   editedAt: string | null;
   resolvedAt: string | null;
@@ -135,9 +137,11 @@ export interface ChallengeRow {
   client_name: string | null;
   author_id: string;
   author_display_name: string;
+  author_active: boolean;
   is_anonymous: boolean;
   assignee_id: string | null;
   assignee_display_name: string | null;
+  assignee_active: boolean | null;
   created_at: Date;
   updated_at: Date;
   edited_at: Date | null;
@@ -161,6 +165,7 @@ interface SolutionRow {
   status: string;
   author_id: string;
   author_display_name: string;
+  author_active: boolean;
   is_anonymous: boolean;
   created_at: Date;
   updated_at: Date;
@@ -174,8 +179,8 @@ export const CHALLENGE_SELECT = `
   select c.id, c.number::text, c.title, c.description, c.status, c.visibility,
          c.namespace_id, ns.slug as namespace_slug,
          c.impact_area_id, ia.name as impact_area_name,
-         c.client_name, c.author_id, u.display_name as author_display_name, c.is_anonymous,
-         c.assignee_id, au.display_name as assignee_display_name,
+         c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, c.is_anonymous,
+         c.assignee_id, au.display_name as assignee_display_name, au.active as assignee_active,
          c.created_at, c.updated_at, c.edited_at, c.resolved_at,
          (select count(*) from likes l where l.parent_type = 'challenge' and l.parent_id = c.id) as like_count,
          exists(select 1 from likes lv where lv.parent_type = 'challenge' and lv.parent_id = c.id and lv.user_id = $viewer) as liked_by_viewer,
@@ -196,7 +201,12 @@ export function toListItem(row: ChallengeRow): ChallengeListItem {
     id: row.id,
     number: formatChallengeNumber(row.number),
     title: row.title,
-    author: maskAuthor({ isAnonymous: row.is_anonymous, authorId: row.author_id, authorDisplayName: row.author_display_name }),
+    author: maskAuthor({
+      isAnonymous: row.is_anonymous,
+      authorId: row.author_id,
+      authorDisplayName: row.author_display_name,
+      authorActive: row.author_active,
+    }),
     namespaceSlug: row.namespace_slug,
     impactAreaName: row.impact_area_name,
     status: row.status as ChallengeStatus,
@@ -274,6 +284,7 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     namespaceId: row.namespace_id,
     assigneeId: row.assignee_id,
     assigneeDisplayName: row.assignee_display_name,
+    assigneeActive: row.assignee_id === null ? null : row.assignee_active,
     updatedAt: row.updated_at.toISOString(),
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
     resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
@@ -313,7 +324,12 @@ function toSolutionItem(
     number: formatSolutionNumber(row.number),
     description: row.description,
     costVsBenefits: row.cost_vs_benefits,
-    author: maskAuthor({ isAnonymous: row.is_anonymous, authorId: row.author_id, authorDisplayName: row.author_display_name }),
+    author: maskAuthor({
+      isAnonymous: row.is_anonymous,
+      authorId: row.author_id,
+      authorDisplayName: row.author_display_name,
+      authorActive: row.author_active,
+    }),
     isMine,
     status,
     createdAt: row.created_at.toISOString(),
@@ -353,7 +369,7 @@ async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer,
 async function fetchSolutionRows(db: Pool | PoolClient, challengeId: string, viewerId: string): Promise<SolutionRow[]> {
   const { rows } = await db.query<SolutionRow>(
     `select s.id, s.number::text, s.challenge_id, s.description, s.cost_vs_benefits, s.status,
-            s.author_id, u.display_name as author_display_name, s.is_anonymous,
+            s.author_id, u.display_name as author_display_name, u.active as author_active, s.is_anonymous,
             s.created_at, s.updated_at, s.edited_at,
             (select count(*) from likes l where l.parent_type = 'solution' and l.parent_id = s.id) as like_count,
             exists(select 1 from likes lv where lv.parent_type = 'solution' and lv.parent_id = s.id and lv.user_id = $2) as liked_by_viewer,
@@ -472,10 +488,12 @@ export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: {
     is_anonymous: boolean;
     author_id: string;
     author_display_name: string;
+    author_active: boolean;
     shared: number;
   }>(
     `select * from (
        select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
+              u.active as author_active,
               ts_rank(c.search_vector, ${tsquery}) as rank,
               (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
          from challenges c
@@ -493,7 +511,12 @@ export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: {
     number: formatChallengeNumber(r.number),
     title: r.title,
     status: r.status as ChallengeStatus,
-    author: maskAuthor({ isAnonymous: r.is_anonymous, authorId: r.author_id, authorDisplayName: r.author_display_name }),
+    author: maskAuthor({
+      isAnonymous: r.is_anonymous,
+      authorId: r.author_id,
+      authorDisplayName: r.author_display_name,
+      authorActive: r.author_active,
+    }),
   }));
 }
 

@@ -79,15 +79,26 @@ export interface MaskedAuthor {
   userId: string | null;
   displayName: string;
   anonymous: boolean;
+  /** §13.6: false for a SCIM-deactivated (or GDPR-scrubbed) author, so the bubble renders
+   *  greyed. **Absent when anonymous** — an anonymous author's account state is as private as
+   *  their identity (invariant 3), so the masked shape is identical for every anonymous author
+   *  whatever their account state. */
+  active?: boolean;
 }
 
 /** Masking is total by default: an anonymous item shows "Anonymous" (and null userId, so no
  *  avatar/photo) to EVERY viewer, no exceptions — not even the author's own view, not admins,
  *  not committee. The audited admin reveal (§9) is a separate, transient path that never flows
- *  through this projection. */
-export function maskAuthor(item: { isAnonymous: boolean; authorId: string; authorDisplayName: string }): MaskedAuthor {
+ *  through this projection. `authorActive` (the author's `users.active`, the §13.6 greyed
+ *  bubble) is carried only for a non-anonymous author; it defaults to true when omitted. */
+export function maskAuthor(item: {
+  isAnonymous: boolean;
+  authorId: string;
+  authorDisplayName: string;
+  authorActive?: boolean;
+}): MaskedAuthor {
   if (item.isAnonymous) return { userId: null, displayName: "Anonymous", anonymous: true };
-  return { userId: item.authorId, displayName: item.authorDisplayName, anonymous: false };
+  return { userId: item.authorId, displayName: item.authorDisplayName, anonymous: false, active: item.authorActive ?? true };
 }
 
 // ── Visibility (§4.3, invariant 2) ──────────────────────────────────────────────────────

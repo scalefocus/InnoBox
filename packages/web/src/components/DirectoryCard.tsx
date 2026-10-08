@@ -44,7 +44,8 @@ function loadCard(userId: string): Promise<UserCardData | null> {
   if (hit) return hit;
   const pending = fetch(`/api/users/${userId}/card`, { headers: { accept: "application/json" } })
     .then((res) => (res.ok ? res.json() : null))
-    .then((json) => (json?.card ?? null) as UserCardData | null)
+    // The body is the flat card itself (§13.8); anything without a userId is "no card".
+    .then((json) => (json && typeof json.userId === "string" ? (json as UserCardData) : null))
     .catch(() => null)
     .then((card) => {
       if (!card) cache.delete(userId); // transient failure / 404 — don't poison the page session

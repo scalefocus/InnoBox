@@ -83,11 +83,13 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
       is_anonymous: boolean;
       author_id: string;
       author_display_name: string;
+      author_active: boolean;
       challenge_number: string;
       challenge_title: string;
       updated_at: Date;
     }>(
       `select s.number::text, s.description, s.is_anonymous, s.author_id, u.display_name as author_display_name,
+              u.active as author_active,
               c.number::text as challenge_number, c.title as challenge_title, s.updated_at
          from solutions s
          join challenges c on c.id = s.challenge_id
@@ -102,7 +104,12 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
     return {
       number: formatSolutionNumber(row.number),
       description: row.description,
-      author: maskAuthor({ isAnonymous: row.is_anonymous, authorId: row.author_id, authorDisplayName: row.author_display_name }),
+      author: maskAuthor({
+        isAnonymous: row.is_anonymous,
+        authorId: row.author_id,
+        authorDisplayName: row.author_display_name,
+        authorActive: row.author_active,
+      }),
       challengeNumber: formatChallengeNumber(row.challenge_number),
       challengeTitle: row.challenge_title,
       updatedAt: row.updated_at.toISOString(),

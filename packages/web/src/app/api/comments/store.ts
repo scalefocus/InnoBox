@@ -17,6 +17,9 @@ export interface CommentRecord {
   parentId: string;
   authorId: string;
   authorDisplayName: string;
+  /** §13.6: the author's `users.active` — false renders the greyed bubble. Comments are never
+   *  anonymous (§9), so this discloses nothing the name doesn't already. */
+  authorActive: boolean;
   body: string;
   createdAt: string;
   editedAt: string | null;
@@ -34,6 +37,7 @@ interface CommentRow {
   parent_id: string;
   author_id: string;
   author_display_name: string;
+  author_active: boolean;
   body: string;
   created_at: Date;
   edited_at: Date | null;
@@ -50,6 +54,7 @@ function toRecord(row: CommentRow, viewer: Viewer, isNamespaceAdmin: boolean, au
     parentId: row.parent_id,
     authorId: row.author_id,
     authorDisplayName: row.author_display_name,
+    authorActive: row.author_active,
     body: deleted ? MODERATION_PLACEHOLDER : row.body,
     createdAt: row.created_at.toISOString(),
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
@@ -84,7 +89,7 @@ export async function listComments(
   const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
   const committee = namespaceId !== null ? await committeeMemberIds(pool, namespaceId) : new Set<string>();
   const { rows } = await pool.query<CommentRow>(
-    `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name,
+    `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active,
             c.body, c.created_at, c.edited_at, c.deleted_at
        from comments c
        join users u on u.id = c.author_id
@@ -124,9 +129,10 @@ export async function createComment(
     });
     const namespaceId = await getParentNamespaceId(client, parentType, parentId);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
-    const { rows: userRows } = await client.query<{ display_name: string }>(`select display_name from users where id = $1`, [
-      viewer.userId,
-    ]);
+    const { rows: userRows } = await client.query<{ display_name: string; active: boolean }>(
+      `select display_name, active from users where id = $1`,
+      [viewer.userId],
+    );
     const comment = toRecord(
       {
         id: inserted.id,
@@ -134,6 +140,7 @@ export async function createComment(
         parent_id: parentId,
         author_id: viewer.userId,
         author_display_name: userRows[0]?.display_name ?? "",
+        author_active: userRows[0]?.active ?? true,
         body: validated.value,
         created_at: inserted.created_at,
         edited_at: null,
@@ -177,7 +184,7 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
     const namespaceId = await getParentNamespaceId(client, row.parent_type, row.parent_id);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: full } = await client.query<CommentRow>(
-      `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name,
+      `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active,
               c.body, c.created_at, c.edited_at, c.deleted_at
          from comments c join users u on u.id = c.author_id where c.id = $1`,
       [commentId],

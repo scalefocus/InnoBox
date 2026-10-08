@@ -21,6 +21,7 @@ interface MaskedAuthor {
   userId: string | null;
   displayName: string;
   anonymous: boolean;
+  active?: boolean;
 }
 
 interface AttachmentItem {
@@ -72,6 +73,7 @@ interface ChallengeDetail {
   resolvedAt: string | null;
   assigneeId: string | null;
   assigneeDisplayName: string | null;
+  assigneeActive?: boolean | null;
   likeCount: number;
   likedByViewer: boolean;
   followedByViewer: boolean;
@@ -438,6 +440,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             userId={revealed ? revealed.userId : challenge.author.userId}
             displayName={revealed ? revealed.displayName : challenge.author.displayName}
             anonymous={!revealed && challenge.author.anonymous}
+            deactivated={!revealed && challenge.author.active === false}
             /* noCard (§13.8): the reveal surface stays untouched — it already names the person, and
                the audited reveal (§9) is the one place anonymity is deliberately lifted. */
             noCard={Boolean(revealed)}
@@ -461,7 +464,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             </div>
             {challenge.assigneeDisplayName && (
               <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                assignee: <AvatarBubble size="sm" userId={challenge.assigneeId} displayName={challenge.assigneeDisplayName} /> {challenge.assigneeDisplayName}
+                assignee:{" "}
+                <AvatarBubble
+                  size="sm"
+                  userId={challenge.assigneeId}
+                  displayName={challenge.assigneeDisplayName}
+                  deactivated={challenge.assigneeActive === false}
+                />{" "}
+                {challenge.assigneeDisplayName}
               </div>
             )}
           </div>
@@ -625,7 +635,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span className="chip mono">{s.number}</span>
                 <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} />
+                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
                 <span className="sub" style={{ flex: 1 }}>
                   {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
                 </span>

@@ -91,7 +91,7 @@ function ChallengeRow({
         /{challenge.namespaceSlug}
       </span>
       <span className="ch-c-author">
-        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} />
+        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} deactivated={challenge.author.active === false} />
         <span className="ch-author-name">
           <ChallengeAuthorName challenge={challenge} />
         </span>

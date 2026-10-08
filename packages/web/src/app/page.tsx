@@ -17,7 +17,7 @@ import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/Fea
 interface SpotlightSolution {
   number: string;
   description: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   challengeNumber: string;
   challengeTitle: string;
   updatedAt: string;
@@ -250,7 +250,7 @@ function SpotlightCard({ title, solution, empty }: { title: string; solution: Sp
           </p>
           <div className="sub mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {solution.number} ·{" "}
-            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} />
+            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} deactivated={solution.author.active === false} />
             {solution.author.anonymous ? "Anonymous" : solution.author.displayName} · {fmt.date(solution.updatedAt)}
           </div>
         </Link>
