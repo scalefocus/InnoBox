@@ -7,7 +7,9 @@ import type { NextAuthOptions } from "next-auth";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { pool } from "./db";
-import { getUserByExternalId, jitUpsertFromClaims, upsertDevUser } from "./users";
+import { upsertDevUser } from "./users";
+import { resolveEntraSignIn } from "./signin-relink";
+import { recordSystemEvent } from "../app/api/admin/system-log/store";
 
 declare module "next-auth" {
   interface Session {
@@ -105,15 +107,22 @@ export const authOptions: NextAuthOptions = {
       const claims = profile as EntraClaims | undefined;
       const oid = claims?.oid;
       if (!oid) return false; // no immutable identity key — refuse
-      const existing = await getUserByExternalId(pool, oid);
-      if (existing && !existing.active) return false; // leaver semantics: deactivated → refused
-      await jitUpsertFromClaims(pool, {
-        oid,
-        userName: claims?.preferred_username ?? claims?.email ?? oid,
-        email: claims?.email ?? null,
-        displayName: claims?.name ?? "",
-      });
-      return true;
+      // Existing row by oid (deactivated → refused), else the SCIM relink repair, else JIT; a
+      // UPN collision nothing may relink is refused (→ /?error=AccessDenied) and recorded in
+      // the system log (INNOBOX_SPEC.md §3 sign-in relink, §14.7).
+      const result = await resolveEntraSignIn(
+        pool,
+        { oid, preferredUsername: claims?.preferred_username, email: claims?.email, name: claims?.name },
+        {
+          // Fire-and-forget, like every system-log insert: never blocks or fails the sign-in.
+          recordConflict: (event) => {
+            void recordSystemEvent(pool, event).catch((err: unknown) =>
+              console.error(JSON.stringify({ level: "error", msg: "system-log insert failed", error: String(err) })),
+            );
+          },
+        },
+      );
+      return result.ok;
     },
     async jwt({ token, user, account, profile }) {
       if (account) {

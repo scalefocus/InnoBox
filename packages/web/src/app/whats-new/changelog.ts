@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.37.0",
+    date: "2026-10-08",
+    summary:
+      "Signing out now clears every InnoBox sign-in cookie, not just the session. And if your account was set up under the wrong directory ID, signing in for the first time now links you to it instead of failing or creating a second, empty account.",
+  },
+  {
     version: "0.36.1",
     date: "2026-10-08",
     summary:
