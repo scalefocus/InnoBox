@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canAssignAtStatus, canEditOwnComment, finalizeRecipients, validateCommentBody } from "./social.js";
+import { areLikesFrozen, canAssignAtStatus, canEditOwnComment, finalizeRecipients, validateCommentBody } from "./social.js";
 
 const AUTHOR = "11111111-0000-0000-0000-000000000001";
 const OTHER = "22222222-0000-0000-0000-000000000002";
@@ -40,6 +40,13 @@ test("canAssignAtStatus: true for non-terminal statuses, false for terminal", ()
   assert.equal(canAssignAtStatus("solved"), false);
   assert.equal(canAssignAtStatus("rejected"), false);
   assert.equal(canAssignAtStatus("withdrawn"), false);
+});
+
+test("areLikesFrozen: only a solved challenge freezes likes", () => {
+  assert.equal(areLikesFrozen("solved"), true);
+  for (const s of ["awaiting_triage", "in_review", "needs_improvement", "meeting_scheduled", "valid", "rejected", "withdrawn"] as const) {
+    assert.equal(areLikesFrozen(s), false, s);
+  }
 });
 
 test("finalizeRecipients: drops the actor and dedupes", () => {

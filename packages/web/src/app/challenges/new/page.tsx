@@ -16,7 +16,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
-import { StagedAttachments } from "@/components/StagedAttachments";
+import { AttachmentControl } from "@/components/AttachmentControl";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
 import { CHALLENGE_STATUS_LABEL } from "../status";
@@ -250,7 +250,7 @@ export default function NewChallengePage() {
             </select>
           </div>
 
-          <StagedAttachments parentType="challenge" draftKey={draftKey} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+          <AttachmentControl parentType="challenge" target={{ kind: "staged", draftKey }} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
 
           <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
             <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />

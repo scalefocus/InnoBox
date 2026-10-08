@@ -6,6 +6,7 @@
 // plain node test runner (mirrors packages/web/src/app/api/admin/store.ts).
 import type { Pool, PoolClient } from "pg";
 import {
+  areLikesFrozen,
   blocksAcceptedInternally,
   canAssignAtStatus,
   canAuthorEditChallenge,
@@ -80,6 +81,10 @@ export interface SolutionListItem {
   likedByViewer: boolean;
   followedByViewer: boolean;
   canOverrideStatus: boolean;
+  /** §9 audited admin reveal — namespace admin of the parent's namespace / platform admin. */
+  canReveal: boolean;
+  /** §9 one-way self-reveal — the solution's own anonymous author. */
+  canSelfReveal: boolean;
   /** §7.2/§8.2 enforced transitions this viewer (committee/assignee, non-admin) may take from
    *  the current status. Empty for admins (they use the free-set override) and everyone else. */
   allowedTransitions: SolutionStatus[];
@@ -106,7 +111,16 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   editedAt: string | null;
   resolvedAt: string | null;
   isMine: boolean;
+  /** §6.2/§13.1: the Propose button is shown to every viewer but enabled only while `valid`. */
   canPropose: boolean;
+  /** §8.3: a `solved` challenge freezes likes on itself and on its solutions (counts stay shown). */
+  likesFrozen: boolean;
+  /** §9 audited admin reveal — namespace admin of this namespace / platform admin, anonymous item. */
+  canReveal: boolean;
+  /** §9 one-way self-reveal — the author of an anonymous item. */
+  canSelfReveal: boolean;
+  /** §7.3 assign/unassign — namespace/platform admin, non-terminal status only. */
+  canAssign: boolean;
   canOverrideStatus: boolean;
   /** §7.2 enforced transitions this viewer (committee/assignee, non-admin) may take. */
   allowedTransitions: ChallengeStatus[];
@@ -279,6 +293,10 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
     isMine,
     canPropose: row.status === "valid",
+    likesFrozen: areLikesFrozen(status),
+    canReveal: isAdmin && row.is_anonymous,
+    canSelfReveal: isMine && row.is_anonymous,
+    canAssign: isAdmin && canAssignAtStatus(status),
     canOverrideStatus: isAdmin,
     allowedTransitions:
       !isAdmin && isEnforcer(viewer, row.namespace_id, row.assignee_id)
@@ -321,6 +339,8 @@ function toSolutionItem(
     likedByViewer: row.liked_by_viewer,
     followedByViewer: row.followed_by_viewer,
     canOverrideStatus: isAdmin,
+    canReveal: isAdmin && row.is_anonymous,
+    canSelfReveal: isMine && row.is_anonymous,
     allowedTransitions:
       !isAdmin && isEnforcer(viewer, challenge.namespaceId, challenge.assigneeId)
         ? solutionEnforcedTargets(status)
@@ -1025,7 +1045,7 @@ export async function setSolutionStatus(
 
 // ── Likes (minimal slice pulled forward from Phase 3) ───────────────────────────────────
 
-export type ToggleLikeResult = { status: "ok"; liked: boolean; count: number } | { status: "not_found" };
+export type ToggleLikeResult = { status: "ok"; liked: boolean; count: number } | { status: "not_found" } | { status: "frozen" };
 
 export async function toggleLike(
   pool: Pool,
@@ -1037,6 +1057,18 @@ export async function toggleLike(
   if (!visible) return { status: "not_found" };
 
   return inTransaction(pool, async (client) => {
+    // §8.3: a solved challenge freezes likes on itself and its solutions — neither a like nor an
+    // unlike lands. Read under FOR SHARE so a concurrent auto-close (which updates the challenge
+    // row) cannot slip in between this check and the write below.
+    const { rows: parentRows } = await client.query<{ status: string }>(
+      parentType === "challenge"
+        ? `select c.status from challenges c where c.id = $1 for share`
+        : `select c.status from solutions s join challenges c on c.id = s.challenge_id where s.id = $1 for share of c`,
+      [parentId],
+    );
+    if (!parentRows[0]) return { status: "not_found" };
+    if (areLikesFrozen(parentRows[0].status as ChallengeStatus)) return { status: "frozen" };
+
     const { rows: existing } = await client.query(
       `select 1 from likes where user_id = $1 and parent_type = $2 and parent_id = $3`,
       [viewer.userId, parentType, parentId],
