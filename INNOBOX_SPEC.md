@@ -1995,6 +1995,15 @@ removed, or altered by §21.
   Sans, and JetBrains Mono arrive as `@fontsource-variable/*` npm dependencies, so no
   font binaries are vendored into the repository and their licences travel with the
   packages.
+- **Review outcome (pre-publication).** The production tree is MIT, Apache-2.0, ISC,
+  BSD-3-Clause, 0BSD, MIT-0, OFL-1.1 (the fonts) and CC-BY-4.0 (`caniuse-lite`, whose
+  attribution travels in its own package) — no copyleft, so `NOTICE` is unchanged. The
+  one copyleft hit was **`sharp`**, an optional dependency of `next` whose prebuilt
+  libvips binary is LGPL-3.0. It is **excluded, not accepted**: the root `package.json`
+  lists it under `pnpm.ignoredOptionalDependencies`, and `next.config.ts` sets
+  `images.unoptimized` so Next never looks for it. Nothing is lost — InnoBox renders no
+  `next/image`. Re-run the review after any upgrade of `next`, since a new optional
+  dependency would arrive the same way.
 
 ### §21.2 Brand, trademark & rebranding
 
