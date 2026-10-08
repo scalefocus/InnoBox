@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.30.0",
+    date: "2026-10-08",
+    summary:
+      "The audit log is easier to work with: category chips (Challenges, Solutions, Comments, Attachments, Identity, Admin), a search box that matches actions, challenge or solution numbers and the acting person, a From/To date range, and a one-click way to clear every filter. The list now scrolls on endlessly instead of paging, and platform admins can export exactly the entries they are looking at as a CSV file — capped at 50,000 rows, and every export is itself recorded in the audit log.",
+  },
+  {
     version: "0.29.0",
     date: "2026-10-08",
     summary:

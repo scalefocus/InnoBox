@@ -33,6 +33,10 @@
     "./system-log": {
       "types": "./dist/system-log.d.ts",
       "default": "./dist/system-log.js"
+    },
+    "./audit-browser": {
+      "types": "./dist/audit-browser.d.ts",
+      "default": "./dist/audit-browser.js"
     }
   },
   "scripts": {

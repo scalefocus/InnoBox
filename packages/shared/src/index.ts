@@ -49,3 +49,7 @@ export * from "./ratelimit.js";
 // §14.7 system log: which statuses are recorded, message sanitizing, the status chips, and the
 // entity-in-path extraction behind anonymity masking. DB access lives in each tier.
 export * from "./system-log.js";
+
+// §15 audit browser: category chips (action prefixes), page size and export cap. Client-safe,
+// also exposed at `@innobox/shared/audit-browser`.
+export * from "./audit-browser.js";
