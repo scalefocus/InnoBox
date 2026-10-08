@@ -207,9 +207,10 @@ proven sibling project with `skilly→innobox` renames applied:
   tables — wire during Phases 1/3.
 - `packages/web/src/components/DateFormat.tsx` — the timestamp formatter (imports a
   `./ui` cache helper that Phase 0 must provide).
-- Dockerfiles, compose, Caddyfile, migrate.sh, Jenkinsfile, .gitlab-ci.yml — ready;
-  all deploy specifics (host, path, repo URL, tokens) load from Jenkins credentials
-  (see the Jenkinsfile header for the IDs) — nothing environment-specific is hardcoded.
+- Dockerfiles, compose, Caddyfile, migrate.sh, Jenkinsfile — ready; all deploy specifics
+  (host, path, repo URL, keys) load from Jenkins credentials (see the Jenkinsfile header
+  for the IDs) — nothing environment-specific is hardcoded. GitHub Actions
+  (`.github/workflows/ci.yml`) is the public CI; Jenkins mirrors it and owns deploy.
 
 ## Build order (§18)
 Phase 0 foundations → Phase 1 identity (OIDC + SCIM + RBAC + namespaces, per

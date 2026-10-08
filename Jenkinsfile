@@ -7,12 +7,17 @@
 // JENKINS CREDENTIALS (create these in Jenkins → Credentials, then adjust the IDs):
 //   - innobox-deploy-env  : "Secret file"   → the production deploy/.env (secrets; never in git)
 //   - innobox-deploy-ssh  : "SSH Username with private key" → access to the deploy host
-//   - GiteaInnoboxToken   : "Secret text"   → scoped Gitea token for the deploy-host clone/fetch
 //   - innobox-deploy-host : "Secret text"   → SSH target for the Docker remote context (user@host)
 //   - innobox-deploy-path : "Secret text"   → path to the innobox checkout on the deploy host
 //                                             (e.g. /opt/innobox)
-//   - innobox-repo-url    : "Secret text"   → https clone URL of this repo on Gitea
-//                                             (e.g. https://<your-git-host>/<group>/InnoBox.git)
+//   - innobox-repo-url    : "Secret text"   → https clone URL of the repository
+//                                             (e.g. https://<your-git-host>/<group>/InnoBox.git).
+//                                             The repository is public, so the deploy host clones
+//                                             and fetches anonymously — no git token is needed.
+//
+// JOB CONFIGURATION: build `main` only. Never discover or build pull requests from forks — this
+// agent holds the production credentials and a public repository accepts PRs from anyone. The
+// Deploy stage additionally refuses to run on any change-request build (see its `when`).
 //
 // Deploy model: Docker remote context over SSH.
 //   Jenkins SSHes into the deploy host, clones the repo on first deploy (fast-forwards the
@@ -35,7 +40,7 @@ pipeline {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     booleanParam(name: 'RUN_E2E', defaultValue: false, description: 'Run Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed)')
-    booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Force a deploy regardless of branch (main deploys automatically)')
+    booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy from a non-main branch (main deploys automatically; never on pull-request builds)')
     // Deploy target (host + checkout path) comes from Jenkins credentials, not build parameters —
     // see innobox-deploy-host / innobox-deploy-path in the credentials list above.
   }
@@ -197,9 +202,13 @@ pipeline {
 
     stage('Deploy') {
       when {
-        anyOf {
-          branch 'main'
-          expression { return params.DEPLOY }
+        allOf {
+          // Never deploy a change request (PR) build, whatever the parameter says.
+          not { changeRequest() }
+          anyOf {
+            branch 'main'
+            expression { return params.DEPLOY }
+          }
         }
       }
       steps {
@@ -208,7 +217,6 @@ pipeline {
         withCredentials([
           file(credentialsId: 'innobox-deploy-env', variable: 'DEPLOY_ENV_FILE'),
           sshUserPrivateKey(credentialsId: 'innobox-deploy-ssh', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER'),
-          string(credentialsId: 'GiteaInnoboxToken', variable: 'GITEA_TOKEN'),
           string(credentialsId: 'innobox-deploy-host', variable: 'DEPLOY_HOST'),
           string(credentialsId: 'innobox-deploy-path', variable: 'DEPLOY_PATH'),
           string(credentialsId: 'innobox-repo-url', variable: 'REPO_URL')
@@ -220,17 +228,15 @@ pipeline {
 
             # ── 1. Clone on first deploy, then fast-forward to this exact commit ──────────
             # REPO_URL comes from the innobox-repo-url credential (with or without the https://
-            # prefix — it is normalized here). The Gitea token is spliced in only for the
-            # network calls and never persisted on the deploy host (after a first-time clone,
-            # origin is reset to the token-less URL).
+            # prefix — it is normalized here). The repository is public: clone and fetch are
+            # anonymous, so no token reaches the deploy host.
             # checkout --force + clean -fd make the tree byte-exact to the commit: local edits
             # to tracked files are discarded and untracked leftovers from earlier runs removed.
             # Deliberately NOT clean -x: gitignored paths must survive — deploy/.env (secrets)
             # and deploy/data/** (postgres/minio/clamav volumes) live inside the checkout.
             REPO_HOSTPATH="${REPO_URL#https://}"
-            REPO_TOKEN_URL="https://x-access-token:${GITEA_TOKEN}@${REPO_HOSTPATH}"
             REPO_CLEAN_URL="https://${REPO_HOSTPATH}"
-            $SSH "${DEPLOY_HOST}" "if [ ! -d ${DEPLOY_PATH}/.git ]; then git clone ${REPO_TOKEN_URL} ${DEPLOY_PATH} && git -C ${DEPLOY_PATH} remote set-url origin ${REPO_CLEAN_URL}; fi && cd ${DEPLOY_PATH} && git fetch ${REPO_TOKEN_URL} --prune && git checkout --force --detach ${GIT_COMMIT} && git clean -fd"
+            $SSH "${DEPLOY_HOST}" "if [ ! -d ${DEPLOY_PATH}/.git ]; then git clone ${REPO_CLEAN_URL} ${DEPLOY_PATH}; fi && cd ${DEPLOY_PATH} && git remote set-url origin ${REPO_CLEAN_URL} && git fetch origin --prune && git checkout --force --detach ${GIT_COMMIT} && git clean -fd"
 
             # ── 2. Push the secret .env to the deploy host (never in git) ─────────────────
             # Remove-then-copy: a stale .env owned by another user (e.g. root after manual
