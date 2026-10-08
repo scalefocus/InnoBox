@@ -11,6 +11,48 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.41.0",
+    date: "2026-10-08",
+    summary:
+      "The audit log can now prove it hasn't been tampered with: every new entry is chained to the one before it, and platform admins have a \"Verify integrity\" button that checks the whole chain and points to the first entry that doesn't match. Each check is itself recorded in the audit log.",
+  },
+  {
+    version: "0.40.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins get an Identity sync card in Administration: how many people and groups the directory has provisioned, when the last sync request arrived (and the last one that was refused), which role-mapped groups never arrived, and plain-language next steps when users sync without groups or nothing has synced yet.",
+  },
+  {
+    version: "0.39.0",
+    date: "2026-10-08",
+    summary:
+      "When a platform admin deletes a person's information, they can now hand that person's open assignments to a colleague in the same step. Anything the colleague can't see is listed so it can be reassigned by hand, and the colleague gets a single notification listing what they took over.",
+  },
+  {
+    version: "0.38.0",
+    date: "2026-10-08",
+    summary:
+      "Behind the scenes: operators can now run the browser security policy in report-only mode while checking a new deployment, and violations are counted for monitoring. Nothing changes in how InnoBox looks or works.",
+  },
+  {
+    version: "0.37.0",
+    date: "2026-10-08",
+    summary:
+      "Signing out now clears every InnoBox sign-in cookie, not just the session. And if your account was set up under the wrong directory ID, signing in for the first time now links you to it instead of failing or creating a second, empty account.",
+  },
+  {
+    version: "0.36.1",
+    date: "2026-10-08",
+    summary:
+      "Menus and pop-ups now open with the same quick, subtle animation everywhere, including the search suggestions under the top bar, and they share one consistent look. If your device is set to reduce motion, they simply appear.",
+  },
+  {
+    version: "0.36.0",
+    date: "2026-10-08",
+    summary:
+      "Submitting a challenge or solution, or resubmitting one, now locks the form while InnoBox works on it: the button reads \"Working…\" and nothing can be clicked twice, so a slow connection can no longer create a duplicate. If something goes wrong the form unlocks with everything you typed still in place.",
+  },
+  {
     version: "0.35.1",
     date: "2026-10-08",
     summary:

@@ -186,21 +186,20 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236cd0f7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
 }
 
-/* Shared open/close animation for popover menus — the account menu below and the messages
-   dropdown (INNOBOX_SPEC.md §23 Account menu, §24 Surfaces). `--menu-pop-y` is the distance the
-   menu travels from/toward its trigger; each menu sets its own sign based on which side it opens
-   on. `.menu-pop-closing` plays the reverse animation while the exit-animation hook keeps the
-   element mounted (see `usePopoverPresence` in components/ui.tsx). */
+/* Popovers — one shared treatment (INNOBOX_SPEC.md §2.2). Every popover (a floating panel
+   anchored to a trigger: menus, dropdown result lists, hover/focus cards, pickers) carries
+   `.menu-pop`: a ~120 ms ease-out fade + scale on open, played once on mount, so a popover whose
+   content refreshes while open (autocomplete results) does not replay it as long as the element
+   stays mounted. Close is instant: the element simply unmounts, with no exit animation.
+   `--menu-pop-y` is the ~6 px travel toward the trigger and `transform-origin` the point it grows
+   from; each popover sets both for the side it opens on. Nothing animates under reduced motion.
+   `sheet-slide-up` is the mobile notification sheet's own entrance (the sheet has no anchor to
+   scale from, an explicit exception to the shared treatment). */
 @keyframes menu-pop-in { from { opacity: 0; transform: scale(.96) translateY(var(--menu-pop-y, -6px)); } to { opacity: 1; transform: scale(1) translateY(0); } }
-@keyframes menu-pop-out { from { opacity: 1; transform: scale(1) translateY(0); } to { opacity: 0; transform: scale(.96) translateY(var(--menu-pop-y, -6px)); } }
-@keyframes menu-pop-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes menu-pop-fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes sheet-slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-@keyframes sheet-slide-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
-.menu-pop { animation: menu-pop-in .15s ease-out; }
-.menu-pop.menu-pop-closing { animation: menu-pop-out .12s ease-in forwards; }
+.menu-pop { animation: menu-pop-in .12s ease-out; }
 @media (prefers-reduced-motion: reduce) {
-  .menu-pop, .menu-pop.menu-pop-closing { animation: none; }
+  .menu-pop { animation: none; }
 }
 
 /* Bottom-left account menu (Profile / Sign out). */
@@ -234,6 +233,7 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
   box-shadow: var(--shadow); padding: 5px; display: flex; flex-direction: column; gap: 2px;
   overflow: hidden;
+  transform-origin: top center; --menu-pop-y: -6px; /* opens below its anchor */
 }
 .user-result-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 9px;
@@ -391,12 +391,14 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
   background: var(--surface); color: var(--muted); transition: border-color 0.2s, box-shadow 0.2s;
 }
-/* Autocomplete dropdown anchored to the search box. */
+/* Autocomplete dropdown anchored to the search box. A popover, so it wears the shared `.menu-pop`
+   chrome and motion (INNOBOX_SPEC.md §2.2, §13.4). */
 .search-ac {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 70;
   margin: 0; padding: 5px; list-style: none;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22); max-height: 60vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); max-height: 60vh; overflow-y: auto;
+  transform-origin: top center; --menu-pop-y: -6px; /* opens below the search box */
 }
 .search-ac-item {
   display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left;
@@ -826,12 +828,6 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .taginput-chip { display: inline-flex; align-items: center; gap: 6px; }
 .taginput-chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0; opacity: 0.7; }
 .taginput-chip button:hover { opacity: 1; }
-/* z-index matches .search-ac (70) so result dropdowns (maintainer add, admin user delete/replace,
-   propose tags) paint above sibling cards and sticky table headers (z-20) instead of behind them. */
-.taginput-menu { position: absolute; z-index: 70; left: 0; right: 0; margin-top: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 14px 40px -16px rgba(0,0,0,0.4); overflow: hidden; max-height: 240px; overflow-y: auto; }
-.taginput-opt { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--ink); font-family: var(--font-body); font-size: 13.5px; padding: 9px 12px; cursor: pointer; }
-.taginput-opt.hi, .taginput-opt:hover { background: var(--surface-2); }
-.taginput-opt strong { color: var(--accent-2); }
 
 /* ── Notification bell (topbar) ────────────────────────────────────────── */
 .bell { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--muted); cursor: pointer; transition: all 0.15s; }
@@ -854,25 +850,17 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .msg-menu { position: relative; display: inline-flex; }
 /* Messages dropdown: an anchored panel on desktop; a full-screen sheet on mobile (so it can
    never spill off-screen), both with an explicit close (✕) button. */
-.msg-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: 380px; max-width: 92vw; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transform-origin: top right; }
+.msg-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: 380px; max-width: 92vw; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; transform-origin: top right; --menu-pop-y: -6px; /* opens below the bell */ }
 .msg-panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .msg-close { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; font-size: 12px; flex-shrink: 0; transition: color 0.15s, border-color 0.15s; }
 .msg-close:hover { color: var(--ink); border-color: var(--accent); }
-.msg-backdrop { display: none; }
-/* Backdrop just fades — no scale/slide (it has no anchor point). */
-.msg-backdrop.menu-pop { animation: menu-pop-fade-in .18s ease-out; }
-.msg-backdrop.menu-pop.menu-pop-closing { animation: menu-pop-fade-out .18s ease-in forwards; }
-@media (prefers-reduced-motion: reduce) {
-  .msg-backdrop.menu-pop, .msg-backdrop.menu-pop.menu-pop-closing { animation: none; }
-}
 @media (max-width: 880px) {
-  .msg-backdrop { display: block; position: fixed; inset: 0; z-index: 59; background: rgba(0,0,0,0.45); }
   .msg-panel { position: fixed; inset: 0; width: 100%; max-width: none; height: 100dvh; border: 0; border-radius: 0; z-index: 60; }
-  /* On the full-screen sheet, slide up/down from the bottom edge instead of the desktop fade+scale. */
+  /* On the full-screen sheet, slide up from the bottom edge instead of the desktop fade + scale
+     (the sheet has no anchor to scale from); close stays instant, like every popover. */
   .msg-panel.menu-pop { animation: sheet-slide-up .22s ease-out; }
-  .msg-panel.menu-pop.menu-pop-closing { animation: sheet-slide-down .18s ease-in forwards; }
   @media (prefers-reduced-motion: reduce) {
-    .msg-panel.menu-pop, .msg-panel.menu-pop.menu-pop-closing { animation: none; }
+    .msg-panel.menu-pop { animation: none; }
   }
   .msg-panel .msg-scroll { flex: 1 1 auto; min-height: 0; max-height: none !important; }
 }
@@ -950,6 +938,29 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   border-radius: 50%; animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Submission lock (INNOBOX_SPEC.md §6.4) — while a submit is in flight a plain scrim covers the
+   form (its contents are `inert`), and only the primary button, raised above it, stays visible
+   as "Working…". Appears at once: no delay, no transition. No new token — `--surface` at ~60%. */
+.form-lock { position: relative; }
+/* Wraps the lockable fields without adding a box, so the form's own flex gap still applies. */
+.form-lock-body { display: contents; }
+.form-lock-scrim {
+  position: absolute; inset: 0; z-index: 1; border-radius: inherit;
+  background: color-mix(in oklab, var(--surface) 60%, transparent); cursor: progress;
+}
+.form-lock-raised { position: relative; z-index: 2; }
+.form-lock-raised:disabled { cursor: progress; }
+/* On an accent-filled button the default spinner's accent arc would vanish — draw it in the
+   button's own ink instead. */
+.btn-primary .spinner {
+  border-color: color-mix(in oklab, currentColor 35%, transparent); border-top-color: currentColor;
+}
+/* The lock's polite live region: read by assistive tech, never seen. */
+.form-lock-status {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 /* Transient confirmation toast (e.g. "copied to clipboard") — centered above the bottom
    edge so it is visible at any viewport width, unlike in-box feedback that can sit in a
@@ -1200,3 +1211,16 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .toast { animation: none; }
   .spinner { animation-duration: 2s; }
 }
+
+/* ── Identity sync diagnostics card (admin console, platform admin) ─────────────────────── */
+.identity-sync-times { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 16px 0 0; font-size: 14px; }
+.identity-sync-label { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
+.identity-sync-explain { margin: 16px 0 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 35%, transparent); font-size: 13.5px; line-height: 1.5; }
+.identity-sync-subhead { font-family: var(--font-display); font-size: 15px; margin: 20px 0 10px; }
+.identity-sync-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+.identity-sync .row .ttl.mono { font-size: 13px; overflow-wrap: anywhere; }
+
+/* ── Audit integrity check ("Verify integrity", INNOBOX_SPEC.md §15) ─────────────────────── */
+.audit-verify-intact { color: var(--ok); font-weight: 600; }
+.audit-verify-broken { color: var(--danger); font-weight: 600; }
+.audit-verify-error { color: var(--warn); }

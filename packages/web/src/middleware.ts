@@ -7,10 +7,12 @@
 //
 // It is also where the per-request half of the §2.4 web security baseline lives: the CSRF Origin
 // check on state-changing API requests (lib/csrf.ts), and — on EVERY response this layer
-// produces, whichever branch produced it — the nonce-bearing Content-Security-Policy and HSTS
+// produces, whichever branch produced it — the nonce-bearing Content-Security-Policy (sent as
+// enforcing, report-only, or not at all per CSP_MODE, lib/csp-mode.ts) and HSTS
 // (lib/security-headers.ts). The env-independent headers come from next.config.ts.
 import { getToken } from "next-auth/jwt";
 import { NextResponse, type NextRequest } from "next/server";
+import { cspResponseHeaders, resolveCspMode } from "./lib/csp-mode";
 import { isOriginAllowed } from "./lib/csrf";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER } from "./lib/presence-touch";
 import { isPublicPath } from "./lib/routeAccess";
@@ -21,6 +23,8 @@ import {
   generateNonce,
   isAttachmentDownload,
   NONCE_HEADER,
+  reportingEndpoints,
+  reportingOrigin,
   strictTransportSecurity,
 } from "./lib/security-headers";
 
@@ -88,15 +92,31 @@ async function route(req: NextRequest, sec: Security): Promise<NextResponse> {
 }
 
 export async function middleware(req: NextRequest): Promise<NextResponse> {
+  const dev = isDev();
+  // §2.4 CSP_MODE, read per request (so switching modes needs no rebuild). An unrecognised value
+  // is enforce here; the startup check in instrumentation.ts warns about it (or, in a production
+  // build, refuses to start — as it does for off).
+  const { mode } = resolveCspMode(process.env.CSP_MODE);
+  const report = mode !== "off";
+  // Minted and forwarded on the request side in EVERY mode, so the renderer keeps nonce-tagging
+  // its inline scripts whatever the response header ends up being.
   const nonce = generateNonce();
-  const sec: Security = { nonce, csp: buildContentSecurityPolicy({ nonce, dev: isDev() }) };
+  const sec: Security = { nonce, csp: buildContentSecurityPolicy({ nonce, dev, report }) };
 
   const res = await route(req, sec);
-  res.headers.set(
-    "Content-Security-Policy",
-    isAttachmentDownload(req.method, req.nextUrl.pathname) ? ATTACHMENT_DOWNLOAD_CSP : sec.csp,
-  );
-  const hsts = strictTransportSecurity(canonicalBaseUrl(process.env));
+  const baseUrl = canonicalBaseUrl(process.env);
+  const origin = report ? reportingOrigin(baseUrl, req.nextUrl.origin, dev) : null;
+  const headers = cspResponseHeaders({
+    mode,
+    policy: sec.csp,
+    attachmentPolicy: isAttachmentDownload(req.method, req.nextUrl.pathname) ? ATTACHMENT_DOWNLOAD_CSP : null,
+    reportingEndpoints: origin ? reportingEndpoints(origin) : null,
+  });
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === null) res.headers.delete(name);
+    else res.headers.set(name, value);
+  }
+  const hsts = strictTransportSecurity(baseUrl);
   if (hsts) res.headers.set("Strict-Transport-Security", hsts);
   return res;
 }

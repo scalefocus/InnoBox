@@ -31,7 +31,7 @@ open; no user table exists. No local accounts will ever exist (INNOBOX_SPEC.md �
 | Bootstrap admins | `INNOBOX_BOOTSTRAP_ADMIN_GROUP` (Entra group object id, already in `.env.example`): while set, treated as an implicit `(group → platform_admin)` mapping. Its membership is synced by reconciliation from worker boot, so bootstrap works before any SCIM assignment |
 | Role staleness | **Per-request resolution** (one indexed join); `users.active` checked on every request at session validation. No role cache in v1 |
 | Session | Auth.js JWT cookie session (`HttpOnly`, `Secure`, `SameSite=Lax`), rolling, **7-day** max age. The JWT carries `oid` + display basics only — **never roles** |
-| Sign-out | Local only (destroy the InnoBox session); no Entra front-channel logout |
+| Sign-out | Local only (destroy the InnoBox session and expire every Auth.js cookie the request carried — INNOBOX_SPEC.md §3); no Entra front-channel logout |
 | Rollout | Greenfield hard cutover: once Phase 1 deploys, all routes require sign-in. Local dev/e2e use the `INNOBOX_DEV_AUTH` bypass (never set in production — §2.3 release checklist) |
 
 ## 3. Entra configuration (operator runbook)
@@ -194,7 +194,7 @@ tolerates; exact file follows `db/migrations/README.md` rules.)
   `signIn("azure-ad", { callbackUrl })`; the sidebar carries no nav links and the main
   area is the §13.2 welcome landing. A sign-in error returned on the URL (e.g.
   `?error=AccessDenied` for a deactivated account) is surfaced on that landing.
-- **Sign-out**: Auth.js `signOut` clears the local session cookie only.
+- **Sign-out**: Auth.js `signOut` clears the local session; a thin wrapper around the handler additionally expires every `next-auth.*` cookie the request carried (session chunks, CSRF, callback URL, PKCE/state/nonce — INNOBOX_SPEC.md §3). Nothing in Entra is touched.
 - **Dev bypass**: when `INNOBOX_DEV_AUTH=1`, a Credentials provider ("Dev sign-in": free-form
   display name + role preset) is registered and the Entra provider becomes optional; used by
   local dev and Playwright. Because there is no default Auth.js page, the dev form renders on
@@ -289,7 +289,7 @@ provisioning contract, including the Entra dialect quirks:
 
 ## 6. Security invariants (restated for InnoBox)
 
-1. Identity key = Entra `oid` ≡ SCIM `externalId` (`users.external_id`); never email/UPN.
+1. Identity key = Entra `oid` ≡ SCIM `externalId` (`users.external_id`); never email/UPN. The UPN serves only as the audited sign-in **relink** hint for a never-used SCIM-provisioned row (`user.relinked`, INNOBOX_SPEC.md §3).
 2. **Roles never come from token claims** (Entra ~200-group claim overage; INNOBOX_SPEC.md
    invariant 1). The `groups` claim is not requested and is ignored if present.
 3. Leaver ≠ erasure: PATCH/PUT `active:false` and SCIM DELETE deactivate; the GDPR scrub is

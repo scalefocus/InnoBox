@@ -26,11 +26,19 @@ export const STATIC_SECURITY_HEADERS: ReadonlyArray<{ key: string; value: string
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
 ];
 
+/** §2.4: the CSP violation report sink — the one public, unauthenticated API route. */
+export const CSP_REPORT_PATH = "/api/csp-report";
+
+/** §2.4: the Reporting API endpoint group named by `report-to` and `Reporting-Endpoints`. */
+export const CSP_REPORT_GROUP = "csp";
+
 /** The Content-Security-Policy for one response. With a `nonce`, scripts are allowed only by
  *  that nonce (plus whatever those scripts load, via 'strict-dynamic') — there is deliberately no
  *  'unsafe-inline' script source. `dev` adds what `next dev` needs (React's eval-based debugging
- *  and the HMR websocket) and must never be true in a production build. */
-export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean }): string {
+ *  and the HMR websocket) and must never be true in a production build. `report` (the
+ *  `enforce` and `report-only` modes, §2.4) appends `report-uri` + `report-to` naming the
+ *  report sink. */
+export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean; report?: boolean }): string {
   const scriptSrc = ["'self'"];
   if (opts.nonce) scriptSrc.push(`'nonce-${opts.nonce}'`, "'strict-dynamic'");
   if (opts.dev) scriptSrc.push("'unsafe-eval'");
@@ -50,6 +58,11 @@ export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean 
     ["frame-ancestors", ["'none'"]],
     ["form-action", ["'self'", OIDC_AUTHORITY_ORIGIN]],
   ];
+  if (opts.report) {
+    // Both, because browsers differ: report-to (the Reporting API) delivers only to https
+    // endpoints and batches; the legacy report-uri covers the rest.
+    directives.push(["report-uri", [CSP_REPORT_PATH]], ["report-to", [CSP_REPORT_GROUP]]);
+  }
   return directives.map(([name, sources]) => `${name} ${sources.join(" ")}`).join("; ");
 }
 
@@ -67,6 +80,25 @@ export function isAttachmentDownload(method: string, pathname: string): boolean 
 export function canonicalBaseUrl(env: { PUBLIC_BASE_URL?: string; NEXTAUTH_URL?: string }): string | undefined {
   const value = env.PUBLIC_BASE_URL?.trim() || env.NEXTAUTH_URL?.trim();
   return value || undefined;
+}
+
+/** §2.4: the origin the `Reporting-Endpoints` URL is built on — the canonical URL's origin or,
+ *  in local dev with neither PUBLIC_BASE_URL nor NEXTAUTH_URL set, the request's own origin.
+ *  Null when none can be determined (a production build with nothing configured). */
+export function reportingOrigin(baseUrl: string | undefined, requestOrigin: string, dev: boolean): string | null {
+  const candidate = baseUrl ?? (dev ? requestOrigin : undefined);
+  if (!candidate) return null;
+  try {
+    const origin = new URL(candidate).origin;
+    return origin === "null" ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+/** The `Reporting-Endpoints` header value naming the report sink under `origin`. */
+export function reportingEndpoints(origin: string): string {
+  return `${CSP_REPORT_GROUP}="${origin}${CSP_REPORT_PATH}"`;
 }
 
 /** The HSTS header value when the canonical URL is https, else null (never on plain http). */

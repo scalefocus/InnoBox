@@ -39,6 +39,15 @@ test("requiresOriginCheck: the Auth.js routes are exempt (they carry their own C
   assert.equal(requiresOriginCheck("POST", "/api/authors"), true);
 });
 
+test("requiresOriginCheck: the public CSP report sink is exempt — exact path only", () => {
+  for (const m of ["POST", "PUT", "DELETE"]) assert.equal(requiresOriginCheck(m, "/api/csp-report"), false, m);
+  assert.equal(check({ pathname: "/api/csp-report", origin: null }), true);
+  // Look-alikes stay checked.
+  assert.equal(requiresOriginCheck("POST", "/api/csp-report/x"), true);
+  assert.equal(requiresOriginCheck("POST", "/api/csp-reports"), true);
+  assert.equal(requiresOriginCheck("POST", "/api/csp-report/"), true);
+});
+
 test("a matching Origin passes; missing, different, sibling-subdomain, or 'null' Origin is refused", () => {
   assert.equal(check({}), true);
   assert.equal(check({ origin: null }), false);

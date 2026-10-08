@@ -2,7 +2,9 @@
 // cookies are SameSite=Lax, which stops other sites but not a sibling sub-domain of the same
 // registrable domain — so every state-changing API request must carry an `Origin` equal to the
 // deployment's canonical origin. Auth.js routes (/api/auth/*) are exempt: they carry their own
-// CSRF token. Pure and dependency-free so the middleware (edge) and the unit tests share it.
+// CSRF token, and so is the public CSP report sink (/api/csp-report, exact path). Pure (its one
+// import is the pure security-headers module) so the middleware (edge) and the unit tests share it.
+import { CSP_REPORT_PATH } from "./security-headers";
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -12,6 +14,9 @@ export function requiresOriginCheck(method: string, pathname: string): boolean {
   if (!STATE_CHANGING_METHODS.has(method.toUpperCase())) return false;
   if (pathname !== "/api" && !pathname.startsWith("/api/")) return false;
   if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return false;
+  // The public CSP report sink (exact path): browsers send reports with no reliable Origin, and
+  // a report changes no application state.
+  if (pathname === CSP_REPORT_PATH) return false;
   return true;
 }
 

@@ -10,7 +10,9 @@
 // landing too — a brand asset like icon.svg/favicon, not protected data).
 // NOTE: /whats-new is deliberately NOT public — it stays behind sign-in like every other route
 // (invariant 2: all access is auth-required).
-const PUBLIC_EXACT = new Set(["/", "/healthz", "/readyz", "/metrics", "/icon.svg", "/favicon.ico"]);
+// The CSP report sink /api/csp-report (§2.4) is the one public API route: browsers send violation
+// reports without a session. Exact path only.
+const PUBLIC_EXACT = new Set(["/", "/healthz", "/readyz", "/metrics", "/icon.svg", "/favicon.ico", "/api/csp-report"]);
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;

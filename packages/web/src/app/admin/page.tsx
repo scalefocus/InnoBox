@@ -9,9 +9,10 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { deleteReq, patchJson, postJson } from "@/lib/api-client";
-import { AvatarBubble } from "@/components/AvatarBubble";
 import { CurrentlyOnline } from "./CurrentlyOnline";
 import { SystemBannerCard } from "./SystemBannerCard";
+import { GdprCard } from "./GdprCard";
+import { IdentitySyncCard } from "./IdentitySyncCard";
 
 const NAMESPACES_URL = "/api/admin/namespaces";
 const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
@@ -19,7 +20,7 @@ const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
 // The admin console's collapsible cards remember their open/closed state per browser
 // (localStorage) so a chosen layout survives reloads. Default: everything expanded.
 const ADMIN_CARDS_STORAGE_KEY = "innobox:admin-cards-open";
-const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true };
+const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true, identity: true };
 const ADMIN_CARD_IDS = Object.keys(DEFAULT_ADMIN_CARDS);
 
 function loadAdminCardState(): Record<string, boolean> {
@@ -173,6 +174,7 @@ function AdminConsole() {
   const [openCards, setOpenCards] = useState<Record<string, boolean>>(loadAdminCardState);
   const [onlineTotal, setOnlineTotal] = useState<number | null>(null);
   const [bannerActive, setBannerActive] = useState(false);
+  const [identitySummary, setIdentitySummary] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = (message: string) => {
@@ -270,7 +272,17 @@ function AdminConsole() {
         />
       </AdminCard>
 
-      <GDPRCard onNotify={notify} />
+      <AdminCard
+        id="identity"
+        title="Identity sync"
+        summary={identitySummary ?? "…"}
+        open={openCards.identity ?? true}
+        onToggle={() => toggleCard("identity")}
+      >
+        <IdentitySyncCard onSummary={setIdentitySummary} />
+      </AdminCard>
+
+      <GdprCard onNotify={notify} />
 
       {toast && <div className="toast">{toast}</div>}
     </>
@@ -582,73 +594,6 @@ function RoleMappingsPanel({
         </div>
       )}
     </>
-  );
-}
-
-function GDPRCard({ onNotify }: { onNotify: (message: string) => void }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ id: string; displayName: string; email: string | null; active: boolean; scrubbed: boolean }[]>([]);
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const search = async (q: string) => {
-    setQuery(q);
-    if (q.trim().length < 2) {
-      setResults([]);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}`, { headers: { accept: "application/json" } });
-      const json = await res.json();
-      setResults(json.users ?? []);
-    } catch {
-      setResults([]);
-    }
-  };
-
-  const scrub = async (u: { id: string; displayName: string }) => {
-    if (!window.confirm(`Permanently delete all personal info for “${u.displayName}”? Their name becomes “Deleted User” on every challenge, solution, and comment, and this cannot be undone.`)) return;
-    setBusyId(u.id);
-    try {
-      await postJson(`/api/admin/users/${u.id}/scrub`, {});
-      onNotify(`Deleted personal info for ${u.displayName}.`);
-      setQuery("");
-      setResults([]);
-    } catch (err) {
-      onNotify(err instanceof Error ? err.message : "Could not delete user info");
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  return (
-    <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
-      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Delete user info (GDPR)</h3>
-      <p className="muted" style={{ fontSize: 13.5, marginTop: 0 }}>
-        Irreversibly de-identifies a user: their name becomes “Deleted User” on every challenge, solution, and comment, personal
-        fields are erased, and the account is deactivated. The append-only audit log is retained.
-      </p>
-      <input className="field" placeholder="Search users by name or email…" value={query} onChange={(e) => search(e.target.value)} />
-      {results.length > 0 && (
-        <div className="rows" style={{ marginTop: 10 }}>
-          {results.map((u) => (
-            <div className="row" key={u.id}>
-              <AvatarBubble size="sm" userId={u.scrubbed ? null : u.id} displayName={u.displayName} deactivated={!u.active} />
-              <span className="grow">
-                <span className="ttl">{u.displayName}</span> {u.email && <span className="muted mono">{u.email}</span>}
-              </span>
-              {!u.active && <span className="pill pill-muted">Inactive</span>}
-              {u.scrubbed ? (
-                <span className="chip">Deleted</span>
-              ) : (
-                <button type="button" className="btn btn-sm btn-danger" disabled={busyId === u.id} onClick={() => scrub(u)}>
-                  Delete info
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

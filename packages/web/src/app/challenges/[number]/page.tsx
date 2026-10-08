@@ -13,6 +13,8 @@ import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
 import { StagedAttachments } from "@/components/StagedAttachments";
 import { uploadFileInChunks } from "@/lib/chunked-upload";
+import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
+import { primaryButtonState } from "@/lib/form-lock";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -93,20 +95,34 @@ export default function ChallengeDetailPage() {
   const [challenge, setChallenge] = useState<ChallengeDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // §6.4: a locked submit (solution form, Resubmit) is held until the re-read has RENDERED, not
+  // merely been fetched. refresh() therefore resolves only once the new challenge is committed —
+  // its resolver waits here and the effect below fires it after that render.
+  const rendered = useRef<(() => void)[]>([]);
 
-  const refresh = () => {
-    fetch(`/api/challenges/${number}`, { headers: { accept: "application/json" } })
-      .then(async (res) => {
-        if (res.status === 404) {
-          setNotFound(true);
-          return;
-        }
-        const json = await readJson(res);
-        if (!res.ok) throw new Error(json.error ?? "Could not load challenge");
-        setChallenge(json.challenge as ChallengeDetail);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Could not load challenge"));
-  };
+  useEffect(() => {
+    for (const resolve of rendered.current.splice(0)) resolve();
+  }, [challenge]);
+
+  const refresh = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      fetch(`/api/challenges/${number}`, { headers: { accept: "application/json" } })
+        .then(async (res) => {
+          if (res.status === 404) {
+            setNotFound(true);
+            resolve();
+            return;
+          }
+          const json = await readJson(res);
+          if (!res.ok) throw new Error(json.error ?? "Could not load challenge");
+          rendered.current.push(resolve);
+          setChallenge(json.challenge as ChallengeDetail);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Could not load challenge");
+          resolve();
+        });
+    });
 
   useEffect(() => {
     refresh();
@@ -140,7 +156,7 @@ export default function ChallengeDetailPage() {
   return <ChallengeDetailView challenge={challenge} onChanged={refresh} />;
 }
 
-function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDetail; onChanged: () => void }) {
+function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDetail; onChanged: () => Promise<void> }) {
   const fmt = useDateFmt();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -326,6 +342,31 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     }
   };
 
+  // §6.4 submission lock for Resubmit: one lock for the page, owned by the item (challenge or
+  // solution id) whose author action bar — and inline edit form, if open — it covers. Errors
+  // release it and show through the page's notice; a success is held until the detail re-read
+  // has rendered (the item is then in_review and the bar no longer offers Resubmit).
+  const resubmitLock = useFormLock();
+  const resubmit = async (owner: string, path: string) => {
+    if (!resubmitLock.lock(owner)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(path, { method: "POST" });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not resubmit");
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not resubmit");
+      resubmitLock.release();
+      setBusy(false);
+      return;
+    }
+    resubmitLock.succeed();
+    await onChanged();
+    resubmitLock.reset();
+    setBusy(false);
+  };
+  const challengeLocked = resubmitLock.lockedFor(challenge.id);
+
   // §10.3 platform-admin permanent delete. The reason is mandatory (the server refuses a
   // blank one) and the deleted item is gone for good — so a challenge delete leaves this
   // page entirely, while a solution delete just re-reads the challenge.
@@ -350,10 +391,11 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
   const chNum = challenge.number.replace("CH-", "");
   const withdrawChallenge = () => authorAction(`/api/challenges/${chNum}/withdraw`, "withdraw", "Withdraw this challenge? This is permanent — it becomes read-only and hidden from others.");
-  const resubmitChallenge = () => authorAction(`/api/challenges/${chNum}/resubmit`, "resubmit");
+  const resubmitChallenge = () => resubmit(challenge.id, `/api/challenges/${chNum}/resubmit`);
   const withdrawSolution = (solutionNumber: string) =>
     authorAction(`/api/solutions/${solutionNumber.replace("SOL-", "")}/withdraw`, "withdraw", "Withdraw this solution? This is permanent.");
-  const resubmitSolution = (solutionNumber: string) => authorAction(`/api/solutions/${solutionNumber.replace("SOL-", "")}/resubmit`, "resubmit");
+  const resubmitSolution = (solutionId: string, solutionNumber: string) =>
+    resubmit(solutionId, `/api/solutions/${solutionNumber.replace("SOL-", "")}/resubmit`);
 
   // Deep-link (§12.1/§13.1): solution-scoped links resolve to this page with a #SOL-<n> hash —
   // scroll that solution into view once the detail (and its solution rows) have rendered.
@@ -442,27 +484,30 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         )}
 
         {(challenge.canEdit || challenge.canResubmit || challenge.canWithdraw) && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-            {challenge.canEdit && (
-              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setEditingChallenge((v) => !v)}>
-                {editingChallenge ? "Cancel edit" : "Edit"}
-              </button>
-            )}
-            {challenge.canResubmit && (
-              <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={resubmitChallenge}>
-                Resubmit for review
-              </button>
-            )}
-            {challenge.canWithdraw && (
-              <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={withdrawChallenge}>
-                Withdraw
-              </button>
-            )}
-          </div>
-        )}
+          <div className="form-lock" aria-busy={challengeLocked}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              {challenge.canEdit && (
+                <button type="button" className="btn btn-sm" inert={challengeLocked} disabled={busy} onClick={() => setEditingChallenge((v) => !v)}>
+                  {editingChallenge ? "Cancel edit" : "Edit"}
+                </button>
+              )}
+              {challenge.canResubmit && (
+                <ResubmitButton locked={challengeLocked} busy={busy} label="Resubmit for review" onClick={resubmitChallenge} />
+              )}
+              {challenge.canWithdraw && (
+                <button type="button" className="btn btn-sm btn-danger" inert={challengeLocked} disabled={busy} onClick={withdrawChallenge}>
+                  Withdraw
+                </button>
+              )}
+            </div>
 
-        {editingChallenge && challenge.canEdit && (
-          <ChallengeEditForm challenge={challenge} onDone={() => setEditingChallenge(false)} onSaved={onChanged} onError={notify} />
+            {editingChallenge && challenge.canEdit && (
+              <div inert={challengeLocked}>
+                <ChallengeEditForm challenge={challenge} onDone={() => setEditingChallenge(false)} onSaved={onChanged} onError={notify} />
+              </div>
+            )}
+            <FormLockOverlay locked={challengeLocked} />
+          </div>
         )}
 
         <AttachmentsSection
@@ -606,26 +651,35 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                 </div>
               )}
               {(s.canEdit || s.canResubmit || s.canWithdraw) && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
-                  {s.canEdit && (
-                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setEditingSolution((cur) => (cur === s.id ? null : s.id))}>
-                      {editingSolution === s.id ? "Cancel edit" : "Edit"}
-                    </button>
+                <div className="form-lock" aria-busy={resubmitLock.lockedFor(s.id)} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
+                    {s.canEdit && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        inert={resubmitLock.lockedFor(s.id)}
+                        disabled={busy}
+                        onClick={() => setEditingSolution((cur) => (cur === s.id ? null : s.id))}
+                      >
+                        {editingSolution === s.id ? "Cancel edit" : "Edit"}
+                      </button>
+                    )}
+                    {s.canResubmit && (
+                      <ResubmitButton locked={resubmitLock.lockedFor(s.id)} busy={busy} label="Resubmit" onClick={() => resubmitSolution(s.id, s.number)} />
+                    )}
+                    {s.canWithdraw && (
+                      <button type="button" className="btn btn-sm btn-danger" inert={resubmitLock.lockedFor(s.id)} disabled={busy} onClick={() => withdrawSolution(s.number)}>
+                        Withdraw
+                      </button>
+                    )}
+                  </div>
+                  {editingSolution === s.id && s.canEdit && (
+                    <div inert={resubmitLock.lockedFor(s.id)}>
+                      <SolutionEditForm solution={s} onDone={() => setEditingSolution(null)} onSaved={onChanged} onError={notify} />
+                    </div>
                   )}
-                  {s.canResubmit && (
-                    <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => resubmitSolution(s.number)}>
-                      Resubmit
-                    </button>
-                  )}
-                  {s.canWithdraw && (
-                    <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => withdrawSolution(s.number)}>
-                      Withdraw
-                    </button>
-                  )}
+                  <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
                 </div>
-              )}
-              {editingSolution === s.id && s.canEdit && (
-                <SolutionEditForm solution={s} onDone={() => setEditingSolution(null)} onSaved={onChanged} onError={notify} />
               )}
               {s.canDelete && (
                 <DangerZone
@@ -760,14 +814,27 @@ function DangerZone({
   );
 }
 
-function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber: string; onProposed: () => void }) {
+// The Resubmit action's button (§6.4): raised above its bar's scrim, "Working…" while locked.
+function ResubmitButton({ locked, busy, label, onClick }: { locked: boolean; busy: boolean; label: string; onClick: () => void }) {
+  const state = primaryButtonState({ locked, idleLabel: label });
+  return (
+    <button type="button" className="btn btn-sm btn-primary form-lock-raised" disabled={busy || state.disabled} onClick={onClick}>
+      <PrimaryButtonLabel state={state} />
+    </button>
+  );
+}
+
+// §6.2 propose form. §6.4: locked while the create is in flight; on error it releases with the
+// fields and staged files intact; on success it stays locked until the parent challenge has been
+// re-read AND re-rendered, and only then closes.
+function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber: string; onProposed: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState("");
   const [costVsBenefits, setCostVsBenefits] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [draftKey] = useState(() => crypto.randomUUID());
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
 
   if (!open) {
@@ -780,7 +847,8 @@ function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber:
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    // A second submit (double click, Enter) while locked is a no-op.
+    if (!lock.lock()) return;
     setError(null);
     try {
       const res = await fetch(`/api/challenges/${challengeNumber.replace("CH-", "")}/solutions`, {
@@ -790,56 +858,71 @@ function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber:
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not propose solution");
-      setDescription("");
-      setCostVsBenefits("");
-      setIsAnonymous(false);
-      setOpen(false);
-      onProposed();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not propose solution");
-    } finally {
-      setSubmitting(false);
+      lock.release();
+      return;
     }
+    lock.succeed();
+    // Close only once the new solution is on screen — never alongside the refresh.
+    await onProposed();
+    setDescription("");
+    setCostVsBenefits("");
+    setIsAnonymous(false);
+    setOpen(false);
+    lock.reset();
   };
 
+  const button = primaryButtonState({ locked: lock.locked, attachmentsBusy, idleLabel: "Submit solution" });
+
   return (
-    <form onSubmit={onSubmit} className="card card-pad reveal" style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
-      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>Propose a solution</h3>
-      <textarea
-        className="field"
-        style={{ minHeight: 100, resize: "vertical" }}
-        placeholder="Describe your solution"
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        maxLength={10000}
-        required
-      />
-      <textarea
-        className="field"
-        style={{ minHeight: 60, resize: "vertical" }}
-        placeholder="Cost vs. benefits (optional)"
-        value={costVsBenefits}
-        onChange={(e) => setCostVsBenefits(e.target.value)}
-        maxLength={5000}
-      />
-      <StagedAttachments parentType="solution" draftKey={draftKey} disabled={submitting} onBusyChange={setAttachmentsBusy} />
-      <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
-        <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
-        Submit anonymously
-      </label>
-      {error && (
-        <p className="muted" style={{ color: "var(--danger)" }}>
-          {error}
-        </p>
-      )}
-      <div style={{ display: "flex", gap: 10 }}>
-        <button type="submit" className="btn btn-primary" disabled={submitting || attachmentsBusy}>
-          {submitting ? "Submitting…" : attachmentsBusy ? "Waiting for attachments…" : "Submit solution"}
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>
-          Cancel
-        </button>
+    <form
+      onSubmit={onSubmit}
+      className="card card-pad reveal form-lock"
+      aria-busy={lock.locked}
+      style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}
+    >
+      <div className="form-lock-body" inert={lock.locked}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>Propose a solution</h3>
+        <textarea
+          className="field"
+          style={{ minHeight: 100, resize: "vertical" }}
+          placeholder="Describe your solution"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          maxLength={10000}
+          required
+        />
+        <textarea
+          className="field"
+          style={{ minHeight: 60, resize: "vertical" }}
+          placeholder="Cost vs. benefits (optional)"
+          value={costVsBenefits}
+          onChange={(e) => setCostVsBenefits(e.target.value)}
+          maxLength={5000}
+        />
+        <StagedAttachments parentType="solution" draftKey={draftKey} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+        <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
+          <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
+          Submit anonymously
+        </label>
+        {error && (
+          <p className="muted" role="alert" style={{ color: "var(--danger)" }}>
+            {error}
+          </p>
+        )}
       </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled}>
+          <PrimaryButtonLabel state={button} />
+        </button>
+        <span className="form-lock-body" inert={lock.locked}>
+          <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </button>
+        </span>
+      </div>
+      <FormLockOverlay locked={lock.locked} />
     </form>
   );
 }

@@ -110,7 +110,15 @@ async function main() {
     // Run the suites against the ephemeral DB, as innobox_app. Sequential; any failure fails.
     // The commands are static (no interpolated input), so a shell string is safe here and
     // avoids the shell+args-array deprecation warning.
-    const childEnv = { ...process.env, DATABASE_URL: ephAppUrl, INNOBOX_DB_E2E: "1" };
+    // TEST_OWNER_DATABASE_URL: the owner connection to THIS throwaway database only — used by the
+    // audit-chain tamper tests, which disable a guard trigger inside a rolled-back transaction to
+    // prove "Verify integrity" catches the tampering. Never set for any other database.
+    const childEnv = {
+      ...process.env,
+      DATABASE_URL: ephAppUrl,
+      TEST_OWNER_DATABASE_URL: adminUrl.replace(/\/[^/]*$/, `/${ephName}`),
+      INNOBOX_DB_E2E: "1",
+    };
     const suites = [
       ["@innobox/web", "pnpm --filter @innobox/web run test:db:run"],
       ["@innobox/worker", "pnpm --filter @innobox/worker run test:db"],

@@ -61,3 +61,11 @@ export * from "./system-banner.js";
 // §12.1 per-event notification preferences: the three follower-event toggles, the mute, and the
 // PATCH parser. Client-safe, also exposed at `@innobox/shared/notification-preferences`.
 export * from "./notification-preferences.js";
+
+// §14.10 identity sync diagnostics: the SCIM last-request settings key + throttle, and the pure
+// explanation selection. Client-safe, also exposed at `@innobox/shared/identity-sync`.
+export * from "./identity-sync.js";
+
+// §15 audit hash chain: the canonical serialization v1, row-hash recomputation and the
+// verification state machine behind "Verify integrity". Server-only (node:crypto).
+export * from "./audit-chain.js";

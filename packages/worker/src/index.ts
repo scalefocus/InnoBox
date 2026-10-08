@@ -12,6 +12,7 @@ import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
 import { parseEmailTokenKey, type GraphMailEnv } from "@innobox/shared";
 import { createScimRouter } from "./scim/router.js";
+import { createScimLastRequestStamper } from "./scim/last-request.js";
 import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
@@ -74,7 +75,8 @@ app.get("/metrics", createMetricsHandler());
 // ahead of the limiter so it sees the auth outcome; a limiter 429 is deliberately not recorded.
 app.use("/scim/v2", createScimEventRecorder(pool));
 app.use("/scim/v2", createScimRateLimit());
-app.use("/scim/v2", createScimRouter(pool, { bearerToken: scimToken }));
+// §14.10: bearer-accepted SCIM requests stamp scim_last_request_at (throttled, fire-and-forget).
+app.use("/scim/v2", createScimRouter(pool, { bearerToken: scimToken, onAccepted: createScimLastRequestStamper(pool) }));
 
 // Start the server before leader election (health checks must work immediately).
 const server = app.listen(port, () => {

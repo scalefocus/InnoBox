@@ -1136,9 +1136,10 @@ export type AssignResult =
   | { status: "unknown_user" }
   | { status: "terminal_status" };
 
-async function applyChallengeAssigneeChange(
+/** Exported for the GDPR erasure hand-over (§3), whose every move is an ordinary §7.3 change. */
+export async function applyChallengeAssigneeChange(
   client: PoolClient,
-  admin: Viewer,
+  admin: Pick<Viewer, "userId">,
   current: { id: string; assignee_id: string | null },
   assigneeUserId: string | null,
 ): Promise<void> {

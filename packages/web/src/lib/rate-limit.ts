@@ -5,7 +5,7 @@
 // is operational telemetry, not the audit log.)
 import { resolveRateLimitMultiplier } from "@innobox/shared";
 
-export type RateLimitBucket = "create" | "comment" | "upload" | "search" | "mutation";
+export type RateLimitBucket = "create" | "comment" | "upload" | "search" | "mutation" | "csp-report";
 
 /** §2.4 limits: `limit` requests per `windowMs`, refilled continuously. */
 export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: number }> = {
@@ -14,6 +14,9 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   upload: { limit: 60, windowMs: 60 * 60 * 1000 }, // single-shot or chunked initiate
   search: { limit: 120, windowMs: 60 * 1000 }, // search, autocomplete, the §6.1 similarity check
   mutation: { limit: 120, windowMs: 60 * 1000 }, // every other state-changing request
+  // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
+  // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
+  "csp-report": { limit: 120, windowMs: 60 * 1000 },
 };
 
 /** RATE_LIMIT_MULTIPLIER scales every limit for local dev and e2e; a production build ignores it
