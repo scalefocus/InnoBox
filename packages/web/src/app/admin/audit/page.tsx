@@ -4,6 +4,7 @@
 // meaningful fields (never the JSON payload), a From/To date range, infinite scroll in pages of
 // 100, and a CSV export of exactly what is on screen. Platform-admin-only, gated in-page against
 // /api/me (the API route is the real gate).
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AUDIT_CATEGORIES, AUDIT_CATEGORY_LABEL, AUDIT_PAGE_SIZE, type AuditCategory } from "@innobox/shared/audit-browser";
 import { cachedGet } from "@/lib/ui";
@@ -25,6 +26,8 @@ interface AuditEntry {
   targetType: string | null;
   targetId: string | null;
   targetNumber: string | null;
+  /** Set only for a challenge/solution target that still resolves; otherwise plain text. */
+  targetHref: string | null;
   before: unknown;
   after: unknown;
   createdAt: string;
@@ -32,7 +35,6 @@ interface AuditEntry {
 
 interface AuditPage {
   rows: AuditEntry[];
-  total: number;
   hasMore: boolean;
 }
 
@@ -82,7 +84,6 @@ function AuditBrowser() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
-  const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -116,7 +117,6 @@ function AuditBrowser() {
           if (seq !== requestSeq.current) return;
           const page = j as unknown as AuditPage;
           setRows((cur) => (offset === 0 || !cur ? page.rows : [...cur, ...page.rows]));
-          setTotal(page.total);
           setHasMore(page.hasMore);
         })
         .catch(() => {
@@ -238,7 +238,9 @@ function AuditBrowser() {
       {rows && rows.length > 0 && (
         <>
           <p className="sub mono" style={{ marginBottom: 10 }}>
-            {total.toLocaleString()} entr{total === 1 ? "y" : "ies"}
+            {/* No full count: the query is bounded by its page LIMIT; "+" means more to scroll. */}
+            {rows.length.toLocaleString()}
+            {hasMore ? "+" : ""} entr{rows.length === 1 && !hasMore ? "y" : "ies"}
           </p>
           <div className="rows">
             {rows.map((r) => (
@@ -248,7 +250,22 @@ function AuditBrowser() {
                   <span className="sub grow">
                     {r.actorDisplayName ?? "—"}
                     {r.targetType && ` · ${r.targetType}`}
-                    {r.targetNumber ? ` ${r.targetNumber}` : r.targetId ? ` ${r.targetId}` : ""}
+                    {/* A target that still resolves links to it; a deleted one (or any other
+                        target type) stays plain text. */}
+                    {r.targetHref && r.targetNumber ? (
+                      <>
+                        {" "}
+                        <Link href={r.targetHref} className="mono">
+                          {r.targetNumber}
+                        </Link>
+                      </>
+                    ) : r.targetNumber ? (
+                      ` ${r.targetNumber}`
+                    ) : r.targetId ? (
+                      ` ${r.targetId}`
+                    ) : (
+                      ""
+                    )}
                   </span>
                   <span className="sub mono">{fmt.dateTime(r.createdAt)}</span>
                   {(r.before != null || r.after != null) && (

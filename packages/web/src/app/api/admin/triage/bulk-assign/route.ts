@@ -1,6 +1,7 @@
 // POST /api/admin/triage/bulk-assign (INNOBOX_SPEC.md §14.1): bulk assign/unassign over a
-// selection — each item audited individually via setChallengeAssignee.
-import { requireUser } from "@/lib/auth";
+// selection — each item audited individually via setChallengeAssignee and notified exactly like
+// the detail-page assignment (§12.1 event 7, incl. the auto-follow).
+import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, bulkAssign } from "../store";
 import { parseBulkAssignBody } from "../validation";
@@ -23,7 +24,7 @@ async function handlePOST(req: Request): Promise<Response> {
   const parsed = parseBulkAssignBody(body);
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
-  const outcomes = await bulkAssign(pool, admin, parsed.value.numbers, parsed.value.assigneeUserId);
+  const outcomes = await bulkAssign(pool, admin, parsed.value.numbers, parsed.value.assigneeUserId, resolveRolesForUser);
   return Response.json({ outcomes });
 }
 

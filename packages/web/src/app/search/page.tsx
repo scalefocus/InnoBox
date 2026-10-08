@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { itemHref } from "@/lib/deep-link";
 
 interface ChallengeResult {
   number: string;
@@ -108,7 +109,7 @@ function SearchPageInner() {
           {challenges !== null && challenges.length > 0 && (
             <div className="rows" style={{ marginBottom: 26 }}>
               {challenges.map((c) => (
-                <Link key={c.number} href={`/challenges/${c.number.replace("CH-", "")}`} className="row">
+                <Link key={c.number} href={itemHref(c.number)} className="row">
                   <span className="chip mono">{c.number}</span>
                   <span className={statusPillClass(c.status)}>{CHALLENGE_STATUS_LABEL[c.status] ?? c.status}</span>
                   <span className="ttl grow">{c.title}</span>
@@ -127,7 +128,7 @@ function SearchPageInner() {
           {solutions !== null && solutions.length > 0 && (
             <div className="rows">
               {solutions.map((s) => (
-                <Link key={s.number} href={`/challenges/${s.challengeNumber.replace("CH-", "")}`} className="row">
+                <Link key={s.number} href={itemHref(s.challengeNumber, s.number)} className="row">
                   <span className="chip mono">{s.number}</span>
                   <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
                   <span className="ttl grow">{s.description}</span>

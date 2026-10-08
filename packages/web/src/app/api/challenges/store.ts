@@ -990,12 +990,16 @@ export async function setSolutionStatus(
             `update challenges set status = 'solved', resolved_at = coalesce(resolved_at, now()), updated_at = now(), status_changed_at = now() where id = $1`,
             [current.challenge_id],
           );
+          // Invariant 6: audited `from → to` like every transition. The cascade is part of the
+          // actor's one action, so it carries that action's mode: an admin override that set
+          // `implemented` makes the cascade rows overrides too; an enforced move does not.
           await appendAudit(client, {
             actorUserId: actor.userId,
             action: "challenge.status_changed",
             targetType: "challenge",
             targetId: current.challenge_id,
-            after: { status: "solved", trigger: "auto_close", solutionId: current.id },
+            before: { status: current.challenge_status },
+            after: { status: "solved", override: mode === "override", trigger: "auto_close", solutionId: current.id },
           });
 
           const toClose = siblingsToAutoClose(
@@ -1011,7 +1015,7 @@ export async function setSolutionStatus(
               targetType: "solution",
               targetId: siblingId,
               before: { status: before },
-              after: { status: "not_selected", trigger: "auto_close", implementedSolutionId: current.id },
+              after: { status: "not_selected", override: mode === "override", trigger: "auto_close", implementedSolutionId: current.id },
             });
           }
           autoClose = {
@@ -1047,6 +1051,25 @@ export async function setSolutionStatus(
 
 export type ToggleLikeResult = { status: "ok"; liked: boolean; count: number } | { status: "not_found" } | { status: "frozen" };
 
+/** §8.3: a solved challenge freezes likes on itself and its solutions — neither a like nor an
+ *  unlike lands. Reads the parent challenge's status under FOR SHARE so a concurrent auto-close
+ *  (which updates the challenge row) cannot slip in between this check and the caller's write.
+ *  Shared by the POST toggle and the DELETE unlike; call inside the write transaction. */
+export async function lockLikeParent(
+  client: PoolClient,
+  parentType: "challenge" | "solution",
+  parentId: string,
+): Promise<"open" | "frozen" | "not_found"> {
+  const { rows } = await client.query<{ status: string }>(
+    parentType === "challenge"
+      ? `select c.status from challenges c where c.id = $1 for share`
+      : `select c.status from solutions s join challenges c on c.id = s.challenge_id where s.id = $1 for share of c`,
+    [parentId],
+  );
+  if (!rows[0]) return "not_found";
+  return areLikesFrozen(rows[0].status as ChallengeStatus) ? "frozen" : "open";
+}
+
 export async function toggleLike(
   pool: Pool,
   viewer: Viewer,
@@ -1057,17 +1080,8 @@ export async function toggleLike(
   if (!visible) return { status: "not_found" };
 
   return inTransaction(pool, async (client) => {
-    // §8.3: a solved challenge freezes likes on itself and its solutions — neither a like nor an
-    // unlike lands. Read under FOR SHARE so a concurrent auto-close (which updates the challenge
-    // row) cannot slip in between this check and the write below.
-    const { rows: parentRows } = await client.query<{ status: string }>(
-      parentType === "challenge"
-        ? `select c.status from challenges c where c.id = $1 for share`
-        : `select c.status from solutions s join challenges c on c.id = s.challenge_id where s.id = $1 for share of c`,
-      [parentId],
-    );
-    if (!parentRows[0]) return { status: "not_found" };
-    if (areLikesFrozen(parentRows[0].status as ChallengeStatus)) return { status: "frozen" };
+    const gate = await lockLikeParent(client, parentType, parentId);
+    if (gate !== "open") return { status: gate };
 
     const { rows: existing } = await client.query(
       `select 1 from likes where user_id = $1 and parent_type = $2 and parent_id = $3`,
