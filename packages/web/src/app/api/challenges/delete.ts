@@ -19,6 +19,7 @@ import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import type { StorageClient } from "../../../lib/storage";
 import type { Viewer } from "./store";
+import { unpinOnDelete, unpinOnStatusChange } from "./featured-unpin";
 
 export interface DeleteDeps {
   pool: Pool;
@@ -36,6 +37,8 @@ export interface CascadeCounts {
   notifications: number;
   outbox: number;
   uploadSessions: number;
+  /** §12.4 channel-webhook deliveries targeting the subtree (any status). */
+  webhookDeliveries: number;
 }
 
 export type DeleteChallengeResult = { status: "ok"; counts: CascadeCounts } | { status: "not_found" };
@@ -82,6 +85,12 @@ async function deleteChildren(
     params,
   );
 
+  // §12.4: every webhook delivery row targeting the subtree (polymorphic entity id, no FK).
+  const webhookDeliveries = await client.query(
+    `delete from webhook_deliveries where (entity_type = 'challenge' and entity_id = any($1::uuid[])) or (entity_type = 'solution' and entity_id = any($2::uuid[]))`,
+    params,
+  );
+
   return {
     counts: {
       comments: comments.rowCount ?? 0,
@@ -89,6 +98,7 @@ async function deleteChildren(
       follows: follows.rowCount ?? 0,
       attachments: attachments.rowCount ?? 0,
       uploadSessions: sessions.rowCount ?? 0,
+      webhookDeliveries: webhookDeliveries.rowCount ?? 0,
     },
     purge: {
       objectKeys: attachments.rows.map((r) => r.object_key),
@@ -155,6 +165,8 @@ export async function deleteChallenge(deps: DeleteDeps, admin: Viewer, number: s
     // A challenge's scope covers its own link plus every `#SOL-<n>` link beneath it.
     const notifications = await deleteNotifications(client, notificationLinkScope({ challengeNumber: challenge.number }));
 
+    // §13.2: a featured challenge's pin is closed out in the audit trail before the row goes.
+    await unpinOnDelete(client, admin.userId, challenge.id);
     await client.query(`delete from solutions where challenge_id = $1`, [challenge.id]);
     await client.query(`delete from challenges where id = $1`, [challenge.id]);
 
@@ -224,6 +236,7 @@ export async function deleteSolution(deps: DeleteDeps, admin: Viewer, number: st
     await client.query(`delete from solutions where id = $1`, [solution.id]);
 
     if (revertTo !== null) {
+      await unpinOnStatusChange(client, admin.userId, solution.challenge_id, revertTo); // §13.2 (solved → valid keeps it)
       await client.query(
         `update challenges set status = $2, resolved_at = null, updated_at = now(), status_changed_at = now() where id = $1`,
         [solution.challenge_id, revertTo],

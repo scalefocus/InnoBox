@@ -15,6 +15,7 @@ import { StagedAttachments } from "@/components/StagedAttachments";
 import { uploadFileInChunks } from "@/lib/chunked-upload";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
+import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -83,6 +84,11 @@ interface ChallengeDetail {
   canWithdraw: boolean;
   canResubmit: boolean;
   canDelete: boolean;
+  /** §13.2 Home pin: `featured` for everyone; the control + provenance only via `canFeature`. */
+  featured: boolean;
+  canFeature: boolean;
+  featuredBy?: string;
+  featuredAt?: string;
   impactAreaId: string;
   solutions: SolutionItem[];
   attachments: AttachmentItem[];
@@ -582,6 +588,16 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               )}
             </div>
           </div>
+        )}
+
+        {challenge.canFeature && (
+          <FeatureOnHomeControl
+            challengeDigits={chNum}
+            featured={challenge.featured}
+            featuredBy={challenge.featuredBy}
+            featuredAt={challenge.featuredAt}
+            onChanged={onChanged}
+          />
         )}
 
         {challenge.canDelete && (

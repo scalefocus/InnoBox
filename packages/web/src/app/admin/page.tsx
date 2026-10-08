@@ -13,6 +13,7 @@ import { CurrentlyOnline } from "./CurrentlyOnline";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { GdprCard } from "./GdprCard";
 import { IdentitySyncCard } from "./IdentitySyncCard";
+import { ChannelWebhooksCard } from "./ChannelWebhooksCard";
 
 const NAMESPACES_URL = "/api/admin/namespaces";
 const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
@@ -20,7 +21,7 @@ const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
 // The admin console's collapsible cards remember their open/closed state per browser
 // (localStorage) so a chosen layout survives reloads. Default: everything expanded.
 const ADMIN_CARDS_STORAGE_KEY = "innobox:admin-cards-open";
-const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true, identity: true };
+const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, webhooks: true, presence: true, namespaces: true, mappings: true, identity: true };
 const ADMIN_CARD_IDS = Object.keys(DEFAULT_ADMIN_CARDS);
 
 function loadAdminCardState(): Record<string, boolean> {
@@ -175,6 +176,7 @@ function AdminConsole() {
   const [onlineTotal, setOnlineTotal] = useState<number | null>(null);
   const [bannerActive, setBannerActive] = useState(false);
   const [identitySummary, setIdentitySummary] = useState<string | null>(null);
+  const [webhooksSummary, setWebhooksSummary] = useState("…");
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = (message: string) => {
@@ -231,6 +233,16 @@ function AdminConsole() {
         onToggle={() => toggleCard("banner")}
       >
         <SystemBannerCard onNotify={notify} onActiveChange={setBannerActive} />
+      </AdminCard>
+
+      <AdminCard
+        id="webhooks"
+        title="Channel webhooks"
+        summary={webhooksSummary}
+        open={openCards.webhooks ?? true}
+        onToggle={() => toggleCard("webhooks")}
+      >
+        <ChannelWebhooksCard onNotify={notify} onCount={setWebhooksSummary} />
       </AdminCard>
 
       <AdminCard

@@ -27,11 +27,13 @@ import {
   healthzHandler,
   recordNotificationSweep,
   recordScanSweep,
+  recordWebhookSweep,
   setLeader,
 } from "./metrics.js";
 import { createScimRateLimit, parseTrustProxy } from "./ratelimit.js";
 import { createScimEventRecorder, trimSystemEvents } from "./system-log/record.js";
 import { runSystemLogAlertSweep } from "./system-log/alert.js";
+import { startWebhookSweeps } from "./webhooks/deliver.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -147,6 +149,7 @@ let scanInterval: NodeJS.Timeout | null = null;
 let draftGcInterval: NodeJS.Timeout | null = null;
 let presenceRollupInterval: NodeJS.Timeout | null = null;
 let systemLogAlertInterval: NodeJS.Timeout | null = null;
+let stopWebhookSweeps: (() => void) | null = null;
 
 const leaderElection = startLeaderElection(dbUrl, {
   lockKey: WORKER_LEADER_LOCK_KEY,
@@ -193,6 +196,10 @@ const leaderElection = startLeaderElection(dbUrl, {
     };
     void runSystemLogAlert();
     systemLogAlertInterval = setInterval(runSystemLogAlert, 5 * 60 * 1000); // every 5 minutes
+
+    // §12.4 channel-webhook delivery sweep (30 s) + 30-day trim (hourly). Pure DB + outbound
+    // HTTPS, so it too runs before the Entra-credential check below.
+    stopWebhookSweeps = startWebhookSweeps(pool, { onSweep: recordWebhookSweep });
 
     // Run reconciliation immediately on leadership acquisition (only if Entra creds present).
     const tenantId = process.env.ENTRA_TENANT_ID;
@@ -332,6 +339,8 @@ const leaderElection = startLeaderElection(dbUrl, {
       clearInterval(systemLogAlertInterval);
       systemLogAlertInterval = null;
     }
+    stopWebhookSweeps?.();
+    stopWebhookSweeps = null;
     console.log(JSON.stringify({ level: "info", msg: "lost leader lock" }));
   },
 });
@@ -345,6 +354,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     if (draftGcInterval) clearInterval(draftGcInterval);
     if (presenceRollupInterval) clearInterval(presenceRollupInterval);
     if (systemLogAlertInterval) clearInterval(systemLogAlertInterval);
+    stopWebhookSweeps?.();
     await leaderElection.stop();
     await pool.end();
     server.close(() => process.exit(0));

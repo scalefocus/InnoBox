@@ -69,3 +69,9 @@ export * from "./identity-sync.js";
 // §15 audit hash chain: the canonical serialization v1, row-hash recomputation and the
 // verification state machine behind "Verify integrity". Server-only (node:crypto).
 export * from "./audit-chain.js";
+
+// §12.4 channel webhooks: vocabulary, URL form rules + hint, the org-visible leak guard, both
+// payload formats, the retry schedule and the SSRF address classifier. Client-safe, also exposed
+// at `@innobox/shared/webhooks`. The transport is server-only at `@innobox/shared/webhook-send`.
+export * from "./webhooks.js";
+export * from "./webhook-address.js";

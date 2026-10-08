@@ -14,6 +14,13 @@ test("parseSettingsPatch: accepts attachmentLimits only", () => {
   if (parsed.ok) assert.deepEqual(parsed.value, { attachmentLimits: { maxPerItem: 3, maxUploadSizeMb: 10, chunkSizeMb: 5 } });
 });
 
+test("parseSettingsPatch: featuredLimit is an integer 1–6 and may be sent alone (§14.3)", () => {
+  const parsed = parseSettingsPatch({ featuredLimit: 4 });
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.deepEqual(parsed.value, { featuredLimit: 4 });
+  for (const bad of [0, 7, 2.5, "3", null]) assert.equal(parseSettingsPatch({ featuredLimit: bad }).ok, false, String(bad));
+});
+
 test("parseSettingsPatch: rejects an invalid dateFormat", () => {
   assert.equal(parseSettingsPatch({ dateFormat: "iso" }).ok, false);
 });
