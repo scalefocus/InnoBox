@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.9 — draft for review** (2026-10-08; v0.2 added the UI and CI/CD
+> Status: **v0.10 — draft for review** (2026-10-08; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -20,7 +20,23 @@
 > each shipped as its own minor release in this order: rate limiting for search and SCIM (§2.4), the system
 > log (§14.7), audit browser filters + CSV export (§15), the system banner (§14.6),
 > "new since your last visit" markers (§13.1), the duplicate warning on submit (§6.1),
-> per-event notification preferences and coalesced comment notifications (§12.1)).
+> per-event notification preferences and coalesced comment notifications (§12.1); v0.10
+> added a second batch of features, each again shipped as its own minor release —
+> security and admin operations: a CSP mode switch with a violation-report sink (§2.4), a
+> full Auth.js cookie sweep on sign-out and sign-in relinking of SCIM-provisioned accounts
+> (§3), erasure with hand-over of open assignments (§3), a hash-chained, verifiable audit
+> log (§15), and identity-sync diagnostics (§14.10); UX: the shared popover treatment
+> (§2.2), a Markdown subset for descriptions and comments (§6.3), the submission lock
+> (§6.4), a comment emoji picker (§10.2), and a cards/list toggle on the Challenges
+> gallery (§13.1); curation: duplicate linking (§7.4), featured challenges on Home
+> (§13.2), and the "Committee pick" endorsement (§13.10); leaderboard and engagement: a
+> leaderboard opt-out and leader badges on avatars (§13.3, §13.6), star ratings on
+> solutions with a "Top rated" sort (§8.4), "Challenges you might like" (§13.11), and
+> engagement analytics with a public views sparkline (§14.8, §14.9); collaboration:
+> co-authors (§6.5), a private triage discussion between author and review team (§7.5),
+> and per-namespace channel webhooks to Teams or any JSON receiver (§12.4); and direct
+> messages (§13.9), which reverse the earlier "no direct-message channel" position
+> (§20)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -69,8 +85,16 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
 - **`packages/web`** — Next.js (App Router) **standalone** server: UI + REST API +
   admin panel + OIDC (Auth.js/Entra). **Never Vercel.**
 - **`packages/worker`** — standalone Node service: SCIM 2.0 endpoints, Entra
-  reconciliation, ClamAV scan pipeline, notification dispatch (outbox). **Singleton,
-  leader-locked** via Postgres advisory lock.
+  reconciliation, ClamAV scan pipeline, notification dispatch (outbox), channel-webhook
+  delivery (§12.4). **Singleton, leader-locked** via Postgres advisory lock. Its
+  leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
+  the system-log alert (every 5 min, §14.7), the **hourly housekeeping sweep** (presence
+  rollup §14.5, system-log trim §14.7, challenge-view rollup and purge §14.8,
+  direct-message retention §13.9, webhook-delivery trim §12.4, stale upload sessions
+  §11), the **hourly leader sweep** (leader badges §13.3 and the rating prior §8.4, also
+  run once on acquiring leadership), and the **60-second related-challenges tick**
+  (§13.11). Pure-DB sweeps are scheduled before the Entra-credential check, so a missing
+  Graph/S3 configuration never skips them.
 - **`packages/shared`** — domain types, RBAC resolution, state-machine logic,
   validation.
 - **Postgres** — metadata, `tsvector` FTS, append-only `audit_log`.
@@ -91,8 +115,10 @@ Cross-cutting requirements:
 - Secrets via env / mounted files only; never in images or the repo.
 - Structured JSON logs; health `/healthz`, readiness `/readyz`, Prometheus `/metrics`
   on **both** web and worker. `/metrics` emits the Prometheus text exposition format:
-  `innobox_build_info{version,service}`, `innobox_up`, process memory/uptime gauges, and
-  (worker) `innobox_worker_leader` plus notification- and scan-sweep counters. When
+  `innobox_build_info{version,service}`, `innobox_up`, process memory/uptime gauges,
+  (web) `innobox_csp_violations_total{directive}` (§2.4), and (worker)
+  `innobox_worker_leader` plus notification- and scan-sweep counters and
+  `innobox_webhook_deliveries_total{outcome}` (§12.4). When
   `METRICS_TOKEN` is set, `/metrics` requires `Authorization: Bearer <token>` (401 otherwise),
   compared in **constant time**. When it is unset, `/metrics` is open **only outside
   production** (local dev); in a production build (`NODE_ENV=production`) an unset token
@@ -115,20 +141,22 @@ Cross-cutting requirements:
    OIDC token claims** (Entra group-claim overage).
 2. **All access is auth-required and strictly visibility-filtered.** A
    namespace-restricted challenge must never leak through lists, search,
-   autocomplete, counts, KPIs, leaderboards, or notifications to users outside its
-   namespace (§4.3). The **sole** unauthenticated surface is the Home route (`/`),
+   autocomplete, counts, KPIs, leaderboards, notifications, or outbound channel
+   webhooks (§12.4) to users outside its namespace (§4.3). The **sole** unauthenticated surface is the Home route (`/`),
    which doubles as the sign-in landing: while unauthenticated it renders a static
    welcome and the sign-in control **only** — no challenge/solution/user data, KPIs,
    counts, spotlights, search, or notifications are fetched or shown (§2.2, §13.2).
 3. **Anonymity is enforced at the API layer, everywhere** — lists, details, search,
-   exports, e-mails, in-app notifications. The true identity is stored but is exposed
+   exports, e-mails, in-app notifications, triage threads (§7.5), and webhook payloads
+   (§12.4). The true identity is stored but is exposed
    only through the audited admin **reveal** action (§9).
 4. **Attachments are served only through the authenticated fetch gateway** — no
    direct object-store URLs — and become visible only after a clean ClamAV scan (§11).
    Attachment rows are permanent tombstones; the **sole** exception is the
    platform-admin delete cascade (§10.3), which removes them with their parent.
 5. **`audit_log` is append-only.** App DB role lacks UPDATE/DELETE; a trigger enforces
-   it too (§15).
+   it too (§15); rows written since the chain migration are SHA-256 hash-chained by a
+   database trigger and verifiable from the audit browser (§15).
 6. **Status transitions follow the enforced state machines** (§7.2, §8.2) for
    committee members and assignees; namespace/platform admins may set any status
    freely — every transition, enforced or override, is audited with `from → to` and
@@ -190,14 +218,16 @@ including theme-aware scrollbars and form controls. Pinned values:
   inline script before paint whereas the button's `aria-checked` is only correct after
   mount, so without it the knob would animate across on every dark-mode page load. It
   applies the same transform, so hydration merely swaps which rule matches and nothing
-  visibly moves. Two switches exist in v1: the topbar
-  **theme** toggle (☀️/🌙 — its track stays `--surface-2` in both states, because the
-  whole page already reports which theme is active) and the profile **e-mail
-  notifications** switch (§13.5). A *preference* switch, whose state nothing else on the
-  page reveals, additionally fills its track with `--accent` when on and carries a visible
-  `On`/`Off` word to the left of the pill. **Travel direction is per-switch, not global:**
-  the theme toggle slides right for dark (the knob follows the page getting darker), while
-  the e-mail preference slides **left for on and right for off**, so its knob comes to rest
+  visibly moves. The switches in v1 are the topbar **theme** toggle (☀️/🌙 — its track
+  stays `--surface-2` in both states, because the whole page already reports which theme
+  is active) and the **preference** switches: on the profile (§13.5) the e-mail
+  notifications switch, the three §12.1 per-event toggles and *Show me on leaderboards*
+  (§13.3), and on the Administration console each channel webhook's **enabled** switch
+  (§12.4). A *preference* switch, whose state nothing else on the page reveals,
+  additionally fills its track with `--accent` when on and carries a visible `On`/`Off`
+  word to the left of the pill. **Travel direction is per-switch, not global:** the theme
+  toggle slides right for dark (the knob follows the page getting darker), while every
+  preference switch slides **left for on and right for off**, so its knob comes to rest
   beside the `On`/`Off` word rather than away from it. This is a deliberate divergence from
   the more common on-is-right convention; a switch therefore declares its own direction and
   never inherits one.
@@ -212,13 +242,15 @@ including theme-aware scrollbars and form controls. Pinned values:
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with Profile / Quick start / What's new /
-    Sign out) in the sidebar foot, and the topbar search + notification bell +
-    theme toggle — plus the §14.6 **system banner** pill between search and bell
-    while one is active.
+    Sign out) in the sidebar foot, and the topbar search + **messages icon** (§13.9) +
+    notification bell + theme toggle (the messages icon sits immediately left of the
+    bell, in the same round button with the same unread-badge treatment), plus the
+    §14.6 **system banner** pill between search and the messages icon while one is
+    active.
   - **Unauthenticated** — the wordmark and version colophon only, **no nav links**,
     and a primary **"Sign in with Entra ID"** button occupying the exact sidebar-foot
     slot the account menu uses when signed in; the topbar shows only the theme toggle
-    (search and bell are hidden). The button starts Entra OIDC sign-in and honors a
+    (search, messages and bell are hidden). The button starts Entra OIDC sign-in and honors a
     `callbackUrl` (default `/`). The accompanying main area is the §13.2 landing.
   - **Loading** — neutral (no nav, no foot control) until the session resolves, so
     the shell never flashes the wrong state.
@@ -228,6 +260,35 @@ including theme-aware scrollbars and form controls. Pinned values:
 - **Breadcrumbs:** a section's sub-pages render a breadcrumb back to the section root
   above the page title, via a shared component — currently the Administration
   console's sub-pages (§14). Shown only once the viewer passes the page's access gate.
+- **Popovers — one shared treatment.** Every popover — any floating panel anchored to
+  a trigger, opened and closed in place (menus, dropdown result lists, hover/focus
+  cards, pickers) — carries the shared `.menu-pop` class and nothing bespoke:
+  - **Open:** a **~120 ms** ease-out **fade + scale** (opacity 0 → 1, scale 0.96 → 1,
+    with a ~6 px travel toward the trigger; each popover sets `--menu-pop-y` and
+    `transform-origin` for the side it opens on). It plays **once, on mount**. A popover
+    whose content refreshes while open (e.g. autocomplete results) does not replay it.
+  - **Close:** **instant** (unmount). There is no exit animation.
+  - **`prefers-reduced-motion: reduce`:** no animation at all, open or close.
+  - **Chrome:** `--surface` fill, `--line-strong` border, `--radius-sm`, `--shadow`,
+    5 px inner padding, rounded per-row hover. This is the account-menu look §7.3
+    already calls the standard popover chrome.
+  - **In scope today:** the account menu, the notification panel (desktop), the
+    messages panel (desktop, §13.9), the §7.3 assignee search on the challenge detail
+    page, the §14.1 triage assignee pickers (filter-by-assignee, bulk-assign, per-row
+    assign), the §13.8 directory card, the **topbar search autocomplete** (§13.4), and
+    the **comment emoji picker** (§10.2). Any future popover joins this list by
+    construction.
+  - **Explicit exceptions:** native `<select>` lists and `window.confirm` dialogs
+    (OS-drawn), the mobile nav drawer, and the mobile full-screen notification and
+    messages **sheets**. The sheets keep their own slide-up (~220 ms, also silenced
+    under reduced motion) because they have no anchor to scale from. Inline expanders
+    (the §10.3 danger zone, admin card collapse) are not popovers.
+- **Submission lock:** the author submit paths (challenge form, solution form,
+  Resubmit) cover their form with a `.form-lock-scrim` while the request is in flight —
+  `--surface` at ~60% opacity, `cursor: progress`, no new token; one shared component
+  serves all three (§6.4).
+- **Segmented view toggles** reuse the existing `.sort-toggle` look, each option
+  `aria-pressed` — e.g. the Challenges gallery's **Cards | List** toggle (§13.1).
 - **Identity:** InnoBox has its **own wordmark/mark** — the official `innobox`
   logotype (deep navy, with the terminal `o` rendered as an orange box). The sidebar
   renders the wordmark image from `packages/web/public/brand`, with two theme variants
@@ -250,8 +311,12 @@ including theme-aware scrollbars and form controls. Pinned values:
   wordmark; `isPublicPath` in `routeAccess.ts`, §5 of `ENTRA_AUTH_SPEC.md`), so an
   always-unauthenticated scraper can fetch it — a static brand asset, no data.
 - Dates/times render through the shared client-side formatter honoring the EU/US
-  platform setting (§2); rich text is not required for v1 (plain text with line
-  breaks).
+  platform setting (§2).
+- User-written long text — challenge and solution descriptions, cost vs benefits,
+  comments, and triage-thread messages (§7.5) — is a **Markdown subset** rendered by one
+  shared renderer (§6.3); titles and every other field stay plain text. **Direct
+  messages (§13.9) are deliberately plain text** and never pass through the Markdown
+  renderer.
 
 **Attribution (removability rule).** InnoBox is released as open source under
 Apache-2.0 (§21). Apache-2.0 §6 grants no trademark rights, so the creating
@@ -369,6 +434,26 @@ The delivery pipeline, pinned:
   structured error naming the variable and exits non-zero). The structural guard above
   is unchanged and remains the actual protection; the refusal exists so a bad deploy env
   fails the `/readyz` smoke check instead of shipping a misconfiguration nobody noticed.
+  **`CSP_MODE=off` gets the same treatment** (§2.4): a production build that finds
+  it — or any value other than `enforce` / `report-only` / `off` — logs a fatal
+  structured error naming the variable and exits non-zero. A deployment can switch to
+  `report-only` while tuning a policy but can never ship without one. `report-only`
+  itself is permitted in production: it is a deliberate rollout state, visible in the
+  response headers.
+- **Deployment variables added in v0.10** — each documented, commented, with its
+  default, in `deploy/.env.example`, passed through by `docker-compose.yml`, and supplied
+  in production through the existing `innobox-deploy-env` secret file (no new Jenkins
+  credential ID):
+  - **`CSP_MODE`** (web) — `enforce` (default) | `report-only` | `off` (§2.4); `off` or
+    an unknown value refuses to start in a production build (above).
+  - **`WEBHOOK_ENC_KEY`** (web **and** worker) — 32 bytes, base64 (`openssl rand
+    -base64 32`); encrypts channel-webhook URLs at rest (§12.4). Unset or invalid →
+    webhooks are off. Compose passes `${WEBHOOK_ENC_KEY:-}` to both services.
+  - **`TRUST_PROXY`** — now read by **web** as well as the worker, for the CSP report
+    sink's per-IP key (§2.4); compose passes the same `${TRUST_PROXY:-1}` to `web`.
+  - **Egress:** web and worker need outbound HTTPS (443) to channel-webhook receivers
+    (Teams Workflows URLs are on `*.logic.azure.com` or
+    `*.environment.api.powerplatform.com`). No forward-proxy support in v1 (§12.4).
 
 ### §2.4 Web security baseline
 
@@ -385,7 +470,75 @@ these rules close the generic web-platform paths by which it could.
     The nonce is minted per request by the middleware and applied to the framework's own
     inline scripts and to the theme-init script, so **no** `'unsafe-inline'` script source
     exists. Local dev additionally allows `'unsafe-eval'` and the HMR websocket — never in
-    a production build.
+    a production build. In the `enforce` and `report-only` modes (below) the policy
+    also carries `report-uri /api/csp-report` and `report-to csp`, and the response
+    carries the companion `Reporting-Endpoints: csp="<origin>/api/csp-report"`, where
+    `<origin>` is the origin of `PUBLIC_BASE_URL` (falling back to `NEXTAUTH_URL`; in
+    local dev with neither set, the request's own origin). Both are sent because
+    browsers differ: the Reporting API (`report-to`) delivers only to `https`
+    endpoints and batches, while the legacy `report-uri` covers the rest.
+  - **CSP mode — `CSP_MODE=enforce | report-only | off`** (env, default **`enforce`**).
+    It governs **only** the page/API policy above. The §11 attachment-download policy
+    (`sandbox; default-src 'none'`) is a file-serving control and stays **enforced in
+    every mode**. Every other header in this list is also unaffected, including
+    `X-Frame-Options: DENY`, which keeps anti-framing in force.
+    - `enforce` — the policy is sent as `Content-Security-Policy` (the v0.9 behaviour).
+    - `report-only` — the identical policy (same directives, same per-request nonce,
+      same report endpoints) is sent as `Content-Security-Policy-Report-Only` instead,
+      and **no** enforcing `Content-Security-Policy` is sent. This is the rollout
+      switch for a policy change: violations are counted, nothing is blocked.
+    - `off` — neither header (nor `Reporting-Endpoints`) is sent. **Local dev and e2e
+      only:** a production build that finds `CSP_MODE=off` **refuses to start** (§2.3,
+      the same fail-loud startup check as `INNOBOX_DEV_AUTH`). An unrecognised value is
+      the same startup error in a production build, and is treated as `enforce`
+      (with a structured warning) outside production.
+
+    In every mode the middleware still mints the nonce and hands the policy to the
+    renderer on the request side. The framework's inline scripts and the theme-init
+    script therefore stay nonce-tagged, and switching modes needs no rebuild. (The
+    implementation verifies that the renderer still applies the nonce when the response
+    header is report-only.)
+  - **CSP violation reports — `POST /api/csp-report`** (the report sink). The **one
+    public API endpoint**: browsers send reports without a session, so it is on the
+    public-path allowlist (no session required) and **exempt from the CSRF `Origin`
+    check** below (a report carries no reliable `Origin` and changes no application
+    state). Its rules:
+    - **Accepts** `application/csp-report` (the legacy `report-uri` body,
+      `{"csp-report": {…}}`) and `application/reports+json` (the Reporting API body —
+      an array of reports, of which only `type: "csp-violation"` entries are counted;
+      others are ignored). `application/json` is accepted and parsed as either shape.
+      Any other content type → **415**; any method but `POST` → **405**.
+    - **Body cap 64 KB** (not the 1 MB JSON limit), enforced before the body is read
+      (from `Content-Length`, and by a running byte count when it is absent) → **413**.
+      A body that does not parse, or matches neither shape → **400**. Otherwise **204**
+      with an empty body.
+    - **Rate limit — per client IP, not per user** (there is no user): **120 requests
+      per minute**, token bucket, held in the web process like the other web buckets
+      (reset on restart; scaled by `RATE_LIMIT_MULTIPLIER` outside production only).
+      The client IP is the `X-Forwarded-For` entry selected by `TRUST_PROXY` with the
+      worker's semantics (below, *SCIM rate limiting*). When no address can be
+      determined (e.g. the org proxy forwards none), all such requests share one
+      bucket, which can only under-count. Exceeded → **429** with `Retry-After`.
+      Dropping a report only under-counts a metric, so 429s here are **not** logged
+      individually.
+    - **Never stores a report.** No body, URL, `blocked-uri`, sample or user agent is
+      persisted or logged — a report can carry fragments of page content and URLs. The
+      only effect is the Prometheus counter **`innobox_csp_violations_total{directive}`**
+      on the web `/metrics` (§2), incremented once per violation (a Reporting API
+      batch of *n* violations counts *n*). `directive` is the report's
+      `effective-directive` (legacy) or `body.effectiveDirective` (Reporting API),
+      lower-cased and mapped onto a **fixed allowlist**: `default-src`, `script-src`,
+      `script-src-elem`, `script-src-attr`, `style-src`, `style-src-elem`,
+      `style-src-attr`, `img-src`, `font-src`, `connect-src`, `media-src`, `object-src`,
+      `frame-src`, `child-src`, `worker-src`, `manifest-src`, `base-uri`,
+      `form-action`, `frame-ancestors`. Anything else becomes `other`, so an
+      unauthenticated caller can never mint new label values. The counter is in-process
+      (resets on restart), like every other web-tier counter.
+    - **Not recorded in the system log (§14.7)** — none of its responses, its 413 and
+      429 included — and **not audited**: an unauthenticated endpoint must not be a
+      write path into either table. The handler is deliberately not wrapped by the
+      system-log capture and never throws (every failure resolves to one of the
+      statuses above).
   - `Strict-Transport-Security: max-age=31536000` whenever `PUBLIC_BASE_URL` is `https`
     (no `includeSubDomains`/`preload` — those are decisions for the deployment's own
     domain, made at the org proxy).
@@ -398,11 +551,14 @@ these rules close the generic web-platform paths by which it could.
 - **Cross-site request forgery.** Session cookies are `SameSite=Lax`, which stops other
   sites but not a sibling sub-domain of the same registrable domain. So every
   state-changing API request (`POST`/`PUT`/`PATCH`/`DELETE` under `/api/*`, except the
-  Auth.js routes under `/api/auth/*`, which carry their own CSRF token) must carry an
-  `Origin` header equal to the origin of `PUBLIC_BASE_URL`; a missing or different
-  `Origin` is rejected with **403** before the route runs. Endpoints that take a JSON
-  body additionally require `Content-Type: application/json` (**415** otherwise), so a
-  plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
+  Auth.js routes under `/api/auth/*`, which carry their own CSRF token, and the public
+  CSP report sink `/api/csp-report` — exact path — which changes no application state)
+  must carry an `Origin` header equal to the origin of `PUBLIC_BASE_URL`; a missing or
+  different `Origin` is rejected with **403** before the route runs. Endpoints that take
+  a JSON body additionally require `Content-Type: application/json` (**415** otherwise),
+  so a plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
+  The JSON `Content-Type` rule likewise does not apply to the report sink, which takes
+  the two CSP report media types instead (above).
 - **Request body limits** — enforced **before** a body is read into memory (from
   `Content-Length`, and by a running byte count when it is absent), answering **413**:
   - JSON bodies: **1 MB**.
@@ -411,11 +567,25 @@ these rules close the generic web-platform paths by which it could.
   - Chunked-upload part (§11): the session's negotiated chunk size.
   - The bundled reverse proxy enforces an outer cap of the maximum upload size plus
     1 MB as a backstop; the per-route limits above are the real ones.
+  - The CSP report sink: **64 KB** (above).
+- **Outbound requests.** The only user-configured outbound HTTP the platform makes is
+  the channel webhook (§12.4). It is `https` on port 443 only, refuses private,
+  loopback, link-local and other non-public addresses after DNS resolution, connects to
+  the vetted address, follows no redirects, ignores proxy environment variables, and
+  times out after 10 s.
 - **Rate limiting** — per signed-in user, token-bucket, held in the web process
   (v1 runs one web instance; the buckets reset on restart, which is acceptable for an
   abuse brake). Limits:
   - creating a challenge or solution — **30 per hour**;
-  - posting a comment — **60 per hour**;
+  - posting a comment — **60 per hour** (triage-thread messages, §7.5, share this
+    bucket);
+  - sending a direct message (§13.9) — **120 per hour**, in its own bucket. A lively
+    back-and-forth runs at one or two messages a minute, and the bucket's 120-token
+    burst absorbs an hour of that. A script fanning out to colleagues is held to two a
+    minute once the burst is spent, sixty times tighter than the generic mutation
+    bucket it would otherwise fall into. Marking a thread read and block/unblock stay
+    in the generic mutation bucket. DM reads and the 10-second thread poll, like the
+    bell poll, are not limited;
   - starting an upload (single-shot or chunked initiate; parts are bounded by the
     declared size instead) — **60 per hour**;
   - search, autocomplete, and the §6.1 similarity check — **120 per minute** (the
@@ -426,7 +596,9 @@ these rules close the generic web-platform paths by which it could.
   warning with user id and bucket), **not audited** — a flood must not become an audit
   flood — and, like any web-tier 429, are recorded in the system log (§14.7), which is
   operational telemetry, not the audit log. The limits apply to every role; a bulk
-  triage action is one request.
+  triage action is one request. The CSP report sink is the one exception to *per
+  signed-in user*: it is limited per client IP (above), and its 429s are not recorded in
+  the system log.
 - **SCIM rate limiting** — the worker's SCIM endpoints are limited per **client IP**:
   **2 000 requests per 15 minutes**, sized so an initial Entra sync of a few thousand
   users never trips it (Entra honours a 429 with `Retry-After` if it does). The worker
@@ -438,8 +610,9 @@ these rules close the generic web-platform paths by which it could.
 - **Dev and e2e scaling** — local dev and e2e may scale every limit above via
   `RATE_LIMIT_MULTIPLIER`, honoured **only when `NODE_ENV !== "production"`** (the
   same guard as the dev-auth bypass, §2.3); a production build ignores the variable.
-- **Existence is not disclosed.** Any request about a challenge, solution, comment, or
-  attachment the caller **cannot see** (§4.3) answers **404**, indistinguishable from a
+- **Existence is not disclosed.** Any request about a challenge, solution, comment,
+  triage message (§7.5), attachment, or direct-message thread (§13.9) the caller
+  **cannot see** (§4.3; for a DM thread, is not a participant in) answers **404**, indistinguishable from a
   number or id that does not exist. Permission (**403**) and state (**409**) checks
   run **only after** the visibility check passes. So a probe across challenge numbers
   cannot tell "exists in a namespace you can't see" from "doesn't exist". This
@@ -464,9 +637,63 @@ Entra runbook); on conflict this document wins.
   in (no Entra app assignment gate); capabilities are gated by roles. **JIT sign-in
   is allowed**: a first sign-in before SCIM provisioning creates a stub user from
   token claims (keyed on `oid`), completed and thereafter owned by SCIM/
-  reconciliation. Sign-out clears the InnoBox session only (no Entra logout).
+  reconciliation. **Sign-out clears every Auth.js cookie, server-side, and nothing in
+  Entra** (no front-channel logout). On a sign-out request Auth.js has accepted (its own
+  CSRF token checked), the response additionally **expires every cookie the request
+  carried whose name — after stripping a `__Secure-` or `__Host-` prefix — starts
+  with `next-auth.`**. That covers the session token **and every chunk of it**
+  (`.0`, `.1`, …; the set is read from the request, so no chunk count is guessed),
+  the CSRF token, the callback URL, and the PKCE code-verifier, `state` and `nonce`
+  cookies left by an unfinished sign-in. Each is expired with `Max-Age=0`, `Path=/`,
+  no `Domain` (Auth.js cookies are host-only), and `Secure` whenever the name carries
+  a prefix or `PUBLIC_BASE_URL` is `https`. A shared or kiosk machine is therefore
+  left with no InnoBox auth state at all, and no orphaned session chunk can ever be
+  re-assembled with a newer one. Non-auth browser state (theme, collapsed admin
+  cards, the §13.1 view choice) is untouched.
   Sessions: rolling 7-day cookie; the user's `active` flag and roles are resolved
   from the DB on every request — the session token never carries roles.
+- **Sign-in relink (SCIM-provisioned rows).** The identity key stays the Entra
+  `oid` (`users.external_id`); the UPN is never an identity key. It is used for
+  exactly one repair, at sign-in, when **no `users` row has `external_id = oid`**:
+  - **Candidates** are rows with `lower(user_name) = lower(<preferred_username
+    claim>)` **and** `scim_synced = true` (written by SCIM — reconciliation-created
+    rows and JIT stubs are `false`) **and** `active = true` **and**
+    `scrubbed_at IS NULL` **and** `last_seen_at IS NULL` (the row has **never been
+    used** — §14.5) **and** `external_id <> oid`. No `preferred_username` claim → no
+    relink attempt. The never-used condition is the guard against **UPN reuse**: if a
+    leaver's UPN is reassigned to a new hire before SCIM has deactivated the leaver's
+    row, that row has been used and can never be taken over; the real target — a row
+    SCIM provisioned with a mismatched `externalId`, whose owner could therefore never
+    sign in — is still covered.
+  - **Exactly one candidate → relink.** That row's `external_id` is set to the
+    `oid` by a guarded single update (`… WHERE id = <row> AND external_id = <old>`;
+    a concurrent sign-in that loses the race re-reads by `oid` and proceeds). The
+    change is audited **`user.relinked`** (actor = the relinked user, as
+    `user.jit_created` is; `before: { externalId: <old> }`,
+    `after: { externalId: <oid> }`). **No JIT stub is created**. The row keeps its
+    roles, content, profile and SCIM ownership (claims never overwrite a
+    `scim_synced` row), and reconciliation thereafter addresses Graph by the new
+    `oid`.
+  - **More than one candidate, or a UPN collision the relink does not cover** (the
+    only row holding the UPN is inactive, a JIT/reconciliation stub, scrubbed, or
+    already used) → **no merge, ever.** Sign-in falls back to the JIT path unchanged.
+    Because `user_name` is unique case-insensitively, that path cannot insert a second
+    row for the same UPN. The sign-in is therefore **refused** (`/?error=AccessDenied`)
+    rather than surfacing an unhandled error, and a **system-log row** is recorded
+    (§14.7: status `409`, `error_code = signin_upn_conflict`, route
+    `/api/auth/callback/[provider]`, `user_id` null and no actor snapshot, message
+    naming the candidate **user ids** only). It never records the UPN, e-mail or
+    `oid`, which a later erasure of those rows could not find and scrub. A platform
+    admin resolves it in Entra (the SCIM `externalId` mapping or the duplicate
+    account). The unique index makes two simultaneous candidates structurally
+    impossible; the branch is kept as a defensive guard.
+  - **SCIM can undo a relink.** If the tenant maps a *different* Entra object to the
+    SCIM resource, that object's next SCIM `PUT` rewrites `external_id` back (or its
+    SCIM DELETE deactivates the row). Because the relinked row has been used by then,
+    the next sign-in is refused as `signin_upn_conflict` rather than relinked again.
+    The `user.relinked` audit trail and the identity-sync card (§14.10) make this
+    visible; the fix belongs in the tenant mapping, not in InnoBox.
+  - The dev credentials provider (§2.3) never relinks.
 - **Provisioning:** SCIM 2.0 (users + groups) served by the worker; Entra is the
   source of truth. Periodic reconciliation against Entra corrects drift. Deactivated
   users lose access immediately at session validation. **SCIM DELETE deactivates**
@@ -505,7 +732,84 @@ Entra runbook); on conflict this document wins.
   **scrubs the user's system-log rows** (§14.7 — `actor_name`/`actor_email` cleared,
   `user_id` nulled; that table is mutable and so, unlike `audit_log`, not exempt) and
   nulls the per-user seen markers and notification preferences, which live on the
-  `users` row and go with it.
+  `users` row and go with it. Everything runs in **one transaction**. In the same
+  transaction the erasure also:
+  - **leaves the row unrelinkable** — `scim_synced` is set to `false` and `user_name` is
+    rewritten to `deleted-<id>`, so a scrubbed row can never be a sign-in relink
+    candidate (above);
+  - **sets `leaderboard_opt_out = true`** (§13.3), so "Deleted User" never ranks on a
+    leaderboard or wears a leader badge — the next person moves up;
+  - **deletes the user's raw view rows** (`challenge_views`, §14.8). The daily rollups
+    carry no user id and are untouched; the next housekeeping sweep re-derives
+    still-retained closed days without them;
+  - **deletes the user's co-author rows** (§6.5) — a credit link carries nothing worth
+    keeping once the person is "Deleted User";
+  - **erases the user's direct messages** (§13.9): every message they **sent** is
+    **deleted**, not de-identified (in a 1:1 thread "Deleted User" would de-identify
+    nothing — the other party knows who they were talking to). Every block they placed
+    or received is deleted, their side of each thread is cleared (`*_last_sent_at`,
+    `*_last_read_at` → null), `last_message_at` is recomputed, and every thread left
+    without messages is deleted, including any thread whose two participants have both
+    now been erased. The other party keeps the thread, read-only, showing "Deleted
+    User" with the neutral bubble and only the messages they sent themselves;
+  - optionally **hands over open assignments** to a successor (below).
+
+  What erasure deliberately **keeps**, attached to the de-identified row: the user's
+  likes, follows and **solution ratings** (§8.4 — no read path ever names a rater, so
+  they disclose nothing); their **triage-thread messages** (§7.5), de-identified like
+  comments — they render as "Deleted User", or still as "Author" on an anonymous
+  challenge, bodies retained; **curation provenance** — their Committee picks and Home
+  pins stay in place and `endorsed_by` / `featured_by` keep pointing at the scrubbed row,
+  so the provenance line reads *"Marked by Deleted User on <date>"* (erasure does not
+  unpin, unendorse, or unlink anything); and the user references on channel-webhook
+  configuration rows they created or updated (§12.4), which render "Deleted User". The
+  system-log row a refused relink records (above) carries candidate user ids only, so the
+  system-log scrub (which keys on `user_id`) has nothing extra to find.
+
+  **Optional successor for open assignments.** The erasure may name a **successor**
+  ("Reassign open assignments to"). When it does, the following happens inside the
+  **same transaction** as the scrub (all-or-nothing):
+  - **What moves:** every challenge whose `assignee_id` is the erased user and whose
+    status is **non-terminal** (not `solved`, `rejected`, `withdrawn`, §7.1), locked
+    `FOR UPDATE` against a concurrent assignment. Terminal challenges keep the erased
+    row as their historical assignee.
+  - **Visibility gate:** a challenge moves only if the successor **can see it** under
+    §4.3, evaluated with the successor's roles resolved from SCIM-synced membership
+    (invariant 1). For example, an `awaiting_triage` item moves only to a namespace or
+    platform admin of its namespace, and a namespace-restricted item only to a member.
+    An item the successor cannot see is **skipped**: it stays assigned to the
+    de-identified row ("Deleted User") and is listed in the result so the admin can
+    reassign it by hand (§7.3).
+  - **Each move is an ordinary assignment change:** `assignee_id` set to the
+    successor, the successor auto-followed (§12.3), and one **`challenge.assigned`**
+    audit row per challenge with exactly the §7.3 shape (actor = the platform admin;
+    `before: { assigneeId: <erased> }`, `after: { assigneeId: <successor> }`).
+    `updated_at` bumps; `edited_at` does not; status is untouched.
+  - **Authorship never moves.** Challenges, solutions and comments the erased user
+    wrote stay attributed to the de-identified row, exactly as without a successor.
+    Only the assignee role is handed over.
+  - **One notification:** after commit the successor receives **one** summary item
+    (§12.1 event 12) listing the moved challenges — not one event-7 item per move.
+    No other recipient is notified (the erased user is not).
+  - **Successor rules:** an **active**, not-scrubbed user other than the one being
+    erased. The acting admin may name themselves, and then gets no notification
+    (actors never notify themselves). Anything else is rejected (**400**) before any
+    change is made. Without a successor, erasure behaves exactly as before: open
+    assignments keep pointing at "Deleted User".
+
+  **The `user.scrubbed` audit row** records `reassignedTo` (user id or null),
+  `reassignedCount`, `skippedCount`, `coauthorsRemoved`, and the DM cascade counts
+  `dmMessagesDeleted` / `dmThreadsDeleted` — numbers and ids only, never content.
+
+  **The "Delete user info (GDPR)" card** (Administration console, platform admins).
+  Choosing **Delete info** on a search result opens an inline confirmation, replacing
+  the browser confirm dialog. It holds an **optional "Reassign open assignments to"**
+  picker — the §7.3 assignee search over active users, excluding the user being
+  erased — and the irreversibility warning. On success the toast reports *"Deleted
+  personal info for <name>. Moved N open assignments to <successor>."* When items
+  were skipped, the card lists them (*"Left with Deleted User — <successor> can't see
+  these: CH-12, CH-40"*, each a link) until dismissed. The endpoint is
+  `POST /api/admin/users/:userId/scrub` (§16).
 
 ### §3.1 Profile photos (avatars)
 
@@ -553,14 +857,16 @@ shown (§13.6).
 
 | Role | Scope | Powers |
 |---|---|---|
-| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area management |
-| **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; bulk actions; CSV export |
-| **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2); comment with a committee badge. No assignment, no reveal, no bulk/config |
+| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area management; **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); audit integrity verification (§15); related-challenges rebuild (§14.9) |
+| **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; bulk actions; CSV export; **mark/unmark duplicates** (§7.4); **Committee pick** (§13.10); participate in and moderate triage threads (§7.5); engagement analytics for own namespaces (§14.8) |
+| **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2); **mark/remove a Committee pick** (§13.10); participate in the private triage thread (§7.5) of the namespace's challenges they can see; comment with a committee badge. No assignment, no reveal, no duplicate linking, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
-| **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
-| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
+| **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment; participate in the assigned challenge's triage thread (§7.5). No Committee pick. Granted by assignment, revoked by unassignment |
+| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), comment, like/unlike, follow, rate others' solutions (§8.4), view per visibility, manage own profile/preferences; add co-authors to own items within the edit window (§6.5); talk to the review team in own challenges' triage threads (§7.5); send and block direct messages (§13.9) |
 
 A user may hold different roles in different namespaces. Roles are additive.
+**Co-author** (§6.5) is not a role: it is a per-item **credit** that grants visibility
+and notifications, and no powers.
 
 ### §4.3 Visibility
 
@@ -579,12 +885,25 @@ A user may hold different roles in different namespaces. Roles are additive.
   - `rejected` / `not_selected` solutions: shown in a collapsed "closed solutions"
     section of the challenge page to anyone who can see the challenge; excluded from
     solution counts and galleries.
+  - **Co-authors (§6.5)** are treated as the author for the author-only states above
+    (`awaiting_triage` and `withdrawn` challenges, `proposed` and `withdrawn`
+    solutions), provided they also pass the item's namespace visibility test.
+- The **triage thread** (§7.5) is visible only to its participants, and to each of
+  them only while they can see the challenge.
 - Search, autocomplete, KPIs, counts, and leaderboards are computed strictly within
   the viewer's visibility (invariant 2). Leaderboards additionally count **org-visible
-  content only**, so a public leaderboard never hints at restricted work.
+  content only**, so a public leaderboard never hints at restricted work. Solution
+  ratings (§8.4), related-challenge suggestions (§13.11) and view counts (the §13.1
+  sparkline, §14.8) follow the same rule: ratings and the sparkline appear only inside a
+  payload the viewer is already entitled to, and suggestions are re-filtered by the
+  viewer's visibility at read time. Leader badges (§13.3) derive only from the
+  org-visible leaderboard.
 - Submission targeting: a user may submit a challenge into any namespace they are a
   member of (everyone can use `global`). A solution may be proposed by anyone who can
   **see** the challenge.
+- **Direct messages (§13.9)** sit outside this model: they carry no challenge,
+  solution, namespace, role or count data, so there is nothing for visibility to
+  filter.
 
 ---
 
@@ -593,7 +912,11 @@ A user may hold different roles in different namespaces. Roles are additive.
 Entities (Postgres; key fields only — types/constraints finalized in migrations):
 
 - **`namespaces`** — id, slug, display name, archived_at.
-- **`users`** — id, entra object id, email, display name, department, job title,
+- **`users`** — id, entra object id (`external_id`), email, display name,
+  **user_name** (the UPN as SCIM sent it; unique case-insensitively — the §3 relink
+  hint), **scim_synced** (true once a SCIM write has touched the row; false for JIT
+  stubs and reconciliation-created rows, and reset by erasure — §3 relink, §14.10),
+  **scrubbed_at** (the GDPR erasure marker, §3), department, job title,
   **office_location** (nullable text — the directory profile's third field, mirroring
   the Entra `officeLocation` attribute; §3, §13.8),
   photo (cached 240×240 bytes) + photo_etag (§3.1), email_notifications_enabled
@@ -606,7 +929,15 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   marker, backfilled to the migration's run time), **system_log_seen_at** (nullable;
   platform admins' §14.7 nav badge), **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
-  default true — the §12.1 per-event preferences), deactivated_at.
+  default true — the §12.1 per-event preferences), **leaderboard_opt_out** (boolean, not
+  null, default false; set true by erasure — hides the user from leaderboards and
+  leader badges, §13.3), deactivated_at.
+- **`groups`** — id, external_id (Entra group object id), display_name,
+  **scim_synced** (boolean, not null, default false; set true by every SCIM group
+  create/replace/patch and left untouched by reconciliation's mirroring of mapped
+  groups — §14.10; backfilled true for groups whose `scim.group_created` /
+  `scim.group_renamed` audit rows show a SCIM origin, i.e. no `via: reconciliation`),
+  created_at, updated_at; plus **`group_members`** (group_id, user_id).
 - **`role_mappings`** — entra group id → (namespace_id | null for platform) + role.
 - **`impact_areas`** — id, name, active flag. Seeded: **Client, Internal,
   Accelerator**. Platform-admin managed (§14.3); retiring an area keeps it on
@@ -615,24 +946,55 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   its challenges to another active area as part of the delete. Deletion is the only
   path that removes a row.
 - **`challenges`** — id (uuid), **number** (global sequence, displayed `CH-<n>`),
-  namespace_id, visibility, title (≤ 120 chars), description (plain text, ≤ 10 000
-  chars), impact_area_id, client_name (**required iff impact area = Client**, hidden
-  otherwise), is_anonymous, author_id, assignee_id (nullable), status (§7.1),
-  status_changed_at (defaults to created_at at genesis, bumped on every transition —
-  drives the §14.4 attention badge), created_at, updated_at, edited_at, resolved_at.
+  namespace_id, visibility, title (≤ 120 chars), description (**Markdown source**,
+  §6.3; ≤ 10 000 raw chars), **description_text** (text, not null — the server-derived
+  `stripMarkdown` twin; it feeds `search_vector`, §6.1 ranking and snippets, and is
+  never user-edited or returned as source), impact_area_id, client_name (**required iff
+  impact area = Client**, hidden otherwise), is_anonymous, author_id, assignee_id
+  (nullable), status (§7.1), status_changed_at (defaults to created_at at genesis,
+  bumped on every transition — drives the §14.4 attention badge), created_at,
+  updated_at, edited_at, resolved_at, **first_valid_at** (nullable timestamptz; set on
+  the challenge's first transition into `valid`, never cleared — it pins the §12.4
+  `challenge.validated` webhook to once per challenge; the migration backfills it from
+  the earliest `challenge.status_changed` audit row whose target is `valid`, falling
+  back to `status_changed_at` for challenges currently `valid` or `solved`),
+  **featured_at** + **featured_by** (nullable timestamptz / user FK, set together;
+  non-null only while status is `valid` or `solved`, DB-checked — the §13.2 Home pin),
+  **endorsed_at** + **endorsed_by** (nullable timestamptz / user FK, set together — the
+  §13.10 Committee pick), **duplicate_of_id** (nullable FK → `challenges.id`; non-null
+  only while status is `rejected` and never equal to `id`, DB-checked; never points at a
+  challenge that is itself a duplicate — §7.4). Curation columns are not content:
+  writing them bumps neither `updated_at` nor `edited_at`.
   A platform admin may **hard-delete** a challenge, cascading to every child row
   (§10.3); that is the only path that removes the row.
-- **`solutions`** — id, **number** (`SOL-<n>`), challenge_id, description (≤ 10 000),
-  cost_vs_benefits (≤ 5 000, optional), is_anonymous, author_id, status (§8.1),
-  status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at.
+- **`solutions`** — id, **number** (`SOL-<n>`), challenge_id, description (Markdown
+  source, ≤ 10 000), cost_vs_benefits (Markdown source, ≤ 5 000, optional), twins
+  **description_text** and **cost_vs_benefits_text** (nullable iff the source is null;
+  same rules as the challenge twin), is_anonymous, author_id, status (§8.1),
+  status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at,
+  **endorsed_at** + **endorsed_by** (as challenges, §13.10).
   Hard-deletable by a platform admin on the same terms (§10.3), and removed with its
   parent challenge when that is deleted.
-- **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
-  created_at, edited_at, deleted_at + deleted_by (soft delete, §10.2); rows are
-  hard-deleted only inside the §10.3 parent-delete cascade.
+- **`coauthors`** — (parent_type `challenge | solution`, parent_id, user_id) primary
+  key; added_by, created_at (§6.5). At most 5 per parent, enforced in the shared
+  validation and re-checked under a row lock on the parent. A removal deletes the row,
+  like `likes`/`follows`. Rows are also removed by the §10.3 cascade and by GDPR
+  erasure (§3).
+- **`comments`** — id, parent (challenge | solution), author_id, body (Markdown source,
+  §6.3; ≤ 5 000; no plain-text twin), created_at, edited_at, deleted_at + deleted_by
+  (soft delete, §10.2); rows are hard-deleted only inside the §10.3 parent-delete
+  cascade.
+- **`triage_messages`** — id, challenge_id (FK), author_id, body (Markdown source, §6.3;
+  ≤ 5 000), created_at, edited_at, deleted_at + deleted_by (soft delete, §7.5). Rows
+  are hard-deleted only inside the §10.3 challenge-delete cascade. Never indexed for
+  search.
 - **`likes`** — (user_id, parent) unique; created_at. Toggling like/unlike
   inserts/deletes the row.
 - **`follows`** — (user_id, parent) unique; created_at.
+- **`solution_ratings`** — (solution_id, user_id) unique; stars (smallint, 1–5,
+  checked), created_at, updated_at. One editable rating per user per solution (§8.4).
+  Removing a rating deletes the row. Rows are deleted with their solution (§10.3).
+  Raters are never exposed by any read path.
 - **`attachments`** — id, parent (challenge | solution; `parent_id` **nullable while
   staged**, §11), **`draft_key`** (nullable UUID; set only while staged, before the
   parent exists), filename, size, mime, object key, scan_status (pending | clean |
@@ -651,7 +1013,45 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   WHERE read_at IS NULL AND type = 'comment_posted'` lets the insert become an atomic
   update-in-place while the row is unread; the payload carries `count`, `latestBy`,
   `latestAt`, and the parent `challengeId` (so opening the challenge page can read
-  the rows for the challenge and its solutions).
+  the rows for the challenge and its solutions). **Triage-message rows coalesce the
+  same way** (§12.1 event 14, §7.5): a partial unique index on `(user_id,
+  payload->>'challengeId') WHERE read_at IS NULL AND type = 'triage_message_posted'`.
+  The v0.10 types are `assignments_transferred` (event 12; payload `{ message, link,
+  count, numbers[] }`), `coauthor_added` (event 13) and `triage_message_posted`
+  (event 14).
+- **`dm_threads`** — the 1:1 direct-message conversation (§13.9): id (uuid),
+  **user_low_id**, **user_high_id** (FK `users`; **canonical ordering**:
+  `CHECK (user_low_id < user_high_id)` by uuid comparison and `UNIQUE (user_low_id,
+  user_high_id)`, so a pair has exactly one thread), created_at, **last_message_at**
+  (drives list order), **low_last_sent_at** / **high_last_sent_at** (nullable; each
+  side's latest send) and **low_last_read_at** / **high_last_read_at** (nullable; each
+  side's private **read marker**, advanced monotonically). A thread is unread for a
+  participant ⇔ the *other* side's `last_sent_at` > their own `last_read_at` (null =
+  never). That predicate reads the thread row alone, so the 30-second count never scans
+  messages. Indexes `(user_low_id, last_message_at DESC)` and `(user_high_id,
+  last_message_at DESC)`. Created by the first message; deleted when it holds no
+  messages (retention, erasure).
+- **`dm_messages`** — id (uuid), thread_id (FK, `ON DELETE CASCADE`), sender_id (FK
+  `users`), body (plain text, `CHECK (char_length(body) BETWEEN 1 AND 2000)`),
+  created_at. **Immutable** (no edit or delete columns). Indexes `(thread_id,
+  created_at, id)` (paging and the 10 s `after` poll), `(sender_id)` (erasure),
+  `(created_at)` (retention sweep). Deleted by the 365-day retention sweep and by GDPR
+  erasure. The app role holds DELETE; these are **not** §10.3 tables.
+- **`dm_blocks`** — (blocker_id, blocked_id) primary key (FK `users`), created_at;
+  `CHECK (blocker_id <> blocked_id)`; index `(blocked_id)` (send check, erasure).
+  Unblock deletes the row. The three DM tables carry no audit trigger.
+- **`channel_webhooks`** — id, namespace_id (FK), name (≤ 80), format
+  (`json | teams_workflows`), url_enc (AES-256-GCM under `WEBHOOK_ENC_KEY`, §12.4),
+  url_hint (plaintext host + last 4 characters), enabled, created_by, created_at,
+  updated_by, updated_at (§12.4). At most 5 per namespace.
+- **`webhook_deliveries`** — the §12.4 webhook outbox: id (also the
+  `X-InnoBox-Delivery` header); webhook_id (FK, `ON DELETE CASCADE`); event
+  (`challenge.validated | solution.implemented | challenge.solved`); entity_type,
+  entity_id (no FK); event_status, occurred_at (snapshotted); status
+  (`pending | sent | failed | skipped`); attempts, next_attempt_at; last_http_status
+  (nullable); last_reason (fixed reason code, never the URL); created_at, finished_at.
+  Mutable working data: terminal rows are trimmed 30 days after `finished_at`. Rows of
+  a deleted subtree are removed by the §10.3 cascade.
 - **`system_events`** — the §14.7 operational error log: id, created_at, status,
   method, route (matched template), path (concrete, no query string; the template
   only when the target is anonymous), user_id (nullable), actor_name, actor_email
@@ -665,9 +1065,30 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`presence_daily`** — (day) unique, active_users int; the rolled-up daily
   distinct-active-user count behind the §14.5 chart. Carries **no user ids** and is
   retained indefinitely.
+- **`challenge_views`** — (challenge_id, user_id, day) unique; viewed_at (first view
+  that UTC day). Raw view detail for §14.8, **purged after 90 days** by the worker.
+  Deleted with the challenge (§10.3) and by GDPR erasure (§3).
+- **`challenge_view_daily`** — (challenge_id, day) unique; views int. The daily rollup
+  behind the §14.8 charts and the §13.1 sparkline. Carries **no user ids** and is kept
+  indefinitely. Deleted with the challenge (§10.3).
+- **`challenge_related`** — (challenge_id, related_id) unique; shared (int ≥ 2), rank
+  (smallint), computed_at. The co-engagement suggestions behind §13.11: top 10 per
+  challenge, both directions, replaced wholesale by each rebuild. Carries no user ids.
+  Rows are deleted with either challenge (§10.3).
+- **`leader_badges`** — (metric, window) unique; user_id, count, first_at, computed_at.
+  The cached #1 of each §13.3 leaderboard (≤ 8 rows), replaced wholesale by the hourly
+  leader sweep; an empty slot has no row. Derived data, with no history.
 - **`settings`** — key/value platform configuration (§14.3); also holds the
-  `system_banner` singleton (§14.6) and the `system_log_notify_at` watermark (§14.7).
-- **`audit_log`** — append-only (§15).
+  `system_banner` singleton (§14.6), the `system_log_notify_at` watermark (§14.7), the
+  `featured_limit` (§13.2, §14.3), the `solution_rating_prior` value (§8.4), the
+  `related_challenges` rebuild state (§13.11, §14.9), and the **`scim_last_request_at`**
+  stamp (ISO UTC; written by the worker on accepted SCIM requests, at most once a
+  minute — §14.10).
+- **`audit_log`** — append-only (§15): id, actor_user_id, action, target_type,
+  target_id, before, after, created_at, plus the hash-chain columns **chain_seq**
+  (bigint, unique where set), **prev_hash** and **row_hash** (hex SHA-256). All three
+  are NULL on pre-chain rows and are set by the `audit_log_chain` trigger on every later
+  insert.
 
 Dropped from the legacy model (never used by any screen): `Portfolio`,
 `expert_team`, `accessteam(s)`, the challenge-level free-text `Comments` column, the
@@ -676,6 +1097,7 @@ Dropped from the legacy model (never used by any screen): `Portfolio`,
 Validation is enforced server-side (shared package), mirrored client-side for UX:
 title required ≤ 120; description required ≤ 10 000; client_name required iff
 impact = Client; impact area required and must be active at submission time.
+Lengths count the raw Markdown source (§6.3).
 
 ---
 
@@ -689,13 +1111,15 @@ Reached at **`/challenges/new`**, via the **Submit a Challenge** sidebar nav ite
 Form: title, description, impact area (active areas), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11), **"Submit
-anonymously"** checkbox (§9).
+anonymously"** checkbox (§9), **co-authors** (up to 5, §6.5; the picker is disabled
+while *Submit anonymously* is checked). The description is Markdown (§6.3).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
 is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — author auto-follows it (§12.3),
-notifications fire (§12.1 event 1), audit entry.
+notifications fire (§12.1 event 1; each co-author is notified, event 13), audit
+entry.
 
 **Duplicate warning.** The first **Submit** click runs a server-side similarity check
 before anything is created: `POST /api/challenges/similar { title, description }`
@@ -711,6 +1135,7 @@ one of them?"*) listing them as links, and the button flips to **Submit anyway**
 next click submits. **Editing any field after the warning re-arms the check** — the
 banner clears and the next click re-checks — so a changed challenge is never posted
 on a stale acknowledgement. With no matches the first click submits directly. The
+check and the create share one submission lock (§6.4). The
 check is **advisory, always on, never a hard block**, and has no platform setting.
 When the author submitted past a warning, the `challenge.created` audit payload
 records `similarAcknowledged: [<numbers>]` (absent otherwise) — no new column. The
@@ -721,17 +1146,285 @@ endpoint shares the search rate limit (§2.4). **Solutions get no duplicate chec
 Allowed **only while the challenge status is `valid`** (the UI hides/disables the
 action otherwise; the API enforces it).
 
-Form: description, cost vs benefits (optional), attachments (**staged inline via a
-`draftKey`**, §11), "Submit anonymously".
+Form: description, cost vs benefits (optional; both Markdown, §6.3), attachments
+(**staged inline via a `draftKey`**, §11), "Submit anonymously", **co-authors** (up to
+5, §6.5; the picker is disabled while *Submit anonymously* is checked).
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
 **rejected while any staged file is still scanning or infected** when a scanner is
 available (§11 *Binding at submit* scan gate) — author auto-follows it, notifications
-fire (§12.1 event 2), audit entry.
+fire (§12.1 event 2; each co-author is notified, event 13), audit entry. The form locks
+while the request is in flight and closes only once the challenge has re-rendered
+(§6.4).
 
 There is no draft state for the solution itself; cancel discards (any files staged
 via §11 are left to the 24-hour GC). Editing after submission: §10.1.
+
+### §6.3 Formatted text (Markdown subset)
+
+**Where.** Five fields are stored as **Markdown source** and rendered as formatted
+text: **challenge description**, **solution description**, **solution cost vs
+benefits**, **comment body** (§10.2), and **triage-message body** (§7.5). Every other
+field — titles, client name, names, the system banner, admin-entered text — remains
+plain text and is never interpreted. **Direct messages (§13.9) are plain text**, never
+Markdown, and never pass through this renderer.
+
+**The subset (CommonMark, minus everything not listed):**
+- **emphasis** `*em*`/`_em_` and **strong** `**strong**`/`__strong__`;
+- **lists**, bulleted (`-`, `*`, `+`) and ordered (`1.`, honoring the start number),
+  nestable;
+- **links** — inline `[text](url)`, reference-style, and autolinks `<https://…>`;
+- **code** — inline `` `code` `` and **fenced** blocks (```` ``` ```` / `~~~`). The
+  fence's info string is ignored: no syntax highlighting;
+- **blockquotes** (`>`), nestable;
+- backslash escapes and entities, per CommonMark.
+
+**Deliberately excluded**, with the source rendered **as literal text**: images,
+tables, **raw HTML** (block and inline — `<b>` shows as the characters `<b>`),
+headings (ATX `#` and setext), thematic breaks (`---`), **indented code blocks** (so
+indented plain text stays a paragraph — only fences make code), strikethrough, task
+lists, footnotes, and bare-URL auto-linking (a URL becomes a link only via `[…](…)` or
+`<…>`).
+
+**Line breaks — existing text renders as before.** No content is migrated or
+re-encoded: rows written as plain text are rendered as Markdown as-is. So that plain
+text with line breaks looks the same, a **single newline renders as a line break
+(`<br>`)**, not CommonMark's soft break, and a blank line separates paragraphs.
+Accepted divergences from the old `pre-wrap` rendering are that runs of blank lines
+collapse to one paragraph gap, leading spaces are not preserved outside code, and
+text that happens to use the syntax (`*word*`, a line starting `- ` or `> `) now
+formats.
+
+**Links.** A link renders as an anchor **only when its URL parses as absolute
+`http:` or `https:`**. Anything else — relative, `mailto:`, `javascript:`, `data:`,
+malformed — renders as its link text, with no anchor. Every anchor carries
+`target="_blank"` and `rel="noopener noreferrer"`, including links back to the app.
+Link titles are dropped.
+
+**One shared renderer, safe by construction.**
+- A single client-safe module in `@innobox/shared` (subpath export
+  `@innobox/shared/markdown`, with no Node-only imports) owns the parse. It is
+  configured once with the subset above and exposes:
+  - `parseMarkdown(src)` → a small typed node tree, and
+  - `stripMarkdown(src)` → plain text with all syntax removed. Emphasis and code
+    markers drop, fences drop (content kept verbatim), quote markers drop, list items
+    become one line each prefixed `• ` (bulleted) or `n. ` (ordered), a link becomes
+    `text (url)` (just `url` when the two are equal), escapes are resolved, and
+    paragraphs are separated by one blank line.
+- The web package renders the tree through one `<Markdown>` component that maps each
+  node type to a **fixed element allowlist** — `p`, `br`, `strong`, `em`, `a` (`href`,
+  `target`, `rel` only), `code`, `pre`, `ul`, `ol` (`start` only), `li`,
+  `blockquote` — as **React elements, never `dangerouslySetInnerHTML`**. User text only
+  ever becomes text nodes or a validated `href`. No `class`, `style`, `id` or `on*`
+  attribute derives from content, so the output is compatible with the §2.4 CSP (no
+  inline handlers, no inline script) without a browser-side HTML sanitizer. Unknown or
+  excluded node types fall back to their literal source text. Nesting beyond the
+  parser's depth cap renders as text.
+- Styling reuses the existing `.md` rules in `globals.css` (paragraph, list, inline
+  code, `pre`, quote, link) on the tokens, with no new token. Long lines and wide code
+  wrap or scroll inside the block, never the page.
+- **Editing shows the raw source.** There is no WYSIWYG and no preview pane. Each
+  Markdown field carries a one-line muted hint below it: *"Formatting: \*\*bold\*\*,
+  \_italic\_, \`code\`, lists, > quotes, [links](https://…)"*.
+
+**Rendered on:** the §13.1 detail page — the challenge description, each solution's
+description and cost vs benefits, every comment (§10.2; a moderator-removed comment
+still shows its fixed placeholder), and every triage-thread message (§7.5).
+
+**Stays plain text, syntax stripped (via `stripMarkdown`):** every
+e-mail and plain-text body, every CSV export, and every **snippet or label** that
+shows a Markdown field outside its detail rendering. That covers search results and
+topbar autocomplete (§13.4), the dashboard spotlight cards (§13.2), and profile
+lists/activity (§13.5), with whitespace collapsed to one line where a snippet is
+single-line. The API returns stripped text in those list/snippet payloads and raw
+source only in the detail and edit payloads. **E-mail content safety (§12.1) applies
+unchanged** to the stripped text: a URL in it is a link in the HTML body only when its
+origin is `PUBLIC_BASE_URL`'s, and otherwise escaped plain text.
+
+**Limits and validation are unchanged and count the raw source:** description
+≤ 10 000, cost vs benefits ≤ 5 000, comment and triage message ≤ 5 000 characters,
+measured on the text as typed, Markdown syntax included, by the same shared validators
+and `maxLength` mirrors. Required-ness ("description required") is judged on the raw
+source as before.
+
+**Search indexes the stripped text.** Each searchable Markdown column has a derived
+plain-text twin (§5), written by the server from `stripMarkdown` in the same statement
+as every insert and edit. The §13.4 `search_vector` and the §6.1 similarity ranking are
+built from the twins, so link URLs and syntax characters are never indexed. The §6.1
+endpoint strips its `description` input with the same function before ranking. The
+migration backfills the twins with the raw value (every existing row predates Markdown,
+so its source *is* its plain text) and redefines the generated `search_vector` columns
+over the twins, weights unchanged. Comments and triage messages are searched nowhere,
+so they have no twin.
+
+### §6.4 Submission lock
+
+The three author submit paths **lock** while their request is in flight, so a slow
+server never invites a second click, a half-edited resend or a stray Cancel:
+the **challenge form** (§6.1), the **solution form** (§6.2), and the **Resubmit**
+action (§10.1). Withdraw, edit, comment and admin controls are out of scope (their
+existing `busy` disabling is unchanged).
+
+- **What locks.** A **scrim** covers the form body: an overlay on the form card
+  (`--surface` at ~60% opacity, `cursor: progress`, no new token) over contents made
+  **`inert`** — no pointer, no focus, no typing, staged attachments included — with
+  `aria-busy="true"` on the form. The **primary button** stays visible above the scrim,
+  disabled, with the shared `.spinner` and the label **"Working…"** (replacing the
+  per-form "Checking…"/"Submitting…" labels). A polite live region announces
+  "Working…" once. The scrim appears immediately, with no delay and no animation.
+  The handler is guarded too, not only the UI: a second `submit` event (e.g. Enter)
+  while locked is a no-op.
+- **Released on error.** Any failure (validation 400, the §11 scan gate, 429, network)
+  lifts the lock: the scrim goes, every field is editable again with its values and
+  staged files intact, and the server's message renders in the form's error line
+  (`role="alert"`). Nothing is re-sent automatically.
+- **Held on success.** The lock is **never released on success**, so no frame exists
+  in which the form is both submitted and clickable:
+  - *Challenge form* — held through `router.push` to the new `/challenges/:number`;
+    the form unmounts while still locked.
+  - *Solution form* — there is no navigation: the form stays locked until the parent
+    challenge has been **re-read and re-rendered**, and then closes. Closing on success
+    must wait for that refresh, not fire alongside it.
+  - *Resubmit* — the lock covers the item's **author action bar** (Edit / Resubmit /
+    Withdraw) and, if open, that item's inline edit form; the Resubmit button reads
+    "Working…". On success the lock is held until the detail re-read has rendered.
+    The item is then `in_review`, `canResubmit` is false, and the bar re-renders
+    without it. On error it releases and the message shows through the page's
+    existing notice. No separate resubmit form is introduced.
+- **The duplicate check (§6.1) is part of the lock.** The first **Submit** click
+  locks the form *before* `POST /api/challenges/similar`:
+  - **matches** → the lock **releases**, and the advisory banner and **Submit anyway**
+    appear. The author must be able to read, edit or proceed.
+  - **no matches, or a failed check** (advisory, never blocking) → the lock is **held
+    continuously** into the create call, with no release and re-lock flicker in between.
+  - **Submit anyway** → locks again for the create. The "editing re-arms the check"
+    rule is unaffected: edits are only possible while unlocked.
+- **Not a lock:** the existing **"Waiting for attachments…"** state (an upload still
+  scanning *before* submit) keeps the form editable and only disables the button,
+  exactly as before. A lock never blocks leaving the page (no `beforeunload` prompt).
+- One shared implementation (a small form-lock component/hook plus the
+  `.form-lock-scrim` rule in `globals.css`, §2.2) serves all three surfaces.
+
+### §6.5 Co-authors
+
+The author of a challenge or solution may name up to **5 co-authors**: colleagues
+credited on the item. Co-authors **see** the item and **hear** about it the way the
+author does, but they **hold no powers over it** and earn **no leaderboard credit**.
+Co-author is a per-item credit, not a role (§4.2).
+
+**Who may be a co-author.** An **active** user who is not the item's author, is not
+already a co-author of it, and passes the item's **namespace visibility test**:
+- for an `org`-visible challenge (or a solution on one), any active user;
+- for a `namespace`-visible one, members of that namespace (any role) and platform
+  admins.
+
+The state-based rules of §4.3 are not part of eligibility, because co-authors are
+exempted from them below. The limit is **5 per item**, counting every co-author row,
+deactivated users included.
+
+**Who manages them, and when.**
+- **Add / remove:** the item's **author** only, and only while the item is
+  **author-editable** (§10.1): a challenge in `awaiting_triage` or
+  `needs_improvement`, a solution in `proposed` or `needs_improvement`.
+- The submit forms (§6.1, §6.2) carry a co-author picker, so co-authors can be set at
+  creation. After that, the §13.1 detail page carries a **Co-authors** control within
+  the edit window. Each add and remove applies immediately, independently of the Edit
+  form's Save.
+- **Self-removal:** a co-author may remove **themselves** from an item at **any**
+  status, terminal included. It is their own association to end. The author may add
+  them again later within an edit window.
+- Nobody else adds or removes co-authors. Admins moderate content through status and
+  comment deletion (§10.1), not by editing credits.
+- There is **no acceptance step**. An added user becomes a co-author immediately and
+  receives the *Added as co-author* notification (§12.1 event 13).
+- Removal (by the author or self) **notifies nobody**.
+
+**Anonymity (§9).** An anonymous item **cannot have co-authors**. A co-author list
+would point at the circle around the hidden author.
+- Anonymity is chosen only at submission and cannot be turned on later (§10.1). So
+  the rule is enforced at create: the submit form **disables the co-author picker
+  while "Submit anonymously" is checked**, and checking it clears any picked
+  co-authors.
+- The API refuses a create carrying both `isAnonymous: true` and a non-empty
+  co-author list (**422**). It also refuses an add on an anonymous item (**422**).
+- After a one-way author **self-reveal** the item is no longer anonymous, and
+  co-authors may be added within an edit window.
+- The detail and list responses of an anonymous item carry **no** co-author field at
+  all.
+
+**What co-authors get.**
+- **Visibility:** wherever §4.3 lets the item's **author** see an item in an
+  author-only state, co-authors see it too, but only while they **also pass the
+  namespace visibility test**. That covers a challenge in `awaiting_triage` or
+  `withdrawn`, and a solution in `proposed` or `withdrawn`. A co-author who later
+  leaves the namespace of a `namespace`-visible item loses sight of it, like any
+  member. The co-author row remains; they are simply dropped from views and
+  notifications. A co-author of a solution gets nothing extra on the parent challenge.
+- **Notifications:** co-authors are added beside the item's author wherever §12.1
+  names the item author as a recipient, subject to the same preference mutes as the
+  author route (§12.1 *Per-event preferences*). Precisely:
+  - event 2 (co-authors of the challenge);
+  - events 3, 4, 5 and 6 (co-authors of the item);
+  - event 8 (co-authors of the challenge and of each `not_selected` sibling);
+  - events 9 and 10 (resubmitted and withdrawn) are author actions; the author gets
+    no copy only because actors never notify themselves. Their **co-authors are added
+    as recipients**, delivered directly for event 10 like its other recipients.
+  - The event 5 copy is the same for co-authors, although only the author can act on
+    it.
+  - Co-authors receive **no** triage-thread notifications (§7.5 — they are not thread
+    participants) and are not auto-followed (§12.3). The author routes already cover
+    everything a follower would hear.
+- **Display:**
+  - The §13.1 detail page shows a **Co-authors** row under the author, with each
+    co-author as an avatar bubble plus name (§13.6, hover-card enabled).
+  - Challenge cards and list rows, and the solution entries on the detail page, show
+    **"+N"** after the author's name (e.g. *"Alice Smith +2"*), with a native `title`
+    listing the co-authors' names.
+  - The **Mine** tab (§13.1) includes challenges the viewer co-authors.
+  - The §13.1 author-name filter matches the **author only**.
+  - Deactivated co-authors render with the greyed bubble. GDPR-erased co-authors are
+    removed (below).
+- **No powers:** a co-author cannot edit, resubmit, withdraw, self-reveal, reveal, or
+  manage co-authors (other than removing themselves). The detail response's
+  `canEdit`/`canResubmit`/`canWithdraw` stay author-only. It adds `coAuthors`,
+  `isCoAuthor` and `canManageCoAuthors`.
+- **No rating of a co-authored solution** (§8.4): a co-author is treated as the author.
+  Adding a user who has already rated the solution as its co-author **removes that
+  rating in the same transaction** (audited `rating.removed` with
+  `trigger: "became_coauthor"`), so the rule holds without a read-time special case.
+- **Their views are not counted** in the §14.8 engagement analytics, exactly like the
+  author's own views.
+- **No leaderboard credit** (§13.3): every metric credits the author only, and a
+  co-authored item adds nothing to a co-author's counts.
+- Co-authored items are **not** listed on profile pages (§13.5) in v1.
+
+**API (§16).**
+- `POST /api/challenges` and `POST /api/challenges/:number/solutions` accept
+  `coAuthorIds: string[]` (≤ 5, distinct, validated in the create transaction).
+- `POST /api/challenges/:number/coauthors { userId }`, and the solution twin under
+  `/api/solutions/:number/coauthors`.
+- `DELETE /api/challenges/:number/coauthors/:userId`, and the solution twin. The author
+  may delete within the edit window; the co-author may delete themselves at any time.
+- Refusals:
+  - an ineligible user or an anonymous item: **422**;
+  - the limit is reached or the user is already a co-author: **409**;
+  - the author acting outside the edit window, or a caller who is neither the author
+    nor (for self-removal) the co-author: **403**.
+- The picker uses the user directory search (`GET /api/users?q=`), which gains an
+  optional `namespace=<id>` parameter. When set to a non-global namespace, results are
+  limited to that namespace's members and platform admins. It is accepted only for a
+  namespace the caller is a member of; any other value is ignored. The server
+  re-checks eligibility on every add.
+
+**Audit (§15).** Each add writes `challenge.coauthor_added` / `solution.coauthor_added`,
+including adds made at create (target = the item, payload `{ userId }`). Each removal
+writes `challenge.coauthor_removed` / `solution.coauthor_removed` with payload
+`{ userId, self: boolean }`.
+
+**Deletion and erasure.** The §10.3 cascade removes the co-author rows of the deleted
+subtree. GDPR erasure (§3) deletes the erased user's co-author rows and counts them in
+its audit payload.
 
 ---
 
@@ -766,7 +1459,11 @@ transition is audited with actor and `from → to`, and override transitions are
 flagged as such in the audit entry. The one exit from a terminal status that no actor
 requests directly is `solved → valid`, applied when the challenge's `implemented`
 solution is deleted (§10.3) — audited as an override transition with the deleting
-platform admin as actor.
+platform admin as actor. Closing a challenge as a duplicate (§7.4) is an override to
+`rejected` with `trigger: "duplicate"`; overriding a linked duplicate out of `rejected`
+clears its link. A transition out of `valid`/`solved` (other than between those two)
+clears any Home pin (§13.2), and the first transition into `valid` stamps
+`first_valid_at` (§5, §12.4).
 
 Triage (leaving `awaiting_triage`) and assignment are namespace-admin actions;
 committee members operate from `in_review` onward.
@@ -815,6 +1512,245 @@ presentation is used by every assignee-search control in the app: the challenge-
 assignment control (this section) and the triage queue's filter-by-assignee,
 bulk-assign, and per-row assign controls (§14.1). The search payload is unchanged
 (`id`, `displayName`, `email`), as is who may assign and when.
+
+### §7.4 Duplicate challenges
+
+A namespace admin can close a challenge as a **duplicate** of an existing one. There is
+**no new status**. The duplicate (**A**) closes as **`rejected`**, and A carries a
+`duplicate_of` pointer to the canonical challenge (**B**).
+
+- **Who.** The **namespace admins of A's namespace** and **platform admins**. Committee
+  members, assignees, and authors cannot do this.
+- **Action.** "Mark as duplicate of `CH-<n>`" is on A's §13.1 detail page. The admin
+  enters B's number. In **one transaction**:
+  1. A moves to **`rejected`** as an admin override (invariant 6). The
+     `challenge.status_changed` row records `from → to` with
+     `after: { status: "rejected", override: true, trigger: "duplicate", duplicateOfId }`.
+     If A is already `rejected`, there is no transition, no status row, and no
+     notification. Only the link is written.
+  2. `duplicate_of_id` is set to B.
+  3. **Follower transfer.** Every user following A is added as a follower of B **only if
+     that user can see B** (§4.3, evaluated per user). Existing follows of B are left
+     alone. Followers keep following A. Nobody is notified of the new follow, and follows
+     stay unaudited (§12.3).
+  4. Any Home pin on A is cleared (§13.2 *Featured challenges*). A Committee pick on A
+     stays (§13.10).
+  5. **Flattening.** Any challenge already linked as a duplicate *of A* is re-pointed to
+     B, so chains never form. Each re-point writes its own `challenge.duplicate_linked`
+     row with `trigger: "repointed"` and the previous target in `before`. Its status is
+     unchanged, and there is no follower transfer and no notification. (Refusing
+     instead — "CH-7 has N duplicates" — would leak the existence and count of
+     challenges the actor may not be able to see, invariant 2.)
+  6. `challenge.duplicate_linked` is written for A with
+     `before: { duplicateOfId | null, status }`,
+     `after: { duplicateOfId, duplicateOfNumber, followersAdded }`.
+- **Eligibility of A.** A may be in any **non-terminal** status, or already `rejected`
+  (re-linking an existing duplicate re-points it, as below). Requests for a `solved` or
+  `withdrawn` A are refused with **409** (*"Only an open or rejected challenge can be
+  marked as a duplicate."*). A solved challenge has a delivered outcome, and a withdrawn
+  one has already been taken down by its author. An admin who really means it can
+  override the status first.
+- **Eligibility of B (the canonical).**
+  - B must **exist and be visible to the actor**. Otherwise the request fails with
+    **422**, using the same message for both cases (*"No challenge CH-<n> to link to."*),
+    so a hidden B cannot be distinguished from a missing one.
+  - B must **not be A** (**422**, *"A challenge can't be a duplicate of itself."*).
+  - B must **not itself be a duplicate** (**409**, *"CH-<n> is itself closed as a
+    duplicate and can't be the original."*). This tells the actor only that a challenge
+    they can see carries a link. It does not reveal the target.
+  - B must **not be `awaiting_triage` or `withdrawn`** (**409**, *"CH-<n> can't be the
+    original while it is awaiting triage or withdrawn."*). Those statuses are hidden from
+    almost everyone (§4.3), so the pointer and the follower transfer would reach no one.
+    Every other status qualifies, including `solved` and `rejected` ("this was already
+    rejected as CH-12").
+  - B may be in **any namespace** the actor can see.
+- **Re-linking.** Linking an A that is already a duplicate of B′ to a different B
+  re-points it. It is the same action, audited as `challenge.duplicate_linked` with the
+  old target in `before`, and followers are transferred to the new B. Linking A to the
+  same B again is a **200 no-op**.
+- **Invariants (DB-enforced).** `duplicate_of_id IS NULL OR status = 'rejected'`, and
+  `duplicate_of_id <> id`. So any transition that takes a linked A **out of `rejected`**
+  (only an admin override can, because `rejected` is terminal) **clears the link in the
+  same statement**. That writes `challenge.duplicate_unlinked` with
+  `after: { trigger: "status_changed", status: <new> }`, actor = the overriding admin.
+- **Unlinking.** "Remove duplicate link" is on A's detail page and uses the same RBAC as
+  linking. It clears `duplicate_of_id` and **does not restore A's previous status**. A
+  stays `rejected` until an admin overrides it. Followers already copied to B stay. No
+  notification is sent. Audited as `challenge.duplicate_unlinked`, with
+  `before: { duplicateOfId }` and `after: { trigger: "manual" }`.
+- **Display, per viewer (invariant 2).** The pointer reads **"Duplicate of CH-<n>"** and
+  links to B. It renders **only for a viewer who can see B**, evaluated at read time.
+  Everyone else sees A as plain **"Rejected"**, without a number, a hint, or a "linked"
+  marker. If B later becomes hidden from someone (withdrawn, or its visibility narrowed),
+  the pointer disappears for that viewer automatically. It shows:
+  - on A's §13.1 detail page, next to the status;
+  - on A's §13.1 gallery card, under the status, and in A's list-view row (A appears on
+    the **Completed** tab, as every `rejected` challenge does).
+
+  Search results, the triage queue, and exports show only the status. B's page does not
+  list its duplicates in v1.
+- **The link is visible to the viewer, or it is not there.** The detail response carries
+  `duplicateOf: { number, title } | null`, which is **null when the viewer cannot see B**.
+  It also carries `canLinkDuplicate` (admin of A's namespace and A eligible) and
+  `canUnlinkDuplicate`. `canUnlinkDuplicate` is true only when a link exists **and** the
+  viewer can see B. For a namespace admin who cannot see B, A behaves as unlinked:
+  `DELETE` answers **409** (*"This challenge isn't marked as a duplicate."*), and `PUT`
+  simply re-points. A platform admin can always see and unlink. Gallery payloads carry
+  `duplicateOf: { number } | null` under the same rule.
+- **Notifications.** A's move to `rejected` fires exactly what any override to `rejected`
+  fires (§12.1 event 4, the author's *rejected* template). The template **adds the
+  pointer** (*"CH-7 "…" was rejected as a duplicate of CH-12."*) **only if the recipient
+  can see B**. Otherwise the recipient gets the plain rejected message. The deep link
+  stays A's page. The payload is built per recipient, so this rule holds for any
+  recipient set. Linking an already-rejected A, re-pointing, flattening, and unlinking
+  fire nothing.
+- **Hard delete (§10.3).** Deleting **B** clears `duplicate_of_id` on every challenge
+  that points at it, inside the delete transaction and before B's row is removed (the
+  FK requires it). Each of those writes `challenge.duplicate_unlinked` with
+  `after: { trigger: "canonical_deleted" }`, actor = the deleting admin. Those
+  challenges stay `rejected`. Deleting **A** needs nothing extra.
+- **Duplicate warning (§6.1): no change.** `rejected` challenges are already excluded
+  from similarity results, so a linked A never appears there. B appears only on its own
+  merits. The canonical is **not** substituted for A.
+- **Triage queue (§14.1): no change.** Linking is a **detail-page action only**. There is
+  no bulk path, and the queue gains no column.
+- **API.** `PUT /api/challenges/:number/duplicate-of` with body `{ canonical: "CH-12" }`
+  (the `CH-` prefix is optional). `DELETE /api/challenges/:number/duplicate-of` unlinks.
+  Order of checks (§2.4): **404** if A is invisible or its number is malformed; **400**
+  for a malformed body or canonical; **403** if the caller is not an admin of A's
+  namespace (*"Only namespace admins can mark duplicates."*); then the 422/409 checks
+  above. The response is the updated challenge detail.
+
+### §7.5 Triage discussion
+
+Every challenge carries one **private triage thread**: a conversation between the
+challenge's author and the people reviewing it. It is separate from the public comments
+(§10.2), shares none of their rows, and never appears in a comment count, the comment
+thread, search (§13.4), a CSV export, a KPI or a leaderboard. Solutions have no triage
+thread in v1.
+
+**Participants.** Two sides:
+- **Author side** — the challenge's **author** only. Co-authors (§6.5) are **not**
+  participants: the thread is the review team's channel to the submitter, and
+  co-authors hold no powers on the item.
+- **Team side** — the **namespace admins** of the challenge's namespace, its
+  **committee members**, the challenge's **assignee** (if any, while assigned — the
+  assignee drives the review), and **platform admins**.
+
+A participant reads the thread **only while they can also see the challenge** (§4.3,
+invariant 2). Participation never widens visibility. So while a challenge is
+`awaiting_triage` or `withdrawn`, only the author, the namespace's admins and platform
+admins can read the thread. Committee members, and an assignee who is not a namespace
+admin, cannot see such a challenge and therefore cannot see its thread either — which is
+consistent with triage being a namespace-admin action (§7.2). Once the challenge reaches
+`in_review` they see the **whole** thread, earlier messages included. Anyone else gets
+**404** if they cannot see the challenge. If they can see the challenge but are not a
+participant, they get **403** (§2.4 ordering). Losing a participant role (SCIM,
+unassignment) removes access at once; that person's earlier messages stay in the thread
+under their name.
+
+**Open vs read-only, derived from the challenge's current status.**
+- **Open** (participants may post, and edit or delete their own messages):
+  `awaiting_triage`, `in_review`, `needs_improvement`, `meeting_scheduled`.
+- **Read-only** (still visible to the same participants, no new messages, no own edits
+  or deletes): `valid`, `solved`, `rejected`, `withdrawn`.
+- Openness is computed from the status at request time and is never stored. An admin
+  override back to an open status (§7.2) reopens the thread, and a move to a read-only
+  status closes it. A post, edit or own delete against a read-only thread is refused
+  with **409**.
+
+**Messages.**
+- Body: the same format as comments, i.e. the Markdown subset (§6.3), rendered by the
+  shared renderer. Required, not blank, **≤ 5 000** raw characters. Message bodies are
+  never put into e-mails, inbox rows, webhook payloads (§12.4), audit payloads or the
+  system log.
+- **Own edit/delete:** the message's author may edit or delete it within **15 minutes**
+  of posting, and only while the thread is open. An edit stamps `edited_at`. A delete is
+  **soft**, exactly as comments (§10.2).
+- **Moderation:** namespace admins of the challenge's namespace and platform admins may
+  soft-delete any message at any time, read-only threads included (audited). Committee
+  members and the assignee cannot delete other people's messages.
+- A deleted message renders the way §10.2 renders a deleted comment, with "Message" in
+  place of "Comment", so the thread keeps its continuity.
+- Rows are hard-deleted only by the §10.3 challenge-delete cascade.
+
+**Anonymity (§9).** The thread lets an anonymous author talk to the review team without
+being revealed:
+- A message written by the challenge's author is labelled **"Author"**. If the
+  challenge is anonymous, the **name and avatar are replaced** by "Author" and the
+  generic anonymous bubble (§13.6). This applies to every viewer, admins included.
+  The API sends no author id, name or photo reference for such a message, only
+  `authorRole: "author"` and, for the author's own view, `isOwn: true` (invariant 3,
+  §3.1). The author sees their own messages captioned *"You — shown to the team as
+  Author"*.
+- If the challenge is not anonymous, the author's messages show their real name and
+  avatar plus the "Author" label.
+- **Team-side messages always show the real name and avatar** with a "Review team"
+  label. Like comments, they are never anonymous.
+- Masking is computed at render time from the challenge's current `is_anonymous`. After
+  an author self-reveal (§9), earlier messages show the name. An admin's transient
+  **reveal** (§9) is the only path to the identity and does not change the thread's
+  rendering.
+- If the author is also a team-side role holder (e.g. a namespace admin who submitted
+  into their own namespace), their messages on that challenge are **author-side** and
+  are masked as above when the challenge is anonymous.
+- The system log (§14.7) and presence (§14.5) anonymity rules cover the thread's
+  routes. A request to `/api/triage-messages/:id` resolves the parent challenge and
+  stores the route template only when that challenge is anonymous.
+
+**Notifications.** A new message notifies **the other side** (§12.1 event 14, *Triage
+message posted*, bell + e-mail, coalesced per thread):
+- **Team → author.** The challenge's author. Co-authors are excluded (see
+  Participants).
+- **Author → team.** The namespace admins of the challenge's namespace, its committee
+  members, the assignee (if any), and **only those platform admins who have posted in
+  this thread before**. Platform admins are not notified in bulk. A triage message
+  continues a conversation; it does not bring an item into the triage court the way
+  §12.1's admin-attention events 1, 2, 9 and 10 do. Mailing every platform admin about
+  every author reply in every namespace would bury the attention events. A platform
+  admin who has joined the conversation is treated like any team member.
+  **Fallback:** if this set is empty after the visibility drop (e.g. a namespace with
+  no namespace admins, no committee and no assignee), **all platform admins** are
+  notified instead. An author's message never goes unheard.
+- A new message does **not** notify other members of the poster's own side.
+- The usual §12.1 rules apply: dedup, actors never notify themselves, recipients
+  outside the challenge's visibility are dropped (so committee members get nothing
+  while the challenge is `awaiting_triage`). The event is **not mutable** by the
+  per-event preferences. The e-mail opt-out (§13.5) still governs e-mail.
+- Editing or deleting a message notifies nobody.
+
+**Surface.** The §13.1 detail page shows a **"Triage discussion"** panel to
+participants who can see the challenge. It sits above the public comments, is visually
+distinct from them, and carries a privacy caption. The author sees *"Private — only you
+and the review team can see this."* The team sees *"Private — visible to the author and
+the review team."* Messages are listed oldest-first. When the thread is open the panel
+has a composer. When it is read-only a notice replaces the composer: *"This discussion
+is closed because the challenge is <status>."*
+
+The detail response carries `canReadTriageThread` and `canPostTriageMessage`. The panel
+renders from the first; the composer renders from the second.
+
+**API (§16).**
+- `GET /api/challenges/:number/triage-messages` returns the thread.
+- `POST /api/challenges/:number/triage-messages { body }` returns 201, or **409** when
+  read-only.
+- `PATCH /api/triage-messages/:id { body }` edits the caller's own message (15-minute
+  window, thread open).
+- `DELETE /api/triage-messages/:id` is an own delete (window, thread open) or a
+  moderator soft-delete.
+- Posting shares the **comment** rate-limit bucket (60 per hour, §2.4).
+
+**Audit (§15).** The thread writes:
+- `triage_message.posted` (target = the message, payload `{ challengeId }`);
+- `triage_message.edited`;
+- `triage_message.deleted` (payload `{ moderator: boolean }`).
+
+None of these carry a body, mirroring the comment events. The actor is the real user,
+anonymous authors included: the audit log retains provenance (§15).
+
+**GDPR erasure (§3).** Messages are de-identified like comments. The erased user's
+messages render as "Deleted User", or still as "Author" on an anonymous challenge. The
+bodies remain.
 
 ---
 
@@ -885,6 +1821,64 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
   single-winner slot is free again for a new proposal; the challenge reopens with its
   existing solutions terminal.
 
+### §8.4 Solution ratings
+
+Any viewer may give a solution **1–5 stars**. Ratings are a quality signal for **ordering**
+solutions on the challenge page. They are not a leaderboard metric (§13.3), not a
+vote that changes status, and they change no gate of §8.2/§8.3. The detail-page
+presentation — summary, histogram, star control and the "Top rated" sort — is in §13.1.
+
+- **Who may rate.** Anyone who can **see** the solution (§4.3 — including the stricter
+  `proposed` rule, so while proposed only its author, the assignee and the namespace's
+  committee/admins see it). The exceptions are **its author and its co-authors (§6.5)**.
+  The check uses the **true** `author_id` server-side, so an anonymous author cannot rate
+  their own solution either. The refusal goes only to that author, who already knows they
+  wrote it, so it leaks nothing (invariant 3). A user who has rated a solution and is
+  later added as its co-author loses that rating in the same transaction (§6.5).
+- **One rating per user per solution.** A user can set, change or **remove** their rating
+  at any time while the solution is ratable. A changed rating replaces the old one.
+- **Ratable statuses.** Ratings are open while the solution is in a **forward** status:
+  `proposed`, `in_review`, `needs_improvement`, `valid`, `accepted_internally`,
+  `waiting_for_resources`, `in_implementation`, `external_acceptance` and `implemented`.
+  When the solution is `rejected`, `not_selected` or `withdrawn` (including an admin
+  override into one of them), ratings **freeze**: existing ratings stay and are still
+  displayed wherever the solution is visible, but no rating can be added, changed or
+  removed. An admin override back to a forward status reopens them. Ratability follows
+  the **solution's** status only: unlike likes (§8.3), a `solved` parent challenge does
+  **not** freeze ratings, because the `implemented` winner stays ratable by design, and a
+  `rejected` parent's still-forward solutions remain ratable (a `withdrawn` parent hides
+  its solutions anyway, §4.3).
+- **Who rated is never shown**, to anyone, on any surface: no rater list, no per-user
+  export and no rater name in a notification. An anonymous solution's rating summary is
+  shown like any other; rating rows hold raters, never the author, so the summary cannot
+  reveal the author.
+- **Ranking score (Bayesian average).** For a solution with `n` ratings summing to `S`:
+  `score = (m·C + S) / (m + n)`, with **`m = 5`** and **`C`** = the platform mean rating.
+  - **C** is the mean of every rating on solutions that pass the §13.5 *org-visible* test
+    (solution not `proposed`/`withdrawn`, parent challenge `org`-visible and not
+    `awaiting_triage`/`withdrawn`). That makes it one viewer-independent number that never
+    reflects restricted content (invariant 2).
+  - C is recomputed by the **hourly leader sweep** (§13.3 *Leader badges*) and stored in
+    `settings.solution_rating_prior` → `{ mean, count, computedAt }`. When the key is absent
+    or `count = 0`, **C = 3.0**.
+  - An unrated solution therefore scores exactly C. The score is used **only for
+    ordering** and is never displayed.
+- **Visibility.** Ratings and their aggregates **inherit the solution's visibility**
+  (§4.3). They appear only inside a payload the viewer is already entitled to, and a rating
+  request for a solution the caller cannot see is a **404**.
+- **No notifications.** Setting, changing or removing a rating fires no §12.1 event.
+- **Audited** like likes (§15): `rating.set` and `rating.removed`.
+- **API.**
+  - `PUT /api/solutions/:number/rating { stars: 1..5 }` and
+    `DELETE /api/solutions/:number/rating`. Both return
+    `{ myRating, rating: { average, count, histogram } }`.
+  - Responses: **400** non-integer or out-of-range `stars`; **403** the author or a
+    co-author; **404** not visible; **409** frozen status; **200** otherwise. A `DELETE`
+    with no existing rating is a no-op 200 with no audit row.
+  - Mutation rate-limit bucket (§2.4).
+  - Each solution in the challenge detail payload gains `rating: { average | null, count,
+    histogram: [n1, n2, n3, n4, n5], score }`, `myRating: 1..5 | null` and `canRate`.
+
 ---
 
 ## §9 Anonymity
@@ -892,7 +1886,8 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
 - Challenges and solutions can be submitted anonymously. **The true author is always
   stored**; the flag controls exposure only.
 - **Masking is total by default** (invariant 3): every list, card, detail page,
-  search result, leaderboard, KPI, CSV export, e-mail, and in-app notification shows
+  search result, leaderboard, KPI, CSV export, e-mail, in-app notification, and
+  outbound webhook (§12.4, which carries no person field at all) shows
   **"Anonymous"** with a neutral avatar — for all users **including admins and
   committee**. The neutral avatar is a **generic anonymous bubble** (§13.6): no
   photo, no initials, no per-user color — any of those would fingerprint the author.
@@ -914,7 +1909,23 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
   author, but your comment shows your name").
 - **Leaderboard exclusion:** contributions made anonymously do not count toward any
   leaderboard (challenges submitted, solutions proposed/implemented, likes received
-  on anonymous items). After self-reveal, they count.
+  on anonymous items). After self-reveal, they count. An anonymous bubble therefore
+  never wears a leader badge (§13.3, §13.6).
+- **Triage thread (§7.5).** The anonymous author's messages in the private triage
+  thread show as **"Author"** with the generic anonymous bubble to every viewer,
+  admins included. The API sends no author id for them. Team members' messages always
+  show their real names. The audited reveal remains the only path to the identity.
+- **No co-authors on anonymous items (§6.5).** An anonymous item cannot carry
+  co-authors (create and add are refused). After a self-reveal, co-authors may be
+  added within an edit window.
+- **Curation and ratings name only their actor.** A Committee pick (§13.10) names the
+  endorser, never the author; a rating summary (§8.4) is built from raters, never the
+  author; the author's (and co-authors') own views are excluded from view counts
+  (§14.8) server-side, and nothing about that check reaches the client.
+- **Direct messages (§13.9).** The DM API is keyed on user ids only and accepts no
+  challenge or solution reference; "Reach out" is offered only where the client already
+  holds a real user id. There is therefore no path, in the UI or the API, from an
+  anonymous item to a conversation with its author.
 
 *Implementation note:* the §13.1 Challenges page ships full masking — anonymous items
 always show "Anonymous" to every viewer, no exceptions. Both the audited admin
@@ -935,12 +1946,17 @@ implemented on the challenge detail page.
     Client↔client-name pairing is re-validated); solution: description, cost vs
     benefits. **Not** editable here: `visibility` (namespace/platform-admin only,
     §4.3), anonymity (removed only via one-way self-reveal, §9), and namespace.
+  - **Co-authors** (§6.5) are managed by the author within the same edit windows
+    through their own add/remove endpoints, not through the Edit form. A co-author may
+    remove themselves at any status. Co-authors cannot edit, resubmit or withdraw.
   - Every edit stamps `edited_at` and writes an audit row carrying a **field-level
-    diff** (only the changed fields, before → after). Edits fire no notification.
+    diff** (only the changed fields, before → after; Markdown fields record the **raw
+    source**, never the derived twins, §6.3). Edits fire no notification.
   - Endpoints: `PUT /api/challenges/:number` · `PUT /api/solutions/:number`.
 - **Resubmit:** while `needs_improvement`, the author's explicit **"Resubmit"**
   action moves the item to `in_review` and notifies the reviewers (§12.1 event 9).
-  Author-only; refused from any other status. Audited as a `status_changed` row with
+  Author-only; refused from any other status. The action locks the item's author
+  controls while in flight (§6.4). Audited as a `status_changed` row with
   `override:false` and `trigger:"author_resubmit"`. Endpoints:
   `POST /api/challenges/:number/resubmit` and the solution twin.
 - **Withdraw:** the author may withdraw their own challenge or solution from any
@@ -954,7 +1970,9 @@ implemented on the challenge detail page.
 - The §13.1 detail page shows the author an **Edit** form (pre-filled, within the
   edit window), a **Resubmit** button (while `needs_improvement`), and a **Withdraw**
   button (any non-terminal); the detail response carries `canEdit`/`canResubmit`/
-  `canWithdraw` so each control renders only when permitted.
+  `canWithdraw` so each control renders only when permitted, plus `coAuthors`/
+  `isCoAuthor`/`canManageCoAuthors` (§6.5) and `canReadTriageThread`/
+  `canPostTriageMessage` (§7.5).
 - **Authors never delete.** An author's only removal path is **Withdraw** (above) —
   soft and terminal. Permanent removal does exist, but it is a **platform-admin-only**
   action with its own rules (§10.3). Routine cleanup of spam remains admin override to
@@ -963,6 +1981,8 @@ implemented on the challenge detail page.
 
 ### §10.2 Comments
 
+- **Body** is Markdown source rendered per §6.3 (≤ 5 000 raw characters); comments
+  are searchable nowhere, so they have no plain-text twin.
 - Owner may **edit or delete** their comment within **15 minutes** of posting
   (`edited_at` stamped; delete is soft).
 - Namespace/platform admins may soft-delete any comment at any time (audited);
@@ -971,6 +1991,43 @@ implemented on the challenge detail page.
 - Comment deletion is **soft in every standalone path** — no control anywhere
   hard-deletes a single comment. Comment rows disappear only as part of the §10.3
   parent-delete cascade.
+- Triage-thread messages (§7.5) follow the same 15-minute own edit/delete window and
+  the same admin soft-delete, and are a separate table. Comment counts never include
+  them.
+- **Composer.** The new-comment composer is a multi-line `<textarea>` (2 rows,
+  auto-growing to ~8 then scrolling), as is the 15-minute edit field, because the
+  Markdown subset (§6.3) needs line breaks. **Enter** inserts a newline,
+  **Ctrl+Enter / ⌘+Enter** posts (or saves an edit), and the **Post** button is
+  unchanged. The 5 000-character limit counts the raw text.
+- **Emoji picker.** An icon button beside **Post** (`aria-label="Insert emoji"`,
+  `aria-haspopup="dialog"`, `aria-expanded`) opens a small **non-modal popover**
+  (`role="dialog"`, labelled "Emoji") using the **shared popover treatment** (§2.2).
+  It is positioned against the button and flipped above/below to stay in the viewport.
+  - **Set:** a **built-in, curated list of exactly 40** emoji in an 8 × 5 grid. It is
+    a constant in the web package, with **no new dependency**, no search, no skin tones,
+    no recents, and no server data. In order:
+    👍 👎 👏 🙌 🙏 💪 🤝 👀 ·
+    😀 😄 😅 😊 😉 😍 🤔 😮 ·
+    😢 🙂 😎 🥳 🤯 😬 🙃 😂 ·
+    ✅ ❌ ⚠️ ❓ 💡 🚀 🎯 🔥 ·
+    ⭐ 🏆 🎉 ❤️ 💯 📈 📌 💬
+    Each is a `<button type="button">` whose `aria-label` and `title` are its Unicode
+    CLDR short name ("thumbs up", "rocket", …). All 40 are Emoji ≤ 11.0, so they render
+    on supported systems without an emoji font asset.
+  - **Insertion** goes **at the cursor**: the textarea's selection is captured when
+    the picker opens, and a pick replaces that selection (or inserts at the caret, or at
+    the end if the composer was never focused). The picker then closes and focus returns
+    to the textarea with the caret just after the emoji. One pick per opening. A pick
+    that would take the raw text past 5 000 characters is ignored (an emoji counts as
+    its UTF-16 length; ⚠️ and ❤️ carry a variation selector). Emoji are plain Unicode in
+    the body: no shortcodes, no server-side handling, no Markdown interaction.
+  - **Keyboard & a11y:** opening moves focus to the first emoji. **Arrow keys** move
+    through the grid (roving `tabindex`, stopping at the edges) and **Home/End** jump to
+    the row's ends. **Enter/Space** inserts. **Escape** closes and returns focus to the
+    trigger. **Tab** out of the popover, or a click outside it, closes it. Focus is not
+    trapped.
+  - The picker is on the **new-comment composer only**. The edit field accepts typed
+    or pasted emoji but has no picker.
 
 ### §10.3 Admin delete (platform admin)
 
@@ -995,8 +2052,17 @@ delegated per namespace (contrast §14.2).
 row; **all** of its solutions regardless of status; every comment, like, and follow on
 the challenge and on those solutions; every `attachments` row of the challenge and of
 those solutions — tombstones included; and every `notifications` inbox row and unsent
-`notification_outbox` row targeting any of them. Deleting a **solution** removes the
-same subtree rooted at that solution and leaves the parent challenge standing. Any
+`notification_outbox` row targeting any of them; every **triage message** (§7.5),
+every **co-author** row (§6.5) of the challenge and its solutions, every **solution
+rating** (§8.4), every `webhook_deliveries` row (§12.4) targeting any of them, and the
+challenge's `challenge_views`, `challenge_view_daily` and `challenge_related` rows
+(either side, §13.11, §14.8 — removed by `ON DELETE CASCADE` foreign keys). Before the
+row goes, the same transaction clears `duplicate_of_id` on every challenge that names
+the deleted one as canonical (audited `challenge.duplicate_unlinked`, `trigger:
+"canonical_deleted"`; those challenges stay `rejected`, §7.4) and, if the challenge was
+featured, writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting a
+**solution** removes the same subtree rooted at that solution and leaves the parent
+challenge standing. Any
 in-flight chunked-upload session (`attachment_uploads`, §11) for the deleted subtree is
 aborted and dropped. The transaction is all-or-nothing: a failure anywhere leaves the
 item exactly as it was.
@@ -1024,19 +2090,23 @@ rather than erroring (the verdict handler is shared, §11).
   `override: true`, `trigger: "solution_deleted"`, actor = the deleting admin.
 
 **Notifications: none.** A delete fires no e-mail and no in-app item — not to the
-author, not to the assignee, not to followers, not to other admins (§12.1). The audit
+author, not to the assignee, not to followers, not to other admins (§12.1) — and no
+channel webhook post (§12.4). The audit
 row is the only record. Inbox items for the deleted subtree are removed by the cascade,
 so no notification survives pointing at a dead entity.
 
 **Derived state.** Because the rows are gone, the item disappears everywhere by
 construction: lists, search vectors, solution and like counts, KPIs, dashboard
-spotlights, the triage queue and its attention badge (§14.4), CSV exports.
-**Leaderboards recompute without it** — deleting an implemented solution retroactively
-removes its author's credit and can change historical ranks (§13.3). That is accepted.
+spotlights, the Home featured section (§13.2), related-challenge suggestions
+(§13.11), view analytics (§14.8), the triage queue and its attention badge (§14.4), CSV
+exports. **Leaderboards recompute without it** — deleting an implemented solution
+retroactively removes its author's credit and can change historical ranks (§13.3); leader
+badges follow at the next hourly sweep. That is accepted.
 
 **Audit.** The delete writes `challenge.deleted` / `solution.deleted` carrying: the
 number, entity type, author id, status at deletion, namespace, the per-type counts of
-cascaded child rows, and the **mandatory reason** the admin supplied (free text,
+cascaded child rows (including `triageMessages`, `coauthors` and `webhookDeliveries`),
+and the **mandatory reason** the admin supplied (free text,
 required, ≤ 500 chars). It carries **no content** — no title, no description, no client
 name, no comment bodies, no attachment filenames. That omission is deliberate: the
 action exists to destroy sensitive content, and `audit_log` is exempt from GDPR erasure
@@ -1064,10 +2134,14 @@ while no listing or admin screen surfaces that identity outside the audited reve
 (invariant 3).
 
 **Database.** A migration grants the app role **DELETE** on `challenges`, `solutions`,
-`comments`, `attachments`, `notifications`, and `notification_outbox` (`likes` and
-`follows` already have it; `audit_log` never will). Those grants exist to serve this
-cascade and nothing else — **no other code path may hard-delete these rows**, and the
-soft-delete rules of §10.2 and §11 remain in force everywhere else.
+`comments`, `attachments`, `notifications`, `notification_outbox`, and
+`triage_messages` (`likes` and `follows` already have it; `audit_log` never will). Those
+grants exist to serve this cascade and nothing else — **no other code path may
+hard-delete these rows**, and the soft-delete rules of §7.5, §10.2 and §11 remain in
+force everywhere else. The other v0.10 tables the cascade touches — `coauthors`,
+`solution_ratings`, `webhook_deliveries`, `challenge_views`, `challenge_view_daily`,
+`challenge_related` — hold DELETE for their own ordinary paths too (removal,
+retention trims, rebuilds), so they are not cascade-only.
 
 **Out of scope.** The GDPR "Delete user info" action (§3) gains no "and delete all their
 challenges and solutions" option; it continues to de-identify. `audit_log` rows are
@@ -1363,13 +2437,24 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 | 9 | Resubmitted (`needs_improvement` → `in_review` by the author, §10.1) | Namespace admins + committee, the assignee, followers |
 | 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/followers already had it) |
 | 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader |
+| 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
+| 13 | Added as co-author (§6.5) | The added user |
+| 14 | Triage message posted (§7.5) — **coalesced per thread** | The other side of the thread. **Team → author:** the challenge author. **Author → team:** namespace admins + committee of the challenge's namespace, the assignee, and platform admins who have posted in this thread; if that set is empty, all platform admins |
 
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
 rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`
 (`<PUBLIC_BASE_URL>/challenges/:number`, `…/solutions/:number`).
 Delivery is immediate — there is no scheduled digest (§19); the one batching
-mechanism is the per-item coalescing of comment notifications below.
+mechanism is the per-item coalescing of comment and triage-message notifications
+below.
+
+**Co-author routing (§6.5).** Wherever this matrix names the item's author as a
+recipient (events 2, 3, 4, 5, 6, 8), the item's co-authors are recipients too, with
+the same preference mutes as the author route. Events 9 and 10 (author actions) also
+reach the item's co-authors; for event 10 they are delivered directly like its other
+recipients. Co-authors never receive event 14 (they are not triage-thread
+participants).
 
 **Per-event preferences (follower-derived events).** Three profile toggles (§13.5),
 all default **on**, stored on `users` as `notify_followed_comments`,
@@ -1381,8 +2466,11 @@ true; existing users backfilled on):
   it off hears no comments on their own item either.
 - *Status changes on items I follow* — gates **event 3** for followers **and**
   authors. It does **not** touch the actionable author/assignee events — 4 (rejected),
-  5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed) — which stay
-  non-mutable.
+  5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed), 12
+  (assignments transferred), 13 (added as co-author), 14 (triage message) — which stay
+  non-mutable. A triage message is a direct conversation with a duty to answer, and
+  being credited or handed work is a one-off actionable fact; the e-mail switch still
+  applies to all of them.
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
   and followers; the admin/committee recipients of event 2 are unaffected.
 
@@ -1407,8 +2495,32 @@ one e-mail per item until they read it**; once read, the next comment starts a f
 row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
 (comments carry no anonymity option, so the commenter's name is safe; the item's own
 author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
-**or opening the item's detail page** all mark that item's row read. **Only event 6
-coalesces**; every other event remains one row per occurrence.
+**or opening the item's detail page** all mark that item's row read.
+
+**Coalesced triage notifications (event 14).** One unread inbox row per recipient per
+**thread** (`type = triage_message_posted`; payload `challengeId`, `challengeNumber`,
+`challengeTitle`, `count`, `latestBy`, `latestAt`), upserted exactly like event 6
+against the §5 partial unique index — at most one e-mail per thread until read. Copy:
+*"3 new triage messages on CH-412 — latest by Alice"*. `latestBy` is *"the author"*
+when the challenge is anonymous; the item's author stays masked per §9 in every case.
+The message body is never included. Deep link:
+`<PUBLIC_BASE_URL>/challenges/:number#triage`. **Read actions:** opening the inbox
+row, mark-all-read, or opening the challenge's detail page as a thread participant.
+**Only events 6 and 14 coalesce** (plus the platform admins' §14.7 `system.error`
+alert, which is outside this matrix); every other event remains one row per
+occurrence.
+
+**Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
+(§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
+from a removed account: CH-12, CH-40, …"* (at most 10 numbers, then *"and K more"*); it
+never names the erased person. Link: the lowest-numbered moved challenge. Every listed
+challenge is visible to the recipient by construction, because the move was gated on
+it.
+
+**Event 13 (added as co-author)** — one row per occurrence, never coalesced. Copy:
+*"Alice Smith added you as a co-author of CH-412 "Title""* / *"… of solution SOL-17 on
+CH-412 "Title""*. The actor is the author, who cannot be anonymous here (§6.5).
+Removal fires nothing.
 
 **E-mail content safety.** A notification e-mail comes from the organization's trusted
 service mailbox, so it must not lend that trust to links a user wrote:
@@ -1417,6 +2529,11 @@ service mailbox, so it must not lend that trust to links a user wrote:
   in user-written text (a challenge title, a comment excerpt) is rendered as plain,
   escaped text: still readable and copyable, but never an anchor. The plain-text (SMTP)
   body is unchanged; it has no anchors.
+- **User-written Markdown never reaches an e-mail as markup.** Any description,
+  cost-vs-benefits or comment text placed in an e-mail (HTML or plain-text body) is
+  first reduced by the shared `stripMarkdown` (§6.3). A `[text](https://other.example)`
+  becomes `text (https://other.example)`, and that URL then falls under the rule
+  above: escaped text, not an anchor, unless it is the app's own origin.
 - **The admin-authored HTML wrapper is sanitized by a real HTML parser** against an
   explicit allowlist of e-mail-safe elements and attributes (layout tables, text
   formatting, images, links), not by pattern matching. Anything off the list is dropped:
@@ -1433,28 +2550,319 @@ the dispatch helper resolves both from SCIM-synced membership + `role_mappings`
 item that enters or returns to the triage/review court (submitted, proposed,
 resubmitted, withdrawn). Routine forward transitions driven by committee/assignees
 (events 3–5, 8) deliberately do **not** notify admins; the §14.4 attention badge, not
-a per-transition mail, is how admins track the standing queue.
+a per-transition mail, is how admins track the standing queue. **Event 14 deliberately
+does not include all platform admins:** a triage message continues a conversation and
+does not bring an item into the triage court. Platform admins hear it only once they
+have posted in the thread, or as the fallback when nobody else would (§7.5).
 
 **Admin delete fires nothing.** A platform-admin delete (§10.3) produces no e-mail and
 no in-app item for anyone — the audit row is the only record — and the cascade removes
 the inbox and unsent-outbox rows of the deleted subtree. The matrix above therefore has
 no delete event, by design.
 
+**Curation is silent.** Featuring/unfeaturing (§13.2) and setting or removing a
+Committee pick (§13.10) notify no one. Linking a duplicate (§7.4) notifies only through
+the ordinary rejection it causes: event 4's template names the canonical (*"rejected as
+a duplicate of CH-12"*) only to a recipient who can see it, and the payload is built per
+recipient. Re-pointing, unlinking, and the follower transfer notify no one.
+
+**Other silent sources.** Ratings (§8.4), view recording (§14.8) and the
+related-challenges rebuild (§13.11) fire no notification of any kind. **Direct messages
+are not notifications** (§13.9, §12.2): the matrix has no DM event. **Channel webhooks**
+(§12.4) are a separate, namespace-level channel with their own outbox; they are not rows
+of this matrix and are not affected by any user preference.
+
 ### §12.2 In-app inbox
 
 Bell icon with unread count; inbox lists notifications newest-first with read/unread
 state, mark-read and mark-all-read. In-app notifications are always on; the per-user
 opt-out (§13.5 profile) affects e-mail only, and the §12.1 per-event preferences
-remove a recipient before any row exists. A coalesced comment row (§12.1) renders its
-count and latest commenter; the platform admins' `system.error` alert (§14.7) is an
-ordinary inbox row that is never e-mailed. The 30-second unread poll also carries the
-active §14.6 system banner, so no second poll exists for it.
+remove a recipient before any row exists. A coalesced comment or triage-message row
+(§12.1) renders its count and latest poster; the platform admins' `system.error` alert
+(§14.7) is an ordinary inbox row that is never e-mailed. The 30-second unread poll also
+carries the active §14.6 system banner, so no second poll exists for it.
+
+**Direct messages are not notifications** (§13.9). A DM never creates an inbox row,
+an outbox row or an e-mail; the §12.1 matrix has no DM event; and neither the e-mail
+switch nor the per-event preferences apply. The only signal is the messages icon's
+own unread badge, whose count rides this same 30-second poll (the response gains
+`messagesUnread` beside `banner`), so no second 30-second poll exists for it either.
 
 ### §12.3 Follows
 
 Any user may follow/unfollow any challenge or solution they can see. Authors and
 assignees are auto-followed to their items (can unfollow). Followers receive events
-3, 6, 8 (and 2 for challenge followers).
+3, 6, 8 (and 2 for challenge followers). Co-authors (§6.5) are not auto-followed; they
+already receive the author's events. Closing a challenge as a duplicate copies its
+followers to the canonical, per follower only where they can see it (§7.4). Follows are
+not audited.
+
+### §12.4 Channel webhooks
+
+A **platform admin** may attach **channel webhooks** to a namespace. Each one posts a
+short announcement to a team channel when a milestone happens on an **org-visible**
+item of that namespace: a Microsoft Teams channel through a Teams Workflows webhook, or
+any receiver that accepts generic JSON.
+
+Webhooks are deliberately **not** part of the §12.1 notification pipeline. They have
+their own outbox, never create inbox rows or e-mails, and have no per-user variant
+(per-user webhooks are out of scope, §19).
+
+**Events.** Exactly three. Each is enqueued on the real transition that causes it,
+enforced or override, from the detail page, the triage bulk-status action, or the §8.3
+auto-close:
+
+| Event | Fires when | Item posted |
+|---|---|---|
+| `challenge.validated` | a challenge enters `valid` **for the first time** (new challenge open for solutions after triage) | the challenge |
+| `solution.implemented` | a solution enters `implemented` | the solution |
+| `challenge.solved` | a challenge enters `solved` (by §8.3 auto-close or by admin override) | the challenge |
+
+- "First time" is pinned by `challenges.first_valid_at` (§5). It is set on the first
+  transition into `valid` and never cleared. A challenge that leaves `valid` and
+  returns, including the §10.3 `solved → valid` revert, never posts
+  `challenge.validated` again.
+- `solution.implemented` and `challenge.solved` post on every real transition into
+  those statuses. Both are terminal, so re-entry needs a deliberate admin override.
+- The §8.3 auto-close therefore posts **both** `solution.implemented` and
+  `challenge.solved`, enqueued in that order. Both are kept by design; a JSON receiver
+  can filter on `event`, and there is no per-webhook event selection.
+- A platform-admin delete (§10.3) posts nothing.
+
+**Routing.** An item goes **only to its own namespace's** enabled webhooks. The
+`global` namespace's webhooks post org-visible items of `global` only. There is no
+fan-out to other namespaces, and no all-namespaces webhook. Archived namespaces keep
+posting; archiving blocks new submissions, not milestones.
+
+**Leak guard (invariants 2–3).** A delivery is sent only if the item passes the §13.5
+**org-visible test** (the test an arbitrary authenticated viewer would pass):
+- the challenge, or a solution's parent challenge, is `org`-visible and is not
+  `awaiting_triage` or `withdrawn`;
+- a solution is additionally not `proposed` or `withdrawn`.
+
+The test runs **twice**:
+- **At enqueue.** An item failing it enqueues nothing.
+- **Again in the worker immediately before sending.** An item that has since become
+  `namespace`-visible, been withdrawn, or been deleted is **skipped**. That is not a
+  failure and writes no system-log row.
+
+A namespace-restricted item is never posted, and becoming `org`-visible later does not
+post it retroactively.
+
+**Anonymity** is structural: the payload carries **no author, co-author, assignee or
+any other person field**, so there is nothing to mask. Comments, triage messages,
+descriptions and attachments are never included.
+
+**Payload, generic JSON format** (`Content-Type: application/json; charset=utf-8`).
+Exactly these fields:
+
+```json
+{
+  "schema": "innobox.webhook.v1",
+  "event": "challenge.validated",
+  "occurredAt": "2026-10-08T12:34:56Z",
+  "namespace": "global",
+  "item": {
+    "type": "challenge",
+    "number": "CH-42",
+    "title": "Reduce onboarding time for new joiners",
+    "status": "valid",
+    "url": "<PUBLIC_BASE_URL>/challenges/42"
+  }
+}
+```
+
+- `occurredAt` is the transition time (UTC, second precision).
+- `namespace` is the namespace's current **slug**.
+- `status` is the canonical status the event is about (`valid`, `implemented`,
+  `solved`).
+- `url` is built server-side from `PUBLIC_BASE_URL` (§12.1 deep-link convention).
+- For a solution: `number` is `SOL-<n>`, `title` is the **parent challenge's** title
+  (solutions have none), and `url` is `…/challenges/<n>#SOL-<m>`.
+- `title` is read at send time. `status` and `occurredAt` are snapshotted at enqueue.
+
+**Payload, Teams Workflows format.** This targets the Teams **Workflows** template
+"Post to a channel when a webhook request is received". That template expects a
+`message` envelope wrapping one Adaptive Card attachment:
+
+```json
+{
+  "type": "message",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "contentUrl": null,
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+          { "type": "TextBlock", "text": "New challenge open for solutions", "weight": "Bolder", "size": "Medium", "wrap": true },
+          { "type": "RichTextBlock", "inlines": [ { "type": "TextRun", "text": "CH-42 · Reduce onboarding time for new joiners" } ] },
+          { "type": "FactSet", "facts": [
+              { "title": "Status", "value": "Valid — open for solutions" },
+              { "title": "Namespace", "value": "global" } ] },
+          { "type": "TextBlock", "text": "{{DATE(2026-10-08T12:34:56Z,SHORT)}} {{TIME(2026-10-08T12:34:56Z)}}", "isSubtle": true, "size": "Small", "wrap": true }
+        ],
+        "actions": [
+          { "type": "Action.OpenUrl", "title": "Open in InnoBox", "url": "<PUBLIC_BASE_URL>/challenges/42" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+- **Headings:**
+  - `challenge.validated`: *"New challenge open for solutions"*
+  - `solution.implemented`: *"Solution implemented"*
+  - `challenge.solved`: *"Challenge solved"*
+  - the test send: *"Test message — this channel is connected to InnoBox"*
+- The status fact uses the §7.1/§8.1 **display** label.
+- The time line uses the Adaptive Card `DATE`/`TIME` functions, so Teams renders it in
+  each reader's local time ("store UTC, convert at display", §2).
+- **User text is never Markdown.** The title travels only as a `TextRun` inside a
+  `RichTextBlock`, which Adaptive Cards render as plain text. A title containing
+  `[text](https://…)` cannot become a link.
+- The only actionable element is the `Action.OpenUrl`, whose URL is always under
+  `PUBLIC_BASE_URL`. This is the card analogue of §12.1 *E-mail content safety*.
+
+**Request.**
+- `POST`, body ≤ 16 KB.
+- Headers:
+  - `User-Agent: InnoBox-Webhook/<APP_VERSION>`;
+  - `X-InnoBox-Event: <event>`;
+  - `X-InnoBox-Delivery: <delivery id>`. The delivery id is stable across retries, so
+    a JSON receiver can deduplicate. Delivery is at-least-once.
+- There is no HMAC payload signature: the secret URL is the credential, the same model
+  as Teams.
+- Any **2xx** response is success. Teams Workflows answers `202 Accepted`.
+- The response body is read up to 64 KB and discarded.
+
+**URL rules and the SSRF guard** (§2.4 *Outbound requests*). These are enforced when a
+webhook is saved, and again at **every** send, the send-time check being the
+authoritative one.
+- **Scheme and form:** `https:` only. Port 443 (implicit or explicit). No userinfo
+  (`user:pass@`). ≤ 2 048 characters. A syntactically valid absolute URL.
+- **Address check after DNS resolution:** the host is resolved (A and AAAA), and the
+  request is refused if **any** resolved address is not public. Refused ranges:
+  - IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`,
+    `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`,
+    `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`;
+  - IPv6: `::/128`, `::1/128`, `fc00::/7`, `fe80::/10`, `ff00::/8`, `2001:db8::/32`;
+  - IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`) addresses are judged by
+    their embedded IPv4 address.
+
+  IP-literal hosts get the same check. Compose service names (`postgres`, `minio`, …)
+  resolve to private addresses and are therefore refused.
+- **Pinned connection:** the connection is made **to the vetted address** (no second
+  lookup, closing DNS rebinding). The original host name is used for SNI, `Host` and
+  certificate verification. TLS verification is always on. Proxy environment variables
+  are not honoured (a proxy would defeat the pinned-address guard).
+- **No redirects.** A 3xx response is a **failure**; the `Location` is never followed.
+- **Timeout:** **10 s** for the whole exchange (connect, TLS, response headers).
+- **Save-time checks:** a URL failing the scheme or form rules is refused at save
+  (**422**), as is one that does not resolve, or resolves to a refused address. The
+  message is plain, e.g. *"Webhook URLs must use https on port 443"*, *"This address
+  is on a private or internal network"*.
+
+**Secret handling.** A webhook URL is a bearer secret: a Teams Workflows URL carries its
+signature in the query string.
+- It is stored **encrypted at rest** with AES-256-GCM. This is the same `v1:iv:tag:ct`
+  format and helper as the §12.1 e-mail tokens, under a **dedicated key,
+  `WEBHOOK_ENC_KEY`** (32 bytes, base64, §2.3).
+- **Why not reuse `EMAIL_TOKEN_ENC_KEY`?**
+  - *Independent rotation.* Rotating the e-mail key costs one mailbox reconnect. If
+    webhook URLs shared that key, the same rotation would also break every webhook
+    without warning.
+  - *Feature independence.* A deployment that sends mail only through SMTP never sets
+    the e-mail key, and its webhooks should not depend on it.
+  - *Blast radius.* A leaked key exposes one class of secret, not two.
+
+  The cost is one more variable in `deploy/.env`.
+- **The full URL is never returned** by any API, never written to the audit log, the
+  system log, structured logs or delivery errors. Error text is built from fixed
+  reason codes, never from a library message that might echo the URL.
+- At save the server derives a plaintext **hint**: the host plus the URL's last 4
+  characters (`prod-12.westeurope.logic.azure.com …x9Zq`). The hint is stored next to
+  the ciphertext and is the only form the UI ever shows. Editing a webhook leaves the
+  URL field empty. Leaving it empty keeps the stored URL; entering a value replaces it.
+- With `WEBHOOK_ENC_KEY` unset or invalid:
+  - the admin card shows *"Webhooks are not configured on this server"*;
+  - create, update and test are refused (**409**);
+  - no delivery is enqueued.
+- A stored URL that no longer decrypts (key rotated) fails its delivery permanently
+  with reason "stored URL can't be decrypted — re-enter it".
+
+**Delivery (worker).**
+- At enqueue, the web tier writes one `webhook_deliveries` row (§5) per enabled
+  webhook of the item's namespace. This happens right after the transition commits,
+  alongside the §12.1 rows.
+- A leader-only worker sweep runs every **30 s**, batch 50, oldest `next_attempt_at`
+  first. It re-runs the leak guard, renders the payload, and sends.
+- **Retryable failures:** network error, timeout, `408`, `429`, any `5xx`. The next
+  attempt follows after **1 min, 5 min, 15 min, 1 h, 4 h**: up to **6 attempts** in
+  about 5½ hours. A `429`'s `Retry-After` is honoured when it is longer than the
+  scheduled step, capped at 4 h.
+- **Permanent failures (no retry):** any other `4xx`, any `3xx`, a refused address,
+  DNS failure on the final attempt, an undecryptable URL, or a missing key.
+- A webhook that is **disabled** when its row comes due is **skipped**. A **deleted**
+  webhook takes its pending rows with it.
+- An edited URL applies to rows not yet sent.
+- **Final failure:** when a delivery fails for good (permanent, or the 6th retryable
+  failure), it is marked `failed` and **recorded in the system log** (§14.7,
+  `source = worker`), which also raises the platform admins' system-log alert.
+- Terminal rows (`sent`, `failed`, `skipped`) are deleted **30 days** after they
+  finish, by the worker's hourly housekeeping sweep.
+- The sweep adds `innobox_webhook_deliveries_total{outcome="sent|failed|skipped"}` to
+  the worker's `/metrics`.
+
+**Send test.** Each webhook has a **Send test** action.
+- It POSTs a fixed synthetic payload **synchronously from the web tier**:
+  - event `test`;
+  - item `{ type: "challenge", number: "CH-0", title: "Test message from InnoBox", status: "valid" }`;
+  - `url` = `PUBLIC_BASE_URL`;
+  - no real item data.
+- It goes through the same guard, timeout and no-redirect rules: one attempt, no retry.
+- The result is shown inline (*"Delivered — HTTP 202 in 840 ms"* /
+  *"Failed — receiver answered HTTP 404"*).
+- It works on a disabled webhook, so a channel can be checked before it is switched on.
+- A failed test is **not** written to the system log, because the admin sees it
+  inline. It is audited.
+
+**Administration card.** A collapsible **"Channel webhooks"** card in the
+Administration console's platform-admin section (§14), beside the system banner card.
+It is hidden from namespace admins, and its API answers **403** to anyone but a
+platform admin.
+- **Namespace list:** every namespace, `global` first then alphabetical, archived ones
+  labelled. Under each namespace are its webhooks.
+- **Per-webhook row:** name, format (*JSON* / *Teams Workflows*), URL hint, an
+  enabled/disabled §2.2 preference pill switch, and the latest delivery outcome
+  (*"Delivered 5 min ago"*, *"Failed 2 h ago — receiver answered HTTP 404"*, *"No
+  deliveries yet"*). Actions: **Send test**, **Edit**, **Delete**.
+- **Add webhook** (name ≤ 80, format, URL, enabled) is available up to **5 webhooks
+  per namespace**. A 6th is refused with **409**.
+- **Delete** confirms with *"Delete webhook <name>? Undelivered posts are discarded."*
+
+**API (§16).**
+- `GET /api/admin/webhooks` returns `{ configured, namespaces: [{ id, slug, displayName, archived, webhooks: [{ id, name, format, urlHint, enabled, lastDelivery: { outcome, at, httpStatus, reason } | null, createdAt, updatedAt }] }] }`.
+- `POST /api/admin/webhooks { namespaceId, name, format, url, enabled }`.
+- `PATCH /api/admin/webhooks/:id { name?, format?, url?, enabled? }`.
+- `DELETE /api/admin/webhooks/:id`.
+- `POST /api/admin/webhooks/:id/test` returns
+  `{ ok, httpStatus?, reason?, durationMs }`.
+
+All of these are platform admin only.
+
+**Audit (§15).** Never the URL.
+- `webhook.created` (namespace, name, format, URL hint, enabled);
+- `webhook.updated` (before/after of name, format, enabled, URL hint, plus
+  `urlChanged: boolean`);
+- `webhook.deleted` (before);
+- `webhook.tested` (outcome, HTTP status, reason).
+
+Deliveries themselves are operational, not audited. Their trace is the delivery row,
+plus the system log on final failure.
 
 ---
 
@@ -1466,12 +2874,54 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 
 **List (gallery):**
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
-  **Mine** (own items incl. `awaiting_triage`), **Completed** (`solved` +
-  `rejected`). Filters: status, impact area, namespace, author name; sort: newest
+  **Mine** (own items **and items the viewer co-authors**, §6.5, incl.
+  `awaiting_triage`), **Completed** (`solved` + `rejected`). Filters: status, impact
+  area, namespace, author name (the author only, never co-authors); sort: newest
   (default), most liked, most solutions.
-- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9), created
-  date, impact area, status, like count, and a solution count that excludes
-  `rejected`/`not_selected`/`withdrawn`/`proposed`.
+- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9) followed by
+  **"+N"** when the item has co-authors (§6.5), created date, impact area, status, like
+  count, a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`,
+  the **Committee pick** chip when endorsed (§13.10), and — for a challenge closed as a
+  duplicate — **"Duplicate of CH-<n>"** under its status, only to viewers who can see
+  the canonical (§7.4).
+- **Cards / List view toggle.** A two-option segmented control (**Cards** | **List**,
+  the existing `.sort-toggle` look, each option `aria-pressed`, §2.2) at the end of the
+  filter row switches the gallery's presentation. It is a **pure presentation choice**:
+  the same tabs, filters, sort, API call and payload. Switching never refetches and
+  never resets a filter.
+  - **Persisted per browser** in `localStorage` under `innobox:challenges-view`
+    (`cards` | `list`). There is no server preference, no URL parameter and no audit.
+    It is read after mount, before the first result render, so no hydration mismatch
+    and no visible flash. A missing, invalid or unreadable value (private mode)
+    falls back to **Cards**, and a failed write is silently ignored. The choice applies
+    to all three tabs and only to `/challenges`. Search, profile and dashboard lists
+    are unaffected.
+  - **List columns**, in order: **number** (`CH-<n>`, mono) · **title** (a real link,
+    ellipsized to one line with the full title as `title`) · **status** (the status
+    pill) · **namespace** (`/<slug>`) · **author** (small avatar bubble + name, or
+    **"Anonymous"** with the neutral bubble — masked exactly as on the card, invariant 3,
+    §9; real-user bubbles carry the §13.8 card, anonymous ones never do; the co-author
+    **"+N"** follows the name as on the card) · **likes** (count only — no like toggle)
+    · **solutions** (the same filtered count as the card) · **date** (created, date
+    only, via the shared formatter). Impact area stays a filter and a card chip but is
+    not a list column.
+  - **Rows** reuse the §14.1 list pattern: a `.rows` table with a mono uppercase header
+    row. The **whole row opens the challenge** in place (text selection never
+    navigates), and the title stays the keyboard/screen-reader target.
+  - **"New" marker:** a challenge that is new to the viewer carries the same **"new"
+    tag** as its card — same tooltip and `aria-label` — drawn as a full-height tab
+    flush to the row's right edge, with the row reserving right padding so content
+    never slides under it. The tagged rows are exactly the ones the nav count refers to.
+  - **Card badges carry over:** every badge or marker a card shows renders in the list
+    too, with the same wording, condition and masking — the **Committee pick** chip
+    (§13.10) and the visibility-gated **"Duplicate of CH-<n>"** pointer (§7.4) in the
+    title cell after the title, the co-author "+N" in the author cell. The list never
+    shows less state than the card.
+  - **Mobile (≤ 880 px):** the header row hides and each row stacks: number + status;
+    title; then a muted meta line (namespace · author · date · likes · solutions). The
+    "new" tab stays pinned to the right edge.
+  - Visibility and counts are those of the shared payload (invariant 2). The list adds
+    no data.
 - Strictly visibility-filtered, including counts (invariant 2, §4.3).
 
 **New since your last visit.** Each user carries `users.challenges_seen_at` (§5;
@@ -1483,20 +2933,50 @@ just-submitted items count like anyone else's. The **Challenges** nav item shows
 superscript `1`–`9` / `9+` count of new items (hidden at zero; the §14.4 bubble
 style), polled on the 30-second bell cadence via `GET /api/challenges/new-count →
 { count }` — a bare integer, no titles or namespaces. Each matching card, on **any**
-tab, carries a small **"new" corner tag**, so the tagged cards are exactly the ones
-the count refers to. The marker **advances when the user leaves the Challenges
+tab and in either view, carries a small **"new" corner tag**, so the tagged cards are
+exactly the ones the count refers to. The marker **advances when the user leaves the Challenges
 surface** — `/challenges` and its `/challenges/:number` detail pages share it — via
 `POST /api/me/challenges-seen`, never on entry: the count and tags stay stable for the
 whole visit, and the next visit flags only genuinely newer items.
 
 **Detail page (`/challenges/:number`):**
 - Full fields: number, title, description, impact area, client name (if
-  applicable), namespace, visibility, author (masked/anonymous per §9), status,
-  assignee (if any), created/updated/edited dates.
+  applicable), namespace, visibility, author (masked/anonymous per §9), co-authors
+  (§6.5 — a **Co-authors** row under the author, plus the author's add/remove control
+  within the edit window and a co-author's own "remove me"), status, assignee (if any),
+  created/updated/edited dates. The description renders through the shared Markdown
+  renderer (§6.3); so do each listed solution's description and cost vs benefits.
+- **Committee pick** (§13.10): the badge with *"Marked by <name> on <date>"* on the
+  challenge and on each solution; the set/remove control for platform admins and the
+  namespace's admins and committee, rendered from `canEndorse`.
+- **Duplicate link** (§7.4, namespace admins of this namespace and platform admins):
+  "Mark as duplicate of…" and "Remove duplicate link". The **"Duplicate of CH-<n>"**
+  pointer renders next to the status only for viewers who can see the canonical.
 - Like button (toggle) with live count.
+- **Views sparkline** (§14.8): a small 30-day views sparkline in the header with its
+  label (*"142 views in the last 30 days"*), for everyone who can see the challenge.
 - The challenge's solutions, listed inline, honoring §4.3's solution-visibility rule
   (a `proposed` solution is hidden except to its author, the challenge's assignee,
-  and the namespace's committee/admins). Each solution shows its own like button.
+  and the namespace's committee/admins). Each solution shows its own like button, its
+  author with the co-author "+N" (§6.5), and its **star rating** (§8.4):
+  - the **average** to one decimal and the **count** (*"4.3 ★ · 12 ratings"*, or
+    *"No ratings yet"*), a **1–5 distribution histogram** (five horizontal bars, 5★ at
+    the top, each with its count), and the viewer's own rating highlighted in the star
+    control — shown to everyone who can see the solution, never naming a rater;
+  - the **star control**, rendered only when `canRate`: five star buttons in a
+    `role="radiogroup"` labelled *"Your rating"*, each a `role="radio"` named *"1 star"*
+    … *"5 stars"*, arrow keys moving the selection. Clicking a star sets that rating; a
+    **"Clear my rating"** text button (shown only when the viewer has a rating) removes
+    it. Frozen solutions show the summary with no control, and the author and
+    co-authors see the summary only. A failed request restores the previous state and
+    shows a short inline error, as the profile switches do (§13.5);
+  - a **sort control** over the solutions: **Oldest first** (the default, `created_at`
+    ascending) or **Top rated** (the §8.4 `score` descending, then rating count
+    descending, then `created_at` ascending). Sorting is **client-side** over the detail
+    payload — every visible solution is already in it — is not persisted, and resets to
+    *Oldest first* on each load. It applies within each section: the open list and,
+    where present, the collapsed closed-solutions section (§4.3). The §12.1 `#SOL-n`
+    deep-link scroll works under either order.
 - **Propose a solution** (§6.2): visible to anyone who can see the challenge,
   enabled only while status = `valid`; opens the solution form (description, cost
   vs benefits, "Submit anonymously"). No standalone `/solutions/:number` page —
@@ -1514,6 +2994,13 @@ whole visit, and the next visit flags only genuinely newer items.
     §7.2). The challenge detail response carries each viewer's allowed transitions
     so the control renders exactly the permitted moves.
   - A viewer who is both admin and committee sees the admin override (the superset).
+- **Feature on Home** (platform admin only, §13.2 *Featured challenges*): pins or unpins
+  the challenge on the Home dashboard. It is rendered from `canFeature` and offered only
+  while the status is `valid` or `solved`.
+- **Triage discussion** (§7.5): the private panel above the public comments, rendered
+  from `canReadTriageThread`, with its composer from `canPostTriageMessage`.
+- **Challenges you might like** (§13.11): up to three related challenges below the
+  solutions, filtered by the viewer's visibility. The section is hidden when none remain.
 - **Danger zone — Delete** (platform admin only, §10.3): a permanent, cascading,
   irreversible delete — one control for the challenge, one per listed solution.
   Rendered from `canDelete`; the confirm dialog demands the item's number typed back
@@ -1531,12 +3018,16 @@ The Home route (`/`) is the landing for **both** authenticated and unauthenticat
 visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
 
 **Authenticated** — the dashboard:
+- **Featured** (*Featured challenges*, below): the challenges a platform admin has
+  pinned, newest pin first, filtered per viewer. A viewer who can see none of them gets
+  no section at all, with no heading and no empty state.
 - **KPI tiles** (visibility-filtered, correctly labeled — the legacy app's
   swapped/mislabeled counters are not reproduced): challenges by status
   (in review / valid / solved / rejected) and solutions by status
   (in review / valid / in implementation / implemented).
 - **Spotlight cards:** most recently `implemented` solution; most recent
-  `in_implementation` solution.
+  `in_implementation` solution. Each shows the **Committee pick** chip when endorsed
+  (§13.10) and a Markdown-stripped snippet (§6.3).
 - Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
   rankings; neither is duplicated here.
 
@@ -1549,21 +3040,208 @@ shell's "Sign in with Entra ID" control (§2.2). An Auth.js error handed back on
 URL — e.g. `?error=AccessDenied` for a deactivated account (§5 of
 `ENTRA_AUTH_SPEC.md`) — is surfaced here as a short message.
 
+#### Featured challenges
+
+A **platform admin** may pin a challenge to the top of every viewer's authenticated Home
+dashboard. This is a hand-picked editorial spotlight. It is **separate from the automatic
+spotlight cards** (the most recent `implemented` / `in_implementation` solutions), which
+are unchanged and keep their own place below the KPI tiles.
+
+- **Who.** Platform admins only. Namespace admins, committee members, assignees, and
+  authors cannot feature or unfeature.
+- **Eligible statuses.** A challenge can be featured only while its status is **`valid`**
+  or **`solved`**. A `valid → solved` move (the §8.3 auto-close, or an override) and a
+  `solved → valid` move (the §10.3 revert) keep the pin.
+- **Automatic unpin.** Any other status change clears the pin in the **same transaction**
+  as the transition. That covers an override to `rejected`, `withdrawn`, or any other
+  status, a duplicate link (§7.4), bulk status set (§14.1), and the author's Withdraw
+  (§10.1). The unpin writes a `challenge.unfeatured` audit row with
+  `after: { trigger: "status_changed", status: <new status> }`. Its actor is the actor of
+  the transition: the admin, the committee member, the assignee, or the withdrawing author.
+  If a transition ever runs with no user actor, the actor is the system (null).
+  A platform-admin **hard delete** (§10.3) of a featured challenge writes
+  `challenge.unfeatured` with `after: { trigger: "deleted" }`, actor = the deleting admin.
+  It is written inside the delete transaction, before the row is removed. A pin cleared
+  this way is **not restored** if the challenge later returns to `valid`/`solved`. An admin
+  has to feature it again.
+- **Cap.** At most **N** challenges are featured at once. N is the §14.3 *Featured
+  challenges* setting (default **3**, range **1–6**). Featuring a challenge when N are
+  already pinned is refused with **409**: *"N challenges are already featured. Unfeature
+  one first."* (N is the configured number). Nothing is evicted automatically. The count
+  check and the pin run in one transaction, serialized (a transaction-scoped advisory
+  lock), so two concurrent requests can never both take the last slot. **Lowering** the
+  setting below the current count unpins nothing. The existing pins stay and new features
+  are refused until the count drops below the new cap. The section shows every current pin,
+  never more than 6.
+- **Idempotence.** Featuring an already-featured challenge is a **200 no-op**: no audit
+  row, and the original `featured_at` is kept, so the order is unchanged. Unfeaturing a
+  challenge that is not featured is also a 200 no-op.
+- **Ordering.** Newest pin first (`featured_at DESC`).
+- **Visibility (invariant 2).** The section applies the **full §4.3 challenge predicate**
+  per viewer, the same one the gallery uses. A pinned `namespace`-visible challenge
+  appears only to that namespace's members and to platform admins. A pin survives a
+  visibility change (`org ↔ namespace`, §4.3). The per-viewer filter does the rest.
+  `/api/dashboard` returns only the visible pins. The response never includes a count of
+  hidden pins, the cap, or "N more".
+- **Cards.** Each featured card uses the §13.1 gallery-card fields: number, title,
+  author (**masked per §9**, since anonymity is unchanged), impact area, status, like
+  count, solution count (same exclusions as §13.1), and the **Committee pick** badge
+  (§13.10) when endorsed. The whole card links to `/challenges/:number`. The section
+  heading is **"Featured"**. Cards sit in the existing `card-grid` above the KPI card.
+- **Control.** It is on the §13.1 detail page and is rendered only for platform admins
+  while the status is eligible. It reads **"Feature on Home"** when unpinned. When pinned,
+  it reads **"Unfeature"**, with the sub-text *"Featured by <name> on <date>"* (date
+  through the shared formatter). When the challenge is not eligible, the control is
+  hidden. A 409 at the cap shows its message inline under the control. The detail response
+  carries `featured: boolean` and `canFeature: boolean` for every viewer. `canFeature` is
+  true only for a platform admin on an eligible status. `featuredBy` / `featuredAt` are
+  included only when `canFeature` is true. Non-admins see **no** featured indicator
+  outside the Home section.
+- **Curation is not an edit.** Feature and unfeature stamp only `featured_at` /
+  `featured_by`. They do **not** bump `updated_at`, `edited_at`, or `status_changed_at`,
+  and they fire **no notification**.
+- **API.** `PUT /api/challenges/:number/featured` (feature) and
+  `DELETE /api/challenges/:number/featured` (unfeature). Neither takes a body. Order of
+  checks (§2.4): **404** if the caller cannot see the challenge or the number is
+  malformed; then **403** for a caller who is not a platform admin (*"Only platform admins
+  can feature challenges."*); then **409** for an ineligible status on `PUT` (*"Only
+  challenges that are valid or solved can be featured."*); then **409** at the cap. The
+  success response is `{ featured: boolean, featuredAt: string | null }`.
+- **Audit.** `challenge.featured` with `after: { featuredAt }`. A manual
+  `challenge.unfeatured` uses `after: { trigger: "manual" }`. The automatic triggers are
+  listed above.
+
 ### §13.3 Leaderboard
 
 A dedicated **`/leaderboard`** page (own app-shell nav
 item). **Top 10**, two windows — **last 30 days** and **all time** — across four
 metrics: **solutions implemented (default)**, challenges submitted, solutions
-proposed, likes received. Ranked by count descending (ties by earliest achiever).
-Computed over org-visible, non-anonymous, non-rejected contributions (§4.3, §9).
+proposed, likes received. Ranked by count descending (ties by earliest achiever, then
+the lower user id, so the order is deterministic; the achievement time of an
+implemented solution is its `status_changed_at`). Computed over org-visible,
+non-anonymous, non-rejected contributions (§4.3, §9), excluding opted-out users
+(below). Co-authors (§6.5) earn no credit; every metric credits the item's author only.
+The four ranking queries live in `@innobox/shared` as SQL text that both the web tier
+(live leaderboard) and the worker (leader badges) execute, so a badge holder is by
+construction the leaderboard's #1.
+
+Each row carries a **"Reach out"** button (§13.9). It is omitted on the viewer's own
+row and for a deactivated or scrubbed user: the entry payload gains `deactivated` and
+`scrubbed` booleans with the §13.8 card semantics, and a deactivated user's bubble now
+also renders greyed (§13.6). Every leaderboard row is a named, non-anonymous
+contributor by construction (§9), so the button never touches invariant 3. (A scrubbed
+user never ranks in practice — erasure opts them out, §3.)
+
+#### Opt-out
+
+A user may **hide themselves from leaderboards** with a profile switch (§13.5). Stored as
+`users.leaderboard_opt_out` (boolean, not null, **default false**; existing users
+backfilled false — everyone stays visible until they choose otherwise). GDPR erasure
+sets it to true (§3).
+
+- **Effect.** An opted-out user is removed from **every** leaderboard metric and window,
+  and from **leader badges** (below). The ranking is computed **without them**: the next
+  person moves up, so the Top 10 is still ten people when ten others qualify. The
+  opt-out filter therefore goes **inside** the ranking query (before `order by … limit
+  10`); it is not a post-filter that leaves a gap.
+- **Immediacy.** The leaderboard is computed per request, so the opt-out (and opting back
+  in) applies on the next load. Leader badges are cached hourly (below). The badge
+  endpoint drops an opted-out holder **at read time**, so their badge disappears at
+  once. The next eligible person gets that slot at the next hourly sweep (≤ 1 h). Opting
+  back in makes the user eligible again from the next sweep.
+- **Nothing else changes.** KPIs (§13.2), counts, profile statistics, the public profile
+  page (§13.5), search and every other surface are unaffected. The opt-out hides a person
+  from *rankings*, not their contributions. It is not anonymity (§9): their items still show
+  their name.
+- **Not audited.** Toggling it writes no audit row. This matches the other §13.5
+  preferences.
+- **No viewer hint.** The leaderboard does not mark that someone is hidden, and the
+  opted-out user's own view of the leaderboard simply does not include them.
+
+#### Leader badges
+
+The **#1** of each leaderboard (four metrics × two windows = at most **eight** slots) wears
+a small **leader badge** on their avatar bubble across the app.
+
+- **Who holds a slot.** The holder is exactly the **#1 row** of that metric/window as
+  ranked above: the same query and the same eligibility rules (org-visible,
+  non-anonymous, non-rejected contributions; §9 leaderboard exclusion; opt-out). Ties use
+  the same tie-break (earliest achiever, then lower user id). A metric/window with no
+  qualifying contribution has **no** holder. Deactivated users stay eligible exactly as
+  they stay on the leaderboard, and their badge renders on the greyed bubble.
+- **One glyph per person.** Someone who holds several slots shows **one** badge, chosen by:
+  1. **Window first:** any **all-time** slot outranks any **last-30-days** slot. Example: a
+     user who leads all-time *likes received* and 30-day *solutions implemented* shows the
+     all-time *likes* crown.
+  2. **Then metric:** solutions implemented > challenges submitted > solutions proposed >
+     likes received.
+
+  This is a pure function in `@innobox/shared` (`resolveLeaderBadge(slots)`), unit-tested.
+- **Glyphs.** Each metric has its own glyph, drawn as inline SVG on the existing tokens. No
+  emoji, because they render inconsistently at this size, and no new token:
+
+  | Metric | Glyph |
+  |---|---|
+  | Solutions implemented | trophy |
+  | Challenges submitted | flag |
+  | Solutions proposed | lightbulb |
+  | Likes received | heart |
+
+  - **All-time:** a **crown variant**. The metric glyph sits in a disc filled `--anchor`
+    with a small crown in `--warn` resting on top of the disc.
+  - **Last 30 days:** the **plain glyph**. The same metric glyph in a `--surface` disc
+    stroked `--accent-2`, with no crown.
+
+  Both are correct in light and dark themes because they use tokens only.
+- **Placement & size.** The badge is anchored to the bubble's **bottom-right edge**,
+  overlapping the circle (the position a presence dot would take), with a 1.5 px `--surface`
+  ring separating it from the photo. It scales with the bubble: about **12 px** on small,
+  **16 px** on medium and **24 px** on large. It is decoration on the bubble: it never shifts
+  layout, never captures the click, and does not change the bubble's hover-card behavior
+  (§13.8, which deliberately gains no "Top in …" line).
+- **Where.** On **every avatar bubble that carries a real user id** (§13.6 surfaces,
+  including the account-menu bubble, popover rows and the leaderboard itself). **Never** on
+  an anonymous bubble, a deleted/unknown-actor bubble or any bubble without a user id. The
+  check uses the same eligibility as the hover card: `anonymous` false and a non-null id.
+  Because an anonymous author's id never reaches the client (invariant 3), there is nothing
+  to badge.
+- **Accessibility.** The badge is `aria-hidden`. Its meaning is appended to the bubble's
+  accessible name, e.g. *"Alice Doe, top in solutions implemented — all time"* or *"…, top
+  in likes received — last 30 days"*. Bubbles that keep a native `title` (no hover card,
+  §13.6) append the same phrase to it. The `/leaderboard` page carries a one-line **legend**
+  of the four glyphs and the crown/plain distinction, so the glyphs can be learned.
+- **Computation & cache.** An **hourly leader-only worker sweep** (also run once on
+  acquiring leadership) evaluates the eight #1 queries and replaces the contents of
+  `leader_badges` (§5) in one transaction; the same sweep recomputes the §8.4 rating
+  prior. Empty slots have no row. The web tier never computes badges per request.
+- **Delivery.** `GET /api/leaderboards/leaders` → `{ computedAt, badges: [{ userId, metric,
+  window }] }`. Badges are already resolved to **one entry per user** (≤ 8 entries). Holders
+  who have opted out since the last sweep are dropped at read time. Any authenticated user
+  may call it. It contains only what the public leaderboard already shows: org-visible,
+  non-anonymous rankings (invariant 2), so it needs no per-viewer filtering. The response
+  carries `Cache-Control: private, max-age=300`.
+  - The client fetches it **once per page session** (when the app shell mounts on a full
+    page load). It does not re-fetch on client-side navigation. The result is held in a
+    context that `AvatarBubble` reads. The map is **not** added to any list or detail
+    payload.
+  - A failed fetch renders **no badges**. It never shows an error and never blocks a
+    bubble.
+  - This read stamps no presence (§14.5 allowlist) and writes no audit row.
+- **Staleness.** Badges lag the live leaderboard by up to an hour (or one sweep after a
+  §10.3 delete changes a ranking). That is accepted. The leaderboard page itself stays live.
 
 ### §13.4 Search
 
 Postgres `tsvector` full-text search over challenge
 title/description/client name and solution description/cost-vs-benefits, plus exact
-lookup by number (`CH-123`, `SOL-456`). Strictly visibility-filtered including
-autocomplete and result counts (invariant 2). §13.1's gallery filters
-(status/impact area/namespace/author) narrow the list alongside it.
+lookup by number (`CH-123`, `SOL-456`) — the descriptions and cost vs benefits indexed
+through their Markdown-stripped twins (§5, §6.3), with result snippets returned
+stripped. Strictly visibility-filtered including autocomplete and result counts
+(invariant 2). §13.1's gallery filters (status/impact area/namespace/author) narrow the
+list alongside it. Results — on the `/search` page and in the topbar autocomplete rows,
+challenges and solutions alike — show the **Committee pick** chip (§13.10); it does
+not affect ranking (`ts_rank` is unchanged). Comments, triage-thread messages (§7.5)
+and direct messages (§13.9) are never indexed or searched.
 
 **Keyboard shortcut:** `Ctrl+K` (`Cmd+K` on macOS) focuses the topbar search
 input from anywhere in the app while authenticated — it's a global `keydown`
@@ -1614,6 +3292,11 @@ clear button. On an **already-empty** field, `Escape` blurs the input (exits the
 field). This supersedes the prior behavior where `Escape` only closed the
 autocomplete dropdown.
 
+**Dropdown motion:** the autocomplete dropdown uses the shared popover treatment
+(§2.2), including its chrome (`--line-strong` border, `--shadow`). It fades and scales
+in when it first appears (≥2 characters), never replays while results refresh, and
+closes instantly.
+
 ### §13.5 Profile
 
 Own profile shows: identity (from Entra — display name, e-mail, department, job
@@ -1624,7 +3307,17 @@ items I follow; latest activity (newest first, any status — fixing the legacy
 **switch**, below, followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
-flip and inline-error revert).
+flip and inline-error revert), then a separate **Leaderboards** row, *Show me on
+leaderboards* (sub-text *"When off, you're hidden from leaderboards and leader badges.
+Your contributions and profile are unaffected."*): the same §2.2 preference switch, knob
+glyphs 🏆 on / 🙈 off, showing the **inverse** of `users.leaderboard_opt_out` (On =
+visible, the default), PATCHed through the profile endpoint as `leaderboardVisible:
+boolean`, not audited (§13.3). Your own profile also shows **Blocked people** (§13.9):
+one row per user you have blocked, with avatar bubble, display name (greyed when
+deactivated), and an **Unblock** button. Unblock removes the row optimistically and
+restores it with an inline error if the request fails. Empty state: *"You haven't
+blocked anyone."* The list is never shown on anyone else's profile, and the blocked
+person's profile never indicates a block.
 Other users' profiles show display name, department, job title, **office location**,
 photo, and their **non-anonymous** org-visible contributions. "Org-visible" is the full
 §4.3 test that an arbitrary authenticated viewer would pass, applied to **both** the item
@@ -1638,6 +3331,9 @@ and, for a solution, its parent challenge:
   visible again.
 
 The owner's own profile is unaffected: it lists all of their own contributions, as above.
+An opted-out user's public profile still lists their contributions (§13.3). Co-authored
+items are not listed on profile pages in v1 (§6.5). Profile lists and activity show
+Markdown fields as stripped snippets (§6.3).
 
 The **e-mail notifications** control is a §2.2 pill switch rather than a labelled
 button: an `On`/`Off` word, then the pill — 📧 in the knob and an `--accent` track when
@@ -1665,8 +3361,11 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
 - **Surfaces:** challenge/solution cards and detail headers (author), comment
   threads, assignee chips, **assignee-search result rows** (§7.3 — the assignment
   and triage-assign popovers), leaderboard rows, profile pages (large), the account
-  menu/sidebar (self), triage queue rows, the admin users list, search results, and
-  the reveal dialog (§9). **Not** in notification e-mails (no embedded images), CSV
+  menu/sidebar (self), triage queue rows, the admin users list, search results, the
+  reveal dialog (§9), co-author rows and the "+N" tooltip owner list (§6.5), team-side
+  triage messages (§7.5 — an anonymous author's triage messages use the generic
+  anonymous bubble), and the messages panel (thread-list rows and the thread-view
+  header, §13.9). **Not** in notification e-mails (no embedded images), CSV
   exports, or the notification **inbox** rows — the outbox payload carries only a
   rendered `{message, link}` with no structured actor id, so an inbox bubble would
   require reworking the whole event matrix and re-checking anonymity for every event
@@ -1690,6 +3389,12 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   would race and overlap the card on the very same element) — the `aria-label` stays,
   and the card itself shows the name. Bubbles with **no** user id — anonymous authors,
   deleted/unknown actors — keep their `title`, gain no tab stop, and open no card.
+- **Leader badge (§13.3):** a bubble that carries a real user id shows that user's leader
+  badge, if any: a per-metric glyph at the bubble's bottom-right edge, a crown variant for
+  all-time and a plain glyph for last-30-days, one per person by priority. It is never
+  shown on anonymous, deleted/unknown or id-less bubbles. The leader map comes from one
+  cached `GET /api/leaderboards/leaders` per page session and never from list payloads. The
+  badge's meaning is appended to the bubble's accessible name.
 - **Loading/perf:** list rows lazy-load bubble images; the browser cache +
   `ETag` revalidation (§3.1) means each distinct user's photo is fetched at most
   once per session in practice. No base64 inlining in list payloads.
@@ -1725,7 +3430,9 @@ via the account menu (§2.2), positioned above **What's new**.
 Hovering an **avatar bubble** (§13.6) opens a small floating card with that person's
 Entra directory profile — **display name, job title, department, office location** —
 plus a link to their full profile. It is **read-only and display-only**: nothing it
-shows participates in authorization, and nothing it exposes changes state.
+shows participates in authorization, and nothing it exposes changes state. Its **"Reach
+out"** button (§13.9) only opens the messages panel; a message is sent only from the
+panel's composer.
 
 Of the three directory fields, department and job title already exist (§3, §5);
 **office location is new** and is added by this change.
@@ -1744,7 +3451,10 @@ Of the three directory fields, department and job title already exist (§3, §5)
     popover;
   - the **reveal dialog** (§9) — the dialog already names the revealed person, so the
     card adds nothing to the one surface where anonymity is deliberately lifted, and
-    the reveal flow stays untouched.
+    the reveal flow stays untouched;
+  - bubbles **inside the messages panel** (§13.9). The thread list and thread header
+    sit in an open popover, so the same popover-in-popover rule applies as for the
+    assignee search.
 - **No user id → no card.** An **anonymous** author's bubble (invariant 3: the client
   never learns the real id — the payload carries `null`, §13.6), a deleted/unknown
   actor, or a bubble whose caller marks it anonymous shows **no card, issues no
@@ -1763,6 +3473,11 @@ Top to bottom, in a fixed max-width (~280 px) card:
 3. **Department**.
 4. **Office location**.
 5. **"View profile"** — a link to `/profile/<id>` (to `/profile` for your own bubble).
+6. **"Reach out"** opens the messages panel on the thread with this person (§13.9).
+   It renders **only after the card's data has loaded**, and only when the person is
+   **not you**, **not deactivated** and **not scrubbed**. Block state is deliberately
+   **not** part of the card payload: the button renders regardless and the thread
+   view reports the outcome, so hovering a bubble never reveals a block.
 
 - Lines 2–4 are **omitted individually** when the field is empty. When **all three**
   are empty the block collapses to a single muted line — **"No directory
@@ -1796,9 +3511,9 @@ Top to bottom, in a fixed max-width (~280 px) card:
   (side, above/below) to stay inside the viewport, so it is never clipped by a
   scrolling table, a dropdown or the sidebar.
 - **One card at a time** — opening a second closes the first.
-- **Animation** reuses the app's shared popover treatment (§2.2): a short fade-and-rise
-  on open and an instant close — the same as every other popover in the app — and
-  nothing at all under `prefers-reduced-motion: reduce`.
+- **Animation** reuses the app's shared popover treatment (§2.2): a ~120 ms
+  fade-and-scale on open and an instant close — the same as every other popover in the
+  app — and nothing at all under `prefers-reduced-motion: reduce`.
 
 #### Interaction — touch
 
@@ -1808,7 +3523,9 @@ Top to bottom, in a fixed max-width (~280 px) card:
   mobile and right-clickable on desktop exactly as today, and a touch on an avatar
   inside a clickable triage row still opens the row (§14.1).
 - On touch, the directory profile is reached through the **profile page** (§13.5) — the
-  same destination the card's link points at.
+  same destination the card's link points at. Because the card is mouse-only, its
+  "Reach out" is too; on touch the direct-message entry points are the leaderboard rows,
+  the Currently online rows and existing threads (§13.9).
 
 #### Keyboard & accessibility
 
@@ -1856,15 +3573,392 @@ Top to bottom, in a fixed max-width (~280 px) card:
   namespace, role or count data, so it cannot leak restricted items — which is why
   those were excluded from its contents above.
 
+### §13.9 Direct messages
+
+A private **1:1 conversation layer** between colleagues: a **messages icon** in the
+topbar beside the bell (§2.2), a **messages panel** that holds the thread list and an
+inline **thread view**, and a **"Reach out"** button on the directory hover card
+(§13.8), the leaderboard rows (§13.3) and the Currently online panel (§14.5). It is
+deliberately small: **plain text, two people, polling, no attachments, and no
+notification beyond an unread badge.** It carries **no challenge, solution, namespace
+or role data of any kind**, which is what keeps it outside invariants 2 and 3 (below).
+This reverses the earlier "no direct-message channel" position (§14.5, §20).
+
+#### Who may message whom
+
+- **Any active user may message any other active user.** No role, namespace or
+  committee membership matters, and **platform admins have no extra power here**.
+  InnoBox has no per-user visibility model (§13.8 *Data & delivery*), and a DM is not
+  governance.
+- **A recipient is messageable** iff the row is **active**, **not scrubbed** (§3), **not
+  the e-mail service mailbox** (§12: not a person; the same exclusion as §14.5), **not
+  the sender**, and **no block exists in either direction** (below). Every other case is
+  refused with one generic answer (*Sending*, below).
+- **You cannot message yourself.** No entry point offers it, and the API refuses it (422).
+- **Deactivated and scrubbed users cannot be messaged.** Their existing threads stay
+  listed and **readable but read-only** for the remaining party. A reactivated user
+  (SCIM re-enable, §3) can be messaged again and their threads resume.
+- **Never from an anonymous contribution (invariant 3).** "Reach out" is offered only
+  where the client already holds a **real user id**: the hover card (which never opens
+  for an anonymous bubble, §13.6/§13.8), leaderboard rows (anonymous contributions never
+  count, §9), and the Currently online rows (always named people). An anonymous author's
+  id never reaches the client, so there is **no path**, in the UI or the API, from an
+  anonymous item to a conversation with its author. The DM API is keyed only on user
+  ids and accepts no challenge or solution reference.
+
+#### Entry points
+
+- **Topbar messages icon** (§2.2): a 💬 glyph in the same round `.bell` button as the
+  bell, placed **immediately left of the bell**, with the same `.bell-dot` badge showing
+  the **unread thread count** (`1`–`99`, then **`99+`**; hidden at zero). Clicking it
+  toggles the messages panel on the **thread list**.
+- **"Reach out"**: a small ghost button that opens the messages panel **directly on
+  the thread view for that person** (an existing thread, or an empty one ready for a
+  first message). It never sends anything by itself. Rendered:
+  - in the **hover card** (§13.8), under "View profile", only once the card's data has
+    loaded, and only when the person is **not you, not deactivated, not scrubbed**;
+  - on each **leaderboard row** (§13.3), except your own row and the rows of
+    deactivated or scrubbed users;
+  - on each **Currently online row** (§14.5, platform admins), except your own row and
+    greyed (deactivated) rows.
+
+  Whether a **block** exists is deliberately **not** reflected in any entry point: the
+  button renders, and the thread view states the outcome (below). Gating the button on
+  block state would make every hover a block oracle. There is no "Reach out" on the
+  profile page in v1.
+
+#### The messages panel
+
+One panel with two views, reusing the bell's existing `.msg-panel` popover contract
+(§12.2, §2.2): a ~380 px popover anchored under the icon on desktop, and a **full-screen
+sheet** with backdrop at the narrow breakpoint (≤ 880 px), exactly like the bell's inbox.
+Only one of the two popovers is open at a time: opening one closes the other.
+
+- **Thread list**: the viewer's threads, **most recent message first**, paged 30 at a
+  time (infinite scroll). Each row shows the counterpart's avatar bubble (§13.6: greyed
+  when deactivated, the neutral bubble for "Deleted User"), the display name, a one-line
+  preview of the last message (first 120 characters, prefixed **"You: "** when it is
+  yours), a relative time through the shared formatter (§2), and an **unread** treatment
+  (bold name + accent dot) when the thread holds a message from the other party newer
+  than the viewer's read marker. Empty state: **"No messages yet. Use "Reach out" on a
+  colleague's card or the leaderboard to start one."** A muted footer states the
+  privacy terms: **"Messages are private to you and the other person. Administrators
+  have no access to them in InnoBox. Messages are deleted after 365 days."**
+- **Thread view**: opened from a list row or a "Reach out" button. A **back** control
+  returns to the list.
+  - **Header:** the counterpart's bubble and name, a **"View profile"** link (omitted for
+    a scrubbed counterpart), and a **⋯ menu** with **Block** / **Unblock** (omitted for
+    a scrubbed counterpart, since nothing remains to block).
+  - **Messages:** oldest at the top, newest at the bottom; the view opens scrolled to the
+    newest. Your own messages are right-aligned on `--accent-soft`; the other party's are
+    left-aligned on `--surface-2`. Each message has a timestamp, and a day separator
+    appears when the local day (after UTC conversion) changes (shared formatter, §2).
+    **"Load earlier"** at the top fetches the previous page (50).
+  - **Rendering is plain text.** The body is escaped and rendered with
+    `white-space: pre-wrap` (line breaks kept) and `overflow-wrap: anywhere` (so a long
+    URL wraps). **No Markdown (§6.3 does not apply), no rich text, and URLs are not
+    auto-linked.** This matches §12.1 *E-mail content safety*: a message is user-written
+    text, and a clickable link inside a trusted app surface lends that trust to a
+    phishing URL. A pasted link stays readable and copyable. There are no link previews
+    or unfurling: a pasted challenge URL is inert text, and the normal route checks the
+    recipient's access when they open it (invariant 2).
+  - **Composer:** a textarea (grows to ~6 lines, then scrolls) and a **Send** button. On
+    a fine pointer, **Enter sends** and **Shift+Enter** inserts a line break. On a coarse
+    (touch) pointer, Enter inserts a line break and only the button sends. A live counter
+    appears from **1 800** characters (`1 950 / 2 000`). Send is disabled while the
+    trimmed text is empty, over the limit, or a send is in flight. Sending is **not
+    optimistic**: the message is appended when the server answers 201; on failure the
+    text stays in the composer with a short inline error. An unsent draft is kept **in
+    memory only**, per thread, for the page session. **DM content is never written to
+    `localStorage` or `sessionStorage`.**
+  - **Read-only states** replace the composer with one muted line:
+    - you blocked them → **"You blocked this person."** + an **Unblock** button;
+    - **every other refusal** (they blocked you, deactivated, scrubbed, service mailbox)
+      → **"You can't message this person."** The wording is the same for all of them,
+      so a blocked sender cannot tell a block from any other reason.
+  - Bubbles inside the open panel **open no hover card**: the §13.8 popover-in-popover
+    exclusion.
+
+#### Sending
+
+- **Format:** plain UTF-8 text, **1–2 000 characters** after trimming leading and
+  trailing whitespace (counted by the shared validator, mirrored client-side). Line
+  breaks are kept and CRLF is normalized to LF. **No attachments, no Markdown, no
+  mentions, no reactions.**
+- **Messages are immutable**: no edit, no delete, no unsend in v1. They leave the
+  database only through retention or GDPR erasure (below).
+- **Threads are created lazily by the first message.** `POST /api/messages` takes the
+  **recipient's user id**. In one transaction the server resolves the canonical pair,
+  inserts the thread if it does not exist (`ON CONFLICT DO NOTHING` on the pair, so two
+  simultaneous first messages converge on one thread), inserts the message, and bumps
+  the thread's `last_message_at` and the sender's `*_last_sent_at`. **There is no empty
+  thread**: opening a thread view with someone you have never written to writes nothing.
+- **Check order (§2.4):** 401 → rate limit (429; its own 120-per-hour bucket) → body
+  shape (400/415) → recipient id malformed or unknown (**404**) → recipient is self
+  (**422**) → body empty or too long (**422**) → recipient cannot be messaged (**403**,
+  body **`{ "error": "You can't message this person." }`** for **every** reason: blocked
+  either way, deactivated, scrubbed, service mailbox). The 403 is byte-identical across
+  reasons, so the endpoint is no block or deactivation oracle. The recipient id travels
+  in the **body**, never the path, so the §14.7 system-log row that a 403 or 429 produces
+  names only the sender and `/api/messages`, never the counterpart.
+
+#### Read state & polling
+
+- **One read marker per participant per thread** (`*_last_read_at`, §5). It is
+  **private**: the other party never sees it. **No read receipts, no typing indicator,
+  no "seen".**
+- **Unread count = threads**, not messages: the number of the viewer's threads in which
+  the **other party's** latest message is newer than the viewer's marker. A
+  conversation is one thing to attend to, and a thread count cannot be inflated by
+  someone sending forty one-liners. Your own sends never touch your marker and never
+  count. (The bell counts inbox rows; the two badges deliberately count different
+  things, and the icon's label says "unread conversations".)
+- **Marking read.** Whenever the thread view shows the newest messages while the tab is
+  visible (on open, and on each poll that brings new inbound messages), the client posts
+  `read { upTo: <newest inbound message id> }`. The server sets the marker to that
+  message's `created_at` **monotonically** (`greatest(existing, new)`), so a late or
+  out-of-order request never moves it backwards, and a message that arrived after the
+  rendered one is never marked read. The client then dispatches `innobox:dm-changed` so
+  the badge refreshes at once (the `innobox:banner-changed` pattern, §14.6) instead of
+  at the next tick.
+- **Polling. No WebSockets, no SSE:**
+  - **Unread count: rides the existing 30-second bell poll.** `GET /api/notifications`
+    gains `messagesUnread: number` beside `banner` (§12.2), so **no second 30-second
+    poller exists**, exactly as for the §14.6 banner.
+  - **Open thread: every 10 s.** `GET …/threads/:id?after=<newest id>` returns only new
+    messages (normally none) plus the current `canSend`/`blockedByMe`, so a block,
+    unblock or deactivation reaches an open thread within one poll. The 10 s poll runs
+    **only while a thread view is open**, **pauses while the tab is hidden**
+    (`visibilityState`), and fetches once immediately when the tab returns.
+  - **Thread list:** fetched when the panel opens on it, and fetched again when the 30 s
+    `messagesUnread` value changes while it is open.
+  - **Presence (§14.5):** every DM `GET` (list, thread, poll) is **off the presence
+    allowlist**, because background pollers never stamp. **Sending** is a user-initiated
+    mutation and stamps at the **"touch"** tier (`last_seen_at` only, `last_route`
+    untouched). **No DM route ever "locates"**, so the panel never shows a "Messages"
+    location and never reveals a counterpart.
+
+#### Blocking
+
+- A **per-user block list**: `(blocker, blocked)`. A block **stops sending in both
+  directions** for that pair: the blocked person cannot write to the blocker, and the
+  blocker must unblock before writing again. It does **not** hide or delete history:
+  the thread stays listed and readable for both.
+- **The blocked person is never told.** Their composer shows the generic **"You can't
+  message this person."**, and their thread, list row and entry points are otherwise
+  unchanged. No API field exposes "blocked me".
+- **Where:** **Block/Unblock** in the thread-view ⋯ menu, and the **Blocked people**
+  list on your own profile (§13.5), each row with **Unblock**. Block asks for a one-line
+  confirm: *"Block <name>? Neither of you will be able to send messages. They won't be
+  notified."* Any user except yourself may be blocked, including a deactivated one. A
+  scrubbed user cannot be blocked (erasure already removed every block involving them).
+- **Blocks are personal preferences, not governance:** they are **not audited**, not
+  visible to admins, capped only by the rate limit, and idempotent both ways.
+
+#### Retention
+
+- Messages are kept **365 days** from `created_at`. The worker's leader-locked **hourly
+  housekeeping sweep** (§14.5, §14.7) deletes older messages in bounded batches, then
+  deletes any thread left with **no messages**, and recomputes `last_message_at` /
+  `*_last_sent_at` for the threads it trimmed, so a trimmed message can never leave a
+  phantom unread. The 365 days are a code constant, **not a platform setting**. The
+  sweep logs a count (structured info line) and writes **no audit row**.
+
+#### GDPR erasure (§3)
+
+"Delete user info" **deletes every message the erased user sent** rather than
+de-identifying them, deletes every block involving them, clears their side of each
+thread and deletes threads left empty; the surviving party keeps the thread read-only,
+with the counterpart shown as **"Deleted User"** (§3 lists the full effect).
+
+#### Privacy, audit & admin access
+
+- **No admin read access.** No API, page, export or support tool exposes any message,
+  thread, thread list, read marker or block list to anyone but the participant,
+  **platform admins included**. A non-participant asking for a thread gets **404**
+  (§2.4), indistinguishable from a thread that does not exist.
+- **Nothing about message content is audited, and nothing about DM activity is audited
+  either**: no row for send, thread creation, read, block or unblock (§15). DM bodies
+  never appear in `audit_log`, the system log (§14.7 stores no bodies; a refused send's
+  row names only the sender), structured logs, search (§13.4 indexes no DMs), CSV
+  exports, KPIs or leaderboards. The only DM-related audit data is the cascade **counts**
+  on the existing `user.scrubbed` row.
+- Messages are stored as ordinary rows in Postgres, protected like all platform data.
+  They are **not** end-to-end encrypted, which is why the in-panel line says
+  "administrators have no access to them **in InnoBox**" and nothing stronger.
+
+#### Invariants
+
+- **Invariant 2 (visibility)**: unaffected. A DM carries **no** challenge, solution,
+  namespace, role or count data and no structured reference to any; no surface derives
+  a count or KPI from DMs. A link typed into a message is inert text.
+- **Invariant 3 (anonymity)**: unaffected and reinforced. "Reach out" exists only on
+  bubbles and rows that already carry a real user id (§13.6), the DM API accepts only
+  user ids, and DMs never touch `last_route` (§14.5), so no DM path links a person to an
+  anonymous item.
+- **Invariant 5 (audit)**: unaffected. No DM data enters `audit_log`.
+
+#### Accessibility
+
+- The icon button's `aria-label` is **"Messages"**, or **"Messages, 3 unread
+  conversations"** when the badge shows. The panel is a non-modal `role="dialog"`
+  labelled "Messages". Opening it moves focus to the first thread (list) or the composer
+  (thread view). **Escape** closes it and returns focus to whatever opened it (the icon
+  or the "Reach out" button).
+- The message list is a `role="log"` with `aria-live="polite"`. It announces **only
+  inbound messages that arrive by poll**, never the initial load or your own sends.
+  Each message's accessible name includes the sender ("You" or the name) and the time.
+- "Reach out" buttons are labelled **"Reach out to <name>"** wherever the visible label
+  is an icon. The desktop panel uses the shared `.menu-pop` treatment (§2.2), which is
+  static under `prefers-reduced-motion: reduce`.
+
+#### Mobile
+
+- At ≤ 880 px the panel is the bell's full-screen sheet (`100dvh`), with the composer
+  pinned to the bottom so the on-screen keyboard never hides it. The back control
+  returns to the list. The messages icon gets the bell's narrow-topbar treatment (fixed,
+  non-shrinking, beside the bell).
+- The hover card is mouse-only (§13.8), so on touch the entry points are the leaderboard
+  rows, the Currently online rows (platform admins), and existing threads in the panel.
+  On narrow widths the leaderboard and online-panel "Reach out" collapses to an
+  icon-only 💬 button that keeps the full `aria-label`.
+
+### §13.10 Committee pick
+
+A **Committee pick** is a namespace's visible stamp of approval on a challenge or a
+solution. It is **a signal only**. It does not boost or reorder search (§13.4), it adds
+no gallery sort or filter (§13.1), it does not count toward KPIs or leaderboards (§13.3),
+and it changes no gate: not the state machines (§7.2, §8.2), not the single-winner rule
+(§8.3), and not who may propose, comment, like or rate.
+
+- **Who may set or remove it.** Platform admins, and the **namespace admins** and
+  **committee members** of the item's namespace. For a solution, that is the parent
+  challenge's namespace. Assignees, authors, and members do not have this power. Any
+  eligible actor may remove a pick that someone else set, because the pick belongs to
+  the namespace, not to the individual.
+- **Visibility first (§2.4).** The actor must be able to see the item under §4.3. That
+  includes the solution-level rule: a `proposed` solution is visible to the namespace's
+  committee and admins, so they may endorse it. A request about an item the caller cannot
+  see answers **404**, the same as a missing number. **403** applies only to a caller who
+  can see the item but does not hold one of the roles above. Endorsing a hidden item is
+  impossible.
+- **No status gate.** An item may be endorsed in any status. The pick **persists through
+  every status change**, including rejection, withdrawal, and a duplicate link (§7.4),
+  and through visibility changes. Where the item becomes hidden, the badge is hidden with
+  it. The pick is cleared only by an explicit removal, or by the §10.3 hard delete, which
+  removes the row. The delete's own audit row is the record. No separate
+  `*.unendorsed` row is written.
+- **Idempotence.** Endorsing an already-endorsed item is a **200 no-op**. The original
+  endorser and date are kept, and no audit row is written. Removing a pick from an item
+  that has none is also a 200 no-op.
+- **Provenance and anonymity.** The endorser is recorded (`endorsed_by`, `endorsed_at`)
+  and is **never anonymous**, because a pick is a moderation act like a comment (§9). The
+  detail page shows *"Marked by <display name> on <date>"* under the badge. The date uses
+  the shared formatter, and the name is plain text. If the endorser later loses the role,
+  the pick and its provenance stay as they are, because they record a point in time; an
+  erased endorser reads as "Deleted User" (§3). Endorsing an anonymous item reveals
+  nothing about its author: the badge and the provenance line name only the endorser,
+  and author masking (§9) is unchanged everywhere the badge appears.
+- **Where the badge shows.** It is a small **"Committee pick"** chip, the same on every
+  surface. Its styling uses the existing brand-green `--ok` tokens (the carried-over
+  `.chip-official` style) and adds no new token:
+  - §13.1 gallery cards and list rows (challenges), and each solution entry on the §13.1
+    detail page;
+  - the §13.1 detail page header for the challenge, and each solution's header, each
+    with the provenance line;
+  - §13.2 Home featured cards and the two automatic spotlight cards (solutions);
+  - §13.4 search results, on both the `/search` page and the topbar autocomplete rows,
+    for challenges and solutions alike.
+
+  The triage queue (§14.1), profile lists (§13.5), and CSV exports do not show it in v1.
+- **Payloads.** List and search rows carry `endorsed: boolean` and nothing else. The
+  detail response carries `endorsement: { by: { id, displayName }, at } | null` on the
+  challenge and on each solution, plus `canEndorse: boolean` for the viewer.
+  `canEndorse` covers both setting and removing.
+- **Control.** It is on the §13.1 detail page, beside the item's status control. It reads
+  **"Mark as Committee pick"** when unset and **"Remove Committee pick"** when set. It is
+  rendered from `canEndorse`, and each solution in the list has its own.
+- **Curation is not an edit.** Setting or removing a pick bumps neither `updated_at`
+  nor `edited_at`, so the spotlight ordering and the "edited" stamp are unaffected. It
+  fires **no notification** to anyone.
+- **API.** `PUT` and `DELETE` on `/api/challenges/:number/endorsement` and on
+  `/api/solutions/:number/endorsement`. Neither takes a body. **404** applies for an
+  invisible or malformed target. **403** applies for a visible target when the caller has
+  no endorsing role (*"Only admins and committee members of this namespace can mark a
+  Committee pick."*). The response is `{ endorsement: { by, at } | null }`.
+- **Audit.** `challenge.endorsed` / `solution.endorsed` with `after: { endorsedAt }`.
+  `challenge.unendorsed` / `solution.unendorsed` with
+  `before: { endorsedBy, endorsedAt }`.
+
+### §13.11 Challenges you might like
+
+The challenge detail page shows up to **three related challenges**, based on
+**co-engagement**: two challenges are related when the same people engage with both.
+
+- **Engagement signal.** A user *engages* with a challenge when they **like** it or
+  **follow** it (challenge-level `likes`/`follows` rows only; solution likes and follows do
+  not roll up). Authors count as engaged on their own challenges through their auto-follow
+  (§12.3), as they would after an explicit follow. Each user counts **once per challenge**,
+  however many signals they have.
+- **Pair score.** For challenges *a* ≠ *b*, `shared(a, b)` = the number of distinct users
+  engaged with both. A pair qualifies only when **`shared ≥ 2`**. One person's history
+  never creates a recommendation on its own, so the panel cannot be read back as "what
+  this one colleague likes".
+- **Exclusions.** `withdrawn` and `rejected` challenges are excluded **as source and as
+  candidate**. A deleted challenge is gone by construction (§10.3 cascade).
+  `awaiting_triage` is not excluded at build time; the read-time visibility filter
+  handles it.
+- **Ranking per challenge.** Candidates are sorted by `shared` descending, then by
+  candidate `created_at` **descending** (recency breaks ties), then candidate number
+  descending. The **top 10** per source challenge are stored, which gives the read-time
+  filter headroom to still fill three slots.
+- **Storage.** `challenge_related` (§5): one row per (source, candidate) with `shared`,
+  `rank` and `computed_at`, stored in both directions. A rebuild **replaces the whole
+  table** in one transaction, so readers never see a half-built set.
+- **Schedule.** The rebuild runs **nightly at 02:00 UTC** on the worker's **leader**. A
+  leader-only tick **every 60 s** checks two triggers:
+  1. **Scheduled run due:** the current UTC time is past today's 02:00 and the last
+     completed run is earlier than that.
+  2. **Rebuild pending:** a platform admin's **"Rebuild now"** request (§14.9) is newer
+     than the last completed run.
+
+  A worker that was down at 02:00, or a leadership change, catches up on the next tick.
+  The due-check is a pure, unit-tested function. State lives in
+  `settings.related_challenges` → `{ lastRunAt, lastTrigger: "schedule" | "admin",
+  pairs, durationMs, rebuildRequestedAt }`. Runs never overlap, because only the leader
+  runs them, one at a time; a tick with nothing due is one settings read.
+- **Read path — always viewer-filtered.** The challenge detail response carries
+  `related: [{ number, title, status, author }]` (≤ 3). It takes the stored candidates in
+  `rank` order and applies, **at read time**:
+  - the viewer's full visibility predicate, the same one as the list and search
+    (invariant 2, §4.3);
+  - a fresh status check, so a challenge that became `withdrawn`/`rejected` since the last
+    build is skipped;
+  - removal of anything the viewer cannot see.
+
+  It then keeps the first three. Hidden candidates are skipped silently, and nothing in
+  the response or layout shows that something was skipped.
+- **Presentation.** A **"Challenges you might like"** section below the solutions: up to
+  three compact cards, each a link with number (`CH-<n>`), title, status pill and author.
+  **Anonymous items may appear** and are **masked as everywhere else** (§9): "Anonymous"
+  with the generic bubble. The shared-user count is **not shown**. When no candidate
+  survives the filter, the **section is not rendered at all**: no heading and no empty
+  state.
+- **No notifications, no audit** for the nightly build or for reads. The admin's manual
+  request is audited (§14.9).
+
 ---
 
 ## §14 Administration
 
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
 admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
-system log §14.7 — are hidden from namespace admins, §4). Its sub-pages — the triage
-queue (§14.1), platform settings (§14.3), the audit browser (§15), and the system log
-(§14.7) — each render a **breadcrumb** above the page
+system log §14.7, channel webhooks §12.4, related challenges §14.9, identity sync
+§14.10 — are hidden from namespace admins, §4). The link-card grid offers **"Engagement
+analytics →"** beside *Triage queue* to namespace and platform admins alike (sub-text
+*"Challenge views, trends and top challenges."*, §14.8). Its sub-pages — the triage
+queue (§14.1), engagement analytics (§14.8), platform settings (§14.3), the audit
+browser (§15), and the system log (§14.7) — each render a **breadcrumb** above the page
 title, via a shared component: **Administration** (a link back to `/admin`) › *current
 page* (the trailing crumb is plain text, not a link). Every present and future
 `/admin/*` sub-page carries it, so the way back to the console is consistent. The
@@ -1996,6 +4090,13 @@ delegated per namespace.**
 - Notification sender: connect/disconnect the Microsoft 365 service mailbox
   (delegated Graph consent flow via the dedicated "InnoBox Email" app registration,
   §12.1), author the branded HTML wrapper, test-send.
+- **Channel webhooks** — per-namespace Teams Workflows / JSON webhooks, managed on their
+  own Administration console card (§12.4).
+- **Featured challenges** — the maximum number of challenges pinned to the Home
+  dashboard at once (§13.2): integer, default **3**, range **1–6**. Lowering it unpins
+  nothing; new pins are refused until the count is below the new limit. Audited as
+  `settings.featured_limit_changed` (`after: { limit }`), following the existing
+  `settings.<name>_changed` pattern.
 
 All settings changes are audited.
 
@@ -2040,6 +4141,13 @@ non-admin surface for presence anywhere in the app (§13.8).
   make "online" mean "has a tab open somewhere" and every user who ever left InnoBox
   open would read as permanently active. Reading counts as using: a challenge detail
   `GET` is activity, `GET /api/notifications` is not.
+- **v0.10 routes.** Rating `PUT`/`DELETE` (§8.4) are mutations and stamp presence (no
+  location, like other mutations). `GET /api/leaderboards/leaders` and the
+  `GET /api/admin/related-challenges` pending-state poll are background reads and **do
+  not** stamp. `/admin/analytics` is a page navigation in the *Administration* category.
+- **Direct messages (§13.9).** The thread list, thread reads and the 10-second
+  open-thread poll are **off the allowlist**. Sending a message stamps at the **touch**
+  tier only. No DM route ever writes `last_route`.
 - **Explicit allowlist, not a denylist.** Routes that stamp presence are enumerated;
   anything unlisted is silent by default. A new polling widget can therefore never
   quietly pollute presence by being forgotten — the failure mode is an under-count,
@@ -2078,8 +4186,10 @@ Four blocks, top to bottom:
    first**: avatar bubble (§13.6), display name, e-mail, **current location** (below),
    and a relative **"active just now" / "active 48m ago"** pill. Above it, a
    **client-side search** filtering the fetched set by name or e-mail.
-   - **No "Reach out" action.** Deliberately: the panel answers *who is around*, and
-     InnoBox has no direct-message channel to hand off to.
+   - **"Reach out"** (§13.9) on each row, omitted on the viewing admin's own row and on
+     greyed (deactivated) rows. It opens the admin's **own** messages panel on that
+     person. It grants no access to anyone's messages, and presence data never enters
+     a DM. (This reverses the earlier "no direct-message channel" note, §20.)
    - **Cap 200** users per window, most-recent-first, with a muted **"showing 200 of
      412"** when truncated. No pagination — a longer list is a metrics question, and the
      tiles already answer it.
@@ -2188,7 +4298,22 @@ console directly under Audit, never shown to namespace admins, and the API answe
   noise) and `/api/*` **404 never**. The web tier, plus one worker carve-out: the SCIM
   endpoints' **401 / 403** (`source = worker`) — a wrong provisioning token or SCIM URL
   is the first symptom of an Entra misconfiguration and is worth surfacing. Scan-
-  pipeline failures are **not** recorded here (already audited, §11).
+  pipeline failures are **not** recorded here (already audited, §11). Two further
+  carve-outs: the §3 **sign-in relink refusal** (`409`, `error_code =
+  signin_upn_conflict`, no user, candidate user ids only in the message), and
+  **channel-webhook final failures** (§12.4, `source = worker`). The webhook rows have
+  `method = POST`; `route = /webhooks/[namespace]`, `path = /webhooks/<namespace slug>`;
+  no user; `status` = the receiver's HTTP status when one came back, otherwise **504**
+  for a timeout and **502** for every other no-response failure (refused address, DNS,
+  connect, TLS, undecryptable URL, missing key); `error_code` ∈ `webhook_http_error |
+  webhook_redirect | webhook_timeout | webhook_network | webhook_blocked_address |
+  webhook_undecryptable | webhook_key_missing`; and a one-line `message` naming the
+  webhook name, the event and the item number, **never the URL**. Skipped deliveries
+  and failed *test* sends are not recorded; webhook rows get no chip of their own and
+  appear under *All* (and *5xx* when ≥ 500). The public CSP report sink
+  (`/api/csp-report`, §2.4) is **excluded entirely** — none of its responses, 413 and
+  429 included, is ever recorded. It is unauthenticated, and recording it would give
+  anyone who can reach the proxy a write path into this table.
 - **Capture.** A `withSystemLog(routeTemplate, handler)` wrapper records, in the
   route's own context, both the error responses a handler returns and the errors it
   throws (stack to stdout, a JSON 500 to the client, a 500 row here). Next's
@@ -2232,6 +4357,176 @@ console directly under Audit, never shown to namespace admins, and the API answe
   so nothing double-counts. **In-app only, never e-mailed**, and exempt from the §12.1
   preferences.
 
+### §14.8 Engagement analytics (namespace & platform admins)
+
+How much challenges are **viewed**, as aggregate counts only. **No per-viewer lists, ever.**
+No surface, export or API names who viewed what. The dashboard shows views only.
+
+#### Recording a view
+
+- **What counts.** A view is recorded on a **successful** `GET /api/challenges/:number`.
+  "Successful" means after the visibility check has passed (a 404 records nothing).
+  Lists, search, autocomplete, the §13.1 new-count poll and the badge/leaders fetches
+  never count.
+- **Dedupe.** A view counts **once per user per challenge per UTC day**. The detail page
+  re-fetches after every mutation (§13.1), and those re-fetches dedupe into the same row.
+- **Exclusions.** The challenge's **own author and its co-authors** (§6.5) are excluded,
+  matched on the true `author_id` so an anonymous author's views are excluded too.
+  Nothing about this check reaches the client.
+- **Write path.** `insert … on conflict do nothing` into `challenge_views`, with
+  `day = (now() at time zone 'utc')::date` and `viewed_at = now()` (the first view of that
+  day). The write is **fire-and-forget**: not awaited, errors swallowed and logged. It can
+  never add latency to the page or fail it. This is the same contract as the §14.5
+  presence stamp.
+- **Not audited** and fires nothing.
+
+#### Retention
+
+- **Raw view rows** (`challenge_views`) are kept **90 days**. They carry user ids and exist
+  for the per-day dedupe and the rolling windows below.
+- The worker's **hourly housekeeping sweep** (alongside the §14.5 presence rollup) does
+  two things in this order:
+  1. **Roll up:** in one transaction, replace `challenge_view_daily` for every **closed**
+     UTC day still inside raw retention (delete those days, re-insert per (challenge, day)
+     counts). This is presence-style self-repair: a missed sweep is fixed by the next one.
+  2. **Purge:** delete raw rows with `day` older than 90 days.
+- Rollups (`challenge_view_daily`) carry **no user ids** and are kept **indefinitely**.
+- Day buckets are UTC (§2). There is **no backfill**: history starts the day this ships.
+
+#### Dashboard — `/admin/analytics`
+
+An `/admin/*` sub-page with the §14 **breadcrumb** (*Administration › Engagement
+analytics*). It is linked from the console's link-card grid next to *Triage queue*, so both
+namespace admins and platform admins see the card.
+
+- **Scope.**
+  - A **namespace admin** sees challenges of the namespaces they administer: every
+    visibility and status those namespaces contain, since they can already see all of them.
+  - A **platform admin** sees everything.
+  - A **namespace selector** (*All my namespaces* / one namespace; for platform admins
+    *All namespaces* / one) narrows the scope.
+  - Everyone else gets the §14 restricted state, and the API returns **403**.
+- **Tiles.** Views in the last **24 h / 7 d / 30 d** and **All time**, each with a
+  **trend delta** against the previous period of the same length (24 h vs the 24 h before,
+  and so on). The delta is shown as an arrow plus a signed percentage. When the previous
+  period had zero views, the tile shows *"new"* instead of a percentage. *All time* has no
+  delta.
+  - The 24 h / 7 d / 30 d windows and their previous periods are **rolling** windows over
+    raw `viewed_at` (within the 90-day raw retention, which covers the 60 days the 30 d
+    delta needs).
+  - *All time* = the sum of the rollups plus today's raw count.
+  - A "view" here is a user-day, so one person viewing at 23:59 and at 00:01 UTC counts
+    twice. That is accepted.
+- **Per-day chart.** Daily views as a line chart with a **7d / 30d / 90d / All** range
+  toggle. It reads rollups for closed days and raw rows for today (a partial day, labelled
+  as such). It is hand-rolled inline SVG on the brand tokens with **no charting
+  dependency**, and the axis says the days are UTC (the §14.5 conventions). Under **7 days**
+  of history the chart is replaced by a muted *"Not enough history yet — views are recorded
+  from the day analytics shipped."* The toggle stays visible.
+- **Top challenges.** The **top 10** challenges in scope by views over the selected range.
+  Columns are number (link), title, status, namespace and views. There is **no author
+  column**, so anonymity has nothing to mask here. Ties go to the newer challenge.
+- **Freshness.** Loaded on open, with a manual **Refresh** and an *"as of hh:mm"* stamp.
+  Nothing polls.
+- **Not audited.** Every figure is an aggregate with no user ids, the same reasoning that
+  leaves the §14.5 chart series unaudited.
+- **API.** `GET /api/admin/analytics?range=7d|30d|90d|all&namespace=<id>|all` →
+  `{ asOf, scope, tiles: { d1, d7, d30, all }, points: [{ day, views }], top: [{ number,
+  title, status, namespace, views }] }`. Each tile is `{ views, previous }` (`previous` is
+  absent on `all`). Errors: **403** for callers who are not namespace or platform admins;
+  **404** for a `namespace` outside the caller's admin scope, so it cannot be used as an
+  oracle; **400** for a malformed `range`.
+
+#### Public 30-day sparkline (challenge detail)
+
+Everyone who can **see** a challenge also sees, in its detail header (§13.1), a small
+**30-day views sparkline** (about 120 × 24 px inline SVG, `--accent` stroke) with the label
+*"142 views in the last 30 days"*. That label is also the SVG's accessible name.
+
+- It covers the last 30 UTC days including today (partial).
+- The detail payload carries `views30d: { total, days: number[30] }`, oldest first, built
+  from rollups plus today's raw count.
+- It shows the same author-excluded, per-user-per-day counts as the dashboard and nothing
+  per-viewer.
+- With zero views it shows a flat line and *"No views in the last 30 days"*.
+
+### §14.9 Related challenges (platform admin)
+
+A collapsible **"Related challenges"** card in the Administration console's
+platform-admin section, operating the §13.11 rebuild. Hidden from namespace admins.
+
+- It shows the last completed rebuild (local time via the shared formatter), its trigger
+  (*Nightly* / *Manual*), the number of stored pairs and the duration, or *"Not built
+  yet"*.
+- A **"Rebuild now"** button stamps `settings.related_challenges.rebuildRequestedAt` via
+  `POST /api/admin/related-challenges/rebuild` (platform admin only, **403** otherwise;
+  mutation rate-limit bucket). The response is **202**, and nothing is computed in the
+  web tier; the worker's 60-second tick picks it up (§13.11).
+- While a request is pending the button is disabled and the card reads *"Rebuild
+  requested at hh:mm — the worker picks it up within a minute."* It re-reads
+  `GET /api/admin/related-challenges` every 10 s **only while pending and expanded**, and
+  reverts when the run completes.
+- Repeated clicks while pending are idempotent: the timestamp is overwritten and only one
+  run follows.
+- Audited `related_challenges.rebuild_requested`.
+
+### §14.10 Identity sync diagnostics (platform admin)
+
+A collapsible **"Identity sync"** card in the Administration console's
+platform-admin section. It answers *is Entra provisioning reaching InnoBox, and is it
+sending what roles need?* — the first stop when a user reports "I signed in but I'm
+not an admin". **Platform admins only** (hidden from namespace admins; the API
+answers **403** to anyone else). Read-only and **not audited**: it shows counts and
+group object ids, no personal data (unlike the §14.5 presence read).
+
+- **Provisioned users** — rows with `scim_synced = true`, shown as *active* and
+  *deactivated* counts. Reconciliation-created rows and JIT stubs (`scim_synced =
+  false`) are excluded: they prove sign-in or the safety net works, not SCIM.
+  Scrubbed rows are excluded (erasure clears `scim_synced`, §3).
+- **Provisioned groups** — rows with `groups.scim_synced = true` (§5: set by every
+  SCIM group write). Reconciliation's mirroring of a mapped group leaves it `false`,
+  so a working safety net cannot mask missing group provisioning.
+- **Mapped groups that never arrived** — every distinct
+  `role_mappings.group_external_id` with **no `groups` row at all**, i.e. neither
+  SCIM nor reconciliation has mirrored it (the same test as the role-mapping card's
+  "Dead" flag). Each is listed with the mapped role and namespace and the fixed hint
+  *"Assign this group to the enterprise application, or remove the mapping."* Nobody
+  can hold that role until the group arrives (invariant 1). The bootstrap admin group
+  (`INNOBOX_BOOTSTRAP_ADMIN_GROUP`) is not a role mapping and is not listed.
+- **Last SCIM request** — `settings.scim_last_request_at` (§5). The worker stamps it
+  on every SCIM request that **passes the bearer-token check** (any method, any
+  outcome), at most **one write per 60 s** per worker process, fire-and-forget (a
+  failed stamp never touches the SCIM response). Shown as a relative time with the
+  absolute instant in a tooltip (shared formatter), or *"Never"*. Beside it, **last
+  rejected SCIM request** — the newest worker 401/403 in the system log (§14.7;
+  *"None in the last 90 days"* when absent). A wrong token shows up here while the
+  accepted-request time stays stale.
+- **Fixed explanations** — at most one, chosen by the counts:
+  - **Nothing synced yet** (provisioned users = 0 and provisioned groups = 0):
+    *"Nothing has been provisioned yet. In the enterprise application's
+    Provisioning settings, check that the Tenant URL is this site's address followed
+    by /scim/v2, that the Secret Token matches the deployment's SCIM token, and that
+    provisioning has been started (status On). Then use Provision on demand for one
+    user to test."*
+  - **Users but no groups** (provisioned users > 0, provisioned groups = 0):
+    *"Users are arriving but groups are not, and roles come only from groups. In the
+    enterprise application, assign the groups themselves (not only their members)
+    under Users and groups, keep the scope at 'Sync only assigned users and
+    groups', and make sure the group mapping is enabled. The next provisioning
+    cycle brings them in."*
+  - Otherwise no explanation is shown. A stale last-request time is **not** flagged
+    on its own: Entra calls InnoBox only when something in scope changes, so a quiet
+    tenant can legitimately go hours without a request.
+- **Card summary** (collapsed header): *"N users · M groups"*, or *"Not synced"*
+  when both are zero.
+- No Entra tenant change is involved: the card only *explains* the existing runbook
+  steps of `ENTRA_AUTH_SPEC.md` §3.1.
+- **API:** `GET /api/admin/identity-sync` →
+  `{ users: { active, deactivated }, groups, unarrivedMappedGroups: [{
+  groupExternalId, role, namespaceId, namespaceName }], lastScimRequestAt,
+  lastRejectedScimRequestAt, state: "ok" | "nothing_synced" | "users_no_groups" }`
+  (timestamps UTC ISO or `null`).
+
 ---
 
 ## §15 Audit
@@ -2248,8 +4543,47 @@ edited, deleted (incl. moderator deletes); like/unlike; attachment uploaded, bou
 **unscannable**), download denials; CSV exports; settings, namespace,
 impact-area create/rename/retire/delete (a delete carries `before: { name, active }` plus any reassignment target and
 per-challenge diffs), and role-mapping changes; **`presence.view`** — a platform admin
-loading the Currently online panel, with the selected window (§14.5; the one audited
-*read* in the app, and deliberately so); SCIM sync anomalies. Platform admins get a read-only,
+loading the Currently online panel, with the selected window (§14.5; one of only two
+audited *reads* in the app, with `audit.verified` below, and deliberately so); SCIM sync
+anomalies. Since v0.10 also:
+- **identity** — `user.relinked` (§3 sign-in relink, before/after external id);
+  `user.scrubbed` gains `reassignedTo`, `reassignedCount`, `skippedCount`,
+  `coauthorsRemoved`, `dmMessagesDeleted` and `dmThreadsDeleted` (§3); each challenge an
+  erasure moves writes an ordinary `challenge.assigned` row;
+- **audit integrity** — `audit.chain_started` (the genesis row, written once by the
+  migration; actor system) and `audit.verified` (every integrity run, with its result —
+  the second audited *read*, deliberately);
+- **curation** — `challenge.featured` / `challenge.unfeatured` (manual, or automatic with
+  `trigger: "status_changed" | "deleted"`, actor = the transition's actor or the deleting
+  admin, null if system-driven, §13.2); `challenge.endorsed` / `challenge.unendorsed` /
+  `solution.endorsed` / `solution.unendorsed` (§13.10); `challenge.duplicate_linked`
+  (incl. `trigger: "repointed"` for flattening) / `challenge.duplicate_unlinked`
+  (`trigger: "manual" | "status_changed" | "canonical_deleted"`); the duplicate close
+  itself is a `challenge.status_changed` override row with `trigger: "duplicate"` (§7.4);
+  `settings.featured_limit_changed` (§14.3);
+- **collaboration** — co-authors added/removed (`challenge|solution.coauthor_added`,
+  `…coauthor_removed` with `self`, §6.5); triage messages posted, edited, deleted
+  (`triage_message.*`, no body, incl. moderator deletes, §7.5); channel webhooks
+  created, updated, deleted, tested (`webhook.*`, never the URL, §12.4);
+- **engagement** — ratings set/changed/removed (`rating.set` with `before: { stars } |
+  null` and `after: { stars }`; `rating.removed` with `before: { stars }` and, when caused
+  by a co-author add, `trigger: "became_coauthor"`; target = the solution — the same
+  footing as like/unlike, §8.4); `related_challenges.rebuild_requested` (§14.9).
+
+**Deliberately not audited:** direct messages (§13.9) — message content **and** the
+activity: there is no row for send, thread creation, read, block or unblock. A DM is
+private correspondence and a block is a personal preference, not governance; an audit
+trail of who wrote to whom would itself be the surveillance record the feature promises
+not to keep (the only DM-related audit data is the pair of cascade counts on
+`user.scrubbed`). Likewise not audited: the leaderboard opt-out and other profile
+preferences, view recording and analytics reads (aggregates only, §14.8), the leader-map
+read, the worker's scheduled sweeps and rebuilds, webhook deliveries (their trace is the
+delivery row and, on final failure, the system log), identity-sync reads (§14.10), CSP
+reports (§2.4), and the purely presentational view toggle, emoji picker and submission
+lock. The edit audit's field-level diff records Markdown fields as **raw source**; the
+derived twins are never diffed (§6.3).
+
+Platform admins get a read-only,
 filterable audit browser; a target that no longer resolves (a deleted challenge or
 solution, §10.3) renders as plain text rather than a link. Audit retains actor PII
 for provenance and is exempt from GDPR erasure (§3).
@@ -2261,14 +4595,151 @@ grant in any case; the trigger closes the path for the owner role too, so emptyi
 table requires deliberately dropping the trigger first (itself a DDL change visible in
 migrations), never an accidental `TRUNCATE`.
 
+**Hash chain (tamper evidence).** Append-only guards stop the app role and an
+accidental owner-level statement. They cannot stop someone who first drops the
+triggers. Every audit row written from the chain migration onward is therefore
+**hash-chained**, so any later edit, deletion or insertion inside the chain is
+detectable:
+- **Columns** (§5): `chain_seq` (bigint — the row's position in the chain, 1-based,
+  unique), `prev_hash` (the previous chained row's `row_hash`), and `row_hash`
+  (lowercase hex SHA-256, 64 characters). All three are `NULL` on rows written
+  before the chain migration. A CHECK requires them to be either all null or all
+  set, with both hashes matching `^[0-9a-f]{64}$`. `chain_seq` exists because `id`
+  (identity) and `created_at` are both assigned before the trigger takes its lock, so
+  neither reliably reflects chain order under concurrency; its uniqueness also makes a
+  fork impossible.
+- **Computed in the database, never by the caller.** A `BEFORE INSERT … FOR EACH
+  ROW` trigger (`audit_log_chain`) does the following:
+  1. It takes a transaction-scoped advisory lock: `pg_advisory_xact_lock` on the
+     fixed key `hashtextextended('innobox:audit_log_chain', 0)`, which is distinct
+     from the worker's leader key.
+  2. It reads the head, which is the row with the highest `chain_seq`.
+  3. It sets `chain_seq = head + 1`, `prev_hash = head.row_hash`, and `row_hash`
+     over the canonical form below, **overwriting** any value an `INSERT` supplied.
+
+  The lock is held until commit, so concurrent audit writes from web and worker
+  **serialize** and each one reads a committed head. A rolled-back insert releases
+  the lock and leaves no gap: the next writer reuses its position, which is why
+  `chain_seq` is not a sequence. The cost is accepted at v1's scale (one web, one
+  worker): a long audited transaction (bulk triage, the §10.3 cascade, an impact-area
+  delete with per-challenge diffs, an erasure with many moves) blocks other audited
+  writes until it commits, and crossing this lock with row locks in a different order
+  can surface as a detected deadlock (`40P01`, one transaction aborted). Where cheap,
+  code writes its audit rows last in a transaction; no retry logic is specified.
+
+  The trigger **raises unless the transaction is `READ COMMITTED`**. That is the
+  platform default, and no code path uses another level. Under a fixed snapshot the
+  head read could be stale, and the unique `chain_seq` index would then reject the
+  insert anyway, so a fork is impossible either way. `db/migrations/README.md` records
+  that the chain trigger must never be dropped or bypassed and that `audit_log` inserts
+  run under `READ COMMITTED`.
+
+  Chain order is `chain_seq` order. It can differ from `id` and `created_at` order,
+  and nothing relies on the three agreeing.
+- **Canonical form (v1).** `row_hash = sha256(utf8(C))` as lowercase hex. `C` is the
+  line `innobox-audit-v1\n` followed by ten fields in this fixed order: `chain_seq`,
+  `id`, `created_at`, `actor_user_id`, `action`, `target_type`, `target_id`,
+  `before`, `after`, `prev_hash`.
+
+  Each field is encoded as `~\n` when it is SQL `NULL`. Otherwise it is encoded as
+  `<n>:<value>\n`, where `<n>` is the value's length in UTF-8 **bytes**, written in
+  base 10. The length prefix makes the encoding unambiguous for any value, newlines
+  included. An empty string is `0:\n`, which is distinct from `NULL`.
+
+  Values:
+  - `chain_seq`, `id` — base-10, no sign, no leading zeros.
+  - `created_at` — UTC, `YYYY-MM-DDTHH:MM:SS.ffffffZ`, always six fractional digits
+    (`to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`).
+  - `actor_user_id` — the canonical lowercase hyphenated UUID text.
+  - `action`, `target_type`, `target_id` — the stored text verbatim.
+  - `before`, `after` — PostgreSQL's own `jsonb` text output (`before::text`). It is
+    deterministic for a stored value: keys are de-duplicated and ordered, and the
+    separators are fixed. A verifier obtains it by selecting `::text`, **never** by
+    re-serializing a parsed object. SQL `NULL` is `~`; a JSON `null` value is the
+    four-byte string `null`.
+  - `prev_hash` — 64 lowercase hex characters.
+- **Genesis.** The chain migration runs in **one transaction**, and its
+  `ALTER TABLE` lock blocks concurrent audit writes until it commits. It does three
+  things:
+  1. It adds the columns. This changes metadata only: no existing row is rewritten,
+     so the immutability trigger never fires and **existing rows stay unchained**.
+     Back-filling them would require the very `UPDATE` invariant 5 forbids.
+  2. It installs the trigger.
+  3. It inserts one **genesis row** — `action = audit.chain_started`,
+     `target_type = audit_log`, actor `NULL` (system), and
+     `after: { unchainedCount: <rows with chain_seq NULL>, lastUnchainedId: <their
+     max id, or null> }`. The trigger chains it as `chain_seq = 1` with `prev_hash`
+     set to 64 zeros; it is the only row whose head read finds nothing.
+
+  The migration is idempotent: the genesis row is inserted only when no chained row
+  exists.
+- **Interaction with the existing guards.** The chain trigger fires on `INSERT`
+  only. `audit_log_no_mutation` (row, `UPDATE`/`DELETE`) and `audit_log_no_truncate`
+  (statement, `TRUNCATE`) are unchanged and still refuse every mutation, so a hash
+  can never be "corrected" in place. The app role's grants stay `SELECT, INSERT`.
+  The chain adds detection *behind* those guards; it does not replace them.
+- **What it proves.** Verification proves the chain is **internally consistent**:
+  no chained row was edited, removed or slipped in unless every later hash was
+  recomputed too. Someone with owner rights who drops the guards *and* recomputes
+  the whole tail cannot be detected from inside the database alone. An operator who
+  records the reported head (`chain_seq` + `row_hash`) outside the system can later
+  prove that nothing up to that point was rewritten; external anchoring is not a v1
+  feature (§19).
+
+**"Verify integrity"** (audit browser, platform admin only). A **Verify integrity**
+button on `/admin/audit` runs `POST /api/admin/audit/verify`:
+- **Streamed both ways.** The server walks the chain in `chain_seq` order, in keyset
+  pages of 5 000, up to the head captured when the run starts. Rows are immutable,
+  so no long transaction is needed. The response is streamed as
+  `application/x-ndjson`: a `{ "type": "start", "head": <chain_seq> }` line, then a
+  `{ "type": "progress", "checked": n }` line every 10 000 rows, then one final
+  `{ "type": "result", … }` line. The page shows *"Checked n of N rows…"* while it
+  runs.
+- **Independent recomputation.** The web process recomputes each row's hash from the
+  fields read as text (as defined above) instead of calling the trigger's function.
+  A defect or tampering in that function therefore shows up as a break instead of
+  being reproduced.
+- **Checks, stopping at the first failure:**
+  - The genesis row has `chain_seq = 1`, action `audit.chain_started`, and an
+    all-zero `prev_hash`.
+  - Each next row has `chain_seq = previous + 1`. Otherwise the break is
+    **`sequence`**: a row is missing or extra.
+  - Each row's `prev_hash` equals the previous row's `row_hash`. Otherwise the break
+    is **`link`**.
+  - The recomputed hash equals the stored `row_hash`. Otherwise the break is
+    **`content`**.
+  - Finally, the count of unchained rows must still equal the genesis row's
+    `unchainedCount`, and no unchained row may have an id above `lastUnchainedId`.
+    Otherwise the break is **`unchained`**: a row was written with the trigger
+    disabled, or a pre-chain row vanished.
+- **Result:** `{ result: "intact" | "broken", checked, head: { chainSeq, rowHash },
+  firstBreak: null | { id, chainSeq, check, expected, actual } }`. For `link` and
+  `content`, `expected` and `actual` are the two hashes. For `sequence` they are the
+  two sequence numbers, and for `unchained` the two counts (or the offending id).
+  The page shows *"Audit log intact — n entries verified (chain head #<seq>)"* or
+  *"Audit log broken at entry #<id>: expected …, found …"*.
+- **Every run is audited** as `audit.verified`, with actor = the admin and
+  `after: { result, checked, headChainSeq, firstBreak }`. A run the client abandons
+  mid-stream stops and is audited with `result: "aborted"`. The `audit.verified` row
+  joins the chain after the head it verified. Only one run may be active per web
+  process; a second request answers **409** *"A verification is already running."*
+  The request counts against the ordinary state-changing rate limit (§2.4).
+
+**No trim.** A retention trim of old audit rows was considered and **rejected**.
+Deleting audit rows is exactly what invariant 5 forbids, and it would also cut the
+chain's anchor. The audit log grows for the life of the deployment (§19).
+
 **Audit browser (`/admin/audit`, platform admin).** The default view is the newest
 100 rows, infinite scroll in pages of 100 over all history. Layered on top, all
 optional and composable (each an additional `AND`):
 
 - **Category chips** by action prefix — All / Challenges (`challenge.*`) / Solutions
-  (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
-  (`user.*`, `scim.*`, `role_mapping.*`) / Admin (`settings.*`, `namespace.*`,
-  `impact_area.*`, `system_banner.*`, `presence.*`, every `*.exported`).
+  (`solution.*`) / Comments (`comment.*`, `triage_message.*`) / Attachments
+  (`attachment.*`) / Identity (`user.*`, `scim.*`, `role_mapping.*`) / Admin
+  (`settings.*`, `namespace.*`, `impact_area.*`, `system_banner.*`, `presence.*`,
+  `audit.*`, `webhook.*`, `related_challenges.*`, every `*.exported`). Co-author,
+  curation and duplicate events fall under Challenges/Solutions by prefix; `rating.*`,
+  like `like.*`, appears under **All** only.
 - **Search box** (debounced) — a plain `ILIKE` over the human-meaningful fields:
   action, target type, target number, actor name, actor e-mail (joined live). The
   JSON payload is deliberately **not** searched and there is no trigram index — the
@@ -2284,8 +4755,9 @@ optional and composable (each an additional `AND`):
 that sees the browser at all): honours the same active filters, so it downloads
 exactly what is on screen; capped at **50 000** rows newest-first, with
 `X-Total-Matching` / `X-Exported-Count` headers driving the in-app *"exported N of M —
-narrow the range"* notice; every column of the row, with `before`/`after` as their raw
-JSON strings (lossless, matching the viewer); RFC 4180 quoting, UTF-8 BOM. **Rows are
+narrow the range"* notice; every column of the row — `chain_seq`, `prev_hash` and
+`row_hash` included, appended after `after` — with `before`/`after` as their raw JSON
+strings (lossless, matching the viewer); RFC 4180 quoting, UTF-8 BOM. **Rows are
 not anonymity-masked.** The audit log is the provenance record: it already shows the
 true actor of an anonymous submission to platform admins in the browser, and those
 same admins hold the §9 reveal power — a masked export would be lossy while leaving the
@@ -2300,34 +4772,106 @@ bulk download of identities is never silent.
 REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource groups:
 
 - `challenges` (list/search/detail/create/edit/withdraw/transition/assign/visibility/
-  **delete**; `challenges/similar` — the §6.1 duplicate check; `challenges/new-count`
-  — the §13.1 bare integer)
+  **delete**; `challenges/similar` — the §6.1 duplicate check, which strips its
+  `description` input before ranking; `challenges/new-count` — the §13.1 bare integer;
+  `challenges/:number/featured` `PUT`/`DELETE` — platform admin, §13.2, 409 at the cap
+  or on an ineligible status; `challenges/:number/endorsement` `PUT`/`DELETE` — §13.10;
+  `challenges/:number/duplicate-of` `PUT { canonical }` / `DELETE` — namespace admin of
+  the challenge's namespace or platform admin, §7.4; `challenges/:number/coauthors`
+  `POST { userId }` / `DELETE /:userId` — §6.5; `challenges/:number/triage-messages`
+  `GET`/`POST` — §7.5). Create accepts `coAuthorIds` (§6.5). The detail payload
+  carries `featured`/`canFeature`, `endorsement`/`canEndorse`, `duplicateOf`/
+  `canLinkDuplicate`/`canUnlinkDuplicate`, `coAuthors`/`isCoAuthor`/
+  `canManageCoAuthors`, `canReadTriageThread`/`canPostTriageMessage`, per-solution
+  `rating`/`myRating`/`canRate` (§8.4), `related[]` (§13.11) and `views30d` (§14.8);
+  a successful detail `GET` records a view (§14.8)
 - `challenges/:id/solutions`, `solutions` (detail/create/edit/withdraw/transition/
   **delete**) — `DELETE` on either is the platform-admin hard delete (§10.3): reason
-  required in the body, cascading, irreversible, **404 (not 403)** to anyone else
+  required in the body, cascading, irreversible, **404 (not 403)** to anyone else.
+  Create accepts `coAuthorIds`; `solutions/:number/endorsement` `PUT`/`DELETE`
+  (§13.10); `solutions/:number/coauthors` `POST`/`DELETE /:userId` (§6.5);
+  **`solutions/:number/rating`** `PUT { stars }` / `DELETE` — the caller's own 1–5
+  rating (§8.4; 403 for the author or a co-author, 409 when frozen, 404 when not
+  visible)
+- `triage-messages/:id` (`PATCH`, `DELETE`: own 15-minute window or moderator
+  soft-delete, §7.5)
 - `comments`, `likes`, `follows` (create/delete on either parent type)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
-- `notifications` (inbox, mark read; the unread poll carries the §14.6 banner), `me`
-  (profile, preferences incl. the three §12.1 toggles; `me/challenges-seen` advances
-  the §13.1 marker)
-- `users/:id/photo` (authenticated avatar image gateway, §3.1),
-  `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
-  malformed id, §13.8)
-- `leaderboards`, `dashboard` (KPIs, spotlights)
+- `notifications` (inbox, mark read; the unread poll carries the §14.6 banner **and the
+  §13.9 `messagesUnread` count**), `me` (profile, preferences incl. the three §12.1
+  toggles and `leaderboardVisible`, §13.3/§13.5; `me/challenges-seen` advances the
+  §13.1 marker)
+- `messages` (§13.9; **participants only — platform admins have no access**; every
+  non-participant, unknown or malformed thread or user id → **404**):
+  - `GET messages/threads?before=<cursor>` → `{ threads[{ id, counterpart{ userId,
+    displayName, deactivated, scrubbed }, lastMessage{ preview, mine, createdAt },
+    unread }], nextCursor }` (30 per page, newest first);
+  - `GET messages/with/:userId` → `{ threadId | null, counterpart, canSend,
+    blockedByMe }`. Resolve only, **writes nothing** (422 for yourself);
+  - `GET messages/threads/:id?before=<msgId>|after=<msgId>` → `{ counterpart, canSend,
+    blockedByMe, messages[{ id, mine, body, createdAt }], hasMore }` (≤ 50; `after` is
+    the 10 s poll);
+  - `POST messages` `{ recipientId, body }` → **201** `{ threadId, message }`. Creates
+    the thread on first send; uses its own **`message`** rate-limit bucket (§2.4);
+    **403 "You can't message this person."** for every reason the recipient can't be
+    messaged; 422 for self, empty, or over 2 000;
+  - `POST messages/threads/:id/read` `{ upTo: <msgId> }` → 204, monotonic (422 if the
+    message is not in the thread);
+  - `GET messages/blocks` → `{ blocks[{ userId, displayName, deactivated, blockedAt }] }`;
+  - `PUT`/`DELETE messages/blocks/:userId` → 204, idempotent (422 for self; 404 for an
+    unknown, malformed or scrubbed id).
+
+  The unread count has **no endpoint of its own**: it is `messagesUnread` on the
+  `notifications` poll.
+- `users?q=` (directory search of active users; gains an optional `namespace` filter
+  for the §6.5 co-author picker), `users/:id/photo` (authenticated avatar image
+  gateway, §3.1), `users/:id/card` (directory hover card — any authenticated user; 404
+  on unknown or malformed id, §13.8)
+- `leaderboards` (entries carry `deactivated`/`scrubbed` for the §13.3 "Reach out"
+  gate; **`leaderboards/leaders`** — the cached leader-badge map, ≤ 8 entries, one per
+  user, any authenticated user, §13.3), `dashboard` (KPIs, spotlights, **featured** —
+  visibility-filtered pins, §13.2)
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
   and `admin/presence/history?range=7d|30d|90d|all` → `{ points[] }`** — platform admin
   only (**403** for namespace admins), anonymity-masked locations, §14.5;
   **`admin/audit` with `q`/`category`/`from`/`to` + `admin/audit/export`** (§15);
   **`admin/system-banner` `PUT`/`DELETE`** (§14.6); **`admin/system-log` +
-  `admin/system-log/export` + mark-seen** (§14.7) — all platform admin only)
+  `admin/system-log/export` + mark-seen** (§14.7) — all platform admin only;
+  since v0.10: **`admin/audit/verify`** (`POST`, NDJSON stream, one run at a time —
+  **409** otherwise, §15); **`admin/identity-sync`** (`GET`, §14.10);
+  **`admin/users/:userId/scrub`** (`POST`, the §3 erasure — body `{ reassignTo?: uuid |
+  null }`, an empty body or `{}` keeping the no-successor behaviour; **400** when
+  `reassignTo` is not a uuid, is not an active non-scrubbed user, or equals `:userId`;
+  **404** for an unknown user; **409** when already scrubbed, checked before anything
+  changes; **200** returns `{ ok: true, reassignment: null }` or `{ ok: true,
+  reassignment: { successorId, moved: [{ number, title }], skipped: [{ number, title,
+  reason: "not_visible" }] } }` — titles are safe here: the caller is a platform admin,
+  who sees every item, and titles carry no author identity); **`admin/webhooks`
+  `GET`/`POST`, `admin/webhooks/:id` `PATCH`/`DELETE`, `admin/webhooks/:id/test`
+  `POST`** (§12.4 — the URL is write-only: responses carry `urlHint`, never the URL);
+  **`admin/related-challenges`** `GET` (rebuild state) + **`admin/related-challenges/
+  rebuild`** `POST` (202, §14.9) — all platform admin only; and
+  **`admin/analytics?range=7d|30d|90d|all&namespace=`** → `{ asOf, scope, tiles,
+  points[], top[] }` — namespace admins (own namespaces) and platform admins, 403
+  otherwise (§14.8))
+- **The one unauthenticated API route:** `POST /api/csp-report` — the CSP report sink
+  (§2.4): `application/csp-report` or `application/reports+json`, 64 KB cap, per-IP
+  rate limit, **204** with no body; exempt from the `Origin` check; never stored, not
+  system-logged, not audited.
 
 Exact shapes are defined during implementation and documented alongside the code;
 any change to a shipped shape is a spec change first (§17). Responses apply
 visibility and anonymity masking server-side without exception (invariants 2–3).
 Every route also follows the §2.4 baseline: the `Origin` check on state-changing
 requests, the body-size limits, rate limiting (**429** with `Retry-After`), 404 for
-anything the caller can't see, and 400 (never 500) for malformed input.
+anything the caller can't see, and 400 (never 500) for malformed input. The v0.10
+mutation endpoints above use the `mutation` bucket unless stated otherwise (triage
+messages: the comment bucket; DM sends: the `message` bucket), and their error messages
+carry no `§` references (§21.9). Markdown fields (§6.3) are returned as **raw source**
+only in detail and edit payloads; every list, search, autocomplete, dashboard, profile
+and similar-challenge payload that carries one returns the **stripped** plain text
+instead.
 
 ---
 
@@ -2381,7 +4925,17 @@ the legacy SharePoint site; no campaigns/challenge deadlines; no reward points; 
 comment threading; no scheduled digest e-mails (the per-item coalescing of comment
 notifications, §12.1, is in scope and is not a digest); no undelete, trash, or restore for a deleted
 challenge or solution (§10.3 is permanent by design); no i18n;
-no Kubernetes/Helm, HA, or SAML; no mobile app.
+no Kubernetes/Helm, HA, or SAML; no mobile app; **for direct messages (§13.9): no group
+conversations, attachments, rich text/Markdown or auto-linked URLs, message
+edit/delete/unsend, read receipts or typing indicators, WebSocket/SSE push, e-mail or
+bell notifications for messages, or admin access to message content**; no audit-log
+trim or retention window (considered and rejected: deleting audit rows violates
+invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
+audit chain (timestamping service, transparency log — recording the reported head
+out-of-band is an operator practice, not a feature); no stored CSP reports (violations
+are a counter, never a table, §2.4); no Entra front-channel logout (§3); for channel
+webhooks (§12.4): no per-user webhooks, no per-webhook event selection, no HMAC payload
+signing, no egress proxy, and no port other than 443.
 
 Two further non-goals are settled by the open-source release (§21) and were
 explicitly considered and rejected rather than merely deferred:
@@ -2416,7 +4970,13 @@ inbox in v1 · top-10 leaderboards, last-month/all-time, four metrics · spotlig
 cards kept · tabs + filters kept + FTS added · triage queue kept + bulk actions +
 CSV export · attachments default 5 × 10 MB, admin-configurable · client name
 required iff impact = Client · impact areas admin-managed — add/rename/retire/delete,
-delete reassigns or requires zero references (seeded with the legacy three) · unused legacy fields dropped · version-nag/beta-gate/legacy screens dropped.
+delete reassigns or requires zero references (seeded with the legacy three) · unused legacy fields dropped · version-nag/beta-gate/legacy screens dropped
+· **(2026-10-08) direct messages in v1** (§13.9). This **reverses** the earlier
+position, recorded in §14.5, that InnoBox has "no direct-message channel". Plain-text
+1:1 threads between active users, reached from the topbar, the hover card, the
+leaderboard and the Currently online panel; polling (30 s badge on the bell poll, 10 s
+for an open thread); no admin access and no audit of DM activity; per-user blocks;
+365-day retention; erasure deletes the erased user's messages.
 
 ---
 
