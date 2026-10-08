@@ -6,11 +6,19 @@
 // created. With matches, an advisory banner lists them and the button becomes "Submit anyway";
 // the next click submits and records which numbers were acknowledged. Editing any field after
 // the warning clears it, so a changed challenge is never posted on a stale acknowledgement.
+//
+// Submission lock (§6.4): the first click locks the form BEFORE the similarity check. Matches
+// release it (the author must be able to read, edit or proceed); no matches or a failed check
+// keep it held straight into the create. Success never releases — the form unmounts locked as
+// the router moves to the new challenge. Edits (which re-arm the check) are only possible while
+// unlocked, so the warning's signature logic is untouched.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { StagedAttachments } from "@/components/StagedAttachments";
+import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
+import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
 import { CHALLENGE_STATUS_LABEL } from "../status";
 
 interface ImpactArea {
@@ -56,7 +64,7 @@ export default function NewChallengePage() {
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [draftKey] = useState(() => crypto.randomUUID());
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
   // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
   // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
@@ -78,12 +86,20 @@ export default function NewChallengePage() {
     });
   }, []);
 
+  const button = primaryButtonState({
+    locked: lock.locked,
+    attachmentsBusy,
+    idleLabel: similar && similar.length > 0 ? "Submit anyway" : "Submit challenge",
+  });
+
   const selectedArea = impactAreas.find((a) => a.id === impactAreaId);
   const isClient = selectedArea?.name === "Client";
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    // A second submit (double click, Enter) while locked is a no-op — guarded here, not only by
+    // the disabled button.
+    if (!lock.lock()) return;
     setError(null);
     try {
       // First click: check for similar challenges. Advisory — a failed check never blocks.
@@ -96,11 +112,12 @@ export default function NewChallengePage() {
           .then((res) => (res.ok ? res.json() : { similar: [] }))
           .then((json) => (json.similar ?? []) as SimilarChallenge[])
           .catch(() => [] as SimilarChallenge[]);
-        if (found.length > 0) {
+        if (afterSimilarityCheck(found) === "warn") {
           setWarning({ signature: formSignature, matches: found });
-          setSubmitting(false);
+          lock.release();
           return;
         }
+        // No matches (or a failed check): the lock stays held into the create — no flicker.
       }
       const res = await fetch("/api/challenges", {
         method: "POST",
@@ -120,10 +137,11 @@ export default function NewChallengePage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Could not submit challenge");
       const number = (json.challenge.number as string).replace("CH-", "");
+      lock.succeed();
       router.push(`/challenges/${number}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not submit challenge");
-      setSubmitting(false);
+      lock.release();
     }
   };
 
@@ -135,148 +153,148 @@ export default function NewChallengePage() {
         <p className="page-sub">Describe the problem worth solving. A namespace admin will triage it before it opens for solutions.</p>
       </div>
 
-      <form onSubmit={onSubmit} className="card card-pad reveal" style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 640 }}>
-        <div>
-          <label style={labelStyle} htmlFor="title">
-            Title
-          </label>
-          <input
-            id="title"
-            ref={titleInputRef}
-            className="field" style={{ width: "100%" }}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            maxLength={120}
-            required
-          />
-        </div>
-
-        <div>
-          <label style={labelStyle} htmlFor="description">
-            Description
-          </label>
-          <textarea
-            id="description"
-            className="field"
-            style={{ width: "100%", minHeight: 140, resize: "vertical" }}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            maxLength={10000}
-            required
-          />
-        </div>
-
-        <div>
-          <label style={labelStyle} htmlFor="impactArea">
-            Impact area
-          </label>
-          <select id="impactArea" className="field" style={{ width: "100%" }} value={impactAreaId} onChange={(e) => setImpactAreaId(e.target.value)} required>
-            <option value="" disabled>
-              Select an impact area…
-            </option>
-            {impactAreas.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {isClient && (
+      <form
+        onSubmit={onSubmit}
+        className="card card-pad reveal form-lock"
+        aria-busy={lock.locked}
+        style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 640 }}
+      >
+        <div className="form-lock-body" inert={lock.locked}>
           <div>
-            <label style={labelStyle} htmlFor="clientName">
-              Client name
+            <label style={labelStyle} htmlFor="title">
+              Title
             </label>
             <input
-              id="clientName"
+              id="title"
+              ref={titleInputRef}
               className="field" style={{ width: "100%" }}
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              maxLength={200}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={120}
               required
             />
           </div>
-        )}
 
-        <div>
-          <label style={labelStyle} htmlFor="namespace">
-            Namespace
-          </label>
-          <select id="namespace" className="field" style={{ width: "100%" }} value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)} required>
-            {namespaces.map((ns) => (
-              <option key={ns.id} value={ns.id}>
-                {ns.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label style={labelStyle} htmlFor="visibility">
-            Visibility
-          </label>
-          <select
-            id="visibility"
-            className="field" style={{ width: "100%" }}
-            value={visibility}
-            onChange={(e) => setVisibility(e.target.value as "org" | "namespace")}
-          >
-            <option value="org">Everyone in the organization</option>
-            <option value="namespace">Only this namespace&apos;s members</option>
-          </select>
-        </div>
-
-        <StagedAttachments parentType="challenge" draftKey={draftKey} disabled={submitting} onBusyChange={setAttachmentsBusy} />
-
-        <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
-          <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
-          Submit anonymously
-        </label>
-
-        {similar && similar.length > 0 && (
-          <div
-            role="alert"
-            data-testid="similar-warning"
-            style={{ border: "1px solid color-mix(in oklab, var(--warn) 40%, var(--line))", background: "var(--warn-soft)", borderRadius: "var(--radius)", padding: "14px 16px" }}
-          >
-            <strong style={{ display: "block", marginBottom: 8 }}>These challenges look similar — is yours one of them?</strong>
-            <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
-              {similar.map((m) => (
-                <li key={m.number}>
-                  <Link href={`/challenges/${m.number.replace("CH-", "")}`} target="_blank" rel="noopener noreferrer">
-                    <span className="mono">{m.number}</span> {m.title}
-                  </Link>{" "}
-                  <span className="sub">
-                    · {CHALLENGE_STATUS_LABEL[m.status] ?? m.status} · {m.author.anonymous ? "Anonymous" : m.author.displayName}
-                  </span>
-                </li>
-              ))}
-            </ul>
-            <p className="sub" style={{ margin: "10px 0 0" }}>
-              If yours is different, submit it anyway — a namespace admin will triage it like any other.
-            </p>
+          <div>
+            <label style={labelStyle} htmlFor="description">
+              Description
+            </label>
+            <textarea
+              id="description"
+              className="field"
+              style={{ width: "100%", minHeight: 140, resize: "vertical" }}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              maxLength={10000}
+              required
+            />
           </div>
-        )}
 
-        {error && (
-          <p className="muted" style={{ color: "var(--danger)" }}>
-            {error}
-          </p>
-        )}
+          <div>
+            <label style={labelStyle} htmlFor="impactArea">
+              Impact area
+            </label>
+            <select id="impactArea" className="field" style={{ width: "100%" }} value={impactAreaId} onChange={(e) => setImpactAreaId(e.target.value)} required>
+              <option value="" disabled>
+                Select an impact area…
+              </option>
+              {impactAreas.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {isClient && (
+            <div>
+              <label style={labelStyle} htmlFor="clientName">
+                Client name
+              </label>
+              <input
+                id="clientName"
+                className="field" style={{ width: "100%" }}
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                maxLength={200}
+                required
+              />
+            </div>
+          )}
+
+          <div>
+            <label style={labelStyle} htmlFor="namespace">
+              Namespace
+            </label>
+            <select id="namespace" className="field" style={{ width: "100%" }} value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)} required>
+              {namespaces.map((ns) => (
+                <option key={ns.id} value={ns.id}>
+                  {ns.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label style={labelStyle} htmlFor="visibility">
+              Visibility
+            </label>
+            <select
+              id="visibility"
+              className="field" style={{ width: "100%" }}
+              value={visibility}
+              onChange={(e) => setVisibility(e.target.value as "org" | "namespace")}
+            >
+              <option value="org">Everyone in the organization</option>
+              <option value="namespace">Only this namespace&apos;s members</option>
+            </select>
+          </div>
+
+          <StagedAttachments parentType="challenge" draftKey={draftKey} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+
+          <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
+            <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
+            Submit anonymously
+          </label>
+
+          {similar && similar.length > 0 && (
+            <div
+              role="alert"
+              data-testid="similar-warning"
+              style={{ border: "1px solid color-mix(in oklab, var(--warn) 40%, var(--line))", background: "var(--warn-soft)", borderRadius: "var(--radius)", padding: "14px 16px" }}
+            >
+              <strong style={{ display: "block", marginBottom: 8 }}>These challenges look similar — is yours one of them?</strong>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 6 }}>
+                {similar.map((m) => (
+                  <li key={m.number}>
+                    <Link href={`/challenges/${m.number.replace("CH-", "")}`} target="_blank" rel="noopener noreferrer">
+                      <span className="mono">{m.number}</span> {m.title}
+                    </Link>{" "}
+                    <span className="sub">
+                      · {CHALLENGE_STATUS_LABEL[m.status] ?? m.status} · {m.author.anonymous ? "Anonymous" : m.author.displayName}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="sub" style={{ margin: "10px 0 0" }}>
+                If yours is different, submit it anyway — a namespace admin will triage it like any other.
+              </p>
+            </div>
+          )}
+
+          {error && (
+            <p className="muted" role="alert" style={{ color: "var(--danger)" }}>
+              {error}
+            </p>
+          )}
+        </div>
 
         <div>
-          <button type="submit" className="btn btn-primary" disabled={submitting || attachmentsBusy}>
-            {submitting
-              ? similar === null
-                ? "Checking…"
-                : "Submitting…"
-              : attachmentsBusy
-                ? "Waiting for attachments…"
-                : similar && similar.length > 0
-                  ? "Submit anyway"
-                  : "Submit challenge"}
+          <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled}>
+            <PrimaryButtonLabel state={button} />
           </button>
         </div>
+        <FormLockOverlay locked={lock.locked} />
       </form>
     </>
   );

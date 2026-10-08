@@ -951,6 +951,29 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Submission lock (INNOBOX_SPEC.md §6.4) — while a submit is in flight a plain scrim covers the
+   form (its contents are `inert`), and only the primary button, raised above it, stays visible
+   as "Working…". Appears at once: no delay, no transition. No new token — `--surface` at ~60%. */
+.form-lock { position: relative; }
+/* Wraps the lockable fields without adding a box, so the form's own flex gap still applies. */
+.form-lock-body { display: contents; }
+.form-lock-scrim {
+  position: absolute; inset: 0; z-index: 1; border-radius: inherit;
+  background: color-mix(in oklab, var(--surface) 60%, transparent); cursor: progress;
+}
+.form-lock-raised { position: relative; z-index: 2; }
+.form-lock-raised:disabled { cursor: progress; }
+/* On an accent-filled button the default spinner's accent arc would vanish — draw it in the
+   button's own ink instead. */
+.btn-primary .spinner {
+  border-color: color-mix(in oklab, currentColor 35%, transparent); border-top-color: currentColor;
+}
+/* The lock's polite live region: read by assistive tech, never seen. */
+.form-lock-status {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
 /* Transient confirmation toast (e.g. "copied to clipboard") — centered above the bottom
    edge so it is visible at any viewport width, unlike in-box feedback that can sit in a
    horizontally-scrolled region on mobile. */

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.36.0",
+    date: "2026-10-08",
+    summary:
+      "Submitting a challenge or solution, or resubmitting one, now locks the form while InnoBox works on it: the button reads \"Working…\" and nothing can be clicked twice, so a slow connection can no longer create a duplicate. If something goes wrong the form unlocks with everything you typed still in place.",
+  },
+  {
     version: "0.35.1",
     date: "2026-10-08",
     summary:
