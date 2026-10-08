@@ -1211,3 +1211,11 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .toast { animation: none; }
   .spinner { animation-duration: 2s; }
 }
+
+/* ── Identity sync diagnostics card (admin console, platform admin) ─────────────────────── */
+.identity-sync-times { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 16px 0 0; font-size: 14px; }
+.identity-sync-label { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px; }
+.identity-sync-explain { margin: 16px 0 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 35%, transparent); font-size: 13.5px; line-height: 1.5; }
+.identity-sync-subhead { font-family: var(--font-display); font-size: 15px; margin: 20px 0 10px; }
+.identity-sync-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+.identity-sync .row .ttl.mono { font-size: 13px; overflow-wrap: anywhere; }

@@ -12,6 +12,7 @@ import { deleteReq, patchJson, postJson } from "@/lib/api-client";
 import { CurrentlyOnline } from "./CurrentlyOnline";
 import { SystemBannerCard } from "./SystemBannerCard";
 import { GdprCard } from "./GdprCard";
+import { IdentitySyncCard } from "./IdentitySyncCard";
 
 const NAMESPACES_URL = "/api/admin/namespaces";
 const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
@@ -19,7 +20,7 @@ const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
 // The admin console's collapsible cards remember their open/closed state per browser
 // (localStorage) so a chosen layout survives reloads. Default: everything expanded.
 const ADMIN_CARDS_STORAGE_KEY = "innobox:admin-cards-open";
-const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true };
+const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, presence: true, namespaces: true, mappings: true, identity: true };
 const ADMIN_CARD_IDS = Object.keys(DEFAULT_ADMIN_CARDS);
 
 function loadAdminCardState(): Record<string, boolean> {
@@ -173,6 +174,7 @@ function AdminConsole() {
   const [openCards, setOpenCards] = useState<Record<string, boolean>>(loadAdminCardState);
   const [onlineTotal, setOnlineTotal] = useState<number | null>(null);
   const [bannerActive, setBannerActive] = useState(false);
+  const [identitySummary, setIdentitySummary] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = (message: string) => {
@@ -268,6 +270,16 @@ function AdminConsole() {
           onChanged={refreshMappings}
           onError={notify}
         />
+      </AdminCard>
+
+      <AdminCard
+        id="identity"
+        title="Identity sync"
+        summary={identitySummary ?? "…"}
+        open={openCards.identity ?? true}
+        onToggle={() => toggleCard("identity")}
+      >
+        <IdentitySyncCard onSummary={setIdentitySummary} />
       </AdminCard>
 
       <GdprCard onNotify={notify} />

@@ -45,6 +45,10 @@
     "./notification-preferences": {
       "types": "./dist/notification-preferences.d.ts",
       "default": "./dist/notification-preferences.js"
+    },
+    "./identity-sync": {
+      "types": "./dist/identity-sync.d.ts",
+      "default": "./dist/identity-sync.js"
     }
   },
   "scripts": {

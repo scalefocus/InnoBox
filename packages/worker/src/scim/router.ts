@@ -28,6 +28,9 @@ import {
 export interface CreateScimRouterOptions {
   /** The Entra "Secret Token" — compared in constant time, never logged. */
   bearerToken: string;
+  /** §14.10: called on every request that passed the bearer check (the throttled
+   *  `scim_last_request_at` stamper in production). Must not throw or block. */
+  onAccepted?: () => void;
 }
 
 // ── auth ─────────────────────────────────────────────────────────────────────────────────
@@ -230,7 +233,7 @@ async function findGroupById(pool: Pool, id: string): Promise<GroupRow | null> {
 
 async function insertGroup(pool: Pool, data: { externalId: string; displayName: string }): Promise<GroupRow> {
   const { rows } = await pool.query<GroupRow>(
-    `insert into groups (external_id, display_name, updated_at) values ($1, $2, now()) returning *`,
+    `insert into groups (external_id, display_name, scim_synced, updated_at) values ($1, $2, true, now()) returning *`,
     [data.externalId, data.displayName || data.externalId],
   );
   return rows[0]!;
@@ -238,10 +241,17 @@ async function insertGroup(pool: Pool, data: { externalId: string; displayName: 
 
 async function renameGroup(pool: Pool, id: string, displayName: string): Promise<GroupRow> {
   const { rows } = await pool.query<GroupRow>(
-    `update groups set display_name = $2, updated_at = now() where id = $1 returning *`,
+    `update groups set display_name = $2, scim_synced = true, updated_at = now() where id = $1 returning *`,
     [id, displayName],
   );
   return rows[0]!;
+}
+
+/** §14.10: every SCIM group write (create / replace / patch) marks the row SCIM-provisioned —
+ *  including a write that changes nothing else (a replayed POST, a membership-only PATCH).
+ *  Reconciliation's mirroring never calls this, so it cannot mask missing group provisioning. */
+async function markGroupScimSynced(pool: Pool, id: string): Promise<void> {
+  await pool.query(`update groups set scim_synced = true where id = $1 and not scim_synced`, [id]);
 }
 
 async function deleteGroupCascade(pool: Pool, id: string): Promise<void> {
@@ -351,6 +361,17 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     next();
   });
   router.use(bearerAuth(opts.bearerToken));
+  if (opts.onAccepted) {
+    const onAccepted = opts.onAccepted;
+    router.use((_req, _res, next) => {
+      try {
+        onAccepted();
+      } catch {
+        /* the stamp never touches the SCIM response */
+      }
+      next();
+    });
+  }
   router.use(express.json({ type: ["application/json", "application/scim+json"], limit: "1mb" }));
 
   // ── Users ──────────────────────────────────────────────────────────────────────────────
@@ -521,6 +542,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
     let group = await findGroupByExternalId(pool, externalId);
     let created = false;
+    if (group) await markGroupScimSynced(pool, group.id);
     if (!group) {
       group = await insertGroup(pool, { externalId, displayName: parsedBody.displayName });
       created = true;
@@ -567,6 +589,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       return;
     }
     const parsedBody = parseGroupWrite(req.body);
+    await markGroupScimSynced(pool, existing.id);
     let group = existing;
     if (parsedBody.displayName && parsedBody.displayName !== existing.display_name) {
       const before = existing.display_name;
@@ -597,6 +620,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       return;
     }
     const patch = normalizeGroupPatch((req.body as { Operations?: unknown })?.Operations);
+    await markGroupScimSynced(pool, existing.id);
     let group = existing;
     if (patch.displayName && patch.displayName !== existing.display_name) {
       const before = existing.display_name;

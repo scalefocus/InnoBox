@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.40.0",
+    date: "2026-10-08",
+    summary:
+      "Platform admins get an Identity sync card in Administration: how many people and groups the directory has provisioned, when the last sync request arrived (and the last one that was refused), which role-mapped groups never arrived, and plain-language next steps when users sync without groups or nothing has synced yet.",
+  },
+  {
     version: "0.39.0",
     date: "2026-10-08",
     summary:
