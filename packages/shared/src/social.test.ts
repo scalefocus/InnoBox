@@ -57,3 +57,25 @@ test("commentNotificationMessage: singular, then the coalesced count with the la
   assert.equal(commentNotificationMessage(1, "CH-412", "Warehouse pick-path", "Alice"), 'New comment on CH-412 "Warehouse pick-path" — by Alice.');
   assert.equal(commentNotificationMessage(3, "CH-412", "Warehouse pick-path", "Bob"), '3 new comments on CH-412 "Warehouse pick-path" — latest by Bob.');
 });
+
+test("assignmentsTransferredMessage: singular, plural, and the 10-number cap with 'and K more'", async () => {
+  const { assignmentsTransferredMessage, ASSIGNMENTS_TRANSFERRED_LIST_MAX } = await import("./social.js");
+  assert.equal(assignmentsTransferredMessage(["CH-12"]), "1 challenge was reassigned to you from a removed account: CH-12.");
+  assert.equal(
+    assignmentsTransferredMessage(["CH-12", "CH-40"]),
+    "2 challenges were reassigned to you from a removed account: CH-12, CH-40.",
+  );
+  assert.equal(ASSIGNMENTS_TRANSFERRED_LIST_MAX, 10);
+  const thirteen = Array.from({ length: 13 }, (_, i) => `CH-${i + 1}`);
+  assert.equal(
+    assignmentsTransferredMessage(thirteen),
+    "13 challenges were reassigned to you from a removed account: CH-1, CH-2, CH-3, CH-4, CH-5, CH-6, CH-7, CH-8, CH-9, CH-10 and 3 more.",
+  );
+  const ten = thirteen.slice(0, 10);
+  assert.ok(!assignmentsTransferredMessage(ten).includes("more"), "exactly ten numbers need no 'and K more'");
+});
+
+test("NOTIFICATION_TYPES: includes the erasure hand-over summary type", async () => {
+  const { NOTIFICATION_TYPES } = await import("./social.js");
+  assert.ok((NOTIFICATION_TYPES as readonly string[]).includes("assignments_transferred"));
+});

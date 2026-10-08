@@ -49,6 +49,9 @@ export const NOTIFICATION_TYPES = [
   "attachment_scan_failed",
   // §14.7: the platform admins' coalesced system-log alert — in-app only, never e-mailed.
   "system_error",
+  // §12.1 event 12: the successor's one summary item when a GDPR erasure (§3) hands over
+  // the erased user's open assignments.
+  "assignments_transferred",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -86,4 +89,23 @@ export function finalizeRecipients(candidates: string[], actorId: string | null)
 export function commentNotificationMessage(count: number, challengeNumber: string, challengeTitle: string, latestBy: string): string {
   if (count <= 1) return `New comment on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`;
   return `${count} new comments on ${challengeNumber} "${challengeTitle}" — latest by ${latestBy}.`;
+}
+
+// ── Assignments transferred on erasure (§12.1 event 12) ──────────────────────────────────
+
+/** At most this many challenge numbers are listed in the event-12 message; the rest are counted. */
+export const ASSIGNMENTS_TRANSFERRED_LIST_MAX = 10;
+
+/**
+ * The inbox/e-mail line for the one summary item a successor receives when a GDPR erasure (§3)
+ * hands over open assignments. `numbers` are display numbers ("CH-12"), lowest first. It never
+ * names the erased person — the account is "a removed account" — and every listed challenge is
+ * visible to the recipient by construction (the move was gated on it).
+ */
+export function assignmentsTransferredMessage(numbers: string[]): string {
+  const n = numbers.length;
+  const listed = numbers.slice(0, ASSIGNMENTS_TRANSFERRED_LIST_MAX).join(", ");
+  const rest = n - Math.min(n, ASSIGNMENTS_TRANSFERRED_LIST_MAX);
+  const head = n === 1 ? "1 challenge was reassigned to you" : `${n} challenges were reassigned to you`;
+  return `${head} from a removed account: ${listed}${rest > 0 ? ` and ${rest} more` : ""}.`;
 }

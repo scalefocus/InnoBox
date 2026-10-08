@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { scrubSystemEventsForUser } from "../admin/system-log/store";
+import { handOverOpenAssignments, isEligibleSuccessor, type ReassignmentResult, type SuccessorHandover } from "./erasure-reassignment";
 
 export interface UserSearchResult {
   id: string;
@@ -96,21 +97,28 @@ export async function getUserCard(pool: Pool, userId: string): Promise<UserCard 
   };
 }
 
-export type ScrubUserResult = { status: "ok" } | { status: "not_found" } | { status: "already_scrubbed" };
+export type ScrubUserResult =
+  | { status: "ok"; reassignment: ReassignmentResult | null }
+  | { status: "not_found" }
+  | { status: "already_scrubbed" }
+  | { status: "invalid_successor" };
 
 /** GDPR erasure — "Delete user info" (§3). De-identifies the user's row: display name becomes
  *  "Deleted User" (which cascades to every challenge/solution/comment via the display_name
  *  join), personal fields are nulled, user_name is replaced with a non-PII token, the account
  *  is deactivated, and scrubbed_at is stamped so reconciliation never restores it from Entra.
  *  The row (id + external_id) is kept so the audit trail still links, and the audit_log itself
- *  is exempt from erasure (§15). Irreversible; platform-admin-only (gated in the route). */
-export async function scrubUser(pool: Pool, adminUserId: string, userId: string): Promise<ScrubUserResult> {
+ *  is exempt from erasure (§15). Irreversible; platform-admin-only (gated in the route).
+ *  `handover` names the optional successor for open assignments (§3, erasure-reassignment.ts). */
+export async function scrubUser(pool: Pool, adminUserId: string, userId: string, handover?: SuccessorHandover): Promise<ScrubUserResult> {
   const { rows } = await pool.query<{ id: string; scrubbed_at: Date | null }>(`select id, scrubbed_at from users where id = $1`, [userId]);
   const row = rows[0];
   if (!row) return { status: "not_found" };
   if (row.scrubbed_at) return { status: "already_scrubbed" };
 
   return inTransaction(pool, async (client) => {
+    // §3 successor rules, checked before anything changes (the transaction is still empty).
+    if (handover && !(await isEligibleSuccessor(client, handover.successorId, userId))) return { status: "invalid_successor" };
     await client.query(
       `update users
           set display_name = 'Deleted User',
@@ -137,13 +145,20 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string)
     // §14.7: the system log is mutable operational telemetry, so — unlike audit_log — the
     // user's actor snapshots are scrubbed and their rows detached from the user id.
     await scrubSystemEventsForUser(client, userId);
+    // §3 optional successor: hand over the open assignments the successor can see, same transaction.
+    const reassignment = handover ? await handOverOpenAssignments(client, adminUserId, userId, handover) : null;
     await appendAudit(client, {
       actorUserId: adminUserId,
       action: "user.scrubbed",
       targetType: "user",
       targetId: userId,
-      after: { scrubbed: true },
+      after: {
+        scrubbed: true,
+        reassignedTo: reassignment?.successorId ?? null,
+        reassignedCount: reassignment?.moved.length ?? 0,
+        skippedCount: reassignment?.skipped.length ?? 0,
+      },
     });
-    return { status: "ok" };
+    return { status: "ok", reassignment };
   });
 }

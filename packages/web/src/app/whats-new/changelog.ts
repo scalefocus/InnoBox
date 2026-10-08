@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.39.0",
+    date: "2026-10-08",
+    summary:
+      "When a platform admin deletes a person's information, they can now hand that person's open assignments to a colleague in the same step. Anything the colleague can't see is listed so it can be reassigned by hand, and the colleague gets a single notification listing what they took over.",
+  },
+  {
     version: "0.38.0",
     date: "2026-10-08",
     summary:
