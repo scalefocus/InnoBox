@@ -75,8 +75,11 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
   // not a live clock — with no auto-refresh, ticking them would imply data that is refreshing.
   const asOfMs = summary ? Date.parse(summary.asOf) : 0;
 
+  // Latest-callback ref, synced in an effect (not during render) so `load` stays stable.
   const reportTotal = useRef(onTotal);
-  reportTotal.current = onTotal;
+  useEffect(() => {
+    reportTotal.current = onTotal;
+  }, [onTotal]);
 
   const load = useCallback(
     async (w: PresenceWindow, r: PresenceRange) => {

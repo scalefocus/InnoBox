@@ -66,7 +66,7 @@ docker compose -f deploy/docker-compose.yml up -d postgres minio clamav migrate
 pnpm dev
 ```
 
-`pnpm typecheck`, `pnpm test`, and `pnpm build` all run recursively across the
+`pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm build` all run recursively across the
 workspace (`@innobox/shared`, `@innobox/web`, `@innobox/worker`).
 
 ## How it is built
