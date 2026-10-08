@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.32.0",
+    date: "2026-10-08",
+    summary:
+      "The Challenges menu item now shows how many challenges have appeared since you last looked, and each of those cards carries a small \"new\" tag so you can spot them at a glance. The count and the tags stay put while you browse and reset when you leave the Challenges page — a new solution or comment on an old challenge does not make it new again. Only challenges you are allowed to see are ever counted.",
+  },
+  {
     version: "0.31.0",
     date: "2026-10-08",
     summary:

@@ -60,6 +60,8 @@ export interface ChallengeListItem {
   likedByViewer: boolean;
   followedByViewer: boolean;
   solutionCount: number;
+  /** §13.1: created after the viewer last left the Challenges surface (and visible to them). */
+  isNew: boolean;
 }
 
 export interface SolutionListItem {
@@ -140,6 +142,7 @@ interface ChallengeRow {
   liked_by_viewer: boolean;
   followed_by_viewer: boolean;
   solution_count: string;
+  is_new: boolean;
 }
 
 interface SolutionRow {
@@ -171,7 +174,8 @@ const CHALLENGE_SELECT = `
          exists(select 1 from likes lv where lv.parent_type = 'challenge' and lv.parent_id = c.id and lv.user_id = $viewer) as liked_by_viewer,
          exists(select 1 from follows fv where fv.parent_type = 'challenge' and fv.parent_id = c.id and fv.user_id = $viewer) as followed_by_viewer,
          (select count(*) from solutions s where s.challenge_id = c.id
-            and s.status not in ('rejected','not_selected','withdrawn','proposed')) as solution_count
+            and s.status not in ('rejected','not_selected','withdrawn','proposed')) as solution_count,
+         (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new
     from challenges c
     join users u on u.id = c.author_id
     left join users au on au.id = c.assignee_id
@@ -193,6 +197,7 @@ function toListItem(row: ChallengeRow): ChallengeListItem {
     likedByViewer: row.liked_by_viewer,
     followedByViewer: row.followed_by_viewer,
     solutionCount: Number(row.solution_count),
+    isNew: row.is_new,
   };
 }
 
@@ -365,6 +370,44 @@ export async function listActiveImpactAreas(pool: Pool): Promise<ImpactAreaRecor
 
 // ── List / detail ────────────────────────────────────────────────────────────────────────
 
+/** The §4.3 row-level visibility predicate over `challenges c`, shared by the gallery list and
+ *  the §13.1 new-count so the two can never disagree about what the viewer may see: namespace
+ *  membership (or org visibility), and awaiting_triage/withdrawn only for the author and the
+ *  namespace's admins. Platform admins see everything. */
+function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
+  if (viewer.roles.isPlatformAdmin) return;
+  const memberNamespaceIds = viewer.roles.memberNamespaces();
+  conditions.push(`(c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]))`);
+
+  const namespaceAdminIds = viewer.roles.grants
+    .filter((g) => g.role === "namespace_admin" && g.namespaceId !== null)
+    .map((g) => g.namespaceId as string);
+  const authorParam = push(viewer.userId);
+  if (namespaceAdminIds.length > 0) {
+    conditions.push(
+      `(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[]))`,
+    );
+  } else {
+    conditions.push(`(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam})`);
+  }
+}
+
+/** §13.1: challenges visible to the viewer and created since they last left the Challenges
+ *  surface. A bare count for the nav bubble — nothing else leaves this function. A viewer whose
+ *  marker is NULL (never visited) counts everything they can see. */
+export async function countNewChallenges(pool: Pool, viewer: Viewer): Promise<number> {
+  const params: unknown[] = [];
+  const push = (v: unknown): string => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const conditions: string[] = [];
+  pushChallengeVisibilityConditions(viewer, push, conditions);
+  conditions.push(`c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = ${push(viewer.userId)}), '-infinity'::timestamptz)`);
+  const { rows } = await pool.query<{ count: string }>(`select count(*)::text as count from challenges c where ${conditions.join(" and ")}`, params);
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function listChallenges(
   pool: Pool,
   viewer: Viewer,
@@ -378,23 +421,7 @@ export async function listChallenges(
   const viewerParam = push(viewer.userId); // used by the $viewer placeholder in CHALLENGE_SELECT
 
   const conditions: string[] = [];
-
-  if (!viewer.roles.isPlatformAdmin) {
-    const memberNamespaceIds = viewer.roles.memberNamespaces();
-    conditions.push(`(c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]))`);
-
-    const namespaceAdminIds = viewer.roles.grants
-      .filter((g) => g.role === "namespace_admin" && g.namespaceId !== null)
-      .map((g) => g.namespaceId as string);
-    const authorParam = push(viewer.userId);
-    if (namespaceAdminIds.length > 0) {
-      conditions.push(
-        `(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[]))`,
-      );
-    } else {
-      conditions.push(`(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam})`);
-    }
-  }
+  pushChallengeVisibilityConditions(viewer, push, conditions);
 
   if (filters.tab === "open") {
     conditions.push(`c.status IN ('in_review','needs_improvement','meeting_scheduled','valid')`);
