@@ -11,6 +11,11 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.45.1",
+    date: "2026-10-08",
+    summary: "Pressing Escape on a person's hover card now closes it, instead of it popping straight back open.",
+  },
+  {
     version: "0.45.0",
     date: "2026-10-08",
     summary:

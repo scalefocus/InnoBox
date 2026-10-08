@@ -4,6 +4,7 @@
 // (no controlled-<select> status changes), so it's reliable under Next dev's route compilation.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { submitNewChallenge } from "./helpers/forms";
 
 test("engagement: comment (post + edit), like, and follow a challenge", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -16,8 +17,7 @@ test("engagement: comment (post + edit), like, and follow a challenge", async ({
   await page.locator("#title").fill(`E2E engagement challenge ${stamp}`);
   await page.locator("#description").fill("Something to discuss, like, and follow.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });
-  await page.getByRole("button", { name: "Submit challenge" }).click();
-  await page.waitForURL(/\/challenges\/\d+$/);
+  await submitNewChallenge(page);
 
   // ── Comments (§10.2): post, see it, then owner-edit it within the 15-minute window. ──
   const commentBody = `First comment ${stamp}`;

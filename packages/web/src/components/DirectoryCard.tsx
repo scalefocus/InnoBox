@@ -92,6 +92,9 @@ export function useDirectoryCard(opts: {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set while Escape hands focus back to the bubble, so that focus event doesn't reopen the card
+  // it just closed (a hover-opened card's bubble isn't focused yet, so focus() does fire one).
+  const suppressFocusOpen = useRef(false);
 
   const clearTimers = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
@@ -173,7 +176,12 @@ export function useDirectoryCard(opts: {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       close();
-      triggerRef.current?.focus();
+      const trigger = triggerRef.current;
+      if (trigger && document.activeElement !== trigger) {
+        suppressFocusOpen.current = true;
+        trigger.focus();
+        suppressFocusOpen.current = false;
+      }
     };
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
@@ -212,6 +220,7 @@ export function useDirectoryCard(opts: {
     },
     // Focus opens with no delay — hover-intent is a pointer concept.
     onFocus: () => {
+      if (suppressFocusOpen.current) return; // Escape returning focus — stay closed (§13.8)
       cancelClose();
       doOpen();
     },

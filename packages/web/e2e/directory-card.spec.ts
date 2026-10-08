@@ -69,7 +69,12 @@ test("directory card: hover opens it, keyboard reaches it, and an anonymous auth
   // ── keyboard: focus opens with no delay, Escape closes and returns focus ─────────────────
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
+  // Escape leaves focus on the bubble — and handing it back must not reopen the card.
+  await expect(authorBubble).toBeFocused();
+  await expect(card).toBeHidden();
 
+  // Focus arriving afresh opens the card with no delay.
+  await authorBubble.blur();
   await authorBubble.focus();
   await expect(page.getByRole("dialog", { name: authorName })).toBeVisible();
   // Re-hovering/re-opening is served from the per-page-session cache — no second request.
