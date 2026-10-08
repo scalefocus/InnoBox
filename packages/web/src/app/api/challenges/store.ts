@@ -374,7 +374,7 @@ export async function listActiveImpactAreas(pool: Pool): Promise<ImpactAreaRecor
  *  the §13.1 new-count so the two can never disagree about what the viewer may see: namespace
  *  membership (or org visibility), and awaiting_triage/withdrawn only for the author and the
  *  namespace's admins. Platform admins see everything. */
-function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
+export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
   if (viewer.roles.isPlatformAdmin) return;
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   conditions.push(`(c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]))`);
@@ -390,6 +390,97 @@ function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) =>
   } else {
     conditions.push(`(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam})`);
   }
+}
+
+// ── §6.1 duplicate warning ───────────────────────────────────────────────────────────────
+
+export interface SimilarChallenge {
+  number: string;
+  title: string;
+  status: ChallengeStatus;
+  author: MaskedAuthor;
+}
+
+/** At most this many matches are shown in the warning. */
+export const SIMILAR_LIMIT = 5;
+/** The minimum rank: a candidate must share at least this many distinct stemmed terms with the
+ *  submission (title + description). One shared word ("process", "team") is noise; two is the
+ *  smallest overlap that reads as "about the same thing". A one-term submission needs one. */
+export const SIMILAR_MIN_SHARED_TERMS = 2;
+/** Terms the query is built from: every title term, then description terms, up to this cap. */
+const SIMILAR_MAX_TERMS = 48;
+
+/**
+ * Ranks the viewer's VISIBLE challenges (the gallery's own predicate, invariant 2) against what
+ * they are about to submit, over the §13.4 full-text index. Excludes rejected and withdrawn —
+ * keeps solved, the most useful hit. Terms are OR-ed (a phrase-AND would match almost nothing
+ * once a description is involved), candidates are ordered by ts_rank with the title weighted
+ * highest, and only those sharing SIMILAR_MIN_SHARED_TERMS distinct terms survive. Authors are
+ * masked per §9. Advisory: nothing here can block a submission.
+ */
+export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: { title: string; description: string }): Promise<SimilarChallenge[]> {
+  // Distinct stems, title first, capped — computed by Postgres's own English parser so the query
+  // terms are exactly the lexemes stored in challenges.search_vector.
+  const { rows: termRows } = await pool.query<{ term: string }>(
+    `select term from (
+       select t.term, min(t.ord) as ord
+         from (
+           select l as term, 0 as ord from unnest(tsvector_to_array(to_tsvector('english', $1))) l
+           union all
+           select l as term, 1 as ord from unnest(tsvector_to_array(to_tsvector('english', $2))) l
+         ) t
+        group by t.term
+     ) d
+     order by ord, term
+     limit ${SIMILAR_MAX_TERMS}`,
+    [input.title, input.description],
+  );
+  const terms = termRows.map((r) => r.term);
+  if (terms.length === 0) return [];
+  const minShared = Math.min(SIMILAR_MIN_SHARED_TERMS, terms.length);
+
+  const params: unknown[] = [];
+  const push = (v: unknown): string => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const termsParam = push(terms);
+  // Each stem is quoted as a tsquery literal, so punctuation inside a lexeme can never be read
+  // as tsquery syntax.
+  const tsquery = `to_tsquery('simple', (select string_agg(quote_literal(t), ' | ') from unnest(${termsParam}::text[]) t))`;
+  const conditions: string[] = [`c.search_vector @@ ${tsquery}`, `c.status not in ('rejected', 'withdrawn')`];
+  pushChallengeVisibilityConditions(viewer, push, conditions);
+
+  const { rows } = await pool.query<{
+    number: string;
+    title: string;
+    status: string;
+    is_anonymous: boolean;
+    author_id: string;
+    author_display_name: string;
+    shared: number;
+  }>(
+    `select * from (
+       select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
+              ts_rank(c.search_vector, ${tsquery}) as rank,
+              (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
+         from challenges c
+         join users u on u.id = c.author_id
+        where ${conditions.join(" and ")}
+        order by rank desc, c.created_at desc
+        limit 50
+     ) ranked
+     where shared >= ${push(minShared)}
+     order by rank desc
+     limit ${SIMILAR_LIMIT}`,
+    params,
+  );
+  return rows.map((r) => ({
+    number: formatChallengeNumber(r.number),
+    title: r.title,
+    status: r.status as ChallengeStatus,
+    author: maskAuthor({ isAnonymous: r.is_anonymous, authorId: r.author_id, authorDisplayName: r.author_display_name }),
+  }));
 }
 
 /** §13.1: challenges visible to the viewer and created since they last left the Challenges
@@ -500,6 +591,8 @@ export async function createChallenge(
     visibility: unknown;
     isAnonymous: unknown;
     draftKey?: unknown;
+    /** §6.1: the similar challenges the submitter saw and submitted past (already parsed). */
+    similarAcknowledged?: string[];
   },
 ): Promise<CreateChallengeResult> {
   const { rows: nsRows } = await pool.query<{ id: string }>(
@@ -566,6 +659,8 @@ export async function createChallenge(
         namespaceId: input.namespaceId,
         visibility: validated.value.visibility,
         isAnonymous: validated.value.isAnonymous,
+        // §6.1: present only when the author submitted past a duplicate warning.
+        ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
       },
     });
     if (draftKey) await bindStagedAttachments(client, author, "challenge", id, draftKey, maxPerItem);

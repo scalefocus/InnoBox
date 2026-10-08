@@ -6,7 +6,7 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchEvent, getNamespaceAdminUserIds } from "@/lib/notify";
 import { autoFollow } from "../follows/store";
-import { parseChallengeCreateIds, parseChallengeListFilters } from "./validation";
+import { parseChallengeCreateIds, parseChallengeListFilters, parseSimilarAcknowledged } from "./validation";
 import { createChallenge, listChallenges } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -51,6 +51,7 @@ async function handlePOST(req: Request): Promise<Response> {
       visibility: body.visibility,
       isAnonymous: body.isAnonymous,
       draftKey: body.draftKey,
+      similarAcknowledged: parseSimilarAcknowledged(body.similarAcknowledged),
     },
   );
 

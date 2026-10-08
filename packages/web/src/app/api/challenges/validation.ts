@@ -134,3 +134,35 @@ export function parseLikeToggle(body: unknown): Parsed<{ parentType: "challenge"
   }
   return { ok: true, value: { parentType: rec.parentType, parentId: rec.parentId } };
 }
+
+// ── §6.1 duplicate warning ───────────────────────────────────────────────────────────────
+
+/** The similarity check reads the form as typed; it never fails on length (the create path does
+ *  that), it just trims what it ranks on. */
+const SIMILAR_TITLE_MAX = 120;
+const SIMILAR_DESCRIPTION_MAX = 2_000;
+
+export function parseSimilarRequest(body: unknown): Parsed<{ title: string; description: string }> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "request body must be a JSON object" };
+  const rec = body as Record<string, unknown>;
+  const title = typeof rec.title === "string" ? rec.title.trim().slice(0, SIMILAR_TITLE_MAX) : "";
+  const description = typeof rec.description === "string" ? rec.description.trim().slice(0, SIMILAR_DESCRIPTION_MAX) : "";
+  if (title === "" && description === "") return { ok: false, error: "title or description is required" };
+  return { ok: true, value: { title, description } };
+}
+
+/** The numbers a submitter saw in the warning and submitted past (`challenge.created` audit
+ *  payload, §6.1). Advisory provenance only: malformed entries are dropped, never an error. */
+export function parseSimilarAcknowledged(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const m = /^CH-(\d{1,9})$/i.exec(v.trim());
+    if (!m) continue;
+    const n = `CH-${Number(m[1])}`;
+    if (!out.includes(n)) out.push(n);
+    if (out.length === 5) break;
+  }
+  return out;
+}

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.33.0",
+    date: "2026-10-08",
+    summary:
+      "Before a new challenge is submitted, InnoBox now checks for challenges that look similar — among the ones you can already see — and lists up to five of them, so you can join an existing conversation instead of starting a duplicate. It is only a suggestion: \"Submit anyway\" goes ahead, and changing anything on the form simply checks again. Rejected and withdrawn challenges are left out; solved ones are included, since they may already hold your answer.",
+  },
+  {
     version: "0.32.0",
     date: "2026-10-08",
     summary:
