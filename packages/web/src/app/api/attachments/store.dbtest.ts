@@ -157,7 +157,17 @@ test(
       const goodFile = { parentType: "challenge" as const, parentId: ch.id, filename: "notes.txt", mime: "text/plain", size: bytes.byteLength, bytes };
 
       // ── Author-only + edit-window + type + size gates ──────────────────────────────────
-      assert.equal((await uploadAttachment(deps, member, goodFile)).status, "forbidden", "non-author cannot upload");
+      // Invariant 2 "404 before 403": a non-author who cannot see the parent (awaiting_triage is
+      // author/admin-only; the outsider is not in the namespace) gets the nonexistent-parent 404,
+      // so the refusal never confirms the hidden parent exists. Only a viewer who CAN see it gets 403.
+      assert.equal((await uploadAttachment(deps, member, goodFile)).status, "not_found", "hidden parent → 404, not 403");
+      assert.equal((await uploadAttachment(deps, outsider, goodFile)).status, "not_found", "hidden parent → 404, not 403");
+      assert.equal(
+        (await uploadAttachment(deps, outsider, { ...goodFile, parentId: randomUUID() })).status,
+        "not_found",
+        "identical to a nonexistent parent",
+      );
+      assert.equal((await uploadAttachment(deps, admin, goodFile)).status, "forbidden", "a non-author who can see the parent → 403");
       assert.equal(
         (await uploadAttachment(deps, author, { ...goodFile, filename: "run.exe", mime: "application/octet-stream" })).status,
         "unsupported_type",
@@ -241,6 +251,10 @@ test(
       assert.equal(memberListClean.length, 1, "a clean attachment is visible to any parent-viewer");
       assert.equal(memberListClean[0]!.isUploader, false);
       assert.equal((await getAttachmentForDownload(deps, member, att1.id)).status, "ok", "member can download the clean attachment");
+
+      // A visible parent: the non-author member now gets 403; the outsider still gets 404.
+      assert.equal((await uploadAttachment(deps, member, goodFile)).status, "forbidden", "visible parent, non-author → 403");
+      assert.equal((await uploadAttachment(deps, outsider, goodFile)).status, "not_found", "namespace-only parent stays hidden → 404");
 
       // Out of the edit window now (valid) → no more uploads/removes.
       assert.equal((await uploadAttachment(deps, author, goodFile)).status, "not_editable");
@@ -401,6 +415,7 @@ test(
         buildRoleSet(grants, { globalNamespaceId: globalId });
       const author = { userId: await mkUser("author"), roles: roles([{ role: "member", namespaceId: nsId }]) };
       const other = { userId: await mkUser("other"), roles: roles([{ role: "member", namespaceId: nsId }]) };
+      const nsAdmin = { userId: await mkUser("nsadmin"), roles: roles([{ role: "namespace_admin", namespaceId: nsId }]) };
 
       const internal = (await listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
       const c = await createChallenge(pool, author, {
@@ -433,8 +448,13 @@ test(
       );
       assert.equal(
         (await initiateChunkedUpload(deps, other, { parentType: "challenge", parentId, filename: "big.txt", mime: "text/plain", size: total })).status,
+        "not_found",
+        "a non-author who cannot see the (awaiting_triage) parent gets 404, never a 403 confirming it exists",
+      );
+      assert.equal(
+        (await initiateChunkedUpload(deps, nsAdmin, { parentType: "challenge", parentId, filename: "big.txt", mime: "text/plain", size: total })).status,
         "forbidden",
-        "only the author may attach to a bound parent",
+        "only the author may attach to a bound parent (a viewer who can see it → 403)",
       );
 
       // ── Happy path: initiate → 2 parts → complete assembles the object ─────────────────

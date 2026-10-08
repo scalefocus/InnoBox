@@ -131,6 +131,17 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               photo_etag = null,
               last_seen_at = null,      -- §14.5 presence: a retained "Deleted User was last
               last_route = null,        -- online at 14:32" would defeat the erasure
+              -- §3: the per-user seen markers and notification preferences live on the row and
+              -- go with it. The markers are nullable and are nulled; the preference flags are
+              -- NOT NULL, so they fall back to their column defaults (no user-chosen value kept).
+              triage_seen_at = null,
+              challenges_seen_at = null,
+              system_log_seen_at = null,
+              quick_start_seen_at = null,
+              email_notifications_enabled = default,
+              notify_followed_comments = default,
+              notify_followed_status = default,
+              notify_followed_solutions = default,
               active = false,
               deactivated_at = coalesce(deactivated_at, now()),
               scim_synced = false,
