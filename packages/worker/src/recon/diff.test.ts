@@ -3,7 +3,7 @@
 // (also picked up compiled by the package's `pnpm test` dist run).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeMembershipDiff, computeUserHeal, type GraphUser, type LocalUserAttrs } from "./diff.js";
+import { computeMembershipDiff, computeUserHeal, directoryAttr, type GraphUser, type LocalUserAttrs } from "./diff.js";
 
 const local: LocalUserAttrs = {
   userName: "ada@example.com",
@@ -112,4 +112,24 @@ test("computeMembershipDiff: mixed add and remove", () => {
 
 test("computeMembershipDiff: duplicates on either side are ignored", () => {
   assert.deepEqual(computeMembershipDiff(["a", "a", "b"], ["b", "c", "c"]), { add: ["c"], remove: ["a"] });
+});
+
+test("directoryAttr: absent, empty and whitespace-only → null; otherwise trimmed", () => {
+  assert.equal(directoryAttr(undefined), null);
+  assert.equal(directoryAttr(null), null);
+  assert.equal(directoryAttr(""), null);
+  assert.equal(directoryAttr("   "), null);
+  assert.equal(directoryAttr("\t\n"), null);
+  assert.equal(directoryAttr(" Sofia "), "Sofia");
+  assert.equal(directoryAttr("R&D"), "R&D");
+});
+
+test("computeUserHeal: an EMPTY / whitespace Graph directory attribute clears the local one to NULL", () => {
+  const heal = computeUserHeal(local, { ...graphSame, department: "", jobTitle: "  ", officeLocation: "" });
+  assert.deepEqual(heal, { action: "refresh", patch: { department: null, job_title: null, office_location: null } });
+});
+
+test("computeUserHeal: an empty Graph attribute against an already-NULL local one is not drift", () => {
+  const cleared: LocalUserAttrs = { ...local, department: null, jobTitle: null, officeLocation: null };
+  assert.deepEqual(computeUserHeal(cleared, { ...graphSame, department: "", jobTitle: " ", officeLocation: "" }), { action: "none" });
 });

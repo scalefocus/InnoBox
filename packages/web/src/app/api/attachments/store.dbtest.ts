@@ -582,6 +582,19 @@ test(
       assert.equal(objects.has(oddRow[0]!.object_key), false, "the unscannable object is purged");
       await assertAudited(pool, "attachment.scan_unscannable", odd.attachment.id);
       assert.equal(await hasUncleanStagedAttachments(pool, author, "challenge", oddRow[0]!.draft_key), true, "an unscannable staged row blocks submit");
+      // The uploader of a STAGED file is notified too (event 11) — in-app and e-mail outbox —
+      // linking to the submission form, since an unbound row has no parent yet.
+      const { rows: oddNotes } = await pool.query<{ payload: { message: string; link: string } }>(
+        `select payload from notifications where user_id = $1 and type = 'attachment_scan_failed' and payload->>'message' like '%"odd.txt"%'`,
+        [author.userId],
+      );
+      assert.equal(oddNotes.length, 1, "the staged file's uploader is notified");
+      assert.equal(oddNotes[0]!.payload.link, "/challenges/new");
+      const { rows: oddOutbox } = await pool.query(
+        `select 1 from notification_outbox where user_id = $1 and type = 'attachment_scan_failed' and payload->>'message' like '%"odd.txt"%'`,
+        [author.userId],
+      );
+      assert.equal(oddOutbox.length, 1, "and an e-mail is queued");
 
       // On a bound parent: listed only to the uploader, never downloadable.
       const bound = await stageAttachment(deps, author, { parentType: "challenge", draftKey: randomUUID(), filename: "b.txt", mime: "text/plain", size: part1.length, bytes: part1 });

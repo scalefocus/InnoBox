@@ -17,13 +17,21 @@ import {
   type ServiceAccountClaims,
 } from "@innobox/shared/email";
 import { renderEmailText, renderWrappedEmailHtml, validateWrapperHtml } from "@innobox/shared";
+import { canonicalBaseUrl } from "./security-headers";
 
 /** One-shot cookies binding the connect redirect to this browser (state + PKCE verifier). */
 export const EMAIL_OAUTH_STATE_COOKIE = "innobox.email.state";
 export const EMAIL_OAUTH_VERIFIER_COOKIE = "innobox.email.verifier";
 
-export function webBaseUrl(): string {
-  return process.env.PUBLIC_BASE_URL ?? process.env.INNOBOX_REGISTRY_URL ?? process.env.NEXTAUTH_URL ?? "";
+/** The base for the e-mail consent redirect URI and the settings-page bounce (§2.3: derived
+ *  from PUBLIC_BASE_URL). Same resolution as every other canonical-URL consumer — PUBLIC_BASE_URL,
+ *  then NEXTAUTH_URL (which compose sets to the same value) — and, outside production only, the
+ *  documented development default `http://localhost:3000`. No other variable is consulted, and
+ *  a production deployment with neither set yields "" rather than a baked-in host. */
+export function webBaseUrl(env: { PUBLIC_BASE_URL?: string; NEXTAUTH_URL?: string; NODE_ENV?: string } = process.env): string {
+  const base = canonicalBaseUrl(env);
+  if (base) return base.replace(/\/+$/, "");
+  return env.NODE_ENV === "production" ? "" : "http://localhost:3000";
 }
 
 /** Graph env for the web tier (connect flow + test send), or null when key/creds absent.
