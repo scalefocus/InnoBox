@@ -11,7 +11,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && cd dist && node --test",
-    "test:db": "node --import tsx --test src/scim/scim.dbtest.ts src/system-log/alert.dbtest.ts src/scim/identity-sync.dbtest.ts src/webhooks/deliver.dbtest.ts",
+    "test:db": "node --import tsx --test src/scim/scim.dbtest.ts src/system-log/alert.dbtest.ts src/scim/identity-sync.dbtest.ts src/webhooks/deliver.dbtest.ts src/notifications/dispatch.dbtest.ts",
     "lint": "eslint ."
   },
   "dependencies": {

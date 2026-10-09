@@ -2,12 +2,14 @@
 // pending → clean/infected transitions (scanned_at stamped), the infected-path object purge +
 // event-11 notification + audits, that outages (S3/clamd unreachable) leave the row untouched,
 // and that per-file errors back off and, at the attempt cap, make the row `unscannable`.
-// The pure INSTREAM framing/parsing is covered by the @innobox/shared attachment tests, so the
-// socket plumbing is not exercised here (it is not pure). Mirrors notifications/dispatch.test.ts.
+// The pure INSTREAM framing/parsing is covered by the @innobox/shared tests; the streaming socket
+// plumbing is exercised at the end against a fake clamd on a loopback port.
+// Mirrors notifications/dispatch.test.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ClamdErrorReply, SCAN_MAX_ATTEMPTS } from "@innobox/shared";
-import { runScanSweep, type ScanFn, type ScanS3Client } from "./scan.js";
+import net from "node:net";
+import { ClamdErrorReply, SCAN_MAX_ATTEMPTS, ScanObjectReadError } from "@innobox/shared";
+import { createClamavScanner, runScanSweep, type ScanFn, type ScanObjectStream, type ScanS3Client } from "./scan.js";
 
 interface Row {
   [key: string]: unknown;
@@ -58,10 +60,26 @@ function makeFakePool(pending: Row[], opts: { updateRowCount?: number } = {}) {
 
 const KNOWN_BYTES = new Uint8Array([1, 2, 3, 4]);
 
+/** A fake object stream: yields the bytes in two chunks and records whether it was closed. */
+function fakeStream(bytes: Uint8Array): { stream: ScanObjectStream; state: { destroyed: boolean } } {
+  const state = { destroyed: false };
+  const mid = Math.floor(bytes.length / 2);
+  const stream: ScanObjectStream = {
+    async *[Symbol.asyncIterator]() {
+      yield bytes.subarray(0, mid);
+      yield bytes.subarray(mid);
+    },
+    destroy() {
+      state.destroyed = true;
+    },
+  };
+  return { stream, state };
+}
+
 function fakeS3(overrides: Partial<ScanS3Client> = {}): { s3: ScanS3Client; deleted: string[] } {
   const deleted: string[] = [];
   const s3: ScanS3Client = {
-    getObject: async () => KNOWN_BYTES,
+    getObjectStream: async () => fakeStream(KNOWN_BYTES).stream,
     deleteObject: async (key: string) => {
       deleted.push(key);
     },
@@ -170,7 +188,7 @@ test("runScanSweep: an object store outage leaves the row untouched and never ca
   const { pool, updates } = makeFakePool([challengeRow]);
   let scanned = false;
   const s3: ScanS3Client = {
-    getObject: async () => {
+    getObjectStream: async () => {
       throw Object.assign(new Error("minio down"), { code: "ECONNREFUSED" });
     },
     deleteObject: async () => {},
@@ -226,7 +244,7 @@ test("runScanSweep: a per-file error (clamd error reply) counts an attempt and b
 test("runScanSweep: an unreadable object (not an outage) is a per-file error too", async () => {
   const { pool, updates } = makeFakePool([challengeRow]);
   const s3: ScanS3Client = {
-    getObject: async () => {
+    getObjectStream: async () => {
       throw Object.assign(new Error("The specified key does not exist."), { name: "NoSuchKey", $metadata: { httpStatusCode: 404 } });
     },
     deleteObject: async () => {},
@@ -256,4 +274,148 @@ test("runScanSweep: the attempt-cap per-file error makes the row unscannable —
   const payload = JSON.parse(notifications[0]![1] as string) as { message: string; link: string };
   assert.match(payload.message, /couldn't be scanned/);
   assert.equal(payload.link, "/challenges/5");
+});
+
+test("runScanSweep: the scanner receives the object STREAM (never a buffered copy), and the stream is closed afterwards", async () => {
+  const { pool } = makeFakePool([challengeRow]);
+  const { stream, state } = fakeStream(KNOWN_BYTES);
+  const { s3 } = fakeS3({ getObjectStream: async () => stream });
+  let received: unknown = null;
+  const scan: ScanFn = async (source) => {
+    received = source;
+    return { clean: true };
+  };
+  await runScanSweep(pool as never, { s3, scan });
+  assert.equal(received, stream, "the store stream is handed to the scanner as-is");
+  assert.equal(state.destroyed, true, "the store stream is closed once the scan is done");
+});
+
+test("runScanSweep: the stream is closed even when the scanner fails (clamd unreachable)", async () => {
+  const { pool, updates } = makeFakePool([challengeRow]);
+  const { stream, state } = fakeStream(KNOWN_BYTES);
+  const { s3 } = fakeS3({ getObjectStream: async () => stream });
+  const scan: ScanFn = async () => {
+    throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  };
+  const summary = await runScanSweep(pool as never, { s3, scan });
+  assert.equal(state.destroyed, true);
+  assert.equal(summary.errors, 1);
+  assert.equal(updates.length, 0, "an outage leaves the row untouched");
+});
+
+// ── The real streaming scanner against a fake clamd (loopback TCP) ──────────────────────────
+
+/** A minimal clamd: parses `zINSTREAM\0` + length-prefixed frames, records each frame's size,
+ *  and replies `reply` after the terminator — or, with `replyAfterBytes`, as soon as that many
+ *  payload bytes have arrived (what clamd does when StreamMaxLength is exceeded), then closes. */
+async function startFakeClamd(opts: { reply: string; replyAfterBytes?: number }): Promise<{
+  port: number;
+  frames: number[];
+  close: () => Promise<void>;
+}> {
+  const frames: number[] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((sock) => {
+    sockets.add(sock);
+    let buf = Buffer.alloc(0);
+    let commandSeen = false;
+    let total = 0;
+    let replied = false;
+    const reply = (): void => {
+      if (replied) return;
+      replied = true;
+      sock.end(`stream: ${opts.reply}\0`);
+    };
+    sock.on("error", () => {});
+    sock.on("close", () => sockets.delete(sock));
+    sock.on("data", (d: Buffer) => {
+      if (replied) return;
+      buf = Buffer.concat([buf, d]);
+      if (!commandSeen) {
+        const nul = buf.indexOf(0);
+        if (nul < 0) return;
+        assert.equal(buf.subarray(0, nul).toString(), "zINSTREAM");
+        buf = buf.subarray(nul + 1);
+        commandSeen = true;
+      }
+      for (;;) {
+        if (buf.length < 4) return;
+        const len = buf.readUInt32BE(0);
+        if (len === 0) return reply();
+        if (buf.length < 4 + len) return;
+        frames.push(len);
+        total += len;
+        buf = buf.subarray(4 + len);
+        if (opts.replyAfterBytes !== undefined && total >= opts.replyAfterBytes) return reply();
+      }
+    });
+  });
+  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+  const port = (server.address() as net.AddressInfo).port;
+  const close = (): Promise<void> => {
+    for (const s of sockets) s.destroy();
+    return new Promise<void>((ok) => server.close(() => ok()));
+  };
+  return { port, frames, close };
+}
+
+test("createClamavScanner: streams the source in 64 KB frames at most and returns the verdict", async () => {
+  const clamd = await startFakeClamd({ reply: "OK" });
+  try {
+    const scan = createClamavScanner({ host: "127.0.0.1", port: clamd.port, timeoutMs: 5_000 });
+    async function* source() {
+      yield new Uint8Array(100 * 1024); // larger than one frame → split
+      yield new Uint8Array(10);
+    }
+    assert.deepEqual(await scan(source()), { clean: true });
+    assert.deepEqual(clamd.frames, [64 * 1024, 36 * 1024, 10]);
+  } finally {
+    await clamd.close();
+  }
+});
+
+test("createClamavScanner: an early clamd reply (size limit) is a per-file error and stops reading the source", async () => {
+  const clamd = await startFakeClamd({ reply: "INSTREAM size limit exceeded. ERROR", replyAfterBytes: 128 * 1024 });
+  try {
+    const scan = createClamavScanner({ host: "127.0.0.1", port: clamd.port, timeoutMs: 5_000 });
+    let pulled = 0;
+    let closed = false;
+    const endless: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            pulled += 1;
+            if (pulled > 10_000) throw new Error("read far past the reply");
+            await new Promise((r) => setImmediate(r));
+            return { done: false, value: new Uint8Array(64 * 1024) };
+          },
+          return: async () => {
+            closed = true;
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    };
+    await assert.rejects(scan(endless), (err: unknown) => err instanceof ClamdErrorReply);
+    // The writer notices the settled reply at its next frame and closes the source.
+    for (let i = 0; i < 100 && !closed; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(closed, true, "the source stream is closed once clamd has answered");
+    assert.ok(pulled < 10_000);
+  } finally {
+    await clamd.close();
+  }
+});
+
+test("createClamavScanner: a source that breaks mid-read rejects with ScanObjectReadError", async () => {
+  const clamd = await startFakeClamd({ reply: "OK" });
+  try {
+    const scan = createClamavScanner({ host: "127.0.0.1", port: clamd.port, timeoutMs: 5_000 });
+    async function* broken() {
+      yield new Uint8Array(10);
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    }
+    await assert.rejects(scan(broken()), (err: unknown) => err instanceof ScanObjectReadError);
+  } finally {
+    await clamd.close();
+  }
 });

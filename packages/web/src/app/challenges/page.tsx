@@ -5,19 +5,19 @@
 // what the API already decided the viewer may see.
 import Link from "next/link";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { cachedGet } from "@/lib/ui";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
 import { readChallengesView, writeChallengesView, type ChallengesView } from "@/lib/challenges-view";
 import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
 import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
+import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
 
 interface ChallengeListItem {
   id: string;
   number: string;
   title: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   namespaceSlug: string;
   impactAreaName: string;
   status: string;
@@ -26,18 +26,6 @@ interface ChallengeListItem {
   likedByViewer: boolean;
   solutionCount: number;
   isNew: boolean;
-}
-
-interface ImpactArea {
-  id: string;
-  name: string;
-  active: boolean;
-}
-
-interface NamespaceOption {
-  id: string;
-  slug: string;
-  displayName: string;
 }
 
 type Tab = "open" | "mine" | "completed";
@@ -58,14 +46,9 @@ const SORTS: { key: Sort; label: string }[] = [
 export default function ChallengesPage() {
   const [tab, setTab] = useState<Tab>("open");
   const [sort, setSort] = useState<Sort>("newest");
-  const [status, setStatus] = useState("");
-  const [impactAreaId, setImpactAreaId] = useState("");
-  const [namespaceId, setNamespaceId] = useState("");
-  const [authorName, setAuthorName] = useState("");
+  const [filters, setFilters] = useState<GalleryFilterValues>(EMPTY_GALLERY_FILTERS);
 
   const [challenges, setChallenges] = useState<ChallengeListItem[] | null>(null);
-  const [impactAreas, setImpactAreas] = useState<ImpactArea[]>([]);
-  const [namespaces, setNamespaces] = useState<NamespaceOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   // §13.1 Cards / List toggle: persisted per browser (localStorage), read after mount — the server
   // snapshot is Cards and results only render once the post-mount fetch lands, so no hydration
@@ -78,23 +61,7 @@ export default function ChallengesPage() {
     writeChallengesView(v);
   };
 
-  useEffect(() => {
-    cachedGet<{ impactAreas: ImpactArea[] }>("/api/impact-areas")
-      .then((j) => setImpactAreas(j.impactAreas))
-      .catch(() => {});
-    cachedGet<{ namespaces: NamespaceOption[] }>("/api/namespaces")
-      .then((j) => setNamespaces(j.namespaces))
-      .catch(() => {});
-  }, []);
-
-  const queryString = useMemo(() => {
-    const params = new URLSearchParams({ tab, sort });
-    if (status) params.set("status", status);
-    if (impactAreaId) params.set("impactAreaId", impactAreaId);
-    if (namespaceId) params.set("namespaceId", namespaceId);
-    if (authorName.trim()) params.set("authorName", authorName.trim());
-    return params.toString();
-  }, [tab, sort, status, impactAreaId, namespaceId, authorName]);
+  const queryString = useMemo(() => applyGalleryFilters(new URLSearchParams({ tab, sort }), filters).toString(), [tab, sort, filters]);
 
   useEffect(() => {
     let live = true;
@@ -113,8 +80,6 @@ export default function ChallengesPage() {
       live = false;
     };
   }, [queryString]);
-
-  const statusOptions = Object.keys(CHALLENGE_STATUS_LABEL);
 
   return (
     <>
@@ -143,36 +108,7 @@ export default function ChallengesPage() {
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
-        <select className="field" value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          {statusOptions.map((s) => (
-            <option key={s} value={s}>
-              {CHALLENGE_STATUS_LABEL[s]}
-            </option>
-          ))}
-        </select>
-        <select className="field" value={impactAreaId} onChange={(e) => setImpactAreaId(e.target.value)}>
-          <option value="">All impact areas</option>
-          {impactAreas.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-        <select className="field" value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)}>
-          <option value="">All my namespaces</option>
-          {namespaces.map((ns) => (
-            <option key={ns.id} value={ns.id}>
-              {ns.displayName}
-            </option>
-          ))}
-        </select>
-        <input
-          className="field"
-          placeholder="Filter by author name"
-          value={authorName}
-          onChange={(e) => setAuthorName(e.target.value)}
-        />
+        <GalleryFilterFields value={filters} onChange={setFilters} />
         <div className="sort-toggle">
           {SORTS.map((s) => (
             <button
@@ -235,7 +171,7 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       </div>
       <h3>{challenge.title}</h3>
       <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} />
+        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} deactivated={challenge.author.active === false} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
           <span>
             <ChallengeAuthorName challenge={challenge} />

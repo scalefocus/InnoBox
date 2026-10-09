@@ -8,8 +8,8 @@
 // guarded on `scan_status='pending'` so whichever path runs first wins and the other no-ops.
 // Imports stay relative (not @/) so the gated dbtest runs under the plain node test runner.
 import type { Pool } from "pg";
-import { applyScanResult, ScanObjectReadError, type AttachmentParentType, type ScanResult } from "@innobox/shared";
-import { scanBytes } from "../../../lib/clamav";
+import { applyScanResult, ScanObjectReadError, type AttachmentParentType, type ClamdVerdict, type ScanResult, type ScanSource } from "@innobox/shared";
+import { readableStreamSource, scanSource } from "../../../lib/clamav";
 import type { StorageClient } from "../../../lib/storage";
 
 interface ScanRow {
@@ -29,10 +29,11 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: Record<strin
 }
 
 /** Scan a single freshly-uploaded attachment now. Pass `bytes` to avoid a re-read when the
- *  caller still has them (single-shot); chunked completes omit them and the object is fetched.
+ *  caller still has them (single-shot — already in memory, at most one chunk); chunked completes
+ *  omit them and the object is STREAMED from the store to clamd (§11), never buffered whole.
  *  An injectable `scan` lets tests stand in for clamd. Never throws. */
 export async function scanAttachmentNow(
-  deps: { pool: Pool; storage: StorageClient; scan?: (bytes: Uint8Array) => ReturnType<typeof scanBytes> },
+  deps: { pool: Pool; storage: StorageClient; scan?: (source: ScanSource) => Promise<ClamdVerdict> },
   attachmentId: string,
   opts?: { bytes?: Uint8Array },
 ): Promise<void> {
@@ -47,15 +48,22 @@ export async function scanAttachmentNow(
 
     let result: ScanResult;
     try {
-      let bytes = opts?.bytes;
-      if (!bytes) {
+      const scan = deps.scan ?? scanSource;
+      if (opts?.bytes) {
+        result = { verdict: await scan(opts.bytes) };
+      } else {
+        let source: ReturnType<typeof readableStreamSource>;
         try {
-          bytes = await deps.storage.getObject(row.object_key);
+          source = readableStreamSource((await deps.storage.getObjectStream(row.object_key)).body);
         } catch (err) {
           throw new ScanObjectReadError(err);
         }
+        try {
+          result = { verdict: await scan(source) };
+        } finally {
+          source.destroy(); // no-op once read to the end; frees the store connection otherwise
+        }
       }
-      result = { verdict: await (deps.scan ?? scanBytes)(bytes) };
     } catch (err) {
       result = { error: err };
     }

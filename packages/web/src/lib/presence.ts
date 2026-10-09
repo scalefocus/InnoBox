@@ -160,6 +160,10 @@ export function presenceTouchFor(pathname: string, method: string): PresenceTouc
       // plus an anonymous challenge appearing moments later is the §9 correlation with
       // extra steps (§14.5).
       if (!second) return { tier: "locate", route: ROUTE_CHALLENGES };
+      // The shell's "new since your last visit" badge (§13.1) polls this every 30 s on every
+      // page — a background poller, never activity (§14.5); counting it would also relocate a
+      // user on Home to "Challenges" whenever it raced the dashboard read.
+      if (second === "new-count") return null;
       const token = entityToken("challenge", second);
       // A nested solutions listing (…/challenges/412/solutions) is still "on CH-412".
       return token ? { tier: "locate", route: token } : { tier: "locate", route: ROUTE_CHALLENGES };

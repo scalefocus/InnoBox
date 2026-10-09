@@ -61,6 +61,8 @@ test(
       const anonAuthor = { userId: anonAuthorId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const admin = { userId: adminId, roles: buildRoleSet([{ role: "namespace_admin", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const liker = { userId: likerId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) };
+      // The bulk actions' §12.1 visibility drop: every fixture user is a member of the namespace.
+      const resolveRoles = async () => buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId });
 
       const { rows: areaRows } = await pool.query<{ id: string }>(`select id from impact_areas where name = 'Internal'`);
       const areaId = areaRows[0]!.id;
@@ -181,17 +183,17 @@ test(
       assert.equal(page2.rows.length, 1);
       assert.notEqual(page1.rows[0]!.number, page2.rows[0]!.number);
 
-      const bulkStatusOutcomes = await bulkSetStatus(pool, admin, [anonNumber], "valid");
+      const bulkStatusOutcomes = await bulkSetStatus(pool, admin, [anonNumber], "valid", resolveRoles);
       assert.deepEqual(bulkStatusOutcomes, [{ number: anonChallenge.challenge.number, status: "ok" }]);
       await assertAudited(pool, "challenge.status_changed", anonChallenge.challenge.id);
 
-      const bulkAssignOutcomes = await bulkAssign(pool, admin, [anonNumber], winnerId);
+      const bulkAssignOutcomes = await bulkAssign(pool, admin, [anonNumber], winnerId, resolveRoles);
       assert.deepEqual(bulkAssignOutcomes, [{ number: anonChallenge.challenge.number, status: "ok" }]);
       await assertAudited(pool, "challenge.assigned", anonChallenge.challenge.id);
 
-      const { rows: preExportCount } = await pool.query(`select count(*) from audit_log where action = 'admin.triage_exported'`);
+      const { rows: preExportCount } = await pool.query(`select count(*) from audit_log where action = 'triage.exported'`);
       await exportTriageCsv(pool, admin, { namespaceId: nsId });
-      const { rows: postExportCount } = await pool.query(`select count(*) from audit_log where action = 'admin.triage_exported'`);
+      const { rows: postExportCount } = await pool.query(`select count(*) from audit_log where action = 'triage.exported'`);
       assert.equal(Number(postExportCount[0]!.count), Number(preExportCount[0]!.count) + 1);
 
       // A committee-only (non-admin) viewer has no admin namespaces at all.

@@ -4,6 +4,15 @@
 # port 8080. It forwards X-Forwarded-Proto and X-Forwarded-Host so Next.js and
 # NextAuth can reconstruct the correct public URL.
 :8080 {
+	# Outer request-body cap (INNOBOX_SPEC.md §2.4): the maximum upload size plus 1 MB, as a
+	# backstop only — the per-route limits in the app are the real ones. The maximum upload
+	# size is a runtime platform setting (up to 200 MB), which this proxy cannot read, so the
+	# default covers the largest permitted value: 200 MiB + 1 MiB. An operator who pins a
+	# lower maximum may tighten it via PROXY_MAX_BODY_SIZE (e.g. 11MiB for the 10 MB default).
+	request_body {
+		max_size {$PROXY_MAX_BODY_SIZE:201MiB}
+	}
+
 	# SCIM provisioning endpoint -> worker (keep /scim prefix; worker mounts at /scim/v2)
 	handle /scim/* {
 		reverse_proxy worker:4000 {

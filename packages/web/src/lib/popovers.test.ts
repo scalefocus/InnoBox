@@ -111,11 +111,29 @@ test("close is instant: no exit animation survives in globals.css", () => {
   }
 });
 
-test("the search autocomplete wears the shared popover chrome", () => {
+test("the search autocomplete sets its own motion origin (chrome comes from .menu-pop)", () => {
   const body = ruleBody(GLOBALS_CSS, ".search-ac");
   assert.ok(body, "globals.css has no .search-ac rule");
-  assert.match(body, /border:\s*1px solid var\(--line-strong\)/);
-  assert.match(body, /box-shadow:\s*var\(--shadow\)/);
   assert.match(body, /transform-origin:\s*top center/);
   assert.match(body, /--menu-pop-y:\s*-6px/);
+});
+
+test(".menu-pop owns the shared chrome: surface fill, line-strong border, radius-sm, shadow, 5 px padding", () => {
+  const body = ruleBody(GLOBALS_CSS, ".menu-pop");
+  assert.ok(body, "globals.css has no top-level .menu-pop rule");
+  assert.match(body, /background:\s*var\(--surface\)/);
+  assert.match(body, /border:\s*1px solid var\(--line-strong\)/);
+  assert.match(body, /border-radius:\s*var\(--radius-sm\)/);
+  assert.match(body, /box-shadow:\s*var\(--shadow\)/);
+  assert.match(body, /(?:^|[;\s])padding:\s*5px\s*;/);
+});
+
+test("no popover restates (or overrides) the chrome in its own top-level rule — nothing bespoke", () => {
+  const CHROME = /(?:^|[;\s{])(background(?:-color)?|border(?:-radius)?|box-shadow|padding(?:-[a-z]+)?)\s*:/;
+  for (const rootClass of Object.keys(POPOVERS)) {
+    const body = ruleBody(GLOBALS_CSS, `.${rootClass}`);
+    assert.ok(body, `globals.css has no top-level .${rootClass} rule`);
+    const hit = CHROME.exec(body);
+    assert.equal(hit, null, `.${rootClass} restates popover chrome (${hit?.[1]}) — it belongs to .menu-pop`);
+  }
 });

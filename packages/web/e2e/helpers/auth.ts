@@ -34,7 +34,9 @@ export async function signIn(
     // On success the app returns to "/" authenticated and the account menu (.user-trigger, rendered
     // only when signed in) appears; on failure it stays on the signed-out landing with the dev
     // panel — so waiting for the account menu both confirms success and fails fast otherwise.
-    await page.locator(".user-trigger").waitFor({ state: "visible", timeout: 15_000 });
+    // 30 s like the suite's expect timeout: a fresh-onboarding persona is redirected to
+    // /quick-start server-side, and that route's first hit compiles cold in dev mode.
+    await page.locator(".user-trigger").waitFor({ state: "visible", timeout: 30_000 });
 
     const meRes = await context.request.get(`${base}/api/me`, { headers: { accept: "application/json" } });
     const me = (await meRes.json()) as { user?: { id?: string }; roles?: { platformAdmin?: boolean } };

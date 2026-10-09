@@ -5,6 +5,7 @@ import {
   isUuid,
   parseChallengeCreateIds,
   parseChallengeListFilters,
+  parseGalleryFilters,
   parseLikeToggle,
   parseStatusOverride,
 } from "./validation.js";
@@ -34,6 +35,21 @@ test("parseChallengeListFilters: accepts all documented tab/sort/status values",
     assert.equal(result.value.sort, "most_liked");
     assert.equal(result.value.status, "valid");
   }
+});
+
+test("parseGalleryFilters: parses the four §13.1 filters and nothing else (search reuses it)", () => {
+  const result = parseGalleryFilters(
+    new URLSearchParams({ status: "valid", impactAreaId: AREA_ID, namespaceId: NS_ID, authorName: " Jane ", tab: "mine", q: "x" }),
+  );
+  assert.equal(result.ok, true);
+  if (result.ok) assert.deepEqual(result.value, { status: "valid", impactAreaId: AREA_ID, namespaceId: NS_ID, authorName: "Jane" });
+  assert.deepEqual(parseGalleryFilters(new URLSearchParams()), { ok: true, value: {} });
+});
+
+test("parseGalleryFilters: fails closed on a malformed filter", () => {
+  assert.equal(parseGalleryFilters(new URLSearchParams({ status: "bogus" })).ok, false);
+  assert.equal(parseGalleryFilters(new URLSearchParams({ impactAreaId: "nope" })).ok, false);
+  assert.equal(parseGalleryFilters(new URLSearchParams({ namespaceId: "nope" })).ok, false);
 });
 
 test("parseChallengeListFilters: rejects an unknown tab rather than silently defaulting", () => {

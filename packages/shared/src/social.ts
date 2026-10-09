@@ -34,6 +34,15 @@ export function canAssignAtStatus(status: ChallengeStatus): boolean {
   return !CHALLENGE_TERMINAL_STATUSES.has(status);
 }
 
+// ── Likes (§8.3) ─────────────────────────────────────────────────────────────────────────
+
+/** §8.3: once a challenge is `solved`, likes are frozen — on the challenge itself and on its
+ *  solutions (all terminal by then). Existing counts stay displayed; no like or unlike lands.
+ *  A solved challenge that reverts to `valid` (§10.3 winner delete) unfreezes them. */
+export function areLikesFrozen(challengeStatus: ChallengeStatus): boolean {
+  return challengeStatus === "solved";
+}
+
 // ── Notifications (§12.1) ────────────────────────────────────────────────────────────────
 
 export const NOTIFICATION_TYPES = [

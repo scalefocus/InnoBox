@@ -86,7 +86,10 @@ test("profile: the e-mail-notifications toggle round-trips, and the public profi
   const after = before === "true" ? "false" : "true";
   await emailSwitch.click();
   await expect(emailSwitch).toHaveAttribute("aria-checked", after);
-  await expect(page.locator(".toggle-state")).toHaveText(after === "true" ? "On" : "Off");
+  // The page carries one switch per notification preference (§12.1) — read the word that sits
+  // beside THIS switch, inside its own .toggle-field.
+  const emailField = page.locator(".toggle-field", { has: emailSwitch });
+  await expect(emailField.locator(".toggle-state")).toHaveText(after === "true" ? "On" : "Off");
   // The flip is persisted, not just optimistic — it survives a reload.
   await page.reload();
   await expect(page.getByRole("switch", { name: "E-mail notifications" })).toHaveAttribute("aria-checked", after);

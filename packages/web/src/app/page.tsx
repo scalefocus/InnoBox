@@ -9,6 +9,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { getProviders, signIn, useSession } from "next-auth/react";
 import { cachedGet } from "@/lib/ui";
+import { authErrorMessage } from "@/lib/auth-pages";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "./challenges/status";
@@ -17,7 +18,7 @@ import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/Fea
 interface SpotlightSolution {
   number: string;
   description: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   challengeNumber: string;
   challengeTitle: string;
   updatedAt: string;
@@ -153,18 +154,6 @@ function SignedOut() {
   );
 }
 
-/** Maps an Auth.js `?error=` code (handed back to `/` because `pages.signIn` is `/`) to a message.
- *  A rejected `signIn` callback — notably a deactivated account (ENTRA_AUTH_SPEC.md §5) — arrives
- *  as `AccessDenied`. */
-function authErrorMessage(code: string): string {
-  switch (code) {
-    case "AccessDenied":
-      return "Your account has been deactivated. Contact an administrator if you believe this is a mistake.";
-    default:
-      return "Sign-in failed. Please try again.";
-  }
-}
-
 const devLabelStyle: CSSProperties = {
   display: "block",
   fontFamily: "var(--font-mono)",
@@ -250,7 +239,7 @@ function SpotlightCard({ title, solution, empty }: { title: string; solution: Sp
           </p>
           <div className="sub mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {solution.number} ·{" "}
-            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} />
+            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} deactivated={solution.author.active === false} />
             {solution.author.anonymous ? "Anonymous" : solution.author.displayName} · {fmt.date(solution.updatedAt)}
           </div>
         </Link>

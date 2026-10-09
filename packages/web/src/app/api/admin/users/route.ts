@@ -5,12 +5,16 @@ import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { searchUsersForAdmin } from "../../users/store";
 import { withSystemLog } from "@/lib/system-log";
+import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
+  // §2.4: the directory picker is a search/autocomplete read — the limited "search" bucket.
+  const limited = rateLimit(gate.user.id, "search");
+  if (limited) return limited;
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
   if (q.length < 2) return Response.json({ users: [] });
   const users = await searchUsersForAdmin(pool, q);

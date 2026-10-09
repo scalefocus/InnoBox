@@ -4,6 +4,7 @@
 // navigates to the full /search page; results are already visibility-filtered/masked.
 import { useRouter } from "next/navigation";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { itemHref } from "@/lib/deep-link";
 
 interface SearchItem {
   number: string;
@@ -82,9 +83,10 @@ export const TopbarSearch = forwardRef<TopbarSearchHandle>(function TopbarSearch
     router.push(`/search?q=${encodeURIComponent(query)}`);
   };
 
-  const goToChallenge = (number: string) => {
+  // §12.1 deep-link convention: a solution row opens its parent challenge scrolled to it.
+  const goTo = (href: string) => {
     setOpen(false);
-    router.push(`/challenges/${number.replace("CH-", "")}`);
+    router.push(href);
   };
 
   // Clear the field and keep focus so the user can retype (INNOBOX_SPEC.md §13.4).
@@ -147,7 +149,7 @@ export const TopbarSearch = forwardRef<TopbarSearchHandle>(function TopbarSearch
           )}
           {challenges.map((c) => (
             <li key={c.number}>
-              <button type="button" className="search-ac-item" onClick={() => goToChallenge(c.number)}>
+              <button type="button" className="search-ac-item" onClick={() => goTo(itemHref(c.number))}>
                 <span className="search-ac-title">{c.title}</span>
                 <span className="search-ac-sub mono">{c.number}</span>
               </button>
@@ -155,7 +157,7 @@ export const TopbarSearch = forwardRef<TopbarSearchHandle>(function TopbarSearch
           ))}
           {solutions.map((s) => (
             <li key={s.number}>
-              <button type="button" className="search-ac-item" onClick={() => goToChallenge(s.challengeNumber ?? "")}>
+              <button type="button" className="search-ac-item" onClick={() => goTo(itemHref(s.challengeNumber ?? "", s.number))}>
                 <span className="search-ac-title">{s.description}</span>
                 <span className="search-ac-sub mono">
                   {s.number} · {s.challengeNumber}
