@@ -292,8 +292,10 @@ MINIO_SCRIPT
 
             # ── 5. Smoke-check readiness ──────────────────────────────────────────────────
             # Exits non-zero when every attempt fails, so a stack that never becomes ready
-            # fails the pipeline instead of going green.
-            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 3; done; echo "readyz never became ready" >&2; exit 1'
+            # fails the pipeline instead of going green. On failure it dumps container state and
+            # the web/proxy log tails, so the build log carries the cause (a 502 means the proxy
+            # cannot reach web at all — typically web crash-looping on a startup check).
+            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 3; done; echo "readyz never became ready" >&2; cd '"${DEPLOY_PATH}"'/deploy || exit 1; docker compose ps -a; docker compose logs --no-color --tail 100 web proxy; exit 1'
 
             # ── 6. Housekeeping: drop docker residue from this and earlier builds ──────────
             # image prune -f removes only DANGLING images (the <none> layers each --build
