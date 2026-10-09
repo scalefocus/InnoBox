@@ -155,8 +155,17 @@ greater than the highest version already in the branch history** — re-check
 The **What's new** page (`/whats-new`, linked in the account menu) reads from
 **`packages/web/src/app/whats-new/changelog.ts`**. Whenever you bump `APP_VERSION`,
 prepend one `{ version, date, summary }` entry (newest first) in the SAME commit:
-`version` = the new `APP_VERSION`, `date` = today (UTC `YYYY-MM-DD`), `summary` = one
-user-facing line derived from the commit message. No bump → no entry.
+`version` = the new `APP_VERSION`, `date` = today (UTC `YYYY-MM-DD`), `summary` = a
+user-facing description derived from the commit message — aim for **2–3 sentences
+(≈ 350 characters)**: what changed, in plain language, plus any action the user must take.
+It is a soft guideline, not enforced; every release's entry also drives the in-app update
+notice (§13.9). No bump → no entry.
+
+**Specified but not built.** A feature specified ahead of its implementation carries a
+`⚠ GAP-nn · new feature` marker in the spec. Once the *Coming soon* list exists (§13.9,
+GAP-67), each such marker also needs an entry in
+`packages/web/src/app/whats-new/upcoming.ts` (a test enforces it), and the commit that
+ships the feature deletes the marker, removes the teaser and adds the changelog entry.
 
 **`changelog.ts` is itself the source of truth for past versions.** The history was
 squashed to a single commit for the open-source release (§21.4), so `git log` no longer

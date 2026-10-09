@@ -32,7 +32,11 @@
 > accepted the spec now describes it, and every place where the code still has to change
 > is marked inline (see *Implementation gaps* below); a second pass re-triaged every
 > marker against the code shipped since, deleted the closed ones, and wrote in the
-> product owner's decisions and the defaults chosen where the spec was silent).
+> product owner's decisions and the defaults chosen where the spec was silent; v0.12
+> (2026-10-09) specified four features still to be built, each marked as a new-feature
+> gap: the What's new update notice with a greyed-out *Coming soon* list (§13.9), the
+> feedback survey with its admin results (§13.10, §14.11), and the AI integration with
+> Open WebUI or OpenAI and its four tasks (§22)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -42,7 +46,10 @@
 >
 > **Implementation gaps.** A block that starts **`⚠ GAP-nn`** marks a place where the
 > shipped code does not yet do what the surrounding text says. The spec text is
-> authoritative; the marker states what the code must change to match it. Markers are
+> authoritative; the marker states what the code must change to match it. A
+> **`· code fix`** marker is a divergence in something that exists; a **`· new
+> feature`** marker is a specified feature not yet built — each of those is also teased
+> on the What's new page's *Coming soon* list (§13.9), kept in sync by a test. Markers are
 > numbered across this document and `ENTRA_AUTH_SPEC.md`, and each is deleted in the
 > same commit that closes it, so `grep -n "GAP-" INNOBOX_SPEC.md ENTRA_AUTH_SPEC.md`
 > always lists exactly the open work.
@@ -236,15 +243,19 @@ including theme-aware scrollbars and form controls. Pinned values:
 - **App shell:** persistent left-sidebar navigation; the sidebar colophon shows
   `APP_VERSION` above **"Created by Scalefocus"** and, below it, **"Powered by the
   community"** — three stacked lines, the two attribution lines sharing the same
-  `.colophon-sub` treatment, both plain text (no links); the account menu carries the
-  **Quick start** and **What's new** links; fully responsive. The shell renders in
+  `.colophon-sub` treatment, both plain text (no links) — except that, signed in, the
+  community line ends in the §13.10 **"· Have your say"** button; the account menu carries the
+  **Quick start** and **What's new** links; the shell also owns the §13.9 **update
+  notice** (a floating card, bottom-right, after a new release); fully responsive. The shell renders in
   three states keyed on the session:
   - **Authenticated** — unchanged from the signed-in experience: full nav (Home,
     **Submit a Challenge**, Challenges, Leaderboard, plus **Triage** and
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
-    Sign out) in the sidebar foot, and the topbar search + notification bell +
+    Sign out — plus the §13.10 **Take the survey** as the first item while a survey
+    offer is open, and **Give feedback** above Sign out when an on-demand survey can
+    start) in the sidebar foot, and the topbar search + notification bell +
     theme toggle — plus the §14.6 **system banner** pill between search and bell
     while one is active.
   - **Unauthenticated** — the wordmark and version colophon only, **no nav links**,
@@ -284,8 +295,10 @@ including theme-aware scrollbars and form controls. Pinned values:
     construction.
   - **Explicit exceptions:** native `<select>` lists and `window.confirm` dialogs
     (OS-drawn), the mobile nav drawer, and the mobile full-screen notification
-    **sheet**. The sheet keeps its own slide-up (~220 ms, also silenced under reduced
-    motion) because it has no anchor to scale from. Inline expanders
+    **sheet**, the §13.9 **update notice** (a floating status card anchored to no
+    trigger), and the §13.10 **survey card** (a non-modal floating dialog). The sheet keeps its own slide-up (~220 ms, also silenced under reduced
+    motion) because it has no anchor to scale from; the notice has its own slide-up
+    under the same reduced-motion rule. Inline expanders
     (the §10.3 danger zone, admin card collapse) are not popovers.
 - **Submission lock:** the author submit paths (challenge form, solution form,
   Resubmit) cover their form with a `.form-lock-scrim` while the request is in flight —
@@ -494,6 +507,11 @@ The delivery pipeline, pinned:
   - **`WEBHOOK_ENC_KEY`** (web **and** worker) — 32 bytes, base64 (`openssl rand
     -base64 32`); encrypts channel-webhook URLs at rest (§12.4). Unset or invalid →
     webhooks are off. Compose passes `${WEBHOOK_ENC_KEY:-}` to both services.
+  - **`AI_TOKEN_ENC_KEY`** (web **and** worker) — 32 bytes, base64; encrypts the §22 AI
+    provider token at rest. Unset or invalid → the AI provider form is disabled and every
+    provider write answers `ai_key_missing`. Deliberately not the e-mail or webhook key:
+    the three rotate independently. Compose passes `${AI_TOKEN_ENC_KEY:-}` to both
+    services.
   - **`TRUST_PROXY`** — now read by **web** as well as the worker, for the CSP report
     sink's per-IP key (§2.4); compose passes the same `${TRUST_PROXY:-1}` to `web`.
   - **Egress:** web and worker need outbound HTTPS (443) to channel-webhook receivers
@@ -629,7 +647,8 @@ these rules close the generic web-platform paths by which it could.
     `PROXY_MAX_BODY_SIZE`. The per-route limits above are the real ones.
   - The CSP report sink: **64 KB** (above).
 - **Outbound requests.** The only user-configured outbound HTTP the platform makes is
-  the channel webhook (§12.4). It is `https` on port 443 only, refuses private,
+  the channel webhook (§12.4) and the §22 AI provider, which obeys the same rules (with
+  its own timeouts, §22.6). Each is `https` on port 443 only, refuses private,
   loopback, link-local and other non-public addresses after DNS resolution, connects to
   the vetted address, follows no redirects, ignores proxy environment variables, and
   times out after 10 s.
@@ -644,6 +663,8 @@ these rules close the generic web-platform paths by which it could.
     every assignee/successor picker (`GET /api/users?q=`) — and the §6.1 similarity
     check — **120 per minute** (the one limited read: each is a query a script could
     hammer, and the directory search could otherwise enumerate every user);
+  - starting an on-demand survey or submitting a survey response (§13.10) — **10 per
+    minute** (the `survey` bucket; its 429 warning omits the user id);
   - every other state-changing API request — **120 per minute**.
   An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
   requests — try again shortly."). Rate-limit rejections are **logged** (structured
@@ -811,7 +832,11 @@ Entra runbook); on conflict this document wins.
   **scrubs the user's system-log rows** (§14.7 — `actor_name`/`actor_email` cleared,
   `user_id` nulled; that table is mutable and so, unlike `audit_log`, not exempt). It
   nulls the per-user seen markers (`triage_seen_at`, `challenges_seen_at`,
-  `system_log_seen_at`, `quick_start_seen_at`) and resets the notification preferences
+  `system_log_seen_at`, `quick_start_seen_at`, and the §13.9 `whats_new_seen_version`
+  and `whats_new_since_date`), deletes the user's §13.10 `user_feature_uses` rows, clears
+  the survey state (`survey_last_shown_at`, `survey_offer`, `survey_self_shown_at`;
+  `surveys_enabled` back to its default) — survey responses reference no one and are
+  untouched — nulls `ai_usage.user_id` (§22.3), and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
   `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
@@ -1020,7 +1045,12 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   user was last on, masked per §14.5 — current value only, never a history),
   **challenges_seen_at** (nullable timestamptz; the §13.1 "new since your last visit"
   marker, backfilled to the migration's run time), **system_log_seen_at** (nullable;
-  platform admins' §14.7 nav badge), **notify_followed_comments** /
+  platform admins' §14.7 nav badge), **whats_new_seen_version** (nullable text, strict
+  `x.y.z`; the §13.9 acknowledged-release marker, not back-filled) and
+  **whats_new_since_date** (nullable `date`; the §13.9 one-time rollout boundary),
+  **surveys_enabled** / **survey_last_shown_at** / **survey_offer** /
+  **survey_self_shown_at** (the §13.10 per-user survey state),
+  **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
   default true — the §12.1 per-event preferences), deactivated_at.
 - **`groups`** — id, external_id (Entra group object id), display_name,
@@ -1030,6 +1060,12 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   `scim.group_renamed` audit rows show a SCIM origin, i.e. no `via: reconciliation`),
   created_at, updated_at; plus **`group_members`** (group_id, user_id).
 - **`role_mappings`** — entra group id → (namespace_id | null for platform) + role.
+- **`ai_integration`** (single row), **`ai_usage`** and **`ai_results`** — the §22 AI
+  provider connection, its per-call usage log (counts only, never content) and the
+  cached task results (§22.11, §22.13).
+- **`user_feature_uses`**, **`survey_responses`**, **`survey_answers`**,
+  **`survey_daily`** — the §13.10 feedback survey; responses carry **no user
+  reference**.
 - **`impact_areas`** — id, name, active flag. Seeded: **Client, Internal,
   Accelerator**. Platform-admin managed (§14.3); retiring an area keeps it on
   historical items but removes it from the submission form. A **retired** area may
@@ -1494,6 +1530,12 @@ self-reveal and its audit row commit in **one transaction**.
 > update and the audit insert on the pool without a transaction; wrap both in
 > `inTransaction` like the challenge version.
 
+**Survey responses are a different kind of anonymous.** Everything above is
+*masking*: the true author is stored and the API hides it until an audited reveal. A
+§13.10 feedback-survey response is anonymous by **non-storage** — it is written with no
+user reference at all — so there is no identity behind it, nothing to reveal, and the
+reveal actions never apply to it.
+
 ---
 
 ## §10 Editing, withdrawal, deletion
@@ -1569,8 +1611,9 @@ delegated per namespace (contrast §14.2).
 row; **all** of its solutions regardless of status; every comment, like, and follow on
 the challenge and on those solutions; every `attachments` row of the challenge and of
 those solutions — tombstones included; and every `notifications` inbox row and unsent
-`notification_outbox` row targeting any of them; and every `webhook_deliveries` row
-(§12.4) targeting any of them. Before the row goes, if the challenge was featured, the
+`notification_outbox` row targeting any of them; every `webhook_deliveries` row
+(§12.4) targeting any of them; and every §22 `ai_results` row (triage notes, discussion
+summaries) of any of them. Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
 a **solution** removes the same subtree rooted at that solution and leaves the parent
 challenge standing. Any
@@ -2744,7 +2787,8 @@ visible again; latest activity (newest first, any status — fixing the legacy
 **switch**, below, followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
-flip and inline-error revert).
+flip and inline-error revert), followed by the §13.10 **Feedback** section (*Ask me for
+feedback* switch and *Give feedback now*).
 Other users' profiles show display name, department, job title, **office location**,
 photo, and their **non-anonymous** org-visible contributions. "Org-visible" is the full
 §4.3 test that an arbitrary authenticated viewer would pass, applied to **both** the item
@@ -2874,7 +2918,8 @@ via the account menu (§2.2), positioned above **What's new**.
   `/quick-start` as soon as the `me` resource has loaded on first page load — taking
   priority over a deep-link `callbackUrl`. The target route may begin rendering for a
   moment before the redirect; that is accepted. A **"Continue to InnoBox"** action on the page sets
-  `quick_start_seen_at = now()` (via the `me` resource, §16) and navigates to `/`
+  `quick_start_seen_at = now()` — and, in the same statement, stamps the §13.9 What's new
+  marker at the server's `APP_VERSION` — (via the `me` resource, §16) and navigates to `/`
   (Home dashboard, §13.2); the redirect never fires again for that user afterward.
 - **Manual re-access:** the account-menu link navigates to `/quick-start` as an
   ordinary page — no redirect logic, and visiting it this way never touches
@@ -3052,13 +3097,644 @@ Top to bottom, in a fixed max-width (~280 px) card:
   namespace, role or count data, so it cannot leak restricted items — which is why
   those were excluded from its contents above.
 
+### §13.9 What's new (release notes & the update notice)
+
+> **⚠ GAP-59 · new feature:** the **update notice** below does not exist yet. Build:
+> migration `0036_whats_new_seen.sql` (the two `users` columns and the one-time rollout
+> snapshot); a pure, dependency-free `lib/whats-new.ts` (strict `x.y.z` parse/compare,
+> the trigger rule, the missed-entries selector, the `since` resolver); the
+> `POST /api/me/whats-new-seen` route and `markWhatsNewSeen` store (guarded UPDATE);
+> `whatsNewSeenVersion` and `whatsNewSinceDate` on `GET /api/me`; the quick-start
+> `PATCH /api/me` also stamping the marker; `components/WhatsNewNotice.tsx` rendered by
+> AppShell with its CSS on the §2.2 tokens; the dev/e2e seam. Tests as listed at the end
+> of this section. Ships as its own minor release.
+
+> **⚠ GAP-60 · new feature:** the `/whats-new` **page** changes below (the read receipt,
+> the "New since your last visit" highlighting, the **current** label) are not built; the
+> page is a static server component today. Keep the server `page.tsx` for its metadata
+> and add a client child for everything that reads `/api/me` or the query string.
+
+> **⚠ GAP-61 · new feature:** the changelog **integrity unit test** does not exist
+> (`CHANGELOG[0].version === APP_VERSION`; every version strict `x.y.z`, unique, and
+> strictly descending; every date a valid `YYYY-MM-DD`). The notice depends on these
+> properties, so the test lands with GAP-59.
+
+> **⚠ GAP-67 · new feature:** the **Coming soon** teaser below does not exist. Build
+> `app/whats-new/upcoming.ts` (the hand-maintained list), the greyed-out section at the
+> top of `/whats-new`, its audience filter, and the spec-sync unit test that ties the
+> list to this document's open new-feature markers. Can ship with GAP-60 or on its own
+> (minor release).
+
+Every release reaches every user. The **What's new** page lists the full shipped
+history, and a small **update notice** tells a returning user that something changed
+since they last acknowledged it — and lets them jump straight to exactly what they
+missed.
+
+#### The page — `/whats-new`
+
+- **Content.** A list of every `CHANGELOG` entry (`app/whats-new/changelog.ts`, the
+  canonical shipped history, newest first — §17): version chip, date, summary. Dates are
+  UTC calendar dates (`YYYY-MM-DD`) shown **verbatim** — release stamps, not timestamps,
+  so they never pass through `useDateFmt()` (converting a bare date would shift it). The
+  entry equal to the running `APP_VERSION` carries a small **"current"** label.
+- **Summary length** is a soft guideline, not a rule: **2–3 sentences (≈ 350
+  characters)** — what changed, in plain language, plus any action the user must take.
+  Nothing enforces it in code; existing entries are left as they are (the file is
+  append-only history).
+- **Routes in.** The account menu (§2.2), the colophon version (§2.2), the update
+  notice's link (below), and a typed URL. Auth-required like every page.
+- **Read receipt.** On mount the page stamps the marker at the client `APP_VERSION`
+  (`POST /api/me/whats-new-seen`, below) and closes any open update notice in the same
+  tab, whichever route brought the user here.
+- **"New since your last visit."** The entries the user **missed** are **highlighted** —
+  a left accent border, the `--accent-soft` row fill, and a **"New"** tag — and grouped
+  above a divider labelled **"New since your last visit"**; every older entry follows
+  below it, unhighlighted. Which entries count as missed is resolved in this order:
+  1. the **`?since=<version>`** query parameter, when present and valid: every entry with
+     `version > since` (`0.0.0` is valid and means "all of them");
+  2. otherwise the user's marker **as read before the page's own mount stamp**: every
+     entry with `version > marker`;
+  3. otherwise, while the marker is null, the rollout boundary date: every entry dated
+     **on or after** `whatsNewSinceDate` (below).
+
+  If none of these yields a boundary, or the boundary leaves no missed entry, the page
+  renders plainly — no divider, no highlight. `since` is a version string, not a
+  credential; it may live in the URL and is never written to presence (§14.5 keeps the
+  page's static label).
+
+#### Coming soon — what's next, greyed out
+
+The page opens with a **"Coming soon"** section, above the release list, that teases the
+features this specification already defines but that have **not shipped yet** — so users
+see where InnoBox is heading.
+
+- **Source of truth.** A hand-maintained, client-safe list in
+  `app/whats-new/upcoming.ts`, beside the changelog: `UPCOMING: { ids, title, teaser,
+  audience }[]`, in the order to display. `ids` lists the open **new-feature** markers in
+  this document that the entry covers — one teaser may cover a feature's several markers
+  (e.g. `["GAP-59", "GAP-60", "GAP-61"]` for this very section) — and is internal only,
+  **never rendered**. `title` is a short user-facing name (*"Have your say"*), `teaser` one or two
+  plain sentences on what it will do for the user. `audience` is `everyone`, `admins`
+  (platform or namespace admins) or `platform_admin`; an entry is shown only to viewers
+  whose resolved roles match, so admin-only tooling is teased only to the people who will
+  use it.
+- **Kept in sync with the spec, by test.** A unit test reads `INNOBOX_SPEC.md` and
+  `ENTRA_AUTH_SPEC.md` and fails when an `UPCOMING` id has no open
+  `⚠ GAP-nn · new feature` marker, or when an open new-feature marker belongs to no
+  `UPCOMING` entry or to more than one. An entry whose ids have all closed must go. Since a feature's marker is deleted in the same commit that ships it (see the
+  preamble), shipping a feature **forces** its teaser out — and its changelog entry
+  announces it instead — while specifying a new feature **forces** a teaser in. Code-fix
+  markers are never teased.
+- **Look — deliberately greyed out.** A section heading **"Coming soon"** with the
+  sub-line *"Planned and specified, not available yet. Plans can change."*; each entry is a
+  row like a release row but muted: text in `--muted`, a **dashed** `--line` border, no
+  accent, a neutral **"Coming soon"** chip in place of the version chip, and **no date,
+  no version and no ETA** — nothing that reads as a promise. Rows are not links and not
+  focusable; the section is a plain list (`aria-label="Coming soon"`). Hidden entirely
+  when no entry applies to the viewer.
+- **Copy rules.** Titles and teasers follow the §21.9 rule (no `§`, no marker ids), name
+  no person, item or namespace, and describe the feature in user terms — they are product
+  copy, written when the feature is specified.
+- **Not in the notice.** The §13.9 update notice lists only shipped releases; teasers
+  appear on the page alone.
+
+#### The update notice
+
+- **Marker.** `users.whats_new_seen_version` (nullable text, a strict `x.y.z` version):
+  the version the user has **acknowledged** — dismissed the notice for, opened the page
+  on, or finished Quick start on — never the version they were merely shown. `null` means
+  never stamped; a stored value that is not strict `x.y.z` is treated as `null`.
+- **Rollout boundary.** `users.whats_new_since_date` (nullable `date`): a **one-time**
+  snapshot the migration takes for every existing row — the UTC calendar day of the
+  user's last activity (`last_seen_at::date`, §14.5), or null when there is none. It is
+  read **only while the marker is null**, so that the first notice after this ships can
+  still say what an existing user missed; the first stamp clears it. It is a `date`, not a
+  `timestamptz` — a deliberate carve-out from §2.1 invariant 10, because it is compared
+  against the changelog's calendar dates. The marker itself is **not** back-filled: every
+  existing, onboarded user sees the notice once on their next page load.
+- **Trigger rule — every release.** A pure function
+  `whatsNewAction(seen, current, quickStartSeen)` → `"show" | "none"`, evaluated
+  **client-side in AppShell** once the `me` resource has loaded, against the **client
+  bundle's** `APP_VERSION` (the constant the page shows, so the notice can never name a
+  version the page doesn't list):
+  - `"none"` while `quickStartSeen` is false (the §13.7 gate owns that load, and finishing
+    Quick start stamps the marker — a brand-new user never sees the notice for the
+    version they onboarded on); when `current` is not strict `x.y.z`; or when `seen` is
+    not lower than `current` (a **rollback** or a **stale cached bundle** shows nothing
+    and never touches the marker).
+  - `"show"` when `seen` is null, or is lower than `current` — **whatever the size of the
+    change**: a patch release notifies exactly like a minor or major one. There is no
+    silent advance. Several releases skipped in a row still produce **one** notice.
+- **Missed entries** (shared with the page's rule above): with a valid marker, every entry
+  with `version > seen`; with a null marker, every entry dated on or after
+  `whatsNewSinceDate`; with neither, the current version's entry alone. Newest first.
+- **The card.** A floating card — `.update-notice`, `role="status"` (a polite live
+  region: it announces itself but **never takes focus**; no focus trap, no Escape
+  handling), portaled to the end of `<body>`, `data-testid="whats-new-notice"`, owned by
+  **AppShell** so it survives client-side navigation and, because it is stamped only on
+  dismissal, reloads and new tabs too. It is distinct from the transient bottom-centre
+  `.toast` pill. Top to bottom:
+  - **Heading** — *"What's new in"* followed by the client `APP_VERSION` as a small
+    monospace version chip, and a **✕** (`<button aria-label="Dismiss">`) in the top-right
+    corner, reachable by Tab.
+  - **Excerpt** — the missed entries' summaries, newest first, muted text, **at most 3**;
+    the cap bounds the **number** of entries, never their length. Long summaries
+    **scroll, never truncate**: no clamp, no ellipsis, no fade. The list alone is the
+    scroll region (`overflow-y: auto`, `min-height: 0`), with the heading pinned above it
+    and the link pinned below, so dismissal never needs scrolling. Its scrollbar is thin
+    and always visible while the list overflows. Only while it actually overflows
+    (`scrollHeight > clientHeight`, re-checked on resize) does the list get
+    `tabindex="0"` and `aria-label="Release notes"`, making the Tab order ✕ → list → link.
+  - **Link** — **"See what's new since your last visit (N)"**, where N is the number of
+    missed entries (all of them, not just the three shown). It opens
+    `/whats-new?since=<v>`, where `v` is the version of the newest entry that was **not**
+    missed — or `0.0.0` when every entry was — so the page highlights exactly the entries
+    this notice counted, even though following the link has just stamped the marker.
+    When the only missed entry is the current one, the link reads **"See what's new"**
+    and the page shows that single entry highlighted.
+  - **Dismissal paths are exactly two:** the ✕ and the link. Both stamp. Clicking the card
+    body, clicking outside it, or pressing Escape does **nothing** — the notice is a
+    status, not a dialog, so it deliberately does not follow the §13.8 Escape convention.
+- **Stamp endpoint.** `POST /api/me/whats-new-seen {version}` — auth-required (**401**
+  otherwise), Origin-checked like every mutation (§2.4), `mutation` rate-limit bucket.
+  `version` must be strict `x.y.z` and **not greater than the server's `APP_VERSION`** (a
+  client cannot claim the future) — **400** otherwise. It writes `version` only when the
+  stored value is null, invalid, or **strictly lower** — read, compare, then one UPDATE
+  guarded on the value just read, so concurrent stamps cannot leapfrog and the marker
+  never regresses — and nulls `whats_new_since_date` in the same statement. Repeat calls
+  are no-ops. Returns `{ previous, current }`. **Not audited** (a display marker, like
+  `quick_start_seen_at`) and **silent for presence** (§14.5). Called on dismissal (never
+  on appearance — a reload before dismissing shows the notice again), by the page on
+  mount, and — server-side, not through this route — by the §13.7 "Continue to InnoBox"
+  `PATCH /api/me`, which sets the marker to the **server** `APP_VERSION` when it is null
+  or lower. The client closes the notice optimistically; a failed stamp is neither
+  retried nor surfaced, and the notice simply returns on the next load.
+- **Placement & style.** The `.card` tokens (surface, line, radius, shadow) with a left
+  `--accent` border. Desktop: bottom-right, max-width ≈ 380 px, offset from both edges.
+  Mobile (≤ 560 px): a full-width bottom sheet. Height is capped at `60vh` on both: the
+  card is a column flexbox whose heading and link are fixed and whose list is the only
+  flexible child, so the card always fits the viewport. A slide-up entry animation, none
+  under `prefers-reduced-motion`. Layering: above page content and the sidebar, **below**
+  every popover (§2.2), the mobile notification sheet, the toast and native dialogs. It
+  is **hidden (not unmounted)** while the mobile nav drawer (≤ 880 px) or the mobile
+  notification sheet is open. The account menu simply overlaps it.
+- **Not a popover.** The notice is anchored to no trigger and does not carry
+  `.menu-pop`; it is listed among the §2.2 popover exceptions.
+- **Loading.** The shell imports `CHANGELOG` **lazily**, only when the rule returns
+  `"show"`, so the summaries stay out of the shell bundle on every other load.
+- **Multiplicity.** At most one notice per page load. Two tabs may each show it;
+  dismissing in one does not close the other until it reloads (the second stamp is a
+  no-op). Accepted.
+- **Coexistence.** Nothing else floats over it: the §13.10 feedback survey never opens
+  while the notice is showing or due, and the §13.7 gate always has priority.
+- **Erasure (§3)** nulls both columns. **Roles are irrelevant:** every authenticated user
+  gets the same behaviour. **Visibility and anonymity are untouched:** the content is the
+  static changelog — no challenge, user or namespace data — and changelog summaries must
+  never describe a restricted item (an authoring rule, §17).
+- **Dev / e2e seam.** Dev sign-in (§2.3) stamps the marker at `APP_VERSION` on **every**
+  dev sign-in, so ordinary e2e runs and screenshots are never interrupted; a dev-only
+  field on the dev sign-in panel seeds a lower marker (or none, plus a rollout boundary
+  date) for the specs that exercise the notice. It lives behind the same production guard
+  as the rest of dev auth.
+
+#### Tests
+
+- **Unit** (`lib/whats-new.test.ts`): the trigger rule — null, patch-only, minor, major,
+  equal, rollback, invalid version, quick start not seen; the missed-entries selector —
+  marker, rollout date (on-or-after), neither; the excerpt cap of 3 and the full count N;
+  the link's `since` (newest unmissed version, `0.0.0` when all were missed); the page's
+  boundary resolution order. Plus the GAP-61 changelog integrity test and the GAP-67
+  spec-sync test (both directions), and the `UPCOMING` audience filter per role.
+- **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →
+  unchanged with `previous == current`, invalid or future version → 400, unauthenticated
+  → 401, `whats_new_since_date` cleared on stamp; Continue on Quick start sets the marker;
+  erasure nulls both columns; the migration's one-time snapshot (and that re-running it
+  does not move the boundary).
+- **e2e** (`e2e/whats-new-notice.spec.ts`): with the marker seeded one release below, the
+  notice appears with the expected heading and excerpt, **is still there after a
+  reload**, a click on its body leaves it open, ✕ closes it and a reload no longer shows
+  it; a second run follows the link and lands on `/whats-new?since=…` with exactly the
+  missed entries highlighted above the divider; a third opens the page from the account
+  menu and sees the highlighting from the marker fallback while the notice is gone; a
+  rollout run (null marker, boundary date seeded) shows the count and highlighting
+  derived from the date; overflow at 1280×600 and at ≤ 560 px — the card lies inside the
+  viewport, the list scrolls and carries `tabindex="0"`, and the ✕ and link stay visible;
+  Quick start's Continue leaves no notice behind; the page shows the **Coming soon**
+  section greyed out above the releases, and an `everyone` viewer does not see
+  `platform_admin` entries.
+
+### §13.10 Feedback survey ("Have your say")
+
+> **⚠ GAP-62 · new feature:** the **random survey** does not exist. Build: migration
+> `0037_feedback_survey.sql` (the `users` columns, the four tables, the grants, the
+> backfill, the launch stagger and the `survey_enabled` setting, below); the client-safe
+> catalog module `@innobox/shared/survey` (`SURVEY_VERSION`, questions, features); the
+> server-side eligibility predicate, roll and offer logic; the `me/features/used`,
+> `me/survey/check`, `me/survey/close` and `me/survey/responses` routes; `openSurvey` and
+> `surveysEnabled` on the `me`/`profile` resources; the shared `StarInput` and the
+> AppShell-owned survey card; the account-menu **Take the survey** entry and the profile
+> **Feedback** section; the first-use reports from the ten features' success paths. Tests
+> as listed in this section. Ships as its own minor release, together with GAP-65.
+
+> **⚠ GAP-63 · new feature:** the **on-demand survey** (*Give feedback*, the profile
+> button and the colophon's **Have your say**) does not exist. Build:
+> `users.survey_self_shown_at`, the `survey_daily` `_self` counters, the `self` trigger
+> (folded into the same migration if both ship together, otherwise its own), the
+> `me/survey/start` route, `selfSurvey` on the `me` resource, the card's feature picker,
+> and the three entry points. Ships as its own minor release after GAP-62.
+
+> **⚠ GAP-64 · new feature:** the **survey privacy hardening** is not in place, because
+> nothing exists yet: the `me/features/used` and `me/survey/*` routes must write their
+> §14.7 system-log rows with **no `user_id` and no actor snapshot**, the §2.4 rate-limit
+> warning for the `survey` bucket must omit the user id, and every survey route must stay
+> silent for presence (§14.5). Lands with GAP-62 and is pinned by its tests.
+
+An occasional, **anonymous** in-app survey asks signed-in users how satisfied they are
+with InnoBox in general and with **one feature they have just started using**. It floats
+in the corner and can be closed at any time. It appears **at random, at most once every
+30 days** per user; users opt out with a profile switch, and platform admins can switch
+it off platform-wide. Users can also **ask for the survey themselves** — *Have your say*
+— at most once every 7 days. The results are shown to platform admins only (§14.11).
+
+Anonymity here means **non-storage**, not masking: a response is stored **without any
+reference to its author**, so — unlike an anonymous challenge (§9) — there is no true
+identity behind it and **no reveal applies**.
+
+#### Semantics (the random prompt)
+
+- **Trigger: the first use of a feature.** A fixed **feature catalog** (below) names the
+  features that can trigger a survey. The first time a user performs a feature's defining
+  action, that first use is recorded (`user_feature_uses`). **Only a fresh first use
+  counts.** Repeat uses never trigger, and a first use made while the user is ineligible
+  is recorded and **consumed** — it never triggers later.
+- **Eligibility** — **all** of:
+  - the platform switch `survey_enabled` is on (§14.11);
+  - the user is `active` and not erased (`scrubbed_at IS NULL`);
+  - the user has finished Quick start, and `quick_start_seen_at` is **at least 14 days
+    ago** (the grace period);
+  - `users.surveys_enabled` is true (the opt-out, below);
+  - `users.survey_last_shown_at` is null **or at least 30 days ago** (the floor);
+  - no **on-demand** offer is open (below);
+  - the browser can show the survey right now — **`canShow`** (below).
+- **The roll.** An eligible fresh first use rolls **1 in 3**, **server-side**, so the
+  client cannot steer it and a reload cannot re-roll. A lost roll consumes the trigger.
+- **The fallback for long-time users.** Once **90 days** have passed since
+  `survey_last_shown_at` (or, never shown, since `quick_start_seen_at`), **each full page
+  load**, while eligible, also rolls 1 in 3. A fallback survey's feature questions cover
+  **one random feature the user has already used**; a user with no recorded use gets the
+  general questions only.
+- **`canShow`.** The browser reports whether it could display a survey this instant. It
+  is false while the §13.9 **What's new notice** is on screen or due on this load, while
+  the §13.7 Quick start gate is rendering, while a survey card is already open in this
+  tab, and while the mobile nav drawer or the mobile notification sheet is open. A
+  trigger that arrives with `canShow = false` is **not rolled and not carried over**: the
+  first use is recorded and consumed. **What's new always wins.**
+- **Winning opens an offer.** In one guarded `UPDATE` — the eligibility predicate
+  re-checked in its `WHERE`, so two tabs or two requests can never both win — the server
+  stamps `survey_last_shown_at = now()` and stores the **open offer** in
+  `users.survey_offer`, and returns it; the browser shows the card at once. The 30-day
+  floor runs from this stamp, whatever the user then does.
+- **Closing is "not now".** The ✕ closes the card; the offer stays open, and **Take the
+  survey** appears (below) until it expires, so the user can answer later without being
+  asked again. Closing never restarts or extends anything.
+- **Expiry.** An open offer ends when the user submits it, **30 days** after it was
+  shown, when the user opts out, when the platform switch goes off, or when
+  `SURVEY_VERSION` changes in a release (an older-version offer is dropped on read).
+  Expiry clears `survey_offer`; `survey_last_shown_at` is kept.
+- **Audience.** Every signed-in user, **platform admins included** (their answers carry
+  the `admin` segment). SCIM, the worker and other non-browser callers never see a
+  survey.
+
+#### The catalog (`@innobox/shared/survey`)
+
+Questions and features are **hard-coded and versioned** in a client-safe shared module
+exporting `SURVEY_VERSION` (starting at `1`); a change needs a release. Any change bumps
+`SURVEY_VERSION`; a question's **key is permanent** — a change of meaning needs a new
+key and retires the old one (typo fixes may keep it); retired keys' answers stay in the
+results, tagged *retired*.
+
+- **General questions** — the four below in every survey, plus **one rotating question**
+  picked at random when the offer is created and stored in it. All 1–5 stars.
+
+  | Key | Question |
+  |---|---|
+  | `general.overall` | Overall, how satisfied are you with InnoBox? |
+  | `general.discovery` | How easy is it to find challenges that interest you? |
+  | `general.followthrough` | How confident are you that ideas raised here get reviewed and acted on? |
+  | `general.recommend` | How likely are you to recommend InnoBox to a colleague? |
+  | `rotating.performance` | How happy are you with how fast InnoBox feels? |
+  | `rotating.look` | How much do you like the way InnoBox looks and feels? |
+  | `rotating.docs` | How helpful are Quick start and the in-app guidance? |
+  | `rotating.informed` | How well does InnoBox keep you informed about what happens to your challenges and solutions? |
+
+- **Feature questions** — two, about the offer's feature, its label substituted:
+
+  | Key | Question |
+  |---|---|
+  | `feature.useful` | How useful is {feature} for your work? |
+  | `feature.ease` | How easy was {feature} to use? |
+
+- **Free text** — one optional box, *"Anything you'd change, fix or add?"*, ≤ 2 000
+  characters.
+- **The feature catalog** — a key, a label, and the **defining action** that records the
+  first use. The browser reports the action only after it **succeeds**, and the report
+  carries **only the feature key** — never an item id, so a first use can never be tied
+  to a particular (possibly anonymous) challenge or solution.
+
+  | Key | Label | First use = | Backfill source (migration) |
+  |---|---|---|---|
+  | `submit_challenge` | submitting a challenge | a challenge created (§6.1) | `challenges.author_id` (anonymous ones included — the true author is stored, §9) |
+  | `propose_solution` | proposing a solution | a solution created (§6.2) | `solutions.author_id` |
+  | `comment` | commenting | a comment posted (§10.2) | `comments.author_id` (soft-deleted included) |
+  | `like` | liking | a like added | `likes.user_id` |
+  | `follow` | following items | an **explicit** follow toggle (§12.3 — the automatic follows of authors and assignees don't count) | `follows.user_id`, excluding items the user authored or is assigned to |
+  | `attachments` | attaching files | an upload completed (§11) | `attachments.uploaded_by` |
+  | `search` | search | a non-empty topbar or `/search` query (§13.4) | none — starts empty |
+  | `leaderboard` | the leaderboard | `/leaderboard` opened (§13.3) | none — starts empty |
+  | `review` | moving items through review | an **enforced** (non-override) status change by a committee member or assignee (§7.2, §8.2) | `challenge.status_changed` / `solution.status_changed` audit rows by actor with `override = false` |
+  | `triage` | the triage queue | `/admin/triage` opened (§14.1) | `users.triage_seen_at` (approximate) |
+
+- **Detection is client-reported, on purpose.** Only the browser knows `canShow`. A forged
+  report can affect only the caller's own survey, so the endpoint validates the key and
+  rate-limits, and needs nothing more. Page-view features (`leaderboard`, `triage`, a
+  `search` arriving in the URL) **queue** their report until the shell has made its
+  §13.9 decision, so `canShow` is evaluated against the real state. Each tab reports a
+  feature at most once per browser session (`sessionStorage`); the server records it
+  only once anyway.
+
+#### The survey card
+
+- **Owned by AppShell and portaled to `<body>`**, like the §13.9 notice, so it survives
+  client-side navigation; `data-testid="survey-card"`. Not a popover (it is listed among
+  the §2.2 exceptions).
+- **Placement & style.** The notice's card language (`.card` tokens, left `--accent`
+  border), bottom-right, max-width ≈ 440 px; a full-width bottom sheet on mobile
+  (≤ 560 px). **Height cap `80vh`**: header and footer pinned, the question list the only
+  scrolling child (thin, visible scrollbar). Slide-up entry, none under
+  `prefers-reduced-motion`. The notice's layer; hidden (not unmounted) while the mobile
+  nav drawer or notification sheet is open.
+- **Accessibility.** `role="dialog"`, **`aria-modal="false"`** (non-modal — the page stays
+  usable), `aria-labelledby` the heading. It **never takes focus on appearance**;
+  **Escape** closes it only when focus is inside it.
+- **Content, top to bottom:**
+  - **Header** — *"How are we doing?"*, the sub-line *"About a minute. Anonymous: your
+    name isn't stored with your answers. Answer as many as you like."*, and a **✕**
+    (`aria-label="Close survey"`).
+  - **"InnoBox overall"** — the four general questions and the rotating one.
+  - **"About {feature}"** — the two feature questions; omitted when the offer has no
+    feature.
+  - **Free text** — with a live `N / 2000` counter; input beyond 2 000 is blocked.
+  - **Footer** — **Submit** (disabled until a star is set or the box holds
+    non-whitespace) and a quiet **"Don't ask me again"** link (random offers only).
+- **The star control** — a shared `StarInput` on the §2.2 tokens: `--accent` for set
+  stars, `--faint` at rest, a hover preview; no new token. **Nothing is saved on click**
+  (local form state until Submit); clicking the selected star again **clears** that
+  question, so every question stays optional. Keyboard: each question is a
+  `role="radiogroup"` labelled by its text, with five `role="radio"` stars (roving
+  tabindex; arrows move and select; Space/Enter selects); a visually hidden *"Not
+  answered"* is announced on clear.
+- **Submit** locks the card while in flight (§2.2 submission lock). On success the body
+  reads *"Thanks — your feedback helps shape InnoBox."* and the card closes itself after
+  ~4 s (or on ✕). A **409** (the offer expired meanwhile) shows *"This survey has
+  expired. Thanks anyway!"* and closes. Any other failure keeps the answers and shows an
+  inline error with a retry.
+- **Closing** (✕ or Escape) calls `me/survey/close`, optimistically — a failed call is
+  neither retried nor surfaced.
+- **Multiplicity.** At most one card per tab; two tabs can never both *win* an offer. A
+  second tab reopening the same offer is fine: the first submit wins, the other gets the
+  409 path.
+
+#### "Take the survey"
+
+While an offer is open — random or on-demand — the **account menu** gains **Take the
+survey** as its **first item**, marked with the accent dot; the profile's Feedback
+section shows the same button; and the colophon's **Have your say** reopens it too. Each
+reopens the card with the same questions and feature, **starting blank**, and a
+submission from it carries `via = 'menu'`. All three disappear when the offer ends. The
+`me` resource carries the open offer as `openSurvey`, so the menu needs no extra
+request.
+
+#### On-demand feedback ("Give feedback", "Have your say")
+
+- **Gates.** An on-demand survey **bypasses** the roll, the 30-day floor, the 14-day grace
+  and the random opt-out. It **respects** the platform switch (**409 `surveys_off`**),
+  `active` and not erased, and its own **7-day cooldown**.
+- **The cooldown is stamped on open**: `users.survey_self_shown_at = now()`, never written
+  on submit, so it says nothing about whether or when the user answered. Closing without
+  answering still uses the 7 days. The on-demand cooldown and the random floor are
+  **independent clocks**.
+- **One open offer at a time.** While a random offer is open, `start` returns it
+  unchanged (no stamp, nothing counted). While an on-demand offer is open, no random roll
+  or fallback is made (first uses are recorded and consumed).
+- **The offer** has `trigger: 'self'` and no feature — the **user picks one in the card**:
+  a labelled select heading the question list, *"What would you like to tell us about?"*,
+  with **InnoBox in general** (the default) and every catalog feature in catalog order.
+  Picking a feature adds its two questions; changing or clearing the choice removes them
+  and **discards their stars**. It expires **7 days** after it was opened, on submit, when
+  the switch goes off, or on a `SURVEY_VERSION` change — **not** on the random opt-out.
+  The card has **no "Don't ask me again"** (the user asked for it). The click overrides
+  `canShow`: an on-screen §13.9 notice is hidden **without being stamped** (it returns on
+  the next full load).
+- **Entry points:**
+  - **Profile → Feedback → "Give feedback now"** — a `btn btn-sm` with the helper *"Tell
+    us what you think, any time. Once a week at most."*, shown whatever the random switch
+    says; **disabled** during the cooldown with *"You can share feedback again on
+    {date}."* (`useDateFmt()`); replaced by **Take the survey** while any offer is open;
+    hidden while the platform switch is off. `data-testid="profile-give-feedback"`.
+  - **Account menu → "Give feedback"**, after **What's new** and above **Sign out**;
+    **hidden** during the cooldown, while any offer is open (*Take the survey* is already
+    first), and while the platform switch is off.
+  - **Sidebar colophon → "· Have your say"** — the community line reads *"Powered by the
+    community · Have your say"*, where only *Have your say* is interactive: a
+    `<button type="button">` styled as a brand link, `data-testid="colophon-have-your-say"`.
+    **Signed in and past Quick start only**; hidden (the line reverts to plain *"Powered
+    by the community"*, no separator) while signed out or loading, while the platform
+    switch is off, and during the cooldown — **except** that while an offer is open it
+    **stays** and reopens that offer like *Take the survey*. With no offer open it starts
+    one like *Give feedback*. On mobile the click also closes the nav drawer. The
+    *Created by* line is untouched (§2.2).
+- **Submission** carries **`feature`** (a catalog key or `null`) — **required for a `self`
+  offer and rejected (422) for any other**; the response is stored with
+  `trigger = 'self'`. `via` keeps its meaning.
+- **Self-selection** is accepted and visible: on-demand responses are counted apart from
+  the random funnel and filterable in the results (§14.11). The 7-day cooldown caps one
+  person at about 52 on-demand responses a year — it limits stuffing, it doesn't stop it.
+
+#### Opting out
+
+- **Profile → Feedback** (after the notification preferences, §13.5). Row 1, **Ask me for
+  feedback**, is the §2.2 preference pill switch (On/Off word, on-left travel, optimistic
+  flip, inline-error revert). It governs **random prompts only**. Helper copy — on:
+  *"Now and then, at most once a month, InnoBox asks how it's doing. Answers are
+  anonymous."*; off: *"You won't be asked to take surveys."* Row 2 is **Give feedback
+  now** (above).
+- **Default on** for every existing and new user (the column default).
+- **Instant.** Switching off (`PATCH /api/profile { surveysEnabled: false }`) clears an
+  open **random** offer at once (an open on-demand offer survives). Switching back on
+  does **not** reset `survey_last_shown_at`.
+- **"Don't ask me again"** makes the same change, closes the card and toasts *"Got it —
+  no more surveys. You can turn them back on in your profile."*
+- Not audited, like every profile preference.
+
+#### Response content & segment
+
+Stored on submit in **one transaction**: (1) re-read the open offer — **409
+`no_open_survey`** if none or expired; (2) validate every `question_key` against the
+offer (the four general keys, its rotating key, and the two feature keys only when it
+has — or, for `self`, the user picked — a feature) and every star an integer 1–5 —
+**422** otherwise, or when nothing was answered; (3) insert the `survey_responses` row
+(`answered_on` = the current **UTC date**) and its `survey_answers`; (4) clear
+`survey_offer`; (5) bump the `survey_daily` counters. Free text is trimmed (empty →
+null), stored, and **always rendered as plain text**.
+
+**Segment**, computed server-side at submit from the SCIM-resolved roles (§4,
+invariant 1), highest wins: **`admin`** — a platform admin or a namespace admin of any
+namespace; **`committee`** — a committee member of any namespace; **`member`** —
+everyone else (assignee is per-challenge and folds into `member`).
+
+#### Data model (migration 0037)
+
+- **`user_feature_uses`** — `user_id` (FK → `users`, `ON DELETE CASCADE`), `feature`
+  (text, a catalog key), `first_used_at` (timestamptz, default `now()`); **PK
+  `(user_id, feature)`**; written with `INSERT … ON CONFLICT DO NOTHING` — a fresh insert
+  is a first use.
+- **`users`** gains `surveys_enabled` (`boolean not null default true`),
+  `survey_last_shown_at` (timestamptz), `survey_offer` (jsonb — `{ surveyVersion,
+  trigger: 'feature'|'visit'|'self', feature, rotating, closed }`), and
+  `survey_self_shown_at` (timestamptz).
+- **`survey_responses`** — **no user column and no timestamp**: `id` (uuid,
+  `gen_random_uuid()` — random, so ordering by id reveals nothing), `answered_on`
+  (`date`, the UTC date of submission), `survey_version` (int), `trigger` (CHECK
+  `feature|visit|self`), `feature` (text null), `segment` (CHECK
+  `admin|committee|member`), `via` (CHECK `popup|menu`), `free_text` (text null, CHECK
+  ≤ 2 000 chars). Indexed on `answered_on`. **Immutable** — no UPDATE path; the only
+  delete is the §14.11 admin delete.
+- **`survey_answers`** — `response_id` (FK → `survey_responses`, `ON DELETE CASCADE`),
+  `question_key`, `stars` (smallint, CHECK 1–5); **PK `(response_id, question_key)`**;
+  one row per **answered** question, never a 0.
+- **`survey_daily`** — the funnel counters, aggregate only: `day` (`date` PK), `shown`,
+  `closed`, `submitted`, `submitted_from_menu`, `shown_self`, `submitted_self` (int, not
+  null, default 0), bumped with `INSERT … ON CONFLICT (day) DO UPDATE`. **No user or
+  feature dimension**, so the funnel can never be joined back to a person. On-demand
+  surveys bump only the `_self` columns.
+- **`platform_settings`** gains `survey_enabled` (default true).
+- `answered_on` and `survey_daily.day` are `date`, a deliberate carve-out from §2.1
+  invariant 10 (precedent: the §14.5 `presence_daily` table): a time of day would
+  defeat the anonymity. They are UTC calendar dates and are displayed **verbatim** in the
+  platform's EU/US date order, never converted through a time zone.
+- **Grants to `innobox_app`:** `user_feature_uses` SELECT/INSERT/DELETE;
+  `survey_responses` and `survey_answers` SELECT/INSERT/DELETE, **no UPDATE**;
+  `survey_daily` SELECT/INSERT/UPDATE.
+- **Backfill** `user_feature_uses` from the sources in the catalog table, earliest known
+  timestamp per user × feature.
+- **Launch stagger.** Every existing active, onboarded user gets
+  `survey_last_shown_at = now() − random() × 30 days`, so eligibility spreads over the
+  month after release instead of everyone becoming eligible on day one. Idempotent: it
+  touches only rows whose `survey_last_shown_at` is null and is guarded by a one-shot
+  marker in `platform_settings`, so a re-run never re-staggers. These stamps are not
+  "shown" in the funnel — `survey_daily` starts empty.
+
+#### API
+
+All auth-required (401 otherwise), Origin-checked mutations (§2.4).
+- **`POST /api/me/features/used { feature, canShow }`** → `{ firstUse, survey }` —
+  records the first use, then (fresh insert, eligible, `canShow`) rolls and, on a win,
+  opens the offer. **422** for an unknown key. `mutation` bucket.
+- **`POST /api/me/survey/check { canShow }`** → `{ survey }` — the 90-day fallback;
+  AppShell calls it once per full page load, after the §13.9 decision, only when
+  `canShow` is true and no offer is open. `mutation` bucket.
+- **`POST /api/me/survey/start`** → `{ survey, created }` — the on-demand path: returns an
+  open offer as is (`created: false`), otherwise, in one guarded transaction (user row
+  locked, gates re-checked), stamps `survey_self_shown_at`, stores the `self` offer and
+  bumps `shown_self`. **409 `surveys_off`** / **409 `cooldown` `{ nextAt }`**. New
+  **`survey`** bucket (10 / min).
+- **`POST /api/me/survey/close`** → `{ ok }` — first close of a random offer sets
+  `closed` and bumps `survey_daily.closed`; later closes and `self` closes bump nothing.
+  **409 `no_open_survey`** when nothing is open. `mutation` bucket.
+- **`POST /api/me/survey/responses { answers: { [questionKey]: 1..5 }, freeText?, via,
+  feature? }`** → `{ ok }` — as above. **409 `no_open_survey`**, **422** on validation.
+  `survey` bucket.
+- **Offer payload:** `{ surveyVersion, trigger, feature: { key, label } | null,
+  questions: [{ key, text, section: 'general' | 'feature' }], shownAt, expiresAt }`, the
+  questions resolved server-side from the catalog.
+- **`GET /api/me`** carries `openSurvey` (the offer payload or null — null whenever the
+  switch is off) and `selfSurvey` (null while the switch is off, else `{ nextAt }`, null
+  when a survey can start now). **`GET|PATCH /api/profile`** carries `surveysEnabled`.
+  AppShell invalidates its cached `me` after start, close, submit and opt-out.
+
+#### Governance, privacy & lifecycle
+
+- **Never audited or logged with an identity.** Opening, closing, first uses and
+  submissions write **no audit row**. The survey routes write their §14.7 system-log
+  rows (a 409/422/429) **without `user_id` and without the actor snapshot**, and the
+  §2.4 rate-limit warning for these routes omits the user id: a named, exact-time row
+  next to a date-only response would otherwise identify it. Every survey route is
+  **silent for presence** (§14.5).
+- **Visibility (invariant 2)** — features are product areas, never challenges or
+  namespaces; nothing in a survey names an item.
+- **Invariant 1** — untouched: the segment reads the resolved roles; nothing in RBAC
+  reads survey data.
+- **GDPR erasure (§3)** deletes `user_feature_uses`, resets `surveys_enabled` to its
+  default, and clears `survey_last_shown_at`, `survey_offer` and
+  `survey_self_shown_at`. `survey_responses` are **untouched** — they reference no one.
+- **Deactivation** keeps all state; an inactive user is never eligible.
+- **Retention** — responses are kept indefinitely; the only removal is the §14.11 admin
+  delete.
+- **What "anonymous" guarantees.** It holds against **the application** — no screen, API
+  payload, export, audit row or log line links a response to a person, and the size-5
+  threshold (§14.11) stops filters from singling one out. It is **not** a guarantee
+  against someone with direct database access, who could match a response's date,
+  segment and feature against `survey_last_shown_at` in a small population; and **free
+  text can identify its author** whatever the storage. Both are accepted. Before
+  enabling the survey, operators may want their privacy officer or works council to
+  review it, as for §14.5.
+- **Accepted trade-offs.** First uses are client-reported (a user can forge only their
+  own); a trigger that lands on a blocked moment is consumed for good (the 90-day
+  fallback keeps nobody out forever); features without history (`search`,
+  `leaderboard`) are "first used" again after release (the stagger absorbs it); a
+  `SURVEY_VERSION` change drops open offers; the funnel cannot be filtered by segment or
+  feature — the cost of keeping it free of per-user rows.
+
+#### Tests
+
+- **Unit:** the eligibility predicate (opt-out, switch, inactive, scrubbed, quick start
+  not seen, the 14-day grace, the 30-day floor, the 90-day fallback, `canShow`, an open
+  `self` offer); the roll with an injectable RNG; offer composition (general + rotating
+  + feature, no-feature fallback, `self`); response validation (keys against the offer,
+  star range, empty submission, free-text cap, `feature` required for `self` and
+  rejected otherwise); segment derivation; the on-demand gate (switch off, cooldown at 6
+  vs 7 days, bypassed opt-out/grace/floor); catalog integrity (unique keys, every
+  feature labelled, retired keys resolvable); presence silence of the survey routes;
+  the system-log masking of the survey routes.
+- **Integration (`*.dbtest.ts`):** `features/used` — first use vs repeat, ineligible
+  first uses consumed, `canShow = false` never rolled, exactly one of two concurrent
+  winners; `survey/check` at 89 vs 90 days and the used-feature pick; close bumps once;
+  submit — the response row has **no user reference**, the offer is cleared, 409 after
+  expiry/opt-out/switch-off, 422 on bad keys; `start` — returns an open offer unchanged,
+  stamps and counts once under concurrency, 409 `cooldown`/`surveys_off`; no random roll
+  while a `self` offer is open; the opt-out keeps a `self` offer and clears a random one;
+  erasure clears the per-user state and leaves responses intact; the migration's
+  backfill, stagger and idempotency.
+- **e2e** (`e2e/survey.spec.ts`), with a forced-win RNG seam behind the dev-auth
+  production guard: a first-use action shows the card; ✕ closes it and *Take the survey*
+  is in the menu; reopening and submitting shows the thank-you and the menu item goes;
+  *Don't ask me again* flips the profile switch to Off; with the §13.9 notice due, a
+  first-use action produces no survey; at mobile width the card is a bottom sheet with ✕
+  and Submit visible; *Give feedback now* opens the on-demand card, a picked feature
+  shows its questions, and after submit the button is disabled with the next date; the
+  colophon's *Have your say* is absent signed out, opens the card signed in, survives a
+  close and reopens the same offer. Dev sign-in sets `surveys_enabled = false` by
+  default so other specs and screenshots stay free of the card, and the
+  `discovery.spec.ts` colophon assertion keeps matching the *Created by* line.
+
 ---
 
 ## §14 Administration
 
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
 admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
-system log §14.7, channel webhooks §12.4, identity sync §14.10 — are hidden from
+system log §14.7, channel webhooks §12.4, identity sync §14.10, survey results
+§14.11 — are hidden from
 namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform settings
 (§14.3), the audit browser (§15), and the system log (§14.7) — each render a
 **breadcrumb** above the page title, via a shared component: **Administration** (a link back to `/admin`) › *current
@@ -3203,6 +3879,9 @@ delegated per namespace.**
   §12.1), author the branded HTML wrapper, test-send.
 - **Channel webhooks** — per-namespace Teams Workflows / JSON webhooks, managed on their
   own Administration console card (§12.4).
+- **AI provider** — the §22 connection to Open WebUI or OpenAI: provider, base URL, API
+  key (write-only), model, test, enable, the restricted-content and per-task switches,
+  timeouts and display name (§22.4).
 - **Featured challenges** — the maximum number of challenges pinned to the Home
   dashboard at once (§13.2): integer, default **3**, range **1–6**. Lowering it unpins
   nothing; new pins are refused until the count is below the new limit. Audited as
@@ -3415,7 +4094,12 @@ console directly under Audit, never shown to namespace admins, and the API answe
   appear under *All* (and *5xx* when ≥ 500). The public CSP report sink
   (`/api/csp-report`, §2.4) is **excluded entirely** — none of its responses, 413 and
   429 included, is ever recorded. It is unauthenticated, and recording it would give
-  anyone who can reach the proxy a write path into this table.
+  anyone who can reach the proxy a write path into this table. **AI provider runtime
+  failures** (§22.6) are recorded at most once per 15 minutes platform-wide, `source` =
+  the calling process, with no user and no item number. The §13.10 survey routes
+  (`me/features/used`, `me/survey/*`) are recorded **without `user_id` and without the
+  actor snapshot**, so no named, exact-time row can sit beside a date-only survey
+  response.
 - **Capture.** A `withSystemLog(routeTemplate, handler)` wrapper records, in the
   route's own context, both the error responses a handler returns and the errors it
   throws (stack to stdout, a JSON 500 to the client, a 500 row here). Next's
@@ -3516,6 +4200,99 @@ group object ids, no personal data (unlike the §14.5 presence read).
   lastRejectedScimRequestAt, state: "ok" | "nothing_synced" | "users_no_groups" }`
   (timestamps UTC ISO or `null`).
 
+### §14.11 Survey results (platform admin)
+
+> **⚠ GAP-65 · new feature:** the **Survey results** card does not exist. Build: the
+> `admin/survey/summary`, `admin/survey/comments` and `admin/survey/responses/:id`
+> routes with the server-side size-5 withholding and the current-day exclusion; the
+> `survey_enabled` setting on `admin/settings`; an **`action` slot** on the console's
+> `AdminCard` (its header is a `<button>`, so a switch cannot nest inside it); the card
+> itself with its hand-rolled SVG trend; the `survey.*` pattern on the Admin audit chip.
+> Ships with GAP-62.
+
+> **⚠ GAP-66 · new feature:** the results' **Source** filter, the *Self-initiated* funnel
+> line and the feed's *Self-initiated* tag (the on-demand parts) are not built. Ship with
+> GAP-63.
+
+A collapsible **"Survey results"** card in the Administration console's platform-admin
+section, after **Currently online** (§14.5). **Platform admins only** — the API answers
+**403** to anyone else, namespace admins included; free text could otherwise leak
+across namespaces.
+
+- **Header.** The title, a compact *"N responses in range"*, and the **`survey_enabled`**
+  platform switch (the §2.2 preference pill) in the card's **action slot** — beside the
+  collapse button, never inside it, and usable while the card is collapsed. The switch
+  is audited as `settings.survey_enabled_changed` (`after: { enabled }`). **Off:** no
+  offer is created; open offers count as expired (the menu items, profile button,
+  colophon link and any open card disappear on the next `me` read); submissions answer
+  **409 `no_open_survey`**; results stay visible under the note *"Surveys are off.
+  Showing responses collected until {last date}."* **On again:** nothing is backfilled.
+- **Collapse state** follows the console's convention: expanded by default, the choice
+  persisted to `localStorage` per browser.
+- **Range.** Its own **7d / 30d / 90d / All** toggle (the §14.5 ranges). **The current
+  UTC day is always excluded** — results lag by one day — so a fresh response can never
+  be lined up with the people the §14.5 card shows online right now.
+- **Filters:** **Segment** (All / Admin / Committee / Member), **Feature** (All features /
+  each catalog feature with responses in range) and **Source** (All / Prompted /
+  Self-initiated — *Prompted* covers `feature` and `visit`). They apply to the question
+  cards, the trend and the feed; **the funnel is unfiltered** (it has no such
+  dimensions).
+- **Minimum group size: 5, applied server-side.** Any figure computed over **fewer than 5
+  responses** is withheld — per question card (counting responses that answered it), per
+  trend bucket (left as a gap), and for the free-text feed as a whole — and shows *"Not
+  enough responses yet (fewer than 5)."* A withheld figure never reaches the browser.
+- **Data fetching.** The summary loads on mount (it feeds the header count); the feed
+  loads on first expand. Both reload on range or filter change and on the console's
+  refresh. Nothing polls.
+- **Contents:**
+  1. **Funnel** (range-bound, unfiltered) — **Shown**, **Closed on sight**, **Submitted**
+     (*"… of which later, from the menu"*) and the **response rate** (submitted ÷ shown);
+     beside it the current **opted out** count (users with `surveys_enabled = false`, not
+     range-bound); and a separate line **Self-initiated: N opened · M submitted**. A
+     closed survey later submitted counts in both *Closed* and *Submitted*.
+  2. **Satisfaction trend** — the average of `general.overall` per bucket with the
+     response count as bars, **hand-rolled inline SVG on the brand tokens, no charting
+     dependency** (as §14.5); day / week / month buckets by span; fewer than 3 points get
+     visible markers.
+  3. **Question cards** — one per question with answers in range, in catalog order
+     (general, rotating, then the feature questions — per the selected feature, or
+     pooled under *All features*): the question text, the **average** (one decimal, ★),
+     **n**, and a 1–5 distribution histogram. Retired keys carry a *retired* tag.
+  4. **Free-text feed** — newest date first, random order within a day (by the random
+     id), so it never reveals intra-day order. Each item shows the text (plain text), the
+     **date only** (verbatim, the platform's date order), the feature (or *General*), the
+     segment, and a *Self-initiated* tag on `self` responses. **Paged 50 at a time.** Each
+     item has **Delete** (confirm: *"Delete this response? Its star answers are removed
+     too."*).
+- **Delete.** Removes the whole response, answers included (cascade). This is a **new,
+  deliberate hard-delete path**, separate from the §10.3 challenge/solution cascade —
+  survey responses are not content anyone else depends on, and an abusive comment must be
+  removable. Audited as **`survey.response_deleted`** (actor = the admin; `before` =
+  `{ answeredOn, feature, segment, surveyVersion, answerCount, textLength }`) — **the
+  text itself is never copied into the audit log**, so a deleted comment cannot survive
+  in an append-only table. The target never resolves and renders as plain text in the
+  audit browser.
+- **Empty state** — *"Responses appear here as people answer the survey."* No
+  zero-filling.
+- **No export.** There is no CSV or other export of survey responses (§19).
+- **API** (platform admin, 403 otherwise):
+  - `GET /api/admin/survey/summary?range=7|30|90|all&segment=&feature=&source=` →
+    `{ enabled, lastDate, bucket, funnel: { shown, closed, submitted, submittedFromMenu,
+    optedOut, shownSelf, submittedSelf }, series: [{ date, n, overallAvg | null }],
+    questions: [{ key, text, retired, n, avg | null, distribution | null, withheld }],
+    features: [{ key, label, n }] }` — withheld figures are null with `withheld: true`.
+  - `GET /api/admin/survey/comments?range=&segment=&feature=&source=&offset=&limit=` →
+    `{ comments: [{ id, answeredOn, feature, segment, trigger, text }], total, hasMore,
+    withheld }`, `limit` ≤ 50.
+  - `DELETE /api/admin/survey/responses/:id` → `{ ok }`; **404** for an unknown or
+    malformed id.
+  - `GET|PATCH /api/admin/settings` carries `surveyEnabled`.
+- **Tests.** Unit: the size-5 withholding for cards, buckets and the feed; the
+  current-day exclusion; the Source filter. Integration: range, filters, withholding,
+  403 for a namespace admin, delete cascade and an audit row that carries no text, the
+  switch's audit row. e2e: an admin sees the funnel and, with the seed topped past 5, the
+  question cards and the comment; the switch is usable while the card is collapsed.
+
 ---
 
 ## §15 Audit
@@ -3545,12 +4322,19 @@ anomalies. Since v0.10 also:
   `trigger: "status_changed" | "deleted"`, actor = the transition's actor or the deleting
   admin, null if system-driven, §13.2); `settings.featured_limit_changed` (§14.3);
 - **channel webhooks** — created, updated, deleted, tested (`webhook.*`, never the URL,
-  §12.4).
+  §12.4);
+- **feedback survey** — `settings.survey_enabled_changed` and
+  `survey.response_deleted` (never the response text, §14.11);
+- **AI integration** — `ai.config_updated` (never the token or its last 4),
+  `ai.enabled`, `ai.disabled`, `ai.config_cleared`, and `settings.ai_*_changed` for the
+  display name, timeouts and switches (§22.9).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
-(§14.10), CSP reports (§2.4), and the purely presentational view toggle and submission
-lock.
+(§14.10), CSP reports (§2.4), the purely presentational view toggle and submission
+lock, the §13.9 What's new marker, every §13.10 survey action of a user — first
+uses, opening, closing and submitting are never audited, by design — and AI tests,
+model lists, runtime calls and drafts (telemetry in `ai_usage`, §22.9).
 
 Platform admins get a read-only,
 filterable audit browser. A target that resolves — a challenge or solution that still
@@ -3708,7 +4492,7 @@ optional and composable (each an additional `AND`):
   (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
   (`user.*`, `scim.*`, `role_mapping.*`, `recon.*`) / Admin (`settings.*`,
   `namespace.*`, `impact_area.*`, `system_banner.*`, `presence.*`, `email.*`,
-  `audit.*`, `webhook.*`, every `*.exported`) / **Anonymity** (`anonymity.*` — admin
+  `audit.*`, `webhook.*`, `survey.*`, `ai.*`, every `*.exported`) / **Anonymity** (`anonymity.*` — admin
   reveals and self-reveals, the most sensitive reads to review). The curation events (`challenge.featured` /
   `challenge.unfeatured`) fall under Challenges by prefix; `like.*` rows appear under
   All only. The triage CSV export (§14.1) is audited as **`triage.exported`**, so it
@@ -3774,10 +4558,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   a like toggle on a closed challenge is **409**, §8.3)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
 - `notifications` (inbox, mark read; the unread poll carries the §14.6 banner), `me`
-  (`GET` identity, roles and flags; `PATCH` sets the §13.7 quick-start flag;
-  `me/challenges-seen` advances the §13.1 marker), `profile` (own and other users'
-  profiles, §13.5; `PATCH` carries the e-mail switch and the three §12.1 per-event
-  toggles)
+  (`GET` identity, roles and flags, including the §13.9 `whatsNewSeenVersion` and
+  `whatsNewSinceDate`; `PATCH` sets the §13.7 quick-start flag, which also stamps the
+  §13.9 marker; `me/challenges-seen` advances the §13.1 marker; `me/whats-new-seen`
+  `POST {version}` advances the §13.9 marker — 400 on an invalid or future version,
+  returns `{ previous, current }`; `me/features/used`, `me/survey/check`,
+  `me/survey/start`, `me/survey/close` and `me/survey/responses` drive the §13.10
+  feedback survey, and `GET` carries `openSurvey` and `selfSurvey`), `profile` (own and other users'
+  profiles, §13.5; `PATCH` carries the e-mail switch, the three §12.1 per-event
+  toggles and the §13.10 `surveysEnabled` switch)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
   malformed id, §13.8)
@@ -3801,8 +4590,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   reason: "not_visible" }] } }` — titles are safe here: the caller is a platform admin,
   who sees every item, and titles carry no author identity); **`admin/webhooks`
   `GET`/`POST`, `admin/webhooks/:id` `PATCH`/`DELETE`, `admin/webhooks/:id/test`
-  `POST`** (§12.4 — the URL is write-only: responses carry `urlHint`, never the URL) —
-  all platform admin only)
+  `POST`** (§12.4 — the URL is write-only: responses carry `urlHint`, never the URL);
+  **`admin/survey/summary`, `admin/survey/comments` (`GET`) and
+  `admin/survey/responses/:id` (`DELETE`)** (§14.11); **`admin/ai`** (`GET`/`PUT`/
+  `PATCH`/`DELETE`), **`admin/ai/models`**, **`admin/ai/test`**,
+  **`admin/ai/display-name`**, **`admin/ai/timeouts`**, **`admin/ai/switches`** (§22.9)
+  — all platform admin only)
+- `ai/draft` (`GET` availability, `POST` a draft — §22.10), `ai/summary/:parentType/:number`
+  (`GET` the cached summary, `POST` to make or refresh it — §22.13); triage notes ride on
+  the challenge detail and triage-queue payloads for the roles that may see them (§22.11)
 - **The one unauthenticated API route:** `POST /api/csp-report` — the CSP report sink
   (§2.4): `application/csp-report` or `application/reports+json`, 64 KB cap, per-IP
   rate limit, **204** with no body; exempt from the `Origin` check; never stored, not
@@ -3877,7 +4673,12 @@ audit chain (timestamping service, transparency log — recording the reported h
 out-of-band is an operator practice, not a feature); no stored CSP reports (violations
 are a counter, never a table, §2.4); no Entra front-channel logout (§3); for channel
 webhooks (§12.4): no per-user webhooks, no per-webhook event selection, no HMAC payload
-signing, no egress proxy, and no port other than 443.
+signing, no egress proxy, and no port other than 443; no export of feedback-survey
+responses, and no survey surface for namespace admins (§14.11); for the §22 AI
+integration: no streaming, tool use, embeddings or images, no AI on attachments, no
+AI-driven status, assignment or notification, no second simultaneous provider or
+per-task model, no Azure OpenAI, no egress proxy and no non-public or non-443 provider
+address, and no stored prompts or responses beyond the cached task results.
 
 Two further non-goals are settled by the open-source release (§21) and were
 explicitly considered and rejected rather than merely deferred:
@@ -4056,8 +4857,12 @@ document's token table is the sole brand authority.
   pointer to the issue tracker. `CONTRIBUTING.md` explains what *is* welcome — bug
   reports, questions, and feature discussion in issues. No CLA and no DCO, since no
   external code is accepted.
-- **`CODE_OF_CONDUCT.md`** — Contributor Covenant 2.1. Issues are open, so public
-  interaction happens and needs a stated standard.
+- **`CODE_OF_CONDUCT.md`** — the full text of Contributor Covenant 2.1, enforcement
+  ladder and attribution included. Issues are open, so public interaction happens and
+  needs a stated standard. Reports go to the repository maintainers **through GitHub** —
+  a private report to them, GitHub's *Report content* option on the comment or issue,
+  and GitHub's abuse form for Terms-of-Service violations — with **no team handle and no
+  e-mail address**, both of which would be organization-specific values (§2.3).
 - **`SECURITY.md`** — vulnerability reports go through **GitHub private security
   advisories**. Deliberately **no e-mail address**: an address would be a
   deployment-specific value in the repository, which §2.3 forbids, and advisories give
@@ -4102,23 +4907,24 @@ why a second occurrence existed without being recorded anywhere.
 ### §21.8 README
 
 The public README is the front door and replaces the starter-kit document entirely.
-It states, in order: what InnoBox is; a screenshot or two; **prerequisites, stated
-bluntly and first** — a Microsoft Entra ID tenant (app registration for OIDC, an
+It states, in order: what InnoBox is — a short, confident pitch of its strengths, as
+a bulleted list, **claiming only shipped behaviour** (features still marked as gaps are
+not advertised; the What's new *Coming soon* list, §13.9, is where those are teased); a
+screenshot or two; **prerequisites, stated bluntly and first** — a Microsoft Entra ID tenant (app registration for OIDC, an
 Enterprise Application for SCIM), PostgreSQL, S3-compatible object storage, ClamAV,
 and optionally a Microsoft Graph service mailbox for e-mail; **that there is no demo
 or evaluation mode** and InnoBox cannot be run without an Entra tenant (§19);
-self-hosting instructions pointing at `deploy/`; an architecture summary pointing at
+self-hosting instructions pointing at `deploy/`, including every `deploy/.env` value and
+the Entra setup steps; a **developer-only local loop** using the dev sign-in (§2.3) —
+labelled as a way to hack on the code, not to evaluate the product, and impossible to
+enable in a production build — and how to run the test suites; an architecture summary
+pointing at
 this spec and `ENTRA_AUTH_SPEC.md`; the TRADEMARK section and rebranding checklist
 (§21.2); the licence; the versioning note (§21.1); and, last, contributing, security
 and a plain **support statement** — the software is provided as-is, issues are read
 but no response time is promised, and pull requests are closed. The screenshots live
 under `docs/screenshots/`. It contains **no host, no mailbox, and no
 deployment-specific value** (§2.3).
-
-> **⚠ GAP-51 · doc fix:** `README.md`'s closing sections run Versioning →
-> Contributing, security, support → Licence → Trademark; reorder them to Trademark
-> (with the rebranding checklist) → Licence → Versioning → Contributing, security,
-> support.
 
 ### §21.9 No internal spec references in user-facing surfaces
 
@@ -4169,3 +4975,408 @@ All of the following are true before the first public push, in order:
    address anywhere in it; `changelog.ts` intact; only `main` pushed.
 9. Jenkins repointed at the new remote, building `main` only and never fork pull
    requests; a deploy verified green from the new remote.
+
+---
+
+## §22 AI integration
+
+A platform-level connection to **one** external large-language-model provider —
+**Open WebUI** or **OpenAI** — configured by platform admins, that a small set of
+InnoBox features ("AI tasks") call through a single server-side helper. §22.1–§22.9 are
+the plumbing; §22.10–§22.13 are the four tasks. **Every AI task is advisory or a
+writing aid:** none ever changes a status, an assignment or a visibility, and none ever
+sees who wrote anything.
+
+> **⚠ GAP-68 · new feature:** the **AI plumbing** (§22.1–§22.9) does not exist. Build:
+> migration `0038_ai_integration.sql` (`ai_integration`, `ai_usage`, grants); the
+> server-only `@innobox/shared/ai` subpath (provider adapters, base-URL normalization,
+> the outbound guard reuse, `aiComplete`, `aiAvailable`, the `AI_FEATURES` registry,
+> usage recording, the system-log throttle); `AI_TOKEN_ENC_KEY` in `deploy/.env.example`
+> and compose (web + worker), encrypted with the e-mail token code through a thin
+> wrapper like the webhook key; the `admin/ai*` routes; the **AI provider** card on
+> `/admin/settings`; the `ai_usage` prune in the worker's hourly housekeeping; the
+> `innobox_ai_calls_total` metric; the `ai.*` Admin audit-chip pattern. Tests per
+> §22.9. Ships as its own minor release, with an empty registry.
+
+### §22.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **One active configuration** (a single row): provider, base URL, token, model, enabled. | One secret to rotate and audit. |
+| 2 | Providers: **Open WebUI** and **OpenAI**, both through the OpenAI-shaped **Chat Completions** API. | Open WebUI is OpenAI-compatible, so one code path serves both. |
+| 3 | **Public HTTPS only** — the provider URL obeys the same outbound rules as channel webhooks (§2.4, §12.4). | One audited outbound class, no internal-network reach from the admin console. |
+| 4 | The token is **AES-256-GCM-encrypted** under a **new `AI_TOKEN_ENC_KEY`**; write-only in the UI. | Key separation from the e-mail and webhook keys. |
+| 5 | **Save runs a test; a failing save is rejected** and the previous configuration stays live. The **enable** toggle needs a passing test. | A bad rotation can never take AI down; no "enabled but never worked" state. |
+| 6 | The stored token is sent **only to the stored base URL**; changing provider or URL requires re-entering it. | A hijacked session or a typo cannot ship the secret elsewhere. |
+| 7 | **No person data, ever** (§22.7); **namespace-restricted content only behind a platform switch, off by default.** | Anonymity (invariant 3) is made structural, and restricted content leaves only by a deliberate decision. |
+| 8 | **AI output inherits the visibility of its inputs** (invariant 2) and never changes state (invariant 6). | AI must not become a leak path or a shortcut around the state machines. |
+| 9 | Every call is **recorded in `ai_usage`** (counts, never content). | Cost and usage visibility from day one. |
+| 10 | **Non-streaming** helper (text or JSON), usable from **web and worker**. | No task needs streaming. |
+
+### §22.2 Providers & wire calls
+
+| | **Open WebUI** (`openwebui`) | **OpenAI** (`openai`) |
+|---|---|---|
+| Base URL | **required** (a path prefix is allowed); a trailing `/api` segment is stripped (`https://host/api` → `https://host`) | optional; default **`https://api.openai.com/v1`**, stored explicitly; an override for an OpenAI-compatible gateway is allowed (Azure OpenAI is out of scope). A pasted trailing `/chat/completions` is stripped. |
+| Auth | `Authorization: Bearer <token>` (an Open WebUI API key) | `Authorization: Bearer <token>`; no organization or project headers (use a project-scoped key) |
+| Completion | `POST {base}/api/chat/completions` — `{ model, messages, max_tokens, stream: false }` | `POST {base}/chat/completions` — `{ model, messages, max_completion_tokens, store: false }`; no `temperature` (reasoning models reject it) |
+| Text | `choices[0].message.content` | same |
+| Usage | `usage.prompt_tokens` / `usage.completion_tokens` (null when absent) | same |
+| Model list | `GET {base}/api/models` → `data[].id` | `GET {base}/models` → `data[].id`, **filtered** to chat-capable families (embedding, speech, transcription, image, moderation and realtime models dropped) |
+
+- **Base URL validation:** absolute `https://` URL, ≤ 500 characters, no userinfo, query
+  or fragment; a trailing `/` stripped; normalization runs on every form action, so the
+  saved value and the stored-token match always use the normalized form.
+- **Outbound guard:** the **§12.4 URL rules apply unchanged** — `https` on port 443
+  only, every resolved address public, the connection pinned to the vetted address, TLS
+  always verified, **no redirects** (a 3xx is an error, so the token can never follow a
+  `Location`), proxy environment variables ignored — at save and at every call. The
+  only difference is the timeout (§22.6). **Only when `NODE_ENV` is not `production`**
+  may the base URL be `http://localhost` / `127.0.0.1` (the e2e provider stub) — the
+  same structural guard as dev auth (§2.3).
+- **Responses** are capped at 1 MB; the token never appears in a URL.
+- **Budget exhausted.** A 2xx whose content is empty, whitespace or absent **and** whose
+  `finish_reason` is `"length"` is `ai_provider_error` with *"The model used its whole
+  token budget before answering (it may be a reasoning model) — no text was returned."*
+- **OpenAI quota.** A 429 whose error code is `insufficient_quota` is a billing
+  condition: it is **not retried** and carries its own message (*"The OpenAI account has
+  no remaining quota."*).
+- **Open WebUI custom models** can add hidden system prompts, knowledge or tools on the
+  provider side; the card's help text tells the admin to pick a plain model.
+- The card labels the token **"API key"** for both providers.
+
+### §22.3 Data model (migration 0038)
+
+- **`ai_integration`** — a **single row** (the `0007` single-row convention, `id boolean
+  PRIMARY KEY DEFAULT true CHECK (id)`): `enabled` (default false), `provider`
+  (`openwebui` | `openai`), `base_url` (the normalized URL actually used), `model`
+  (≤ 200), `token_enc` (the `v1:` AES-256-GCM blob), `token_last4`, `last_test_at` /
+  `_ok` / `_error` / `_latency_ms`, `last_call_at` / `_ok` / `_error`,
+  `last_failure_logged_at` (the §22.6 throttle watermark), `updated_by` (FK → `users`,
+  `ON DELETE SET NULL`), `updated_at`. **No row = not configured.** *Remove* hard-deletes
+  the row, token included.
+- **`ai_usage`** — one row per provider call: `id` (bigserial), `created_at`, `feature`
+  (a registry key, or `test`), `user_id` (nullable, `ON DELETE SET NULL` — the person
+  the call ran for; null for background work), `provider`, `model`, `input_tokens` /
+  `output_tokens` (nullable), `latency_ms`, `ok`, `error_code`. **Never the prompt, the
+  response, the base URL or the token.** Indexes on `(created_at DESC)` and
+  `(feature, created_at DESC)`. **Retention 365 days**, pruned by the worker's hourly
+  housekeeping. Survives *Remove*.
+- **Grants to `innobox_app`:** `ai_integration` SELECT/INSERT/UPDATE/DELETE; `ai_usage`
+  SELECT/INSERT/UPDATE (erasure) /DELETE (prune) plus its sequence.
+- **Platform settings** (no migration): `ai_display_name`, `ai_timeouts`,
+  `ai_restricted_content_enabled`, and one switch per task that sends third-party
+  content (§22.11–§22.13).
+- **Per-user usage is never exposed** — no UI or API returns `ai_usage` rows or totals
+  per person; the card shows aggregates only. (A draft call's row shortly before an
+  anonymous challenge's creation could otherwise correlate the two outside the audited
+  reveal; with no per-user surface that correlation needs direct database access, which
+  is accepted as for §13.10.)
+
+### §22.4 The AI provider card (`/admin/settings`)
+
+A card on the §14.3 platform-settings page, beside the notification sender — the same
+encrypted-token pattern. Platform admins only.
+
+- **Status pill** (computed on read): **Not configured** (no row) · **Off** (row,
+  disabled) · **Failing — reason, time** (enabled and the token cannot be decrypted, or
+  the **more recent** of the last saved-config test and the last runtime call failed) ·
+  **Operational**.
+- **Enable switch** (§2.2 preference pill) — disabled, with a tooltip saying why, unless a
+  configuration is saved, its latest test passed and its token decrypts.
+- **Form:** **Provider** (changing it clears the token and makes it required) ·
+  **Base URL** (required for Open WebUI; the OpenAI default as placeholder) · **API key**
+  (write-only: with a token stored it reads *"Set · ends …abcd"* plus **Replace**; the
+  plaintext never returns to the browser) · **Model** (a dropdown from the provider's
+  model list, loaded automatically when the stored token applies, or with **Load
+  models**; **Refresh** reloads it; on failure it falls back to free text with the error
+  beneath).
+- **Actions:** **Test** (the values currently in the form), **Save** (tests first,
+  persists only on a pass), **Remove integration** (confirm, then hard-delete; usage
+  history kept).
+- **Panels:** *Last test* (when, pass/fail, latency, the model that answered, the
+  error); *Usage — last 30 days* (calls, failures, input/output tokens, per feature);
+  the **egress notice** — *"When enabled, the features below send data to {provider} at
+  {host}."* followed by each registered task's label and its egress statement (§22.7).
+- **Independent rows** — each with its own Save, no test, no token, usable without a
+  configuration or key, kept on *Remove*: **Allow namespace-restricted content** (switch,
+  off by default — §22.7), one **switch per task** that needs one (§22.11–§22.13, off by
+  default), **Timeouts** (§22.8) and **Display name** (§22.8).
+- **Key missing:** without a valid `AI_TOKEN_ENC_KEY` the provider form is disabled with
+  the hint *"Set AI_TOKEN_ENC_KEY — a 32-byte base64 key — on web and worker."* and every
+  write answers **409 `ai_key_missing`**; the independent rows stay usable.
+
+### §22.5 The test, save, enable, disable, remove
+
+- **Test** — system *"You are a connectivity check."*, user *"Reply with the single word
+  OK."*, a 1 024-token budget (so a reasoning model can think and still answer), **20 s
+  timeout, no retry**. **Pass = HTTP 2xx with a parseable response**; the wording is not
+  checked. Reports pass/fail, latency, the echoed model and, on failure, the HTTP status
+  and a sanitized one-line error (≤ 300 characters, never the token or headers). A blank
+  token means "use the stored one" — allowed **only** when provider and normalized base
+  URL equal the saved configuration, else **422 `ai_token_required`**. Every test writes
+  an `ai_usage` row (`feature = 'test'`); only a test of exactly the saved configuration
+  updates `last_test_*`. Tests are **not audited** and never written to the system log.
+- **Save** (`PUT /api/admin/ai`) — validate, test, and on a pass upsert (a new token
+  encrypted and `token_last4` updated; a blank token keeps the stored one), keeping
+  `enabled` as it was. Audited `ai.config_updated` (before/after of provider, base URL,
+  model; `after.token_rotated` — **never the token or its last 4**). On a fail **422
+  `ai_test_failed`** with the result; **nothing is persisted**. Saving identical values
+  is a no-op.
+- **Enable** (`PATCH { enabled: true }`) — **409 `ai_not_configured` | `ai_test_required`
+  | `ai_token_undecryptable`** when not allowed; audited `ai.enabled`. **Disable** —
+  always allowed, keeps the configuration, audited `ai.disabled`; every helper call then
+  fails fast with `ai_disabled` and `aiAvailable()` hides every affordance. **Remove**
+  (`DELETE`, 204, idempotent) — audited `ai.config_cleared`. A failing manual test while
+  enabled does **not** disable AI; it flips the pill to *Failing*.
+
+### §22.6 The helper, the registry, health
+
+- **`@innobox/shared/ai`** — a **server-only** subpath (it uses `node:crypto` and the
+  database; never imported by client code), callable from web and worker.
+  `aiComplete({ feature, userId?, system?, messages, maxTokens, json?, retry?, signal? })`
+  → `{ text, json?, model, inputTokens, outputTokens, latencyMs }`, and
+  `aiAvailable()` — true when configured, enabled and the token decrypts.
+- **Configuration is read on every call** (one single-row read, no cache), so enable,
+  rotation and removal take effect immediately in both processes.
+- **Timeout & retry:** each attempt uses the feature's effective timeout (§22.8);
+  **one retry** on a network error, 5xx or a rate-limit 429 (honouring `Retry-After` up
+  to 10 s); none on other 4xx or `insufficient_quota`. `retry: false` makes one attempt
+  (interactive callers). A cancelled `signal` is recorded as `ai_cancelled` and never
+  written to the system log.
+- **`json: true`** appends a "respond with a single JSON value only" instruction, strips
+  a surrounding code fence and parses; a failure is `ai_invalid_json` (recorded, not
+  retried).
+- **Errors** (`AiError.code`): `ai_not_configured`, `ai_disabled`, `ai_key_missing`,
+  `ai_token_undecryptable`, `ai_unknown_feature`, `ai_restricted_content`, `ai_timeout`,
+  `ai_provider_error` (with the HTTP status), `ai_invalid_json`, `ai_cancelled`. The
+  calling task decides what its user sees; **provider error text never reaches a
+  non-admin**.
+- **Registry** `AI_FEATURES` — `{ key, label, egress, maxTokens?, timeoutMs?,
+  needsSwitch? }`; an unregistered key throws `ai_unknown_feature` before any network
+  call; `test` is reserved. Output-token ceiling 8 192 by default (a task may register up
+  to 32 768); default timeout 60 s (registered up to 900 s). Registered by §22.10–§22.13:
+  `submit_draft`, `triage_assist`, `duplicate_explain`, `discussion_summary`.
+- **Recording:** every call that reaches the provider writes **one** `ai_usage` row (a
+  retried call is still one row) and updates `last_call_*`; calls refused before the
+  network write nothing (`ai_token_undecryptable` updates `last_call_*` only).
+- **System log (§14.7):** a runtime failure (`ai_timeout`, `ai_provider_error`,
+  `ai_invalid_json`, `ai_token_undecryptable`) writes a `system_events` row **at most once
+  per 15 minutes platform-wide** — claimed by a conditional `UPDATE … SET
+  last_failure_logged_at = now() WHERE … < now() - interval '15 minutes'`, so web and
+  worker never double-log — with `source` = the calling process, `status` 502 / 504 /
+  500, `method` `POST`, `route` `/ai/[feature]`, `path` the provider endpoint path (no
+  host), **no user and no item number**, a fixed `error_code` and a sanitized message.
+  A new carve-out in §14.7's recorded list; no chip of its own.
+- **Metrics:** `innobox_ai_calls_total{feature,outcome}` on both `/metrics`. AI is
+  **not** a `/readyz` dependency.
+- **The browser never talks to the provider** — every call is server-side, so the CSP
+  `connect-src` (§2.4) is unchanged.
+
+### §22.7 Data governance (binding on every AI task)
+
+- **Never sent, by any task:** person data of any kind — names, e-mails, UPNs, user ids,
+  department, job title, office, photos — for authors, assignees, commenters or actors,
+  **and the anonymity flag itself**; attachments and their file names; `client_name`;
+  audit rows; the system log; credentials and URLs. Stripping identity always, rather
+  than masking it per item, makes anonymity (invariant 3) structural.
+- **Each task states its egress** — exactly which fields it sends — in its section below
+  and in its registry entry; the card shows it.
+- **Namespace-restricted content** (`visibility = namespace`) is sent **only** while the
+  platform switch **"Allow namespace-restricted content to be sent to the AI provider"**
+  (`ai_restricted_content_enabled`, **off by default**) is on. While it is off, a task
+  whose input would include restricted content refuses with `ai_restricted_content`
+  before any network call (the affordance is hidden or explains why), and cross-item
+  tasks drop restricted candidates from their input. `org`-visible content flows
+  whenever AI is on.
+- **Visibility of output (invariant 2):** AI output derived from content is shown only
+  to viewers who pass the same visibility test as **every** input — the item's, and for
+  cross-item tasks each candidate's. A cached result belongs to its item and inherits its
+  visibility and lifecycle: it joins the §10.3 delete cascade, an edit (§10.1)
+  invalidates it, and a `withdrawn` item gets none.
+- **State (invariant 6):** no AI output is ever a status transition, an assignment, a
+  visibility change or a notification.
+- **Untrusted input:** challenge text and comments are placed in a delimited data block
+  the prompt tells the model to treat as content, never instructions; output is
+  validated, length-capped and **rendered as escaped plain text**.
+- **Provider-side retention** is outside InnoBox's control; OpenAI calls send
+  `store: false`, and the egress notice names the provider and host so admins choose
+  consciously.
+- **Language:** output follows the language of the input text; UI copy stays English
+  (§19).
+
+### §22.8 Display name & timeouts
+
+- **Display name** — platform setting `ai_display_name`, 1–24 printable characters after
+  trimming; empty means **"AI"**; never an organization-branded default. Returned on the
+  `me` resource as `aiDisplayName`. It replaces "AI" on **end-user** surfaces only
+  (*"Improve with {name}"*, *"Summary by {name}"*); admin surfaces keep "AI". Copy is
+  written so the name stands alone as a noun. Audited `settings.ai_display_name_changed`.
+- **Timeouts** — platform setting `ai_timeouts` `{ calls: { <featureKey>: ms } }`, one
+  per-attempt timeout per registered task, **10–900 s in whole seconds**; only overrides
+  are stored; unknown keys ignored and out-of-range values clamped on read; **422
+  `invalid_timeout`** naming the field; an unchanged save is a no-op; applies to the next
+  attempt. The 20 s test and model-list calls are not tunable. Audited
+  `settings.ai_timeouts_changed`.
+- The two switches of §22.7 and §22.11–§22.13 are audited as
+  `settings.<setting>_changed`.
+
+### §22.9 API, audit, tests
+
+- **API** (platform admin; 403 otherwise; all wrapped in the system-log capture; bodies
+  carrying a token are never logged): `GET /api/admin/ai` (state, status, last test,
+  30-day usage, registry with egress, display name, timeouts, switches — never the
+  token); `POST /api/admin/ai/models`; `POST /api/admin/ai/test` (200 with `ok: false` on
+  a provider failure, 422 only for invalid input); `PUT` / `PATCH` / `DELETE
+  /api/admin/ai`; `PUT /api/admin/ai/display-name`, `PUT /api/admin/ai/timeouts`,
+  `PUT /api/admin/ai/switches`. Every provider write answers **409 `ai_key_missing`**
+  without the key.
+- **Audit (§15):** `ai.config_updated`, `ai.enabled`, `ai.disabled`, `ai.config_cleared`,
+  and the `settings.*_changed` rows above. Tests, model lists and runtime calls are **not
+  audited** — they are telemetry in `ai_usage`. The Admin chip gains `ai.*`.
+- **GDPR erasure (§3)** nulls `ai_usage.user_id`.
+- **Tests.** Unit: base-URL normalization per provider (`/api` stripping, the OpenAI
+  default and suffix stripping); the outbound guard (non-443, private address, redirect,
+  the non-production localhost allowance); request building and response parsing per
+  provider (`max_tokens` vs `max_completion_tokens`, `store: false`, model-list
+  filtering, error bodies); JSON mode; the retry policy (`insufficient_quota` not
+  retried, `Retry-After` capped); budget-exhausted vs generic errors; status derivation;
+  the stored-token rule; unknown feature and `ai_restricted_content` refused before any
+  fetch; encryption round-trip. Integration (provider stubbed by a local HTTP server):
+  403 for non-platform-admins; `ai_key_missing`; save-pass persists and audits,
+  save-fail persists nothing, identical save is a no-op; enable gating; disable →
+  `ai_disabled`; remove keeps `ai_usage`; `GET` never contains the token; one usage row
+  per retried call; the 15-minute throttle under concurrency; prune; erasure. e2e: an
+  admin configures the stub, loads models, tests, saves, enables, sees *Operational*; a
+  failing save leaves the pill unchanged; remove returns to *Not configured*.
+
+### §22.10 Improve with AI — drafting on the submit forms
+
+> **⚠ GAP-69 · new feature:** the **Improve with AI** button on `/challenges/new` and
+> the solution form does not exist. Build: the `submit_draft` registry entry, `GET` and
+> `POST /api/ai/draft` (availability; the draft call with its per-minute and 24-hour
+> limits), the button, confirm-before-replace, Undo, and the tests below. Its own minor
+> release, after GAP-68.
+
+A writing aid for the author's **own** text. Nothing it produces is stored, marked or
+treated differently from text the author typed.
+
+- **Where.** The challenge submit form (§6.1) and the solution form (§6.2) — not edits
+  (§10.1), not comments. **Shown only when `aiAvailable()`** (no disabled ghost); for a
+  challenge the user is about to submit to a namespace-visible audience, the button is
+  disabled with an explanation while the restricted-content switch is off.
+- **Egress:** the form's **title and description** (challenge) or **description and cost
+  vs benefits** (solution, plus the parent challenge's title and description as context —
+  the author can see it by definition), and the names of the active impact areas. Never
+  the client name, the anonymity choice, attachments, or anything about the author.
+- **What it writes.** A clearer **title** (≤ 120 characters) and a structured
+  **description** — problem, who is affected, impact, current workaround, desired
+  outcome — in plain text within the field's limit; for a challenge, a **suggested impact
+  area** shown as a hint the author may apply (never applied silently; never *Client*,
+  which needs a client name); for a solution, the description and a cost-vs-benefits
+  outline. The prompt forbids inventing facts the text does not state.
+- **Flow.** Clicked, never automatic. If a target field already holds text, a dialog
+  offers **Replace** · **Fill empty fields only** · **Cancel** before anything is sent.
+  While drafting the button shows a spinner and *"Improving…"* with **Cancel**; the
+  fields are read-only until it settles. A single-step **Undo** restores the pre-draft
+  text and disappears on the next draft, on submit, or as soon as the author edits a
+  drafted field. A draft fill **counts as an edit** for the §6.1 duplicate check (it
+  re-arms it) and never bypasses the §6.4 submission lock.
+- **Limits:** `retry: false`; **10 per minute and 50 per rolling 24 hours per user**
+  (counted from `ai_usage`), each with a plain message. No persistence, **no audit**, no
+  AI marker anywhere. Errors read *"Couldn't improve the text right now — try again
+  later."*; admins see details on the card.
+- **Tests.** Unit: the prompt builder carries only the listed fields (no client name, no
+  anonymity flag); output post-processing (caps, impact-area hint mapping to an active,
+  non-Client area). Integration: availability, the limits, `ai_restricted_content`.
+  e2e (stub provider): improve a draft, confirm-before-replace, Undo, the duplicate check
+  re-armed.
+
+### §22.11 Triage assist
+
+> **⚠ GAP-70 · new feature:** **triage assist** does not exist. Build: the
+> `triage_assist` registry entry and switch, migration `0039_ai_results.sql` (an
+> `ai_results` table — `kind`, `parent_type`, `parent_id`, `input_hash`, `model`,
+> `status` `pending|ready|failed`, `payload` jsonb, timestamps — joining the §10.3
+> cascade), the worker pass, the detail-page and triage-queue panel, **Re-run**, and the
+> tests below. Its own minor release, after GAP-68.
+
+An **advisory** note that helps triagers and the committee act faster. It never
+transitions, assigns, rejects or notifies (invariant 6).
+
+- **Enablement.** Platform switch **"Triage assist"** (`ai_triage_assist_enabled`, **off
+  by default**); effective while on **and** `aiAvailable()`.
+- **Subjects.** Challenges in `awaiting_triage`, `in_review`, `needs_improvement` or
+  `meeting_scheduled`. While effective, the leader worker gives each subject without a
+  current result a run; one run per distinct input (**cached by a hash** of the inputs),
+  so an unchanged item is never re-sent. An edit makes a new hash and a new run. A
+  namespace-visible challenge is skipped while the restricted-content switch is off.
+- **Egress:** the challenge's **title, description and impact area**, and — for
+  duplicate hints — the **titles** of up to 20 other challenges in the **same namespace**
+  that are `org`-visible (or restricted, when the switch allows) and not
+  `awaiting_triage` or `withdrawn` (the set visible to every viewer of the note).
+- **Output** (JSON, rendered as plain text): a **summary** (≤ 400 characters), **missing
+  information** (a short list — problem, impact, workaround, measurable outcome), a
+  **suggested impact area**, **questions to ask the author**, and **possible
+  duplicates** (numbers from the candidate set only, each with a one-line reason).
+- **Who sees it.** Namespace admins and platform admins always; committee members and
+  the assignee once the challenge is past `awaiting_triage`. **Never the author** in v1 —
+  it is triage material, not feedback. A collapsible **"{name} triage notes"** panel on
+  the challenge detail page and an indicator on the §14.1 queue row; *Pending* until it
+  lands; **Re-run** for namespace and platform admins.
+- **Lifecycle.** Joins the §10.3 cascade; a `withdrawn` challenge's result is deleted;
+  results for items that left the subject statuses are kept read-only for the record
+  until the item is deleted.
+- **Tests.** Unit: subject selection, hashing, the candidate set's visibility, output
+  validation (duplicates limited to candidates). Integration: who sees the note per role
+  and status (author never), cascade, the switch, restricted skipping. e2e (stub): a
+  triager sees the note and re-runs it.
+
+### §22.12 Similar challenges, explained
+
+> **⚠ GAP-71 · new feature:** the AI re-ranking of the §6.1 duplicate warning does not
+> exist. Build: the `duplicate_explain` registry entry and switch, the step inside
+> `POST /api/challenges/similar`, the reasons in the banner, and the tests below. Its own
+> minor release, after GAP-68.
+
+- **Enablement.** Platform switch **"Explain similar challenges"**
+  (`ai_duplicate_explain_enabled`, **off by default** — it sends other people's text).
+- **What it does.** After the §6.1 full-text check finds candidates, the AI re-ranks
+  **only those candidates** and adds a one-line reason to each (*"Same problem: manual
+  invoice matching in finance"*). It never adds a challenge the full-text check did not
+  return, and it stays **advisory** — the banner never blocks.
+- **Egress:** the draft's title and description, and each candidate's **title and the
+  first 500 characters of its description**. Candidates are exactly the caller-visible
+  set §6.1 already returns; restricted candidates are dropped while the
+  restricted-content switch is off.
+- **Failure is silent:** any AI error or a timeout above **5 s** falls back to the plain
+  §6.1 banner. `retry: false`. Shares the §6.1 rate limit.
+- **Tests.** Unit: re-ranking keeps the candidate set closed; restricted candidates
+  dropped. Integration: fallback on error and timeout. e2e (stub): the banner shows
+  reasons.
+
+### §22.13 Discussion summary
+
+> **⚠ GAP-72 · new feature:** the **discussion summary** does not exist. Build: the
+> `discussion_summary` registry entry and switch, the summary rows in `ai_results`
+> (GAP-70's table), `POST` / `GET /api/ai/summary/:parentType/:number`, the comment-thread
+> control, and the tests below. Its own minor release, after GAP-70.
+
+- **Enablement.** Platform switch **"Discussion summaries"**
+  (`ai_discussion_summary_enabled`, **off by default**).
+- **Where.** A **"Summarize discussion"** control above a challenge's or solution's
+  comment thread once it holds **at least 10** visible comments; on demand, for any
+  viewer who can see the item.
+- **Egress:** the item's title, and the comments' **text only**, oldest first, each
+  labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
+  appearance — **never** marking which participant is the item's author, and never a
+  name. Soft-deleted comments are excluded.
+- **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
+  text, headed *"Summary by {name}"* with the time it was made and *"May be inaccurate."*
+- **Caching:** one result per thread state (a hash of the included comments); a new or
+  edited comment marks it stale (*"New comments since this summary"* with **Refresh**).
+  Results inherit the item's visibility and lifecycle (§22.7).
+- **Limits:** 10 per minute and 50 per 24 hours per user; `retry: false`.
+- **Tests.** Unit: pseudonymization (stable letters, author not marked, no names),
+  deleted comments excluded. Integration: visibility of the cached result, staleness,
+  cascade. e2e (stub): summarize a long thread.
