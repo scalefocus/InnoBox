@@ -13,7 +13,10 @@ import nextConfig from "eslint-config-next";
 const eslintConfig = [
   ...nextConfig,
   {
-    ignores: [".next/**", "e2e/**"],
+    // Flat config does not read .gitignore. Playwright's output dirs hold minified,
+    // vendored JS (the trace viewer) and survive between runs on a persistent Jenkins
+    // workspace, so an E2E run would otherwise fail the next build's Lint stage.
+    ignores: [".next/**", "e2e/**", "playwright-report/**", "test-results/**"],
   },
   {
     rules: {
