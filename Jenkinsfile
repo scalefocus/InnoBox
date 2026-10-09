@@ -257,8 +257,11 @@ pipeline {
             # Remove-then-copy: a stale .env owned by another user (e.g. root after manual
             # debugging on the host) fails the overwrite with EACCES, but unlinking only needs
             # write on the directory, which the deploy user has. chmod 600 keeps secrets tight.
+            # CRs are stripped in transit: a secret file saved on Windows has CRLF endings, which
+            # compose tolerates but `. ./.env` (step 4) does not — every value would carry a
+            # trailing \\r (e.g. an "invalid" bucket name). Piped, so no extra copy hits disk.
             $SSH "${DEPLOY_HOST}" "rm -f ${DEPLOY_PATH}/deploy/.env"
-            $SCP "${DEPLOY_ENV_FILE}" "${DEPLOY_HOST}:${DEPLOY_PATH}/deploy/.env"
+            tr -d '\\r' < "${DEPLOY_ENV_FILE}" | $SSH "${DEPLOY_HOST}" "umask 077 && cat > ${DEPLOY_PATH}/deploy/.env"
             $SSH "${DEPLOY_HOST}" "chmod 600 ${DEPLOY_PATH}/deploy/.env"
 
             # ── 3. Build images and (re)start the stack on the remote host ─────────────────
@@ -289,8 +292,10 @@ MINIO_SCRIPT
 
             # ── 5. Smoke-check readiness ──────────────────────────────────────────────────
             # Exits non-zero when every attempt fails, so a stack that never becomes ready
-            # fails the pipeline instead of going green.
-            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 3; done; echo "readyz never became ready" >&2; exit 1'
+            # fails the pipeline instead of going green. On failure it dumps container state and
+            # the web/proxy log tails, so the build log carries the cause (a 502 means the proxy
+            # cannot reach web at all — typically web crash-looping on a startup check).
+            $SSH "${DEPLOY_HOST}" 'for i in $(seq 1 30); do curl -fsS http://localhost:8080/readyz && exit 0; sleep 3; done; echo "readyz never became ready" >&2; cd '"${DEPLOY_PATH}"'/deploy || exit 1; docker compose ps -a; docker compose logs --no-color --tail 100 web proxy; exit 1'
 
             # ── 6. Housekeeping: drop docker residue from this and earlier builds ──────────
             # image prune -f removes only DANGLING images (the <none> layers each --build
