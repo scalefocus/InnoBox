@@ -4,6 +4,8 @@ Status: **DRAFT (pending approval)**
 Layers in scope: **authentication + provisioning + authorization** (OIDC sign-in, SCIM provisioning, group-based RBAC)
 Parent spec: `INNOBOX_SPEC.md` §3–§4 (this document details them; on conflict the parent wins
 and must be amended in the same change).
+Implementation gaps: blocks starting **`⚠ GAP-nn`** mark where the shipped code does not
+yet match this text — the same numbered convention as `INNOBOX_SPEC.md` (see its preamble).
 
 ## 1. Current state
 
@@ -95,7 +97,7 @@ CREATE TABLE IF NOT EXISTS users (
   department    text,
   job_title     text,
   office_location text,                        -- Entra officeLocation; directory profile (INNOBOX_SPEC.md §13.8)
-  photo         bytea,                         -- 96px thumbnail via reconciliation (Graph)
+  photo         bytea,                         -- 240x240 photo via reconciliation (Graph), INNOBOX_SPEC.md §3.1
   photo_etag    text,
   email_notifications_enabled boolean NOT NULL DEFAULT true,   -- §12 per-user e-mail opt-out
   active        boolean NOT NULL DEFAULT true,
@@ -166,15 +168,27 @@ tolerates; exact file follows `db/migrations/README.md` rules.)
   provider (`checks: ["pkce", "state", "nonce"]`), scopes `openid profile email`,
   JWT session strategy (rolling 7 days). Provider display `name: "Entra ID"` (so any
   provider-labeled text reads "Entra ID", never "Azure Active Directory"), and
-  `pages: { signIn: "/" }` so there is **no** default Auth.js sign-in page — the Home
-  landing is the sign-in surface (§5 sign-in UI, below).
+  `pages: { signIn: "/", error: "/" }` so there is **no** default Auth.js sign-in **or
+  error** page — the Home landing is the sign-in surface and shows any `?error=` (§5
+  sign-in UI, below).
+
+  > **⚠ GAP-11** (see `INNOBOX_SPEC.md` §3): `pages.error` is not set, so refusals land
+  > on Auth.js's built-in error page.
 - **Token validation** is delegated to the library and pinned by config: issuer
   `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`, audience = client id,
-  RS256 via the tenant JWKS (rotation-safe), `nonce`/`state` enforced.
+  RS256 via the tenant JWKS (rotation-safe), `nonce`/`state` enforced. A production
+  build **refuses to start** when `ENTRA_TENANT_ID` is unset (fatal structured error
+  naming the variable, like the `INNOBOX_DEV_AUTH` guard), because the AzureAD provider
+  would otherwise fall back to the multi-tenant `common` authority.
+
+  > **⚠ GAP-52 · code fix:** there is no such guard; `authOptions.ts` passes the tenant
+  > through, so an unset `ENTRA_TENANT_ID` silently means `common`. Add the start-up
+  > refusal.
 - **`signIn` callback**: look up `users` by `oid`.
   - Missing → JIT-insert a stub (`external_id=oid`, `user_name=preferred_username`,
     `email`, `display_name`, `scim_synced=false`), audited as `user.jit_created`.
-  - Present + `active=false` → **reject** (sign-in error page: "account deactivated").
+  - Present + `active=false` → **reject**: the sign-in returns to `/?error=AccessDenied`,
+    and the landing shows the "account deactivated" message.
   - Present + JIT-stub (`scim_synced=false`) → refresh name/email from claims.
     Once `scim_synced=true`, SCIM/reconciliation own attributes; claims never overwrite.
 - **Session validation** (every request): `src/lib/auth.ts` exposes `getSessionUser()` —
@@ -195,13 +209,15 @@ tolerates; exact file follows `db/migrations/README.md` rules.)
   area is the §13.2 welcome landing. A sign-in error returned on the URL (e.g.
   `?error=AccessDenied` for a deactivated account) is surfaced on that landing.
 - **Sign-out**: Auth.js `signOut` clears the local session; a thin wrapper around the handler additionally expires every `next-auth.*` cookie the request carried (session chunks, CSRF, callback URL, PKCE/state/nonce — INNOBOX_SPEC.md §3). Nothing in Entra is touched.
-- **Dev bypass**: when `INNOBOX_DEV_AUTH=1`, a Credentials provider ("Dev sign-in": free-form
-  display name + role preset) is registered and the Entra provider becomes optional; used by
-  local dev and Playwright. Because there is no default Auth.js page, the dev form renders on
-  the Home landing as a **dev-only panel** — shown only when the `dev` provider is configured
-  (never in production); Playwright drives that panel instead of `/api/auth/signin`. The flag
-  is refused at startup when `NODE_ENV=production` unless `INNOBOX_DEV_AUTH_I_KNOW=1` — and the
-  deploy env review (§2.3) forbids it.
+- **Dev bypass**: when `INNOBOX_DEV_AUTH=1` **and** `NODE_ENV !== "production"`, a
+  Credentials provider ("Dev sign-in": free-form display name and e-mail plus a
+  **platform-admin** flag — no other role presets) is
+  registered beside the Entra provider, which stays registered; used by local dev and
+  Playwright. Because there is no default Auth.js page, the dev form renders on the Home
+  landing as a **dev-only panel** — shown only when the `dev` provider is configured
+  (never in production); Playwright drives that panel instead of `/api/auth/signin`. A
+  production build that finds the flag set **refuses to start, unconditionally** — there
+  is no override variable (INNOBOX_SPEC.md §2.3, which wins).
 
 ### Layer 2 — SCIM 2.0 server (worker, `/scim/v2`)
 
@@ -220,15 +236,41 @@ provisioning contract, including the Entra dialect quirks:
   `/ResourceTypes`, `/Schemas` (static; `patch.supported=true`, `filter.supported=true`).
 - **Filters**: `userName eq "…"` (case-insensitive compare), `externalId eq "…"`,
   `displayName eq "…"` (groups); anything else → 400 `invalidFilter`. List responses are
-  RFC 7644 `ListResponse`, 1-based `startIndex`, empty = 200 + `totalResults: 0`.
+  RFC 7644 `ListResponse`, 1-based `startIndex`, empty = 200 + `totalResults: 0` —
+  `totalResults` is the full match count, not the page size, and `startIndex` echoes the
+  request, for `/Users` **and** `/Groups`. A `{id}` that is not a well-formed UUID is
+  **404** without reaching the database.
+
+  > **⚠ GAP-53 · code fix:** unfiltered `GET /Groups` (`worker/src/scim/router.ts`)
+  > calls `scimListResponse(resources, resources.length)`, so `totalResults` is the page
+  > size and `startIndex` is always 1 (`/Users` is correct). And `/Users/:id` /
+  > `/Groups/:id` pass a non-UUID id straight to a uuid column, answering 500.
 - **Writes are idempotent upserts keyed on `externalId`** (fall back to `id`; neither → 400).
   Duplicate POST returns the existing resource logic per contract (409 on `userName`
-  uniqueness conflicts). All SCIM writes set `scim_synced=true` and stamp `updated_at`.
+  uniqueness conflicts). All SCIM writes set `scim_synced=true` and stamp `updated_at` —
+  on groups too, including a membership-only change. A scrubbed (GDPR-erased) user is
+  never written: id-addressed writes answer 404, a POST matching it by `externalId`
+  answers 409 (INNOBOX_SPEC.md §3).
+
+  > **⚠ GAP-54 · code fix:** (a) a POST `/Users` whose `externalId` already exists calls
+  > `updateUserFull` without the `userName` conflict check PUT and PATCH run, so a clash
+  > hits the unique index and answers **500**; run the check, and map Postgres `23505`
+  > to 409 in the error tail as a backstop. (b) `markGroupScimSynced` sets only
+  > `scim_synced`, so membership-only writes never bump `groups.updated_at`.
+  > (c) Scrubbed rows: GAP-12.
 - **PATCH quirks handled**: case-insensitive `op`; `active` deactivation in all three
-  serializations (bool, string `"False"`, path-less `{value:{active:false}}`); unknown paths
-  applied-if-stored else ignored with 204 (never fail the sync); group membership `Add`/
-  `Remove` including the `members[value eq "…"]` filter-path form; unknown member ids
-  ignored (reconciliation heals ordering races).
+  serializations (bool, string `"False"`, path-less `{value:{active:false}}`); the work
+  e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less
+  `emails` array); `externalId` (which is how a re-mapped tenant undoes a sign-in relink,
+  INNOBOX_SPEC.md §3); unknown paths applied-if-stored else ignored — the response is
+  **200 with the resource or 204**, both of which Entra accepts (never fail the sync);
+  group membership `Add`/`Remove` including the `members[value eq "…"]` filter-path form;
+  unknown member ids ignored (reconciliation heals ordering races).
+
+  > **⚠ GAP-55 · code fix:** `applyUserAttr` in `worker/src/scim/patch.ts` has no case
+  > for `emails` in either form, and `NormalizedUserPatch.email` is never set, so a PATCH
+  > can never change a user's e-mail (only POST/PUT do); `externalId` is ignored too. Add
+  > both, with `patch.test.ts` cases using Entra's literal payloads.
 - **DELETE `/Users/{id}`** → deactivate (leaver semantics, §2), idempotent 204.
   **DELETE `/Groups/{id}`** → remove group + memberships; `role_mappings` rows survive and
   are flagged "dead" in the admin UI.
@@ -244,15 +286,16 @@ provisioning contract, including the Entra dialect quirks:
 - **Pass**: with Graph client credentials —
   1. Every local `active` user → `GET /users/{oid}` (`accountEnabled`, profile fields):
      missing or disabled → deactivate (audited `recon.user_deactivated`); refresh
-     `display_name/email/user_name/department/job_title/office_location`; fetch the 96px
-     photo when the ETag changed. The three directory-profile fields
+     `display_name/email/user_name/department/job_title/office_location`; fetch the
+     240×240 photo (INNOBOX_SPEC.md §3.1) when the ETag changed. The three directory-profile fields
      (`department`/`job_title`/`office_location`, INNOBOX_SPEC.md §13.8) are refreshed
      **unconditionally** like every other attribute here — a Graph value that is absent
      or empty writes NULL, so clearing an attribute upstream clears it locally. All
      three ride the `$select` this pass already issues: **no extra request, no new
      permission** (default properties of the user resource, covered by application
      `User.Read.All`). Because this pass visits *every* local active user, a user who
-     belongs to no role-mapped group still gets a current directory profile.
+     belongs to no role-mapped group still gets a current directory profile. (Empty
+     strings → NULL: GAP-13 in INNOBOX_SPEC.md §3.)
   2. Every synced group ∪ every group referenced by `role_mappings` ∪ the bootstrap group →
      `GET /groups/{id}/members` → replace local membership (creating JIT-grade stubs for
      unknown members); group gone in Entra → drop group + memberships (audited).
@@ -284,7 +327,8 @@ provisioning contract, including the Entra dialect quirks:
   `GET|POST /api/admin/namespaces`, `PATCH /api/admin/namespaces/:id` (rename/archive),
   `GET|POST|DELETE /api/admin/role-mappings`; an `/admin` page listing namespaces and
   mappings (group display name from the synced store, dead-mapping flag). Sidebar shows
-  "Administration" to platform admins only.
+  "Administration" to platform admins and namespace admins; the platform-admin cards are
+  hidden from namespace admins (INNOBOX_SPEC.md §14).
 - Account menu shows the real signed-in user (name, initials avatar, Sign out).
 
 ## 6. Security invariants (restated for InnoBox)
@@ -330,12 +374,18 @@ provisioning contract, including the Entra dialect quirks:
 - **Negative**: missing/wrong bearer → 401 SCIM error (and no token in logs); deactivated
   user with a live session cookie loses access on next request; wrong-tenant issuer refused
   (config-level unit test).
+- **Reconciliation**: an integration test of one full pass against a stubbed Graph —
+  deactivation of a missing/disabled user, attribute refresh including empty → NULL, photo
+  etag skip, and membership replacement.
+
+  > **⚠ GAP-56 · code fix:** neither test exists. No web test covers the issuer/tenant
+  > configuration, and the worker has only `recon/diff.test.ts`, no pass-level test.
 - Verification checklists of all three layers (authentication, provisioning, authorization), walked against the
   Entra portal (Test Connection, provision-on-demand, leaver, group→role, re-enable).
 
 ## 9. Out of scope / accepted gaps
 
-Front-channel logout; multi-tenant sign-in; photos beyond the 96px thumbnail; SCIM bearer
+Front-channel logout; multi-tenant sign-in; photo sizes beyond the one stored 240×240 image; SCIM bearer
 dual-token rotation (pause-swap-resume documented instead); Prometheus `/metrics` (later
 phase); SAML (§19). The §12 e-mail engine uses a separate app registration (§3.2) and is
 not in scope for this identity spec beyond the runbook entry above.
