@@ -20,7 +20,8 @@ test("likes and follows expose POST (toggle) and DELETE (idempotent), with the s
   for (const { file, api, parser } of ROUTES) {
     const source = readFileSync(file, "utf8");
     for (const method of ["POST", "DELETE"]) {
-      assert.match(source, new RegExp(`export const ${method} = withSystemLog\\("${api.replace(/\//g, "\\/")}", handle${method}\\);`), `${api} ${method}`);
+      // A literal substring check — no regex is built from the route path, so nothing needs escaping.
+      assert.ok(source.includes(`export const ${method} = withSystemLog("${api}", handle${method});`), `${api} ${method}`);
       const m = new RegExp(`async function handle${method}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(source);
       assert.ok(m, `${api} handle${method}`);
       const body = m[1]!;
