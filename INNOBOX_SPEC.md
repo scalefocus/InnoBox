@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.10 — draft for review** (2026-10-08; v0.2 added the UI and CI/CD
+> Status: **v0.11 — draft for review** (2026-10-09; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -30,7 +30,9 @@
 > Teams or any JSON receiver (§12.4), and featured challenges on Home (§13.2); v0.11
 > (2026-10-09) followed a full spec-vs-code audit: where the shipped behaviour was
 > accepted the spec now describes it, and every place where the code still has to change
-> is marked inline (see *Implementation gaps* below)).
+> is marked inline (see *Implementation gaps* below); a second pass re-triaged every
+> marker against the code shipped since, deleted the closed ones, and wrote in the
+> product owner's decisions and the defaults chosen where the spec was silent).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -96,12 +98,6 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
   credentials; the notification sweep (SMTP needs no Entra), the ClamAV scan sweep, and
   the draft and upload-session GC run regardless.
-
-  > **⚠ GAP-01 · code fix:** `packages/worker/src/index.ts` schedules the notification
-  > sweep, the scan sweep and the hourly draft/upload-session GC *after* the early
-  > `return` taken when `ENTRA_TENANT_ID`/`CLIENT_ID`/`SECRET` are missing, so a
-  > deployment without Entra credentials never scans, never sends SMTP mail and never
-  > reaps stale uploads. Move them before the check; keep only Graph-dependent work after it.
 - **`packages/shared`** — domain types, RBAC resolution, state-machine logic,
   validation.
 - **Postgres** — metadata, `tsvector` FTS, append-only `audit_log`.
@@ -254,12 +250,11 @@ including theme-aware scrollbars and form controls. Pinned values:
   - **Unauthenticated** — the wordmark and version colophon only, **no nav links**,
     and a primary **"Sign in with Entra ID"** button occupying the exact sidebar-foot
     slot the account menu uses when signed in; the topbar shows only the theme toggle
-    (search and bell are hidden). The button starts Entra OIDC sign-in and honors a
-    `callbackUrl` (default `/`). The accompanying main area is the §13.2 landing.
-
-    > **⚠ GAP-02 · code fix:** `AppShell.tsx` still renders the mobile hamburger
-    > (`nav-toggle`) when signed out; it opens an empty drawer. Hide it while
-    > unauthenticated.
+    and, on mobile, the drawer toggle (search and bell are hidden). On mobile the
+    sidebar is the off-canvas drawer as usual, so the signed-out drawer holds the
+    wordmark, the sign-in button and the colophon — the drawer toggle is the only route
+    to sign-in there and is therefore kept. The button starts Entra OIDC sign-in and
+    honors a `callbackUrl` (default `/`). The accompanying main area is the §13.2 landing.
   - **Loading** — neutral (no nav, no foot control) until the session resolves, so
     the shell never flashes the wrong state.
   There is **no** separate Auth.js sign-in page: the "Sign in with Azure Active
@@ -282,12 +277,6 @@ including theme-aware scrollbars and form controls. Pinned values:
     add 5 px inner padding and rounded per-row hover. Content popovers — the §13.8
     directory card and the notification panel — keep their own content padding. This is
     the account-menu look §7.3 already calls the standard popover chrome.
-
-    > **⚠ GAP-03 · code fix:** in `globals.css`, `.menu-pop` carries only the animation;
-    > the fill/border/radius/shadow is repeated in each popover's own class
-    > (`.user-menu`, `.user-search-pop`, `.search-ac`, `.msg-panel`, `.dir-card`). Move
-    > the shared chrome onto `.menu-pop` (or one base class every popover uses) and drop
-    > the copies.
   - **In scope today:** the account menu, the notification panel (desktop), the §7.3
     assignee search on the challenge detail page, the §14.1 triage assignee pickers
     (filter-by-assignee, bulk-assign, per-row assign), the §13.8 directory card, and the
@@ -375,36 +364,58 @@ The delivery pipeline, pinned:
   stack (which serves internally on :8080).
 - **No organization-specific value lives in the repository** (open-source
   readiness, §2.2 attribution rule). Concretely:
-  - **No org-specific fallbacks in code.** `PUBLIC_BASE_URL` falls back to
-    `http://localhost:3000` (development) instead of a production host; `SMTP_FROM`
-    has no baked-in address — when unset it falls back to `SMTP_USER`, and if both
-    are unset the SMTP transport is treated as **not configured** (the Graph
-    transport and the in-app inbox are unaffected); the SCIM
-    `serviceProviderConfig.documentationUri` is derived from `PUBLIC_BASE_URL` and
-    **omitted** when that is unset (it is optional in SCIM 2.0).
+  - **No org-specific fallbacks in code.** Web and worker read the canonical URL
+    through **one `publicBaseUrl()` helper in `@innobox/shared`** — e-mail and
+    notification deep links, channel-webhook item links, the e-mail consent redirect,
+    the Open Graph `metadataBase`, and the SCIM `serviceProviderConfig.documentationUri`
+    all take it from there; no other variable (`NEXTAUTH_URL` included) is consulted as
+    a fallback. Outside production (`NODE_ENV !== "production"`) an unset or blank
+    `PUBLIC_BASE_URL` falls back to `http://localhost:3000`. **In production an unset or
+    blank `PUBLIC_BASE_URL` is a start-up refusal**: web (in the instrumentation
+    `register` hook) and worker each log a fatal structured error naming the variable and
+    exit 1 — the same guard pattern as the `INNOBOX_DEV_AUTH` / `CSP_MODE` refusals below
+    and the tenant guard (`ENTRA_AUTH_SPEC.md` §5), so a missing URL fails the `/readyz`
+    smoke check instead of shipping empty links. (The edge-middleware consumers — the
+    CSRF origin check, the CSP report endpoint and HSTS, §2.4 — follow the same
+    variable; in local dev with it unset they use the request's own origin.)
+    `SMTP_FROM` has no baked-in address — when unset or blank it falls back to
+    `SMTP_USER`, and if both are unset the SMTP transport is treated as **not
+    configured** (the Graph transport and the in-app inbox are unaffected). Web and
+    worker apply the one rule: SMTP counts as configured only with `SMTP_HOST` **and** a
+    sender (`SMTP_FROM` or `SMTP_USER`), blank values counting as unset; compose passes
+    `SMTP_USER` and `SMTP_FROM` to both services.
 
-    > **⚠ GAP-04 · code fix:** two fallbacks don't behave as stated.
-    > (a) `PUBLIC_BASE_URL` falls back to `http://localhost:3000` only in `layout.tsx`;
-    > `lib/email.ts` `webBaseUrl()` falls back to an undocumented `INNOBOX_REGISTRY_URL`,
-    > then `NEXTAUTH_URL`, then `""`, and the worker's notification and webhook base URLs
-    > fall back to `""`. Use one `publicBaseUrl()` helper in `@innobox/shared` everywhere
-    > and drop `INNOBOX_REGISTRY_URL`.
-    > (b) The worker uses `SMTP_FROM ?? SMTP_USER`, but compose passes an unset
-    > `SMTP_FROM` as `""`, so the fallback never fires and SMTP is silently off. Use `||`.
-    > On web, `lib/email.ts` treats SMTP as configured on `SMTP_HOST` alone; it must also
-    > require `SMTP_FROM` or `SMTP_USER`, and compose must pass both to `web`.
+    > **⚠ GAP-04 · code fix:** (a) there is no shared helper. `app/layout.tsx` uses
+    > `PUBLIC_BASE_URL ?? "http://localhost:3000"` regardless of `NODE_ENV`;
+    > `lib/security-headers.ts` `canonicalBaseUrl()` (behind `lib/email.ts`
+    > `webBaseUrl()`), `lib/csrf.ts` `allowedOrigins()`, `lib/auth-cookie-sweep.ts` and
+    > `api/admin/webhooks/responses.ts` fall back to `NEXTAUTH_URL`; the worker passes
+    > `PUBLIC_BASE_URL ?? ""` to the notification sweep (`worker/src/index.ts`) and the
+    > webhook sweep (`webhooks/deliver.ts` `startWebhookSweeps`), and
+    > `scim/resources.ts` reads the variable directly. Add `publicBaseUrl()` to
+    > `@innobox/shared`, route every consumer through it, drop the `NEXTAUTH_URL`
+    > fallbacks, and add the production refusal to `web/src/instrumentation.ts` and the
+    > worker's start-up. (b) Web: `lib/email.ts` sets `smtpConfigured` from `SMTP_HOST`
+    > alone — reuse the worker's `buildSmtpEnv` rule (`worker/src/notifications/smtp-env.ts`,
+    > moved to `@innobox/shared`), and pass `SMTP_USER` / `SMTP_FROM` to the `web`
+    > service in `deploy/docker-compose.yml`.
   - **Committed files carry placeholders, never real values** — `deploy/.env.example`,
     `docker-compose.yml`, the `Caddyfile`, the `Jenkinsfile`, `README.md`, and the
     specs use `https://innobox.example.com`, `innobox@example.com`, and
     `<your-git-host>` in prose, examples, and comments. Test fixtures use addresses
     on reserved example domains only — `example.com` or the `.test` top-level domain
     (`@example.test`) — plus the dev sign-in default `dev@innobox.innovate`, which
-    names the product, not a deployment.
+    names the product, not a deployment. The same rule binds product code: the
+    synthetic user name of a dev sign-in persona is `<slug>@dev.test`.
 
-    > **⚠ GAP-05 · code fix:** fixtures still use real-looking domains:
-    > `@contoso.com` (`worker/src/scim/filter.test.ts`, `resources.test.ts`,
-    > `scim.dbtest.ts`), `a@x.com` / `b@x.com` (`resources.test.ts`) and `a@b.com`
-    > (`notifications/dispatch.test.ts`). Move them to `@example.com`.
+    > **⚠ GAP-05 · code fix:** non-reserved domains remain. Product code:
+    > `web/src/lib/users.ts` builds the dev persona's `userName` as `<slug>@dev.local` —
+    > make it `@dev.test`, with `lib/users.test.ts` and `e2e/helpers/auth.ts` (which
+    > fills `@dev.local`). Fixtures → `@example.com`: `@contoso.com`
+    > (`worker/src/scim/filter.test.ts`, `resources.test.ts`, `scim.dbtest.ts`),
+    > `a@x.com` / `b@x.com` (`resources.test.ts`), `a@b.com`
+    > (`worker/src/notifications/dispatch.test.ts`) and `svc@corp.com`
+    > (`shared/src/email-graph.test.ts`).
   - **Real values reach production only through the Jenkins credentials vault** —
     the `innobox-deploy-env` secret file (the production `deploy/.env`, carrying
     `PUBLIC_BASE_URL`, `SMTP_FROM`, and every secret) plus the `innobox-deploy-host`,
@@ -425,10 +436,9 @@ The delivery pipeline, pinned:
   stages nobody outside the organization can run and duplicates the Actions
   workflow.
 
-  > **⚠ GAP-06 · code fix:** `.github/workflows/ci.yml` triggers `push` only on
-  > `main` (must be every branch), its `build` job builds only `@innobox/shared` and
-  > `@innobox/web` (must be the recursive `pnpm -r build`, so the worker is built), and
-  > the integration job uses `postgres:16-alpine` instead of `postgres:16`.
+  > **⚠ GAP-06 · code fix:** the `build` job in `.github/workflows/ci.yml` builds only
+  > `@innobox/shared` and `@innobox/web`; it must run the recursive `pnpm -r build`, so
+  > the worker is built too.
 - **CI (Jenkins declarative pipeline) — retained for deploy, and as the internal
   pre-deploy gate:** stages —
   **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
@@ -447,12 +457,6 @@ The delivery pipeline, pinned:
   idempotently ensures the MinIO bucket, and smoke-checks `/readyz` before the
   pipeline goes green. If `/readyz` never answers `ok` within the retry window, the
   stage **fails**.
-
-  > **⚠ GAP-07 · code fix:** the `Jenkinsfile` loop
-  > `for i in $(seq 1 30); do curl -fsS …/readyz && break || sleep 3; done` always exits
-  > 0 (its last command is `sleep 3`), so a deploy whose web container never becomes
-  > ready — including the deliberate start-up refusals below — still goes green. Exit 0
-  > on success inside the loop and exit 1 after it.
 - **Jenkins credentials vault entries:** `innobox-deploy-env` (secret file — the
   production env), `innobox-deploy-ssh` (SSH key to the deploy host), and the
   `innobox-deploy-host` / `innobox-deploy-path` / `innobox-repo-url` strings. No secret
@@ -495,11 +499,18 @@ The delivery pipeline, pinned:
   - **Egress:** web and worker need outbound HTTPS (443) to channel-webhook receivers
     (Teams Workflows URLs are on `*.logic.azure.com` or
     `*.environment.api.powerplatform.com`). No forward-proxy support in v1 (§12.4).
+- **Object-store credentials:** `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` are optional
+  overrides in `deploy/.env` that default to the MinIO root credentials
+  (`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`). Compose wires them into **web and
+  worker** as `S3_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-innobox}}` and
+  `S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}`, so setting the
+  overrides points both services at a separate key without touching how MinIO itself
+  starts. `deploy/.env.example` documents both as optional.
 
-  > **⚠ GAP-08 · code fix:** `deploy/.env.example` documents `S3_ACCESS_KEY_ID` /
-  > `S3_SECRET_ACCESS_KEY`, but `docker-compose.yml` passes neither to any service (it
-  > wires `S3_ACCESS_KEY` / `S3_SECRET_KEY` from `MINIO_ROOT_*`), so setting them in
-  > `deploy/.env` does nothing. Document only what compose actually passes through.
+  > **⚠ GAP-08 · code fix:** `deploy/docker-compose.yml` wires `S3_ACCESS_KEY` /
+  > `S3_SECRET_KEY` for `web` and `worker` straight from `MINIO_ROOT_*`, so the
+  > documented `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` overrides do nothing. Use the
+  > nested defaults above for both services.
 
 ### §2.4 Web security baseline
 
@@ -519,8 +530,8 @@ these rules close the generic web-platform paths by which it could.
     a production build. In the `enforce` and `report-only` modes (below) the policy
     also carries `report-uri /api/csp-report` and `report-to csp`, and the response
     carries the companion `Reporting-Endpoints: csp="<origin>/api/csp-report"`, where
-    `<origin>` is the origin of `PUBLIC_BASE_URL` (falling back to `NEXTAUTH_URL`; in
-    local dev with neither set, the request's own origin). Both are sent because
+    `<origin>` is the origin of `PUBLIC_BASE_URL` (in local dev with it unset, the
+    request's own origin; §2.3). Both are sent because
     browsers differ: the Reporting API (`report-to`) delivers only to `https`
     endpoints and batches, while the legacy `report-uri` covers the rest.
   - **CSP mode — `CSP_MODE=enforce | report-only | off`** (env, default **`enforce`**).
@@ -611,12 +622,11 @@ these rules close the generic web-platform paths by which it could.
   - Single-shot attachment upload (§11): the chunk size plus 64 KB of multipart
     overhead — anything larger must use the chunked protocol anyway.
   - Chunked-upload part (§11): the session's negotiated chunk size.
-  - The bundled reverse proxy enforces an outer cap of the maximum upload size plus
-    1 MB as a backstop; the per-route limits above are the real ones.
-
-    > **⚠ GAP-09 · code fix:** `deploy/Caddyfile` has no `request_body { max_size … }`
-    > in either handle block. Add it, sized from an env value with a default of the
-    > 200 MB settings ceiling plus 1 MB (e.g. `{$MAX_REQUEST_BODY:201MB}`).
+  - The bundled reverse proxy enforces a site-wide outer cap as a backstop:
+    `request_body { max_size {$PROXY_MAX_BODY_SIZE:201MiB} }` — by default the 200 MB
+    settings ceiling for the maximum upload size plus 1 MB, since the proxy cannot read
+    the runtime setting; an operator who pins a lower maximum may tighten it through
+    `PROXY_MAX_BODY_SIZE`. The per-route limits above are the real ones.
   - The CSP report sink: **64 KB** (above).
 - **Outbound requests.** The only user-configured outbound HTTP the platform makes is
   the channel webhook (§12.4). It is `https` on port 443 only, refuses private,
@@ -634,9 +644,6 @@ these rules close the generic web-platform paths by which it could.
     every assignee/successor picker (`GET /api/users?q=`) — and the §6.1 similarity
     check — **120 per minute** (the one limited read: each is a query a script could
     hammer, and the directory search could otherwise enumerate every user);
-
-    > **⚠ GAP-10 · code fix:** `GET /api/users?q=` has no rate limit. Apply the same
-    > `search` bucket as `/api/search`.
   - every other state-changing API request — **120 per minute**.
   An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
   requests — try again shortly."). Rate-limit rejections are **logged** (structured
@@ -735,14 +742,6 @@ Entra runbook); on conflict this document wins.
     admin resolves it in Entra (the SCIM `externalId` mapping or the duplicate
     account). The unique index makes two simultaneous candidates structurally
     impossible; the branch is kept as a defensive guard.
-
-    > **⚠ GAP-11 · code fix:** every refused sign-in (this conflict, and a deactivated
-    > account, §5 of `ENTRA_AUTH_SPEC.md`) currently lands on Auth.js's built-in error
-    > page at `/api/auth/error`, not on `/?error=AccessDenied`. `lib/authOptions.ts`
-    > sets only `pages: { signIn: "/" }`, and next-auth 4 does not redirect
-    > `AccessDenied` to the sign-in page. Set `pages.error: "/"` so the landing's
-    > existing `AccessDenied` message shows, and cover it with an e2e test (deactivated
-    > user signs in → landing message).
   - **SCIM can undo a relink.** If the tenant maps a *different* Entra object to the
     SCIM resource, that object's next SCIM `PUT` rewrites `external_id` back (or its
     SCIM DELETE deactivates the row). Because the relinked row has been used by then,
@@ -754,16 +753,26 @@ Entra runbook); on conflict this document wins.
   source of truth. Periodic reconciliation against Entra corrects drift. Deactivated
   users lose access immediately at session validation. **SCIM DELETE deactivates**
   (idempotent) — it never triggers the GDPR scrub, which stays a deliberate, audited
-  platform-admin action. **SCIM never writes to an erased row.** A SCIM write addressed
-  to a scrubbed user (`scrubbed_at` set) by id answers **404**, a `POST /Users` whose
-  `externalId` belongs to one answers **409**, and SCIM list/filter reads never return
-  one. Nothing on the row changes, so erased personal data cannot flow back from Entra,
-  and each refusal is audited as `scim.anomaly`. Reconciliation already skips scrubbed
-  rows.
+  platform-admin action. **SCIM never writes to — or returns — an erased row.** Every
+  id-addressed `/Users/{id}` verb (`GET`, `PUT`, `PATCH` **and** `DELETE`) on a
+  scrubbed user (`scrubbed_at` set) answers **404**, exactly as a malformed (non-UUID)
+  id does (`ENTRA_AUTH_SPEC.md` §5); a well-formed id that matches no row keeps the
+  idempotent **204** on `DELETE`. A `POST /Users` whose `externalId` matches a scrubbed
+  row answers **409**. SCIM list and filter reads exclude scrubbed rows — from the
+  resources and from `totalResults`. A group membership add (`POST`, `PUT` or `PATCH`
+  on `/Groups`) naming a scrubbed user treats it as an unknown member: nothing is
+  written. Nothing on the row changes, so erased personal data cannot flow back from
+  Entra, and each refusal on an erased row is audited as `scim.anomaly`.
+  Reconciliation already skips scrubbed rows.
 
-  > **⚠ GAP-12 · code fix:** `worker/src/scim/router.ts` never checks `scrubbed_at`; a
-  > later SCIM `PUT`/`PATCH` for an erased user refills name, e-mail and UPN, sets
-  > `scim_synced = true`, and can reactivate the row. Add the refusals above.
+  > **⚠ GAP-12 · code fix:** `worker/src/scim/router.ts` never checks `scrubbed_at`:
+  > `findUserById`, `findUserByExternalId` and `findUserByUserNameCI` return erased
+  > rows, so `GET`/`PUT`/`PATCH`/`DELETE /Users/:id` act on them (a `PUT`/`PATCH`
+  > refills name, e-mail and UPN, sets `scim_synced`, and can reactivate the row), a
+  > `POST /Users` with a matching `externalId` runs `updateUserFull` on one, the
+  > `GET /Users` page, filter and count include them, and `addMembersTolerantly`
+  > (via `userExists`) adds them to groups. Add the refusals above, each audited
+  > `scim.anomaly`, with `scim.dbtest.ts` cases.
 - **User attributes:** display name, e-mail, department, job title, **office
   location**, photo (Entra); cached locally, refreshed by reconciliation. Department,
   job title and office location are the **directory profile** — display-only data
@@ -781,9 +790,10 @@ Entra runbook); on conflict this document wins.
   fetches nothing from Graph (§3.1); a JIT stub therefore shows no office location for
   at most one reconciliation interval, exactly as it shows no photo.
 
-  > **⚠ GAP-13 · code fix:** `worker/src/recon/graph.ts` maps values with `?? null`,
-  > so an empty or blank string from Graph (`department`, `jobTitle`, `officeLocation`,
-  > `mail`) is stored as `""` instead of NULL. Normalize with `v?.trim() || null`.
+  > **⚠ GAP-13 · code fix:** `worker/src/recon/graph.ts` `getUser` normalizes the three
+  > directory fields through `directoryAttr`, but still maps `mail: j.mail ?? null`, so
+  > an empty or blank `mail` from Graph is stored as `""`. Route `mail` through
+  > `directoryAttr` too.
 - **SCIM stays unmapped for office location.** The SCIM payload carries `title` and the
   enterprise `department` as today, but **no** office attribute — SCIM writes must never
   touch `office_location` (leaving it to reconciliation), so **no Entra provisioning
@@ -853,9 +863,9 @@ Entra runbook); on conflict this document wins.
   **The `user.scrubbed` audit row** records `reassignedTo` (user id or null),
   `reassignedCount` and `skippedCount` — numbers and ids only, never content.
 
-  > **⚠ GAP-14 · code fix:** the `scrubUser` UPDATE in `api/users/store.ts` leaves the
-  > four seen markers and all notification preferences untouched. Clear/reset them as
-  > above and assert it in `store.dbtest.ts`.
+  > **⚠ GAP-14 · code fix:** the `scrubUser` UPDATE in `api/users/store.ts` sets
+  > `email_notifications_enabled = default` (true); it must be `false`. Flip the
+  > assertion in `api/users/store.dbtest.ts`, which currently expects `true`.
 
   **The "Delete user info (GDPR)" card** (Administration console, platform admins).
   Choosing **Delete info** on a search result opens an inline confirmation, replacing
@@ -891,14 +901,16 @@ shown (§13.6).
   the initials bubble). The endpoint exposes **no other profile data** and never
   serves a photo for content whose author is masked (§9 — the client never learns
   an anonymous author's id in the first place, invariant 3). The response's
-  `Content-Type` is the stored image's real type (JPEG or PNG), and its `ETag` is the
-  stored Graph etag as one well-formed quoted string.
+  `Content-Type` is the stored image's real type (JPEG or PNG, sniffed from the leading
+  bytes), and its `ETag` is the stored Graph etag as one well-formed entity tag: a value
+  that is already quoted — strong, or weak with a `W/` prefix — is sent unchanged, and
+  only an unquoted value is wrapped in quotes. `If-None-Match` is compared against that
+  same form.
 
-  > **⚠ GAP-15 · code fix:** `api/users/[userId]/photo/route.ts` always sends
-  > `content-type: image/jpeg`, and wraps the stored `@odata.mediaEtag` in a second pair
-  > of quotes, which yields a malformed `ETag` when Graph's value is already quoted.
-  > Detect the type from the leading bytes (or store it at sync) and quote only an
-  > unquoted etag.
+  > **⚠ GAP-15 · code fix:** `api/users/[userId]/photo/route.ts` always wraps the stored
+  > `photo_etag` in quotes (`` `"${row.photo_etag}"` ``), which yields a malformed `ETag`
+  > when Graph's value is already quoted or weak. Quote only an unquoted value, pass a
+  > `W/"…"` value through, and compare `If-None-Match` against the result.
 - **Deactivation:** when a user deactivates (SCIM or reconciliation), the cached
   photo bytes + etag are cleared; the user renders as a greyed initials bubble
   thereafter (§13.6).
@@ -911,11 +923,19 @@ shown (§13.6).
 
 - A **namespace** represents a business unit / organizational scope. Platform admins
   create, rename, and archive namespaces (archive blocks new submissions — no new
-  challenge into the namespace and no new solution on any of its challenges, refused
-  with 409; existing content remains readable per its visibility).
+  challenge into the namespace and no new solution on any of its challenges, each
+  refused with **409** and `code: "namespace_archived"`; an id that matches no
+  namespace at all stays a 400; existing content remains readable per its visibility).
 
-  > **⚠ GAP-16 · code fix:** `createChallenge` refuses an archived namespace, but
-  > `createSolution` has no archived check. Add it.
+  > **⚠ GAP-16 · code fix:** `createSolution` (`api/challenges/store.ts`) has no
+  > archived-namespace check. Refuse with 409 `code: "namespace_archived"` in
+  > `api/challenges/[number]/solutions/route.ts`.
+
+  > **⚠ GAP-57 · code fix:** `createChallenge` (`api/challenges/store.ts`) folds an
+  > archived namespace into `unknown_namespace` (`archived_at is null` in the lookup),
+  > which `api/challenges/route.ts` answers with **400** "namespace not found or
+  > archived". Return a distinct result for an archived namespace and answer 409
+  > `code: "namespace_archived"`.
 - A built-in **`global`** namespace always exists; **every authenticated user is an
   implicit member** of `global`.
 - Namespace membership and roles come from Entra groups mapped in `role_mappings`
@@ -944,19 +964,33 @@ A user may hold different roles in different namespaces. Roles are additive.
   challenge's visibility.**
 - Additional state-based visibility (applies on top, most restrictive wins):
   - `awaiting_triage` and `withdrawn` challenges: visible only to their author,
-    the namespace's admins, and platform admins.
+    the namespace's admins, and platform admins. For these three the state rule
+    **replaces** the namespace rule rather than narrowing it: the author of a
+    `namespace`-visible item keeps seeing it even after losing membership of its
+    namespace. The same predicate holds in every list, count and search (the SQL form)
+    as on the detail page.
+
+    > **⚠ GAP-58 · code fix:** the SQL twin of `canSeeChallenge`
+    > (`pushChallengeVisibilityConditions`, `api/challenges/store.ts`) ANDs the namespace
+    > condition with the state condition, so an author who has lost membership of a
+    > restricted namespace no longer finds their own `awaiting_triage`/`withdrawn` item
+    > in the gallery, the new-count or search, while `canSeeChallenge`
+    > (`shared/src/challenges.ts`) still shows it on the detail page. Make the SQL match:
+    > for those two statuses, author or namespace admin of the item's namespace (or
+    > platform admin) regardless of membership.
   - Solutions in `proposed` status: visible only to their author, the challenge's
     assignee, and the namespace's committee/admins (mirrors the legacy behavior of
     hiding un-reviewed solutions).
-  - `rejected` / `not_selected` solutions: shown in a collapsed "closed solutions"
-    section of the challenge page to anyone who can see the challenge; excluded from
-    solution counts and galleries.
+  - `rejected` / `not_selected` / `withdrawn` solutions: shown in a collapsed
+    (`<details>`) "Closed solutions" section of the challenge page to anyone who can
+    see the challenge; excluded from solution counts and galleries. The detail page's
+    `Solutions (n)` heading counts only the open list above that section, consistent
+    with the gallery's solution count, which likewise leaves closed solutions out.
 
     > **⚠ GAP-17 · code fix:** the detail page (`challenges/[number]/page.tsx`) renders
-    > every solution in one list, and its heading count `Solutions (n)` includes
-    > `rejected`/`not_selected`. Split them into a collapsed `<details>` "Closed
-    > solutions" section and leave them out of the heading count. (The gallery's
-    > `solution_count` is already correct.)
+    > every visible solution in one list, and its heading `Solutions (n)` counts
+    > `challenge.solutions.length`. Move `rejected`/`not_selected`/`withdrawn` into a
+    > collapsed `<details>` "Closed solutions" section and count only the open list.
 - Search, autocomplete, KPIs, counts, and leaderboards are computed strictly within
   the viewer's visibility (invariant 2). Leaderboards additionally count **org-visible
   content only**, so a public leaderboard never hints at restricted work.
@@ -1239,8 +1273,11 @@ those two) clears any Home pin (§13.2), and the first transition into `valid` s
 `first_valid_at` (§5, §12.4). Entering `solved` sets `resolved_at`; **any** transition
 out of `solved` — the §10.3 revert or an admin override — clears it.
 
-> **⚠ GAP-18 · code fix:** an admin override out of `solved` leaves `resolved_at` set;
-> only the §10.3 delete-revert clears it. Clear it on every exit from `solved`.
+> **⚠ GAP-18 · code fix:** `applyChallengeStatusChange` (`api/challenges/store.ts`)
+> only sets `resolved_at` on entry to `solved`; an admin override (single or bulk) out
+> of `solved` leaves it set — only the §10.3 delete-revert in `challenges/delete.ts`
+> clears it. Clear it there whenever the previous status is `solved` and the new one
+> is not.
 
 Triage (leaving `awaiting_triage`) and assignment are namespace-admin actions;
 committee members operate from `in_review` onward.
@@ -1271,10 +1308,22 @@ A namespace admin assigns an active user as the challenge's **assignee** (search
 directory of active users). The assignee must be able to **see** the challenge under
 §4.3 — the same visibility gate as the §3 erasure hand-over: a `namespace`-visible
 challenge can go only to a member of its namespace or a platform admin, and an
-`awaiting_triage` one only to a namespace or platform admin of its namespace. The
-picker offers only such users (the directory search takes the challenge number and
-filters by it), and the API refuses anyone else with 422. Assignment/unassignment is
-audited and notifies the assignee (§12.1 event 7 — fixing the legacy bug where the
+`awaiting_triage` one only to a namespace or platform admin of its namespace. The gate
+applies **at assignment time only**:
+- the per-challenge pickers — the detail-page control and the §14.1 per-row assign
+  field — search `GET /api/users?q=&challenge=<number>`, which returns only users who
+  can see that challenge;
+- the assign API (single and §14.1 bulk) refuses anyone else — the single-item
+  endpoint with **422**, bulk assign with a per-item `assignee_cannot_see` outcome
+  while the rest of the selection proceeds;
+- the filter-by-assignee and bulk-assign search pickers (§14.1) span many challenges
+  and are **not** filtered;
+- an existing assignee who later **loses** visibility (a namespace-membership change,
+  a visibility change to `namespace`) keeps the assignment — there is no automatic
+  unassign and no assignee carve-out in §4.3, so they cannot open it — until an admin
+  reassigns it.
+
+Assignment/unassignment is audited and notifies the assignee (§12.1 event 7 — fixing the legacy bug where the
 notification went to the assigning admin with a `[TEST]` subject); a **reassignment**
 notifies both people — the new assignee that they were assigned and the previous one
 that they were unassigned. Assignment is possible from `awaiting_triage` onward and is
@@ -1282,15 +1331,15 @@ blocked on terminal statuses. The assignee gains the per-challenge powers in §4
 detail-page control both **assigns** and **unassigns** (an "Unassign" action beside
 the current assignee); the §14.1 triage queue offers the same through its inline field.
 
-> **⚠ GAP-19 · code fix:** three parts.
-> (a) Nothing checks that the assignee can see the challenge; `canSeeChallenge` has no
-> assignee carve-out, so an assignee outside a restricted namespace (or a non-admin on
-> an `awaiting_triage` item) holds a challenge they cannot open. Add the gate to the
-> picker search and the assign API.
-> (b) `api/challenges/[number]/assign/route.ts` notifies only the new assignee on
-> A → B; also notify A (unassigned).
-> (c) The detail page's assignee control can only assign; it never calls `assign(null)`.
-> Add "Unassign".
+> **⚠ GAP-19 · code fix:** nothing checks that the assignee can see the challenge.
+> `GET /api/users` (`api/users/route.ts` → `searchActiveUsers`) ignores any
+> `challenge` parameter, and `loadChallengeForAssignment` (`api/challenges/store.ts`,
+> shared by `setChallengeAssignee` and `setChallengeAssigneeLean`/`bulkAssign`) checks
+> only that the user is active. Add the `challenge=` filter (evaluated with the
+> candidate's roles resolved from SCIM-synced membership, as the §3 hand-over does),
+> pass it from the detail-page and per-row triage pickers, answer 422 from
+> `api/challenges/[number]/assign/route.ts`, and return `assignee_cannot_see` per item
+> from `bulkAssign`.
 
 **Search-result presentation.** The assignee search input opens a popover listing
 matching active users. Each result row is a single control laid out as: the user's
@@ -1370,24 +1419,27 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
      metrics);
   4. notifications fire (§12.1 event 8) and every change is audited — the challenge's
      `solved` row and each sibling's `not_selected` row as ordinary `status_changed`
-     rows carrying `before.status`, `after.status`, `override: false` and
-     `trigger: "auto_close"`, with the implementing actor as actor.
-
-  > **⚠ GAP-20 · code fix:** in `api/challenges/store.ts`, the auto-close's
-  > `challenge.status_changed` row has no `before.status` and no `override`, and the
-  > sibling `not_selected` rows have no `override`. Write the shape above.
+     rows carrying `before.status`, `after.status`, `override` and
+     `trigger: "auto_close"`, with the implementing actor as actor. `override`
+     **inherits the mode of the triggering transition**: the cascade rows are part of
+     the actor's one action, so an admin override that set `implemented` writes them
+     with `override: true`, and an enforced move with `override: false`.
 - A `solved` challenge accepts no new solutions, and comments stay open.
 - **Likes freeze while the challenge is closed** — status `solved`, `rejected` or
   `withdrawn`. Nobody can like or unlike the challenge **or any of its solutions**;
   existing counts stay displayed, the like buttons render disabled with the tooltip
-  *"Likes are closed for this challenge"*, and the API refuses a toggle with **409**.
-  If an admin moves the challenge back to an open status, likes reopen.
+  *"Likes are closed for this challenge"*, and the API refuses a toggle (like or
+  unlike) with **409** and a message that names no particular status. The challenge
+  detail payload carries a **`likesFrozen`** flag, which drives both the challenge's
+  and its solutions' buttons. If an admin moves the challenge back to an open status,
+  likes reopen.
 
-  > **⚠ GAP-21 · code fix:** nothing freezes likes today. `toggleLike` in
-  > `api/challenges/store.ts` and `api/likes/route.ts` never check the parent
-  > challenge's status, and the like buttons in `challenges/[number]/page.tsx` are
-  > always enabled. Add the 409 check (resolving a solution like to its challenge) and
-  > a `canLike` flag in the detail payload for the buttons.
+  > **⚠ GAP-21 · code fix:** the freeze covers `solved` only: `areLikesFrozen`
+  > (`shared/src/social.ts`) returns `challengeStatus === "solved"` — add `rejected`
+  > and `withdrawn`. `LIKES_FROZEN_HINT` (`web/src/lib/challenge-detail.ts`) reads
+  > "Likes are closed because this challenge is solved." and both 409s in
+  > `api/likes/route.ts` say "likes are closed on a solved challenge" — use the wording
+  > above. Extend `likes-frozen.dbtest.ts` to `rejected`/`withdrawn` and the reopen.
 - **If the `implemented` solution is later deleted** by a platform admin (§10.3), the
   auto-close is *not* replayed in reverse: the challenge reverts `solved → valid` with
   `resolved_at` cleared, while siblings closed as `not_selected` stay closed. The
@@ -1409,7 +1461,7 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
 - **Reveal:** namespace admins (own namespace) and platform admins can execute a
   per-item **"Reveal author"** action. The reveal is **transient** (shown in the UI
   for that admin, not persisted as unmasked) and **every execution is audited**
-  (who revealed whom, on which item, when). The reveal surface shows the author's
+  (who revealed whom, on which item, when). The reveal dialog shows the author's
   real avatar bubble (§3.1) alongside the revealed name, transiently. Committee
   members and assignees cannot reveal.
 - **Self-reveal:** the author can remove their own anonymity at any time (one-way);
@@ -1430,15 +1482,17 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
 always show "Anonymous" to every viewer, no exceptions. Both the audited admin
 **reveal** (transient, reveal-to-you-only) and author **self-reveal** (one-way) live on
 the challenge detail page — for the challenge **and for each listed solution**. The
-reveal renders inline on the item (no dialog) with the author's medium avatar bubble
-(§13.6). A self-reveal and its audit row commit in **one transaction**.
+admin reveal opens a **modal dialog** (one for challenges and solutions alike): an
+eyebrow naming the item (*"Author of CH-12"* / *"Author of SOL-7"*), the author's
+**large** avatar bubble (§13.6), their name and e-mail, a *"Revealed to you only"*
+pill and a note that everyone else still sees the item as anonymous and that the
+reveal was recorded in the audit log. Closing it (Close, Escape, or a backdrop click)
+drops the identity from the page state; nothing else on the page changes. A
+self-reveal and its audit row commit in **one transaction**.
 
-> **⚠ GAP-22 · code fix:** (a) the APIs `api/solutions/[number]/reveal` and
-> `…/self-reveal` exist, but the detail page offers Reveal / Reveal myself only for the
-> challenge; add them to each solution, reusing the challenge's components.
-> (b) `selfRevealSolution` (`api/challenges/store.ts`) runs the update and the audit
-> insert on the pool without a transaction; wrap both in `inTransaction` like the
-> challenge version.
+> **⚠ GAP-22 · code fix:** `selfRevealSolution` (`api/challenges/store.ts`) runs the
+> update and the audit insert on the pool without a transaction; wrap both in
+> `inTransaction` like the challenge version.
 
 ---
 
@@ -1525,16 +1579,18 @@ aborted and dropped. The transaction is all-or-nothing: a failure anywhere leave
 item exactly as it was. "Unsent" means every outbox row not yet `sent` — `pending`, and
 `failed` rows still eligible for retry — so no e-mail about the deleted item can go out
 afterwards. Notification rows are matched by the **target they carry** (entity type +
-id in the payload), not by their link text.
+id in the payload), not by their link text; every notification payload about a
+challenge or solution carries that target.
 
-> **⚠ GAP-23 · code fix:** `deleteNotifications` in `challenges/delete.ts` matches only
-> on `payload->>'link'`, using the exact `/challenges/N#SOL-M` link for a solution, so
-> rows that point at a solution through the challenge link survive — comment
-> notifications on a solution and the "solution proposed" notification. It also deletes
-> only `pending` outbox rows, so a `failed` row is still retried and can mail about a
-> deleted item. Add `targetType`/`targetId` to every notification payload, delete by
-> them (keeping the link match as a fallback for rows written before), and delete
-> `failed` outbox rows too.
+> **⚠ GAP-23 · code fix:** only comment notifications carry target fields
+> (`parentType`/`parentId`/`challengeId`, written by `dispatchCoalescedComment` in
+> `web/src/lib/notify.ts`); `dispatchEvent`/`dispatchToUser` (same file) and the
+> scan-failure writer in `shared/src/attachments.ts` write `{ message, link }` only, so
+> `deleteNotifications` (`api/challenges/delete.ts`) still falls back to the link for
+> them. On a solution delete the "solution proposed" row — linked to its challenge,
+> without `#SOL-n` (GAP-33) — therefore survives. Add the target type and id to every
+> notification payload through those writers and match on them, keeping the link match
+> for rows written before.
 
 **Object-store purge.** Once the transaction commits, the MinIO objects of every deleted
 attachment are purged — `clean`, `pending`, and author-removed rows alike (an `infected`
@@ -1600,11 +1656,6 @@ reason is validated (422) only for a platform admin who can see the item. Anonym
 unaffected: the audit row records the real author of an anonymous item (audit
 legitimately retains PII, §15) while no listing or admin screen surfaces that identity
 outside the audited reveal path (invariant 3).
-
-> **⚠ GAP-24 · code fix:** the `DELETE` handlers in `api/challenges/[number]/route.ts`
-> and `api/solutions/[number]/route.ts` (`validateDeleteReason`) validate the reason
-> before checking the caller, so a non-admin sending a missing reason gets 422 instead
-> of 404. Check permission and visibility first.
 
 **Database.** A migration grants the app role **DELETE** on `challenges`, `solutions`,
 `comments`, `attachments`, `notifications`, and `notification_outbox` (`likes` and
@@ -1696,10 +1747,6 @@ never deleted, by anyone, for any reason (invariant 5).
   gets 404, and only then does a non-author get 403. The same order applies to a bound
   chunked-upload initiate.
 
-  > **⚠ GAP-25 · code fix:** `uploadAttachment` and `initiateChunkedUpload` check
-  > authorship without checking parent visibility, so a non-author probing a parent
-  > they cannot see gets 403 instead of 404 — an existence oracle (invariant 2).
-
   Either
   path enforces the §14.3 limits (reject over-count 409, over-size 413) and validates the
   type against an **allowlist** — the file's extension **and** its declared MIME must
@@ -1754,7 +1801,7 @@ never deleted, by anyone, for any reason (invariant 5).
     §14.3 cap, `size` ≤ max-upload, and the extension+MIME allowlist **up front —
     fail-fast** (same 409/413/415 as single-shot), pre-allocates the `attachmentId` and
     its `object_key`, opens a **MinIO multipart upload**, writes an `attachment_uploads`
-    session row, and returns `{ uploadId, chunkSize }`. Before opening the new session it
+    session row, and returns `{ uploadId, chunkSizeBytes }`. Before opening the new session it
     **aborts the caller's own stale sessions** (see *Upload-session GC*).
   - **Send parts** — `PUT /api/attachments/uploads/:uploadId/parts/:n` streams one chunk;
     the server relays it to MinIO `UploadPart` (part `n`). Every non-final part is exactly
@@ -1776,23 +1823,31 @@ never deleted, by anyone, for any reason (invariant 5).
     the `pending` `attachments` row (bound or staged, exactly as single-shot) with
     `size_bytes` = the verified size, deletes the session row, audits `attachment.uploaded`,
     runs the **on-demand scan**, and returns the `AttachmentView`. **Every** path on which
-    `complete` aborts the session — `size_mismatch`, and also a parent that has vanished,
-    become invisible or left its edit window, or a cap reached in the meantime — audits
-    `attachment.upload_aborted` with its reason.
+    `complete` aborts the session audits `attachment.upload_aborted` with its reason:
+    `size_mismatch` (above); `parent_not_found` (the bound parent has vanished or the
+    caller can no longer see it); `forbidden` (the caller is not the parent's author);
+    `not_editable` (the parent has left its author-edit window); and `too_many` (the
+    §14.3 cap was reached in the meantime — whether found before reassembly or by the
+    locked re-count after it, in which case the reassembled object is deleted).
 
     > **⚠ GAP-26 · code fix:** in `completeChunkedUpload` (`api/attachments/store.ts`),
-    > the `abortAnd` path for not_found / forbidden / not_editable / too_many aborts the
-    > multipart and drops the session without an audit row. Audit each with its reason.
-  - **Failure** — a failed part is **retried by the browser**: up to **3** attempts per
-    part with a short backoff (re-sending a part number replaces it, above). Only when a
-    part still fails, or the user cancels, is the file abandoned. An **abort**
+    > the `abortAnd` paths for `not_found` / `forbidden` / `not_editable` / `too_many`,
+    > and the post-assembly `too_many` refusal (`dropAssembled`), drop the session
+    > without an audit row. Audit each with the reason above.
+  - **Failure** — a failed part is **retried by the browser** when the failure is a
+    network error, a 5xx or a 429: up to **3** attempts in all for that part, waiting
+    **1 s** before the second and **2 s** before the third (re-sending a part number
+    replaces it, above). Any other 4xx is never retried, and nothing is retried once the
+    user has cancelled. Only when a part still fails after its attempts, or the user
+    cancels, is the session aborted and the file abandoned. An **abort**
     (`POST …/abort`, or the GC) runs `AbortMultipartUpload`, frees the orphaned MinIO parts,
     drops the session row, and audits `attachment.upload_aborted`. No partial object is ever
     exposed (no `attachments` row exists until complete).
 
-    > **⚠ GAP-27 · code fix:** `lib/chunked-upload.ts` aborts the whole session on the
-    > first failed part (its comment calls this the approved design; this spec
-    > supersedes it). Retry each part as above before aborting.
+    > **⚠ GAP-27 · code fix:** `uploadFileInChunks` in `web/src/lib/chunked-upload.ts` aborts
+    > the whole session on the first failed part (its header comment calls this the
+    > approved design; this spec supersedes it). Retry each part as above before
+    > aborting, with unit tests for the retry classification.
 - **Binding at submit** — `POST /api/challenges` and the solution-create endpoint accept
   an optional `draftKey`. Inside the create transaction the server takes the caller's
   staged rows for that key (`uploaded_by = caller`, `parent_id is null`, `removed_at is
@@ -1807,15 +1862,19 @@ never deleted, by anyone, for any reason (invariant 5).
   binds nothing. Anonymity is unaffected:
   `uploaded_by` is retained but never sent to the client (invariant 3). The gate and the
   cap re-check run **inside** the create transaction, on the staged rows locked
-  `FOR UPDATE`, so a file staged or still scanning at that moment cannot slip through;
-  more staged rows than the cap allows refuses the create (409) rather than binding some
-  and silently dropping the rest. The 409 body carries `code: "attachments_not_clean"`
-  beside its message.
+  `FOR UPDATE`, so a file staged or still scanning at that moment cannot slip through.
+  Either refusal rolls the whole create back and answers **409** with a `code` beside
+  its message: an unclean staged row → `code: "attachments_not_clean"`; more staged rows
+  than the cap allows → `code: "attachments_over_limit"` (rather than binding some and
+  silently dropping the rest).
 
-  > **⚠ GAP-28 · code fix:** `hasUncleanStagedAttachments` runs before `inTransaction` in
-  > `createChallenge`/`createSolution`, so a row staged in between can bind while
-  > `pending`; rows over the cap are skipped by `LIMIT maxPerItem` instead of refused;
-  > and the 409 has no `code` field.
+  > **⚠ GAP-28 · code fix:** `hasUncleanStagedAttachments` (`api/attachments/store.ts`)
+  > runs on the pool before `inTransaction` in `createChallenge`/`createSolution`
+  > (`api/challenges/store.ts`), so a row staged in between can bind while `pending`;
+  > `bindStagedAttachments` skips rows over the cap (`limit $5` = `maxPerItem`) instead
+  > of refusing; and the 409s in `api/challenges/route.ts` and
+  > `api/challenges/[number]/solutions/route.ts` carry no `code`. Lock the staged rows
+  > `FOR UPDATE` inside the transaction, run both checks there, and return the two codes.
 - **Author removal** — `DELETE /api/attachments/:id`: allowed **only** to the
   uploader (who is the parent's author) and **only while the parent is in an
   author-edit window** (§10.1); **unbound staged rows are removable by their uploader at
@@ -1834,11 +1893,6 @@ never deleted, by anyone, for any reason (invariant 5).
   applies the verdict + `scanned_at`. On both paths "streams" is literal: the object is
   piped from MinIO into clamd's INSTREAM in chunks and is **never buffered whole in
   memory** — uploads may be up to 200 MB (§14.3).
-
-  > **⚠ GAP-29 · code fix:** the worker sweep (`worker/src/attachments/scan.ts`,
-  > `streamToUint8Array`) and the web on-demand scan (`attachments/scan.ts` via
-  > `storage.getObject`) both read the whole object into memory before scanning. Pipe
-  > the S3 body stream into the INSTREAM framing instead.
 
   The verdict: **Infected** → the object is deleted from MinIO (the
   row stays as an `infected` tombstone), the uploader is notified (§12.1 event 11), and
@@ -1917,19 +1971,15 @@ never deleted, by anyone, for any reason (invariant 5).
   to block — a bound file simply isn't downloadable until `clean` (unchanged gateway
   rule). Abandoned staged files are GC'd after 24 h; abandoned chunk sessions after 2 h.
   The §12.1 matrix keeps **event 11 — Attachment failed its scan → the uploader**.
-  "Removed at any phase" includes **Uploading**: a Cancel control aborts the in-flight
-  request (and, for a chunked file, the session). While a file is **Scanning…** the
+  "Removed at any phase" includes **Uploading**: while a file is in flight its control
+  is labelled **Cancel** and aborts the in-flight request (and, for a chunked file, the
+  session); once the file has landed (Scanning…, Ready, Failed scan, Couldn't be
+  scanned) the control is labelled **Remove**. While a file is **Scanning…** the
   control polls its status so the phase advances without a page reload, and the
   progress bar carries `role="progressbar"` with its value.
 
-  > **⚠ GAP-30 · code fix:** the detail page has its own `AttachmentsSection`
-  > (`challenges/[number]/page.tsx`) instead of the shared `StagedAttachments` control:
-  > no Ready state, different labels ("Removed — failed scan"), no polling (so
-  > "Scanning…" sticks until reload), no `role="progressbar"`. Use one component on all
-  > three surfaces (staged or bound mode). On both controls a single-shot upload shows
-  > the text "Uploading…" instead of a spinner, and there is no cancel during upload —
-  > the file input and Remove are disabled. Add a spinner and an `AbortController`-backed
-  > Cancel.
+  > **⚠ GAP-30 · code fix:** `components/AttachmentControl.tsx` labels the in-flight
+  > row's cancel button "Remove"; label it "Cancel".
 
 ---
 
@@ -1939,14 +1989,17 @@ never deleted, by anyone, for any reason (invariant 5).
 
 Every event produces **an e-mail and an in-app inbox item**, both fed from the same
 outbox table and dispatched by the worker (at-least-once, retry with backoff). A failed
-send is retried at most 5 times on an exponential schedule — about 1 min, 5 min,
-30 min, then 2 h — recorded per row in the outbox's `next_attempt_at`; a Graph `429`
-schedules the retry no earlier than its `Retry-After`.
+send is retried on an exponential schedule — 1 min after the first failure, then 2, 4,
+8 … minutes, capped at 60 — for at most **5** attempts in all, after which the row
+stays `failed`; the next attempt time is recorded per row in the outbox's
+`next_attempt_at`. A Graph `429` ends
+the current batch and schedules that row's retry no earlier than its `Retry-After`:
+the next attempt is the later of the backoff and the `Retry-After`.
 
-> **⚠ GAP-31 · code fix:** `worker/src/notifications/dispatch.ts` retries every
-> `failed` row on each 30-second sweep (`status='failed' and attempts<5`) with no
-> delay, and there is no `next_attempt_at` column (`0006_notifications.sql`); a 429
-> only ends the current batch. Add the column (migration) and the schedule.
+> **⚠ GAP-31 · code fix:** `worker/src/notifications/dispatch.ts` applies only
+> `emailRetryDelayMinutes` on a 429; `GraphSendError.retryAfterSeconds`
+> (`shared/src/email-graph.ts`) is never read. Set `next_attempt_at` to
+> max(backoff, Retry-After) for a 429.
 E-mail is sent via **Microsoft Graph `sendMail`** from a dedicated service mailbox
 (e.g. `innobox@example.com`) that a platform admin connects on the Administration page
 through a delegated consent flow (`Mail.Send` + `offline_access`, admin-consented).
@@ -1982,13 +2035,6 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 event on one of its solutions. "Challenge author" in event 8 is a recipient in its own
 right, not only through an auto-follow.
 
-> **⚠ GAP-32 · code fix:** (a) event 3 on a solution goes to its author and followers
-> only — `fireSolutionStatusNotifications` (`api/solutions/[number]/route.ts`) never adds
-> the parent challenge's assignee (the resubmit and withdraw paths already do).
-> (b) event 8 sends to the *solution* author, the `not_selected` authors and followers,
-> but not the challenge author, and the `autoClose` payload in `challenges/store.ts`
-> carries no challenge author id. Add both recipients.
-
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
 rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`:
@@ -1997,10 +2043,10 @@ rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL
 its status, a comment on it, its proposal (there is no standalone solution page,
 §13.1).
 
-> **⚠ GAP-33 · code fix:** comment notifications on a solution link to
-> `/challenges/N` without the anchor (`api/comments/route.ts`), and so does "solution
-> proposed" (`api/challenges/[number]/solutions/route.ts`). Use `#SOL-<n>`. (This also
-> lets the GAP-23 delete cleanup find them during the transition.)
+> **⚠ GAP-33 · code fix:** the "solution proposed" notification
+> (`api/challenges/[number]/solutions/route.ts`) links to `/challenges/N` without the
+> `#SOL-<n>` anchor; build it with `itemHref` (`lib/deep-link.ts`) as comment
+> notifications already do.
 Delivery is immediate — there is no scheduled digest (§19); the one batching
 mechanism is the per-item coalescing of comment notifications below.
 
@@ -2448,15 +2494,16 @@ whole visit, and the next visit flags only genuinely newer items.
   collapsed "Closed solutions" section (§4.3). Each solution shows its own like button.
 - **Propose a solution** (§6.2): visible to anyone who can see the challenge,
   enabled only while status = `valid`; opens the solution form (description, cost
-  vs benefits, "Submit anonymously"). While disabled it carries the hint *"Solutions
-  open once the challenge is valid."* No standalone `/solutions/:number` page —
-  the §12.1 deep-link convention resolves to the parent challenge page, scrolled to
-  the solution.
+  vs benefits, "Submit anonymously"). While disabled it carries a hint that depends on
+  the status:
+  - `solved` — *"This challenge is solved, so it no longer accepts solutions."*
+  - `rejected` or `withdrawn` — *"This challenge is closed, so it does not accept
+    solutions."*
+  - any other status — *"Solutions can be proposed once the challenge has been
+    validated."*
 
-  > **⚠ GAP-34 · code fix:** the page renders `{challenge.canPropose &&
-  > <ProposeSolutionForm…>}`, so the action is hidden, not disabled, on every
-  > non-`valid` challenge. Render the button for every viewer and disable it from
-  > `canPropose`.
+  No standalone `/solutions/:number` page — the §12.1 deep-link convention resolves to
+  the parent challenge page, scrolled to the solution.
 - **Status transitions** — two role-scoped controls, on the challenge and on each
   solution:
   - **Admin override** (namespace admin of this namespace, or platform admin): a
@@ -2503,13 +2550,13 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
   **and** state rule (not `awaiting_triage`/`withdrawn` unless the viewer is its author
   or an admin of its namespace).
 
-  > **⚠ GAP-35 · code fix:** `api/dashboard/store.ts` filters solutions only by the
-  > parent's namespace visibility, never its status, so solutions under a withdrawn or
-  > re-triaged challenge are counted and can be a spotlight — showing that challenge's
-  > title — to viewers who cannot see it (invariant 2). Its header comment claiming no
-  > carve-out is needed is wrong. Introduce one shared SQL predicate
-  > (`visibleChallengeSql(viewer, alias)`, the SQL twin of `canSeeChallenge`) and use it
-  > here and in GAP-36, GAP-38 and GAP-39.
+  > **⚠ GAP-35 · code fix:** `api/dashboard/store.ts` uses its own namespace-only
+  > `visibilityClause` (its header comment claiming no carve-out is needed is wrong), so
+  > a solution under a `withdrawn` or re-triaged challenge is counted and can be a
+  > spotlight — showing that challenge's title — to viewers who cannot see it
+  > (invariant 2). Replace it with `pushChallengeVisibilityConditions` for the parent
+  > plus the SQL form of `canSeeSolution` (see GAP-38) for the solution KPIs and both
+  > spotlights.
 - Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
   rankings; neither is duplicated here.
 
@@ -2607,14 +2654,8 @@ Computed over org-visible, non-anonymous, non-rejected contributions (§4.3, §9
 "Org-visible" is the same test as the public profile's (§13.5): a challenge counts only
 if it is `org`-visible and not `awaiting_triage`/`withdrawn`; a solution only if it is
 not `proposed`/`withdrawn` and its parent passes the challenge test. Likes count only
-on items that pass.
-
-> **⚠ GAP-36 · code fix:** `api/leaderboards/store.ts` applies only the namespace part.
-> `challenges_submitted` and challenge likes don't exclude `awaiting_triage`;
-> `solutions_proposed` and solution likes don't exclude `proposed` solutions or parents
-> in `awaiting_triage`/`withdrawn`; `solutions_implemented` doesn't check the parent's
-> status and uses `s.updated_at` (moved by any edit) instead of `s.status_changed_at`.
-> Use the GAP-35 predicate.
+on items that pass. The test is **viewer-independent**: every viewer sees the same
+board, so it is not the per-viewer §4.3 predicate.
 
 ### §13.4 Search
 
@@ -2628,13 +2669,14 @@ accepts them as query parameters beside `q`. Autocomplete stays query-only. Visi
 is applied **inside** the ranked query, before any result limit, so the viewer's top
 results are never displaced by items they cannot see.
 
-> **⚠ GAP-37 · code fix:** search has no filters — `api/search/route.ts` reads only
-> `q`, `search/store.ts` takes none, and `app/search/page.tsx` has no filter UI. Add
-> them, reusing the gallery's filter component.
-
-> **⚠ GAP-38 · code fix:** `search/store.ts` takes the top 50 candidates first and
-> filters visibility afterwards, so visible matches are dropped when higher-ranked
-> hidden ones fill the cut. Move the GAP-35 predicate into the SQL before the `LIMIT`.
+> **⚠ GAP-38 · code fix:** `solutionCandidates` (`api/search/store.ts`) applies the
+> parent's predicate in SQL (`pushChallengeVisibilityConditions`), but the solution's
+> own `proposed` rule runs only in JS (`canSeeSolution` in `toSolutionResults`), after
+> the `limit ${CANDIDATE_LIMIT}`, so hidden `proposed` matches can still fill the cut
+> and displace visible ones. Add a SQL form of `canSeeSolution` (status not `proposed`,
+> or the viewer is its author, the challenge's assignee, or committee/admin of its
+> namespace) beside `pushChallengeVisibilityConditions` and apply it before the limit;
+> GAP-35 and GAP-39 reuse it.
 
 **Keyboard shortcut:** `Ctrl+K` (`Cmd+K` on macOS) focuses the topbar search
 input from anywhere in the app while authenticated — it's a global `keydown`
@@ -2720,16 +2762,24 @@ The owner's own profile is unaffected: it lists all of their own contributions, 
 A **deactivated** user's profile still renders — the greyed bubble (§13.6), a muted
 **"Deactivated"** notice, their directory fields and their contributions by the rules
 above — so the §13.8 card's "View profile" link always lands somewhere. Only a
-**scrubbed** user has no profile (404, "Deleted User"), which is why the card offers
-no link for one.
+**scrubbed** user has no profile (404, below), which is why the card offers no link
+for one.
 
-> **⚠ GAP-39 · code fix:** "items I follow" (`api/profile/store.ts`) joins `follows`
-> with no visibility predicate, so it shows titles and statuses of items the owner can
-> no longer see. Apply the GAP-35 predicate.
+A scrubbed user's `/profile/<id>` renders the same generic not-found state as an
+unknown id — *"That profile doesn't exist."* — never a "Deleted User" page.
 
-> **⚠ GAP-40 · code fix:** `getPublicProfile` returns null for `!active`, so
-> `/profile/<id>` is a 404 for every deactivated user while the hover card still links
-> there. Return null only for scrubbed rows, and render the notice.
+> **⚠ GAP-39 · code fix:** the two "items I follow" queries in `getOwnProfile`
+> (`api/profile/store.ts`) join `follows` to challenges/solutions with no visibility
+> predicate, so they list titles and statuses of items the owner can no longer see.
+> Pass the owner's `Viewer` (the function takes only `userId` today) and apply
+> `pushChallengeVisibilityConditions` and the SQL `canSeeSolution` (GAP-38) in the
+> SQL, before the `limit 50`.
+
+> **⚠ GAP-40 · code fix:** `getPublicProfile` (`api/profile/store.ts`) returns null
+> for `!active`, so `/profile/<id>` is a 404 for every deactivated user while the
+> hover card still links there. Return null only for scrubbed rows, return the
+> `active` state, and render the muted "Deactivated" notice and greyed bubble in
+> `app/profile/[userId]/page.tsx`.
 
 The **e-mail notifications** control is a §2.2 pill switch rather than a labelled
 button: an `On`/`Off` word, then the pill — 📧 in the knob and an `--accent` track when
@@ -2758,7 +2808,7 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   threads, assignee chips, **assignee-search result rows** (§7.3 — the assignment
   and triage-assign popovers), leaderboard rows, profile pages (large), the account
   menu/sidebar (self), triage queue rows, the admin users list, search results, and
-  the inline reveal (§9). **Not** in notification e-mails (no embedded images), CSV
+  the reveal dialog (§9). **Not** in notification e-mails (no embedded images), CSV
   exports, or the notification **inbox** rows — the outbox payload carries only a
   rendered `{message, link}` with no structured actor id, so an inbox bubble would
   require reworking the whole event matrix and re-checking anonymity for every event
@@ -2777,16 +2827,23 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   a scrubbed user renders the neutral "Deleted User" bubble even though the id is
   present.
 
-  > **⚠ GAP-41 · code fix:** only `admin/CurrentlyOnline.tsx` and `admin/GdprCard.tsx`
-  > pass `deactivated`; `maskAuthor` returns `{ userId, displayName, anonymous }` with no
-  > state, so elsewhere a deactivated user gets the coloured initials bubble (the photo
-  > endpoint 404s), and a scrubbed author whose id is still in the payload gets a
-  > coloured "DU" bubble (`shared/src/avatars.ts`, `AvatarBubble.tsx` go neutral only
-  > for `userId === null`). Add the two flags and honour them in `AvatarBubble`.
+  The `scrubbed` flag is **explicit** on every such payload — author, assignee,
+  commenter, leaderboard row, card, profile, triage row, the reveal — and the bubble
+  decides "Deleted User" from it, never from the display name. Like `active`, it is
+  absent for an anonymous author.
+
+  > **⚠ GAP-41 · code fix:** `active` now flows through the payloads, but no payload
+  > carries `scrubbed` (`MaskedAuthor` in `shared/src/challenges.ts` has `active` only),
+  > and `avatarVariant` (`shared/src/avatars.ts`) infers a scrubbed user from
+  > `displayName === "Deleted User"`. Add `scrubbed` beside `active` in `MaskedAuthor`
+  > and every person payload, pass it through `AvatarBubble`, and drop the name-based
+  > inference. Also pass `deactivated`/`scrubbed` to the bubbles in
+  > `app/profile/[userId]/page.tsx` and in the reveal dialog
+  > (`challenges/[number]/page.tsx` `RevealDialog`), which pass neither.
 - **Sizing:** one stored image (§3.1), scaled by context — small (~24–40 px) in
-  lists, chips, comments and rows — the **directory hover card (§13.8)** and the
-  **inline reveal** (§9) reuse the existing **medium** bubble of that band; large
-  (~96 px) on profile pages. Bubbles are circular, with initials sized proportionally.
+  lists, chips, comments and rows — the **directory hover card (§13.8)** reuses the
+  existing **medium** bubble of that band; large (~96 px) on profile pages and in the
+  **reveal dialog** (§9). Bubbles are circular, with initials sized proportionally.
 - **Hover card (§13.8):** a bubble that carries a real user id becomes the trigger for
   the directory hover card. Two consequences land here: such a bubble becomes
   **focusable**, and its native `title` tooltip is **dropped** (a browser tooltip
@@ -2848,15 +2905,20 @@ Of the three directory fields, department and job title already exist (§3, §5)
   - bubbles **inside an already-open popover** — the §7.3 assignee-search result rows
     and the §14.1 inline assignee editor — where a card would nest a popover in a
     popover;
-  - the **inline reveal** (§9) — it already names the revealed person, so the
+  - the **reveal dialog** (§9) — it already names the revealed person, so the
     card adds nothing to the one surface where anonymity is deliberately lifted, and
     the reveal flow stays untouched.
 
   The read-only assignee text on **terminal-status** triage rows (§14.1) is *not* one of
   these exclusions — it sits in no popover — so its bubble opens the card.
 
+  Like the editable assignee cell, the read-only assignee on a terminal row stops click
+  propagation, so opening its card never also opens the row (§14.1).
+
   > **⚠ GAP-42 · code fix:** `admin/triage/page.tsx` passes `noCard` to the assignee
-  > bubble on terminal-status rows. Remove it.
+  > bubble on terminal-status rows (the `TERMINAL_STATUSES` branch of the assignee
+  > cell). Remove it, and give that read-only span the same
+  > `onClick={(e) => e.stopPropagation()}` the editable cell has.
 - **No user id → no card.** An **anonymous** author's bubble (invariant 3: the client
   never learns the real id — the payload carries `null`, §13.6), a deleted/unknown
   actor, or a bubble whose caller marks it anonymous shows **no card, issues no
@@ -2878,10 +2940,10 @@ Top to bottom, in a fixed max-width (~280 px) card:
    decided by comparing the bubble's user id to the signed-in user — no caller has to
    mark a bubble as "self").
 
-> **⚠ GAP-43 · code fix:** only callers passing `self` get `/profile`, and only
-> `profile/page.tsx` does, so your own bubble on cards, comments and the leaderboard
-> links to `/profile/<yourId>`. Compare against the session user inside
-> `DirectoryCard`/`AvatarBubble`.
+> **⚠ GAP-43 · code fix:** `DirectoryCard.tsx` links to `/profile` only when the caller
+> passes `self`, and only `app/profile/page.tsx` does, so your own bubble on cards,
+> comments and the leaderboard links to `/profile/<yourId>`. Compare the bubble's user
+> id with the session user inside `DirectoryCard`/`AvatarBubble` and drop the prop.
 
 - Lines 2–4 are **omitted individually** when the field is empty. When **all three**
   are empty the block collapses to a single muted line — **"No directory
@@ -2940,14 +3002,21 @@ Top to bottom, in a fixed max-width (~280 px) card:
 - The card is a **non-modal `role="dialog"`** labelled with the person's name — not
   `role="tooltip"`, because it contains an interactive link. Focus is **not trapped**:
   Tab moves from the bubble into the card, then out and on through the page. Because
-  the card is portalled (above), Tab order does not reach it naturally: Tab on the
-  bubble while the card is open moves focus to "View profile", and blur closes the card
-  only when focus has left **both** the bubble and the card.
+  the card is portalled (above), Tab order does not reach it naturally, so it is routed
+  explicitly:
+  - **Tab** on the bubble while the card is open moves focus to "View profile".
+  - **Tab** from inside the card continues to the element **after** the bubble in the
+    page order, and **Shift+Tab** from inside the card to the element **before** the
+    bubble; either way focus has left both, so the card closes.
+  - A card with **no link** (a scrubbed row) has nothing to focus: Tab on the bubble
+    moves on to the next element as usual and the card closes.
+  - Blur closes the card only when focus has left **both** the bubble and the card.
 
-  > **⚠ GAP-44 · code fix:** `DirectoryCard.tsx` portals the card to the end of
-  > `document.body`, so Tab from the bubble skips it, and `onBlur` closes it after
-  > 150 ms — keyboard users can never reach "View profile". Route Tab into the card and
-  > keep it open while focus is inside it.
+  > **⚠ GAP-44 · code fix:** focus inside the card now keeps it open and Escape returns
+  > focus, but nothing routes Tab: `DirectoryCard.tsx` portals the card to the end of
+  > `document.body`, so Tab from the bubble skips it and keyboard users can never reach
+  > "View profile", and Tab out of the card lands at the end of the page. Add the
+  > routing above (a `keydown` handler on the trigger and the card).
 
 #### Data & delivery
 
@@ -3040,12 +3109,6 @@ bulk status set (admin override semantics, each item audited individually, and e
 item firing exactly the §12.1 notifications its single-item equivalent fires — events
 3–5 for a status change, event 7 for an assignment — one per item, after commit).
 
-> **⚠ GAP-45 · code fix:** `bulkSetStatus`/`bulkAssign` (`api/admin/triage/store.ts`)
-> use `setChallengeStatusLean`/`setChallengeAssigneeLean` and never reach the notify
-> helpers, so bulk actions notify nobody (webhooks and auto-unpin do fire, because they
-> live in `applyChallengeStatusChange`). Call the same notification path as the
-> single-item routes.
-
 Permanent
 delete (§10.3) is deliberately **not** a bulk action — it is one item at a time, from
 the detail page. **CSV
@@ -3076,8 +3139,9 @@ their namespace(s), platform admins everywhere; invariants 2–3). Bulk actions 
 export remain challenge-only in v1. Dates on both tabs render through the shared
 formatter (EU/US, §14.3).
 
-> **⚠ GAP-46 · code fix:** the Solutions tab renders the proposed date with
-> `toLocaleDateString()` (`admin/triage/page.tsx`) instead of `useDateFmt()`.
+> **⚠ GAP-46 · code fix:** both tabs of `admin/triage/page.tsx` — the Challenges
+> queue's created date and the Solutions tab's proposed date — render with
+> `new Date(r.createdAt).toLocaleDateString()` instead of `useDateFmt()`.
 
 ### §14.2 Moderation
 
@@ -3492,11 +3556,8 @@ Platform admins get a read-only,
 filterable audit browser. A target that resolves — a challenge or solution that still
 exists — renders as a **link** to it (a solution to its parent challenge's
 `#SOL-<n>`); a target that no longer resolves (a deleted challenge or solution, §10.3)
-renders as plain text.
-
-> **⚠ GAP-47 · code fix:** `admin/audit/page.tsx` always renders the target as plain
-> text, although the store already resolves `targetNumber` live. Link it when present. Audit retains actor PII
-for provenance and is exempt from GDPR erasure (§3).
+renders as plain text. Audit retains actor PII for provenance and is exempt from GDPR
+erasure (§3).
 
 **Append-only covers TRUNCATE too.** The mutation-blocking trigger is a row trigger
 (UPDATE, DELETE). `TRUNCATE` bypasses row triggers, so `audit_log` also carries a
@@ -3645,10 +3706,10 @@ optional and composable (each an additional `AND`):
 
 - **Category chips** by action prefix — All / Challenges (`challenge.*`) / Solutions
   (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
-  (`user.*`, `scim.*`, `role_mapping.*`) / Admin (`settings.*`, `namespace.*`,
-  `impact_area.*`, `system_banner.*`, `presence.*`, `audit.*`, `webhook.*`, every
-  `*.exported`) / **Anonymity** (`anonymity.*` — admin reveals and self-reveals, the
-  most sensitive reads to review). The curation events (`challenge.featured` /
+  (`user.*`, `scim.*`, `role_mapping.*`, `recon.*`) / Admin (`settings.*`,
+  `namespace.*`, `impact_area.*`, `system_banner.*`, `presence.*`, `email.*`,
+  `audit.*`, `webhook.*`, every `*.exported`) / **Anonymity** (`anonymity.*` — admin
+  reveals and self-reveals, the most sensitive reads to review). The curation events (`challenge.featured` /
   `challenge.unfeatured`) fall under Challenges by prefix; `like.*` rows appear under
   All only. The triage CSV export (§14.1) is audited as **`triage.exported`**, so it
   matches `*.exported`; rows written earlier under `admin.triage_exported` stay as they
@@ -3659,10 +3720,11 @@ optional and composable (each an additional `AND`):
   query is bounded by `ORDER BY id DESC LIMIT 100` on the primary key (newest first;
   `id` is unique, so paging never skips or repeats a row with a shared timestamp).
 
-> **⚠ GAP-48 · code fix:** `api/admin/triage/store.ts` audits the export as
-> `admin.triage_exported`, which `LIKE '%.exported'` (`shared/src/audit-browser.ts`)
-> never matches, so it shows only under All. Emit `triage.exported`, add the legacy
-> name to the Admin chip, and add the Anonymity chip.
+> **⚠ GAP-48 · code fix:** there is no Anonymity chip: `AUDIT_CATEGORIES` and
+> `AUDIT_CATEGORY_PATTERNS` (`shared/src/audit-browser.ts`) stop at Admin, so
+> `anonymity.*` rows show only under All. Add the chip (pattern `anonymity.%`) to the
+> shared lists and the `/admin/audit` page, and correct the comment on
+> `AUDIT_CATEGORY_PATTERNS` that says anonymity reveals appear under All.
 - **Date range** — two native date inputs; the picked **local** day resolves to UTC
   instants, From = start of day, To = **inclusive** end of day.
 - **`✕ clear filters`** — shown only while any filter is active; resets to the default
@@ -3677,17 +3739,18 @@ exactly what is on screen; capped at **50 000** rows newest-first, with
 narrow the range"* notice; every column of the row — `chain_seq`, `prev_hash` and
 `row_hash` included, appended after `after` — with `before`/`after` as their raw JSON
 strings, i.e. PostgreSQL's own `::text` output (the bytes the hash chain covers, so an
-exported row can be re-verified offline); RFC 4180 quoting, UTF-8 BOM.
-
-> **⚠ GAP-49 · code fix:** `api/admin/audit/csv.ts` re-serializes the parsed objects
-> with `JSON.stringify`, which differs from the stored jsonb text in spacing. Select
-> `before::text` / `after::text` and write them verbatim. **Rows are
+exported row can be re-verified offline); RFC 4180 quoting, UTF-8 BOM. **Rows are
 not anonymity-masked.** The audit log is the provenance record: it already shows the
 true actor of an anonymous submission to platform admins in the browser, and those
 same admins hold the §9 reveal power — a masked export would be lossy while leaving the
 browser as the unmasked path. The compensating control is that **every export is
 itself audited** — `audit.exported` with actor, active filters and row count — so a
 bulk download of identities is never silent.
+
+> **⚠ GAP-49 · code fix:** `api/admin/audit/csv.ts` re-serializes the parsed objects
+> with `JSON.stringify`, which differs from the stored jsonb text in spacing; the
+> export query in `api/admin/audit/store.ts` selects `a.before, a.after` as jsonb.
+> Select `before::text` / `after::text` for the export and write them verbatim.
 
 ---
 
@@ -4022,10 +4085,9 @@ inversion), `.gitignore` (`.claude/skills/`).
 
 Deleted: `START_PROMPT.md`, `.gitlab-ci.yml`.
 
-> **⚠ GAP-50 · code fix:** (a) `.github/dependabot.yml` groups only the npm ecosystem;
-> add a `groups:` block for `github-actions` too. (b) `globals.css` still opens with the
-> "STARTER-KIT NOTE … carried over from a proven sibling app … pruned in Phase 4"
-> header, a starter-kit artefact; replace it with a plain description of the file.
+> **⚠ GAP-50 · code fix:** `packages/web/src/app/globals.css` still opens with the
+> "STARTER-KIT NOTE: carried over from a proven sibling app …" paragraph in its header
+> comment, a starter-kit artefact; replace it with a plain description of the file.
 
 ### §21.7 The attribution test
 
@@ -4047,15 +4109,16 @@ and optionally a Microsoft Graph service mailbox for e-mail; **that there is no 
 or evaluation mode** and InnoBox cannot be run without an Entra tenant (§19);
 self-hosting instructions pointing at `deploy/`; an architecture summary pointing at
 this spec and `ENTRA_AUTH_SPEC.md`; the TRADEMARK section and rebranding checklist
-(§21.2); the versioning note (§21.1); and a plain **support statement** — the software
-is provided as-is, issues are read but no response time is promised, and pull requests
-are closed. It contains **no host, no mailbox, and no deployment-specific value**
-(§2.3).
+(§21.2); the licence; the versioning note (§21.1); and, last, contributing, security
+and a plain **support statement** — the software is provided as-is, issues are read
+but no response time is promised, and pull requests are closed. The screenshots live
+under `docs/screenshots/`. It contains **no host, no mailbox, and no
+deployment-specific value** (§2.3).
 
-> **⚠ GAP-51 · doc fix:** `README.md` has no screenshot, and its closing sections run
-> Versioning → Contributing/support → Licence → Trademark instead of the order above
-> (TRADEMARK + rebranding checklist → versioning note → support statement). Add a
-> screenshot under `docs/` and reorder.
+> **⚠ GAP-51 · doc fix:** `README.md`'s closing sections run Versioning →
+> Contributing, security, support → Licence → Trademark; reorder them to Trademark
+> (with the rebranding checklist) → Licence → Versioning → Contributing, security,
+> support.
 
 ### §21.9 No internal spec references in user-facing surfaces
 
