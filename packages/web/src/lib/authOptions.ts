@@ -10,6 +10,7 @@ import { pool } from "./db";
 import { upsertDevUser } from "./users";
 import { resolveEntraSignIn } from "./signin-relink";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
+import { AUTH_PAGES } from "./auth-pages";
 
 declare module "next-auth" {
   interface Session {
@@ -97,8 +98,9 @@ export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
   // No default Auth.js sign-in page: the Home landing (`/`) is the sign-in surface, and the
   // in-shell "Sign in with Entra ID" button drives OIDC directly. Sign-in errors (e.g. a
-  // deactivated account → AccessDenied) are handed back to `/` as `?error=` (ENTRA_AUTH_SPEC.md §5).
-  pages: { signIn: "/" },
+  // deactivated account → AccessDenied) are handed back to `/` as `?error=` (ENTRA_AUTH_SPEC.md §5):
+  // `pages.error` keeps Auth.js from rendering its built-in error page (lib/auth-pages.ts).
+  pages: { ...AUTH_PAGES },
   // Rolling JWT cookie session, 7-day cap (spec §2): re-issued at most daily on activity.
   session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60, updateAge: 24 * 60 * 60 },
   callbacks: {

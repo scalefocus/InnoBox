@@ -11,6 +11,10 @@ queue sit on top; everything is visibility-filtered, optionally anonymous, and a
 Identity is anchored in **Microsoft Entra ID** — OIDC sign-in, SCIM 2.0 provisioning,
 and group-based RBAC.
 
+![The Home dashboard: challenge and solution counts by status, with spotlight cards below](docs/screenshots/home.png)
+
+![The Challenges gallery: open challenges as cards, with status, impact area, namespace and author filters](docs/screenshots/challenges.png)
+
 ---
 
 ## Before you go further: prerequisites
@@ -121,10 +125,11 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 ## Trademark
 
 **The Apache-2.0 grant covers the code. It does not cover names, logos, or brand.**
-Apache-2.0 §6 grants no trademark rights, and none are granted here: the creating
-organization's name and logo, and the InnoBox wordmark and mark, remain theirs. You may
-run, modify, and redistribute the software freely — but not present your version as the
-original or imply it is endorsed by them.
+Apache-2.0 §6 grants no permission to use the licensor's trade names, trademarks, or
+product names beyond reasonable and customary use in describing the origin of the work,
+and none are granted here: the creating organization's name and logo, and the InnoBox
+wordmark and mark, remain theirs. You may run, modify, and redistribute the software
+freely — but not present your version as the original or imply it is endorsed by them.
 
 The brand ships as the default look, and the codebase is deliberately arranged so you
 can strip it. **To rebrand a fork, edit these and nothing else:**

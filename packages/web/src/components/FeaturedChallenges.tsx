@@ -11,7 +11,7 @@ export interface FeaturedChallengeCard {
   id: string;
   number: string;
   title: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
   impactAreaName: string;
   status: string;
   likeCount: number;
@@ -38,7 +38,7 @@ export function FeaturedChallenges({ items }: { items: FeaturedChallengeCard[] }
             </div>
             <h3>{c.title}</h3>
             <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} />
+              <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} deactivated={c.author.active === false} />
               <span>{c.author.anonymous ? "Anonymous" : c.author.displayName}</span>
             </div>
             <div className="meta">

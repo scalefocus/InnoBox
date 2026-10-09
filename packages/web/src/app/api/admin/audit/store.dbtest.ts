@@ -43,7 +43,8 @@ test(
 
       const mine = { actorUserId: actorId };
       const all = await listAudit(pool, mine);
-      assert.equal(all.total, 4);
+      assert.equal(all.rows.length, 4);
+      assert.equal(all.hasMore, false);
       assert.equal(all.rows[0]!.action, "system_log.exported", "newest first");
       assert.equal(all.rows[0]!.actorEmail, `auditor-${stamp}@example.test`);
       const status = all.rows.find((r) => r.action === "challenge.status_changed")!;
@@ -55,21 +56,21 @@ test(
       assert.deepEqual((await listAudit(pool, { ...mine, category: "comments" })).rows.map((r) => r.action), ["comment.posted"]);
       assert.deepEqual((await listAudit(pool, { ...mine, category: "identity" })).rows.map((r) => r.action), ["scim.user_created"]);
       assert.deepEqual((await listAudit(pool, { ...mine, category: "admin" })).rows.map((r) => r.action), ["system_log.exported"], "every *.exported lands under Admin");
-      assert.equal((await listAudit(pool, { ...mine, category: "attachments" })).total, 0);
+      assert.equal((await listAudit(pool, { ...mine, category: "attachments" })).rows.length, 0);
 
       // Search over the human-meaningful fields.
-      assert.equal((await listAudit(pool, { ...mine, q: "status_chang" })).total, 1, "action");
-      assert.equal((await listAudit(pool, { ...mine, q: challengeId })).total, 1, "target id");
-      assert.equal((await listAudit(pool, { ...mine, q: challengeNumber })).total, 1, "target number");
-      assert.equal((await listAudit(pool, { ...mine, q: `Auditor ${stamp}` })).total, 4, "actor name");
-      assert.equal((await listAudit(pool, { ...mine, q: `auditor-${stamp}@example` })).total, 4, "actor e-mail");
-      assert.equal((await listAudit(pool, { ...mine, q: marker })).total, 2, "target ids carrying the marker — the JSON payload is never searched");
-      assert.equal((await listAudit(pool, { ...mine, q: `%${marker}` })).total, 0, "LIKE metacharacters are literal");
+      assert.equal((await listAudit(pool, { ...mine, q: "status_chang" })).rows.length, 1, "action");
+      assert.equal((await listAudit(pool, { ...mine, q: challengeId })).rows.length, 1, "target id");
+      assert.equal((await listAudit(pool, { ...mine, q: challengeNumber })).rows.length, 1, "target number");
+      assert.equal((await listAudit(pool, { ...mine, q: `Auditor ${stamp}` })).rows.length, 4, "actor name");
+      assert.equal((await listAudit(pool, { ...mine, q: `auditor-${stamp}@example` })).rows.length, 4, "actor e-mail");
+      assert.equal((await listAudit(pool, { ...mine, q: marker })).rows.length, 2, "target ids carrying the marker — the JSON payload is never searched");
+      assert.equal((await listAudit(pool, { ...mine, q: `%${marker}` })).rows.length, 0, "LIKE metacharacters are literal");
 
       // Date range (inclusive bounds).
-      assert.equal((await listAudit(pool, { ...mine, from: new Date(Date.now() + 60_000).toISOString() })).total, 0);
-      assert.equal((await listAudit(pool, { ...mine, to: new Date(Date.now() - 60_000).toISOString() })).total, 0);
-      assert.equal((await listAudit(pool, { ...mine, from: new Date(Date.now() - 60_000).toISOString(), to: new Date(Date.now() + 60_000).toISOString() })).total, 4);
+      assert.equal((await listAudit(pool, { ...mine, from: new Date(Date.now() + 60_000).toISOString() })).rows.length, 0);
+      assert.equal((await listAudit(pool, { ...mine, to: new Date(Date.now() - 60_000).toISOString() })).rows.length, 0);
+      assert.equal((await listAudit(pool, { ...mine, from: new Date(Date.now() - 60_000).toISOString(), to: new Date(Date.now() + 60_000).toISOString() })).rows.length, 4);
 
       // Paging.
       const p1 = await listAudit(pool, mine, { limit: 3, offset: 0 });
@@ -80,7 +81,8 @@ test(
       assert.equal(p2.hasMore, false);
       const p3 = await listAudit(pool, mine, { limit: 3, offset: 6 });
       assert.equal(p3.rows.length, 0);
-      assert.equal(p3.total, 4, "an empty page past the end still reports the total");
+      assert.equal(p3.hasMore, false, "an empty page past the end has nothing more");
+      assert.equal("total" in p3, false, "the browser page carries no window count — the query is bounded by its LIMIT");
 
       // Export: capped, newest-first, total still reported; before/after come through raw.
       const capped = await exportAudit(pool, mine, 2);
@@ -88,6 +90,52 @@ test(
       assert.equal(capped.totalMatching, 4);
       assert.equal(capped.rows[0]!.action, "system_log.exported");
       assert.deepEqual(capped.rows[0]!.after, { marker });
+
+      // ── Target links (§15): a still-resolving challenge / solution links; a deleted one and
+      //    every other target type stay plain text (targetHref null). ──────────────────────
+      assert.equal(status.targetHref, `/challenges/${ch[0]!.number}`);
+      assert.equal(all.rows.find((r) => r.action === "comment.posted")!.targetHref, null);
+      const { rows: sol } = await pool.query<{ id: string; number: number }>(
+        `insert into solutions (challenge_id, author_id, description) values ($1, $2, 'audit link dbtest') returning id, number`,
+        [challengeId, actorId],
+      );
+      const linkActor = { actorUserId: actorId, category: "solutions" as const };
+      await appendAudit(pool, { actorUserId: actorId, action: "solution.status_changed", targetType: "solution", targetId: sol[0]!.id });
+      await appendAudit(pool, { actorUserId: actorId, action: "solution.deleted", targetType: "solution", targetId: randomUUID() });
+      const solRows = (await listAudit(pool, linkActor)).rows;
+      assert.equal(solRows.find((r) => r.action === "solution.status_changed")!.targetHref, `/challenges/${ch[0]!.number}#SOL-${sol[0]!.number}`);
+      assert.equal(solRows.find((r) => r.action === "solution.deleted")!.targetHref, null, "a target that no longer resolves is plain text");
+
+      // ── Ordering: rows written in ONE transaction share created_at; the id breaks the tie, so
+      //    newest-first is still the insertion order reversed and paging is stable. ──────────
+      const tieActor = (await pool.query<{ id: string }>(
+        `insert into users (external_id, user_name, display_name) values ($1, $2, 'Dbtest Tie') returning id`,
+        [`dbtest-audit-tie-${stamp}`, `dbtest-audit-tie-${stamp}@example.test`],
+      )).rows[0]!.id;
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        for (const n of [1, 2, 3]) {
+          await appendAudit(client, { actorUserId: tieActor, action: `settings.tie_${n}`, targetType: "settings" });
+        }
+        await client.query("commit");
+      } finally {
+        client.release();
+      }
+      const tie = { actorUserId: tieActor };
+      assert.deepEqual((await listAudit(pool, tie)).rows.map((r) => r.action), ["settings.tie_3", "settings.tie_2", "settings.tie_1"]);
+      const t1 = await listAudit(pool, tie, { limit: 2, offset: 0 });
+      const t2 = await listAudit(pool, tie, { limit: 2, offset: 2 });
+      assert.deepEqual([...t1.rows, ...t2.rows].map((r) => r.action), ["settings.tie_3", "settings.tie_2", "settings.tie_1"], "no row repeated or skipped across pages");
+      assert.equal(t1.hasMore, true);
+      assert.equal(t2.hasMore, false);
+
+      // ── The triage CSV export's action sits under the Admin chip, as do legacy rows. ──────
+      await appendAudit(pool, { actorUserId: tieActor, action: "triage.exported", targetType: "challenge" });
+      await appendAudit(pool, { actorUserId: tieActor, action: "admin.triage_exported", targetType: "challenge" });
+      const adminActions = (await listAudit(pool, { ...tie, category: "admin" })).rows.map((r) => r.action);
+      assert.ok(adminActions.includes("triage.exported"));
+      assert.ok(adminActions.includes("admin.triage_exported"), "historical rows under the legacy name stay under Admin");
     } finally {
       await pool.end();
     }

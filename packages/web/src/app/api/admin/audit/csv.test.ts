@@ -14,6 +14,7 @@ const base: AuditEntry = {
   targetType: "audit_log",
   targetId: null,
   targetNumber: null,
+  targetHref: null,
   before: null,
   after: { result: "intact" },
   createdAt: "2026-01-01T00:00:00.000Z",

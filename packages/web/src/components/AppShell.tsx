@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { APP_VERSION } from "@innobox/shared/version";
 import { cachedGet } from "../lib/ui";
 import { isChallengesSurface, leavesChallengesSurface } from "../lib/challenges-surface";
+import { QUICK_START_PATH, shouldRedirectToQuickStart } from "../lib/quick-start";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { SystemBanner } from "./SystemBanner";
@@ -112,15 +113,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [authed]);
 
   // First-sign-in onboarding (INNOBOX_SPEC.md §13.7): a null quickStartSeenAt means this user
-  // has never completed /quick-start, so every authenticated route bounces there first — taking
-  // priority over wherever they were headed. Re-fires on every navigation until the page's
-  // "Continue to InnoBox" action marks it seen, which is the intended "force them through it"
-  // behavior for a still-unseen user.
+  // has never completed /quick-start, so every authenticated route goes there first — taking
+  // priority over wherever they were headed. A full page load is redirected server-side by the
+  // root layout before anything renders (lib/quick-start-gate.ts); this covers in-app
+  // navigations, where the root layout does not re-render — the page is withheld (see
+  // `quickStartPending` below) and replaced, so it never renders first either. Re-fires on every
+  // navigation until "Continue to InnoBox" marks it seen.
+  const quickStartPending = authed && me !== null && shouldRedirectToQuickStart(pathname, me.quickStartSeenAt);
   useEffect(() => {
-    if (!me || me.quickStartSeenAt !== null) return;
-    if (pathname === "/quick-start") return;
-    router.replace("/quick-start");
-  }, [me, pathname, router]);
+    if (quickStartPending) router.replace(QUICK_START_PATH);
+  }, [quickStartPending, router]);
 
   const isAdmin = Boolean(me?.roles.platformAdmin || (me?.roles.namespaceAdmin?.length ?? 0) > 0);
 
@@ -300,7 +302,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {authed && <NotificationBell onBanner={setBanner} />}
           <ThemeToggle />
         </header>
-        <main className="content">{children}</main>
+        <main className="content">{quickStartPending ? null : children}</main>
       </div>
     </div>
   );

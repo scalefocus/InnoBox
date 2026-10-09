@@ -93,8 +93,11 @@ test(
       const adminId = adminRows[0]!.id;
 
       const { rows: victimRows } = await pool.query<{ id: string }>(
-        `insert into users (external_id, user_name, display_name, email, department, job_title, office_location, active, scim_synced)
-           values ($1, $2, $3, $4, 'Engineering', 'Staff Engineer', 'Sofia', true, true) returning id`,
+        `insert into users (external_id, user_name, display_name, email, department, job_title, office_location, active, scim_synced,
+                            triage_seen_at, challenges_seen_at, system_log_seen_at, quick_start_seen_at,
+                            email_notifications_enabled, notify_followed_comments, notify_followed_status, notify_followed_solutions)
+           values ($1, $2, $3, $4, 'Engineering', 'Staff Engineer', 'Sofia', true, true,
+                   now(), now(), now(), now(), false, false, false, false) returning id`,
         [`dbtest-scrub-victim-${stamp}`, `dbtest-scrub-victim-${stamp}@example.test`, `Dbtest ScrubVictim ${stamp}`, `scrubvictim-${stamp}@example.test`],
       );
       const victimId = victimRows[0]!.id;
@@ -135,6 +138,33 @@ test(
         [victimId, adminId],
       );
       assert.equal(auditRows[0]!.n, "1", "the erasure is itself audited");
+
+      // §3: the per-user seen markers are nulled and the notification preferences reset to
+      // their column defaults — none of the user's own choices survive on the row.
+      const { rows: prefs } = await pool.query<{
+        triage_seen_at: Date | null;
+        challenges_seen_at: Date | null;
+        system_log_seen_at: Date | null;
+        quick_start_seen_at: Date | null;
+        email_notifications_enabled: boolean;
+        notify_followed_comments: boolean;
+        notify_followed_status: boolean;
+        notify_followed_solutions: boolean;
+      }>(
+        `select triage_seen_at, challenges_seen_at, system_log_seen_at, quick_start_seen_at,
+                email_notifications_enabled, notify_followed_comments, notify_followed_status, notify_followed_solutions
+           from users where id = $1`,
+        [victimId],
+      );
+      const p = prefs[0]!;
+      assert.equal(p.triage_seen_at, null, "triage seen marker nulled");
+      assert.equal(p.challenges_seen_at, null, "challenges seen marker nulled");
+      assert.equal(p.system_log_seen_at, null, "system-log seen marker nulled");
+      assert.equal(p.quick_start_seen_at, null, "quick-start seen marker nulled");
+      assert.equal(p.email_notifications_enabled, true, "e-mail opt-out reset to the column default");
+      assert.equal(p.notify_followed_comments, true, "comment preference reset to the column default");
+      assert.equal(p.notify_followed_status, true, "status preference reset to the column default");
+      assert.equal(p.notify_followed_solutions, true, "solution preference reset to the column default");
 
       const second = await scrubUser(pool, adminId, victimId);
       assert.equal(second.status, "already_scrubbed", "a second scrub is refused");

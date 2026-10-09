@@ -15,6 +15,9 @@ export const AUDIT_CATEGORY_LABEL: Record<AuditCategory, string> = {
   admin: "Admin",
 };
 
+/** The pre-rename action of the triage CSV export (§14.1), still present in historical rows. */
+export const LEGACY_TRIAGE_EXPORT_ACTION = "admin.triage_exported";
+
 /** SQL LIKE patterns per category (`%` is the wildcard). Anything not covered by a chip —
  *  likes, anonymity reveals, probes — still appears under All. */
 export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, readonly string[]> = {
@@ -23,7 +26,20 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
   comments: ["comment.%"],
   attachments: ["attachment.%"],
   identity: ["user.%", "scim.%", "role_mapping.%", "recon.%"],
-  admin: ["settings.%", "namespace.%", "impact_area.%", "system_banner.%", "presence.%", "email.%", "audit.%", "webhook.%", "%.exported"],
+  admin: [
+    "settings.%",
+    "namespace.%",
+    "impact_area.%",
+    "system_banner.%",
+    "presence.%",
+    "email.%",
+    "audit.%",
+    "webhook.%",
+    "%.exported",
+    // The triage CSV export was once audited under this name (now `triage.exported`). Audit rows
+    // are immutable, so the historical ones are kept under the same chip by name.
+    LEGACY_TRIAGE_EXPORT_ACTION,
+  ],
 };
 
 export function parseAuditCategory(raw: string | null | undefined): AuditCategory {

@@ -31,6 +31,8 @@ test("the 30-second pollers are NOT activity — otherwise 'online' means 'left 
   // still read as "active just now" on Friday.
   assert.equal(presenceTouchFor("/api/notifications", "GET"), null);
   assert.equal(presenceTouchFor("/api/admin/triage/attention", "GET"), null);
+  // The shell's new-challenges badge polls on every page — silent, so Home stays "Overview".
+  assert.equal(presenceTouchFor("/api/challenges/new-count", "GET"), null);
 });
 
 test("the allowlist is exhaustive — an unlisted route is silent, never a default touch", () => {

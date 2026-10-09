@@ -1,8 +1,9 @@
 "use client";
 // Challenge detail page (INNOBOX_SPEC.md §13.1 + Phase 3): full fields, inline solutions
 // list, propose-a-solution (§6.2), like/follow toggles, comments (§10.2), the admin
-// status-override control (§7.2/§8.2), assignment (§7.3), anonymity reveal (§9,
-// admin transient + author self-reveal), and the platform-admin danger zone (§10.3).
+// status-override control (§7.2/§8.2), assignment + unassignment (§7.3), anonymity reveal (§9,
+// admin transient in a dialog + author self-reveal, on the challenge and on each solution), the
+// §11 attachment control, the §8.3 like freeze, and the platform-admin danger zone (§10.3).
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
@@ -11,8 +12,8 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "
 import { CommentThread } from "@/components/CommentThread";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
-import { StagedAttachments } from "@/components/StagedAttachments";
-import { uploadFileInChunks } from "@/lib/chunked-upload";
+import { AttachmentControl } from "@/components/AttachmentControl";
+import { LIKES_FROZEN_HINT, proposeDisabledReason } from "@/lib/challenge-detail";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
 import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
@@ -21,6 +22,7 @@ interface MaskedAuthor {
   userId: string | null;
   displayName: string;
   anonymous: boolean;
+  active?: boolean;
 }
 
 interface AttachmentItem {
@@ -46,6 +48,8 @@ interface SolutionItem {
   likedByViewer: boolean;
   followedByViewer: boolean;
   canOverrideStatus: boolean;
+  canReveal: boolean;
+  canSelfReveal: boolean;
   allowedTransitions: string[];
   canEdit: boolean;
   canWithdraw: boolean;
@@ -72,12 +76,17 @@ interface ChallengeDetail {
   resolvedAt: string | null;
   assigneeId: string | null;
   assigneeDisplayName: string | null;
+  assigneeActive?: boolean | null;
   likeCount: number;
   likedByViewer: boolean;
   followedByViewer: boolean;
   solutionCount: number;
   isMine: boolean;
   canPropose: boolean;
+  likesFrozen: boolean;
+  canReveal: boolean;
+  canSelfReveal: boolean;
+  canAssign: boolean;
   canOverrideStatus: boolean;
   allowedTransitions: string[];
   canEdit: boolean;
@@ -167,7 +176,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<{ displayName: string; email: string | null; userId: string | null } | null>(null);
+  const [revealed, setRevealed] = useState<RevealedAuthor | null>(null);
   const [assigneeQuery, setAssigneeQuery] = useState("");
   const [assigneeResults, setAssigneeResults] = useState<{ id: string; displayName: string; email: string | null }[]>([]);
 
@@ -268,13 +277,21 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     }
   };
 
-  const reveal = async () => {
+  // §9 audited admin reveal — transient: the identity lives only in the reveal dialog's state
+  // (never in the byline, never persisted), and every execution is audited server-side.
+  // `itemNumber` is the CH-/SOL- number, which also picks the endpoint.
+  const reveal = async (itemNumber: string) => {
     setBusy(true);
     try {
-      const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}/reveal`, { method: "POST" });
+      const res = await fetch(`${itemApiPath(itemNumber)}/reveal`, { method: "POST" });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not reveal author");
-      setRevealed({ displayName: json.displayName as string, email: (json.email as string) ?? null, userId: (json.userId as string) ?? null });
+      setRevealed({
+        itemNumber,
+        displayName: json.displayName as string,
+        email: (json.email as string) ?? null,
+        userId: (json.userId as string) ?? null,
+      });
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not reveal author");
     } finally {
@@ -282,11 +299,12 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     }
   };
 
-  const selfReveal = async () => {
-    if (!window.confirm("This permanently removes your anonymity on this challenge. Continue?")) return;
+  const selfReveal = async (itemNumber: string) => {
+    const what = itemNumber.startsWith("SOL-") ? "solution" : "challenge";
+    if (!window.confirm(`This permanently removes your anonymity on this ${what}. Continue?`)) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}/self-reveal`, { method: "POST" });
+      const res = await fetch(`${itemApiPath(itemNumber)}/self-reveal`, { method: "POST" });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not reveal yourself");
       onChanged();
@@ -412,8 +430,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
-  const canReveal = challenge.canOverrideStatus && challenge.author.anonymous;
-  const canSelfReveal = challenge.isMine && challenge.author.anonymous;
+  const canReveal = challenge.canReveal && challenge.author.anonymous;
+  const canSelfReveal = challenge.canSelfReveal && challenge.author.anonymous;
+  const likeHint = challenge.likesFrozen ? LIKES_FROZEN_HINT : undefined;
 
   return (
     <>
@@ -435,25 +454,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         <div className="row" style={{ border: 0, padding: 0, marginBottom: 16 }}>
           <AvatarBubble
             size="md"
-            userId={revealed ? revealed.userId : challenge.author.userId}
-            displayName={revealed ? revealed.displayName : challenge.author.displayName}
-            anonymous={!revealed && challenge.author.anonymous}
-            /* noCard (§13.8): the reveal surface stays untouched — it already names the person, and
-               the audited reveal (§9) is the one place anonymity is deliberately lifted. */
-            noCard={Boolean(revealed)}
+            userId={challenge.author.userId}
+            displayName={challenge.author.displayName}
+            anonymous={challenge.author.anonymous}
+            deactivated={challenge.author.active === false}
           />
           <div className="grow">
-            <div className="ttl">
-              {revealed ? (
-                <>
-                  {revealed.displayName} <span className="pill pill-accent">Revealed to you only</span>
-                </>
-              ) : challenge.author.anonymous ? (
-                "Anonymous"
-              ) : (
-                challenge.author.displayName
-              )}
-            </div>
+            <div className="ttl">{challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}</div>
             <div className="sub mono">
               {fmt.dateTime(challenge.createdAt)}
               {challenge.editedAt && ` · edited ${fmt.dateTime(challenge.editedAt)}`}
@@ -461,14 +468,29 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             </div>
             {challenge.assigneeDisplayName && (
               <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                assignee: <AvatarBubble size="sm" userId={challenge.assigneeId} displayName={challenge.assigneeDisplayName} /> {challenge.assigneeDisplayName}
+                assignee:{" "}
+                <AvatarBubble
+                  size="sm"
+                  userId={challenge.assigneeId}
+                  displayName={challenge.assigneeDisplayName}
+                  deactivated={challenge.assigneeActive === false}
+                />{" "}
+                {challenge.assigneeDisplayName}
               </div>
             )}
           </div>
           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("challenge", challenge.id)}>
             {challenge.followedByViewer ? "Following" : "Follow"}
           </button>
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleLike("challenge", challenge.id)}>
+          {/* §8.3: frozen on a solved challenge — the count stays, the button takes no clicks. */}
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy || challenge.likesFrozen}
+            title={likeHint}
+            aria-label={likeHint ? `${challenge.likeCount} likes. ${likeHint}` : undefined}
+            onClick={() => toggleLike("challenge", challenge.id)}
+          >
             {challenge.likedByViewer ? "♥" : "♡"} {challenge.likeCount}
           </button>
         </div>
@@ -476,13 +498,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
         {(canReveal || canSelfReveal) && (
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            {canReveal && !revealed && (
-              <button type="button" className="btn btn-sm" disabled={busy} onClick={reveal}>
+            {canReveal && (
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => reveal(challenge.number)}>
                 Reveal author
               </button>
             )}
             {canSelfReveal && (
-              <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={selfReveal}>
+              <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => selfReveal(challenge.number)}>
                 Reveal myself (permanent)
               </button>
             )}
@@ -516,15 +538,12 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           </div>
         )}
 
-        <AttachmentsSection
-          parentType="challenge"
-          parentId={challenge.id}
-          attachments={challenge.attachments}
-          canUpload={challenge.canEdit}
-          busy={busy}
-          onChanged={onChanged}
-          onError={notify}
-        />
+        <div style={{ marginTop: 14 }}>
+          <AttachmentControl
+            parentType="challenge"
+            target={{ kind: "bound", parentId: challenge.id, attachments: challenge.attachments, canUpload: challenge.canEdit, onChanged }}
+          />
+        </div>
 
         {!challenge.canOverrideStatus && challenge.allowedTransitions.length > 0 && (
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
@@ -568,25 +587,53 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                 <option value="namespace">Namespace-only</option>
               </select>
             </div>
+          </div>
+        )}
 
-            <div style={{ marginTop: 14, position: "relative" }}>
-              <label style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 8, display: "block" }}>
-                Assignee
-              </label>
-              <input
-                className="field"
-                placeholder="Search users by name or email…"
-                value={assigneeQuery}
-                onChange={(e) => searchAssignees(e.target.value)}
-              />
-              {assigneeResults.length > 0 && (
-                <div className="menu-pop user-search-pop" style={{ position: "absolute", zIndex: 10, marginTop: 4, width: "100%", maxWidth: 320 }}>
-                  {assigneeResults.map((u) => (
-                    <UserResultButton key={u.id} user={u} onClick={() => assign(u.id)} />
-                  ))}
-                </div>
+        {challenge.canAssign && (
+          <div style={{ marginTop: 14, position: "relative" }}>
+            <label
+              htmlFor="assignee-search"
+              style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 8, display: "block" }}
+            >
+              Assignee
+            </label>
+            {/* §7.3: the current assignee with an explicit Unassign — the search below only ever
+                assigns or reassigns, so nothing unassigns by accident. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              {challenge.assigneeId && challenge.assigneeDisplayName ? (
+                <>
+                  <AvatarBubble
+                    size="sm"
+                    userId={challenge.assigneeId}
+                    displayName={challenge.assigneeDisplayName}
+                    deactivated={challenge.assigneeActive === false}
+                  />
+                  <span style={{ fontSize: 14 }}>{challenge.assigneeDisplayName}</span>
+                  <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => assign(null)}>
+                    Unassign
+                  </button>
+                </>
+              ) : (
+                <span className="muted" style={{ fontSize: 14 }}>
+                  Unassigned
+                </span>
               )}
             </div>
+            <input
+              id="assignee-search"
+              className="field"
+              placeholder={challenge.assigneeId ? "Reassign: search users by name or email…" : "Search users by name or email…"}
+              value={assigneeQuery}
+              onChange={(e) => searchAssignees(e.target.value)}
+            />
+            {assigneeResults.length > 0 && (
+              <div className="menu-pop user-search-pop" style={{ position: "absolute", zIndex: 10, marginTop: 4, width: "100%", maxWidth: 320 }}>
+                {assigneeResults.map((u) => (
+                  <UserResultButton key={u.id} user={u} onClick={() => assign(u.id)} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -610,7 +657,11 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         )}
       </div>
 
-      {challenge.canPropose && <ProposeSolutionForm challengeNumber={challenge.number} onProposed={onChanged} />}
+      <ProposeSolutionForm
+        challengeNumber={challenge.number}
+        disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status)}
+        onProposed={onChanged}
+      />
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>
         Solutions {challenge.solutions.length > 0 && `(${challenge.solutions.length})`}
@@ -625,17 +676,38 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span className="chip mono">{s.number}</span>
                 <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} />
+                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
                 <span className="sub" style={{ flex: 1 }}>
                   {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
                 </span>
                 <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
                   {s.followedByViewer ? "Following" : "Follow"}
                 </button>
-                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleLike("solution", s.id)}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy || challenge.likesFrozen}
+                  title={likeHint}
+                  aria-label={likeHint ? `${s.likeCount} likes. ${likeHint}` : undefined}
+                  onClick={() => toggleLike("solution", s.id)}
+                >
                   {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
                 </button>
               </div>
+              {s.author.anonymous && (s.canReveal || s.canSelfReveal) && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
+                  {s.canReveal && (
+                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => reveal(s.number)}>
+                      Reveal author
+                    </button>
+                  )}
+                  {s.canSelfReveal && (
+                    <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => selfReveal(s.number)}>
+                      Reveal myself (permanent)
+                    </button>
+                  )}
+                </div>
+              )}
               <p style={{ whiteSpace: "pre-wrap", fontSize: 14, margin: 0 }}>{s.description}</p>
               {s.costVsBenefits && (
                 <p className="muted" style={{ fontSize: 13, margin: 0 }}>
@@ -710,14 +782,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                   onDelete={(reason) => deletePermanently(`/api/solutions/${s.number.replace("SOL-", "")}`, reason, "refresh")}
                 />
               )}
-              <AttachmentsSection
+              <AttachmentControl
                 parentType="solution"
-                parentId={s.id}
-                attachments={s.attachments}
-                canUpload={s.canEdit}
-                busy={busy}
-                onChanged={onChanged}
-                onError={notify}
+                target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
               />
               <CommentThread parentType="solution" parentId={s.id} authoredAnonymously={s.isMine && s.author.anonymous} />
             </div>
@@ -728,8 +795,66 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>Discussion</h2>
       <CommentThread parentType="challenge" parentId={challenge.id} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
 
+      {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}
       {toast && <div className="toast">{toast}</div>}
     </>
+  );
+}
+
+interface RevealedAuthor {
+  /** The CH-/SOL- number of the item whose author was revealed. */
+  itemNumber: string;
+  displayName: string;
+  email: string | null;
+  userId: string | null;
+}
+
+/** `/api/challenges/<n>` or `/api/solutions/<n>` for a CH-/SOL- number. */
+function itemApiPath(itemNumber: string): string {
+  return itemNumber.startsWith("SOL-")
+    ? `/api/solutions/${itemNumber.replace("SOL-", "")}`
+    : `/api/challenges/${itemNumber.replace("CH-", "")}`;
+}
+
+/**
+ * The §9 reveal dialog (§13.6): a modal with the revealed author's real, large avatar bubble
+ * beside their name, flagged as visible to this admin only. Transient by construction — closing
+ * it drops the identity from state, and nothing else on the page changes. The bubble opts out of
+ * the directory hover card (§13.8): the dialog already names the person.
+ */
+function RevealDialog({ revealed, onClose }: { revealed: RevealedAuthor; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="author-reveal-dialog"
+      aria-labelledby="author-reveal-name"
+      onClose={onClose}
+      onClick={(e) => {
+        // A click on the backdrop (the dialog element itself, outside its content) closes it.
+        if (e.target === e.currentTarget) e.currentTarget.close();
+      }}
+    >
+      <div className="author-reveal-body">
+        <div className="eyebrow">Author of {revealed.itemNumber}</div>
+        <AvatarBubble size="lg" userId={revealed.userId} displayName={revealed.displayName} noCard />
+        <h2 id="author-reveal-name" className="author-reveal-name">
+          {revealed.displayName}
+        </h2>
+        {revealed.email && <div className="muted mono author-reveal-email">{revealed.email}</div>}
+        <span className="pill pill-accent">Revealed to you only</span>
+        <p className="muted author-reveal-note">Everyone else still sees this item as anonymous. This reveal has been recorded in the audit log.</p>
+        <form method="dialog">
+          <button type="submit" className="btn btn-primary btn-sm" autoFocus>
+            Close
+          </button>
+        </form>
+      </div>
+    </dialog>
   );
 }
 
@@ -843,7 +968,17 @@ function ResubmitButton({ locked, busy, label, onClick }: { locked: boolean; bus
 // §6.2 propose form. §6.4: locked while the create is in flight; on error it releases with the
 // fields and staged files intact; on success it stays locked until the parent challenge has been
 // re-read AND re-rendered, and only then closes.
-function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber: string; onProposed: () => Promise<void> }) {
+function ProposeSolutionForm({
+  challengeNumber,
+  disabledReason,
+  onProposed,
+}: {
+  challengeNumber: string;
+  /** §13.1: the button is visible to every viewer but enabled only while `valid`; a non-null
+   *  reason disables it and is shown beside it. The server refuses a proposal off `valid` anyway. */
+  disabledReason: string | null;
+  onProposed: () => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState("");
   const [costVsBenefits, setCostVsBenefits] = useState("");
@@ -853,11 +988,24 @@ function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber:
   const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
 
-  if (!open) {
+  if (!open || disabledReason !== null) {
     return (
-      <button type="button" className="btn btn-primary" style={{ marginBottom: 18 }} onClick={() => setOpen(true)}>
-        Propose a solution
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={disabledReason !== null}
+          aria-describedby={disabledReason !== null ? "propose-disabled-reason" : undefined}
+          onClick={() => setOpen(true)}
+        >
+          Propose a solution
+        </button>
+        {disabledReason !== null && (
+          <span id="propose-disabled-reason" className="muted" style={{ fontSize: 13 }}>
+            {disabledReason}
+          </span>
+        )}
+      </div>
     );
   }
 
@@ -917,7 +1065,7 @@ function ProposeSolutionForm({ challengeNumber, onProposed }: { challengeNumber:
           onChange={(e) => setCostVsBenefits(e.target.value)}
           maxLength={5000}
         />
-        <StagedAttachments parentType="solution" draftKey={draftKey} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+        <AttachmentControl parentType="solution" target={{ kind: "staged", draftKey }} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
           <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
           Submit anonymously
@@ -950,170 +1098,6 @@ const EDIT_LABEL: React.CSSProperties = {
   textTransform: "uppercase",
   color: "var(--faint)",
 };
-
-// The client-side mirror of the §11 allowlist, for the file-input `accept` hint (the server is
-// authoritative). Kept as a literal so this client component doesn't import the shared barrel.
-const ATTACHMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.md,.png,.jpg,.jpeg,.gif,.webp,.zip";
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// §11 Attachments section for a challenge or a solution: a list with per-status affordances
-// (download link for clean; "Scanning…" / "Removed — failed scan" / "Removed — couldn't be
-// scanned" for the uploader's pending/infected/unscannable), an upload control shown only within
-// the author-edit window (canUpload), and a Remove button on the uploader's own attachments while
-// still editable (a failed one included, so its slot can be freed for another file).
-function AttachmentsSection({
-  parentType,
-  parentId,
-  attachments,
-  canUpload,
-  busy,
-  onChanged,
-  onError,
-}: {
-  parentType: "challenge" | "solution";
-  parentId: string;
-  attachments: AttachmentItem[];
-  canUpload: boolean;
-  busy: boolean;
-  onChanged: () => void;
-  onError: (m: string) => void;
-}) {
-  const [uploading, setUploading] = useState(false);
-  const [active, setActive] = useState<{ mode: "chunked" | "single"; progress: number } | null>(null);
-  const [config, setConfig] = useState<{ chunkSizeBytes: number; maxUploadSizeMb: number } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    fetch("/api/attachments/config", { headers: { accept: "application/json" } })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (j) setConfig({ chunkSizeBytes: j.chunkSizeMb * 1024 * 1024, maxUploadSizeMb: j.maxUploadSizeMb });
-      })
-      .catch(() => {});
-  }, []);
-
-  const upload = async (file: File) => {
-    const chunkSizeBytes = config?.chunkSizeBytes ?? 5 * 1024 * 1024;
-    if (config && file.size > config.maxUploadSizeMb * 1024 * 1024) {
-      onError(`That file exceeds the ${config.maxUploadSizeMb} MB limit.`);
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
-    const chunked = file.size > chunkSizeBytes;
-    setUploading(true);
-    setActive({ mode: chunked ? "chunked" : "single", progress: 0 });
-    try {
-      // §11: files larger than the chunk size upload chunk-by-chunk (progress bar); smaller
-      // files go in one request (spinner). Both then scan on-demand before becoming downloadable.
-      if (chunked) {
-        await uploadFileInChunks(file, { parentType, parentId }, (up, total) =>
-          setActive((a) => (a ? { ...a, progress: total ? up / total : 0 } : a)),
-        );
-      } else {
-        const form = new FormData();
-        form.append("parentType", parentType);
-        form.append("parentId", parentId);
-        form.append("file", file);
-        const res = await fetch("/api/attachments", { method: "POST", body: form });
-        const json = await readJson(res);
-        if (!res.ok) throw new Error(json.error ?? "Could not upload attachment");
-      }
-      if (fileRef.current) fileRef.current.value = "";
-      onChanged();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not upload attachment");
-    } finally {
-      setUploading(false);
-      setActive(null);
-    }
-  };
-
-  const remove = async (id: string) => {
-    if (!window.confirm("Remove this attachment? This is permanent.")) return;
-    try {
-      const res = await fetch(`/api/attachments/${id}`, { method: "DELETE" });
-      const json = await readJson(res);
-      if (!res.ok) throw new Error(json.error ?? "Could not remove attachment");
-      onChanged();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Could not remove attachment");
-    }
-  };
-
-  if (attachments.length === 0 && !canUpload) return null;
-
-  return (
-    <div style={{ marginTop: 14 }}>
-      <label style={{ ...EDIT_LABEL, display: "block", marginBottom: 8 }}>Attachments</label>
-      {attachments.length === 0 ? (
-        <p className="muted" style={{ margin: "0 0 8px", fontSize: 13 }}>No attachments yet.</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: "0 0 8px", display: "flex", flexDirection: "column", gap: 6 }}>
-          {attachments.map((a) => (
-            <li key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              {a.status === "clean" ? (
-                <a href={`/api/attachments/${a.id}`} style={{ color: "var(--accent)", textDecoration: "underline", fontSize: 14 }}>
-                  {a.filename}
-                </a>
-              ) : (
-                <span style={{ fontSize: 14 }}>{a.filename}</span>
-              )}
-              <span className="mono muted" style={{ fontSize: 12 }}>
-                {formatBytes(a.sizeBytes)}
-              </span>
-              {a.status === "pending" && <span className="chip">Scanning…</span>}
-              {a.status === "infected" && <span className="pill pill-danger">Removed — failed scan</span>}
-              {a.status === "unscannable" && <span className="pill pill-danger">Removed — couldn&apos;t be scanned</span>}
-              {canUpload && a.isUploader && (
-                <button type="button" className="btn btn-sm btn-danger" disabled={busy || uploading} onClick={() => remove(a.id)}>
-                  Remove
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {canUpload && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            ref={fileRef}
-            type="file"
-            className="field"
-            style={{ maxWidth: 340 }}
-            disabled={uploading || busy}
-            accept={ATTACHMENT_ACCEPT}
-            aria-label="Upload an attachment"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void upload(f);
-            }}
-          />
-          {active?.mode === "chunked" ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <span style={{ display: "inline-block", width: 120, height: 6, borderRadius: 3, background: "var(--border)", overflow: "hidden" }}>
-                <span style={{ display: "block", height: "100%", width: `${Math.round(active.progress * 100)}%`, background: "var(--accent)", transition: "width 120ms linear" }} />
-              </span>
-              <span className="mono muted" style={{ fontSize: 12 }}>
-                Uploading… {Math.round(active.progress * 100)}%
-              </span>
-            </span>
-          ) : (
-            uploading && (
-              <span className="muted" style={{ fontSize: 13 }}>
-                Uploading…
-              </span>
-            )
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // §10.1 author edit of a challenge's content (title/description/impact area/client name). Loads
 // the impact-area list to pre-select; visibility/anonymity/namespace are intentionally not

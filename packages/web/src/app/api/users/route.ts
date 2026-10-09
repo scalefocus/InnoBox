@@ -5,10 +5,14 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { searchActiveUsers } from "./store";
 import { withSystemLog } from "@/lib/system-log";
+import { rateLimit } from "@/lib/rate-limit";
 
 async function handleGET(req: Request): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  // §2.4: the directory picker is a search/autocomplete read — the limited "search" bucket.
+  const limited = rateLimit(gate.user.id, "search");
+  if (limited) return limited;
   const q = new URL(req.url).searchParams.get("q")?.trim() ?? "";
   if (q.length < 2) return Response.json({ users: [] });
 

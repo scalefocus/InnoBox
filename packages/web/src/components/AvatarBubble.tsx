@@ -14,7 +14,7 @@
 // deleted/unknown actors — and the surfaces that opt out via `noCard` keep their `title`, gain no
 // tab stop, and issue no card request.
 import { useState } from "react";
-import { avatarInitials, avatarColorIndex } from "@innobox/shared/avatars";
+import { avatarInitials, avatarColorIndex, avatarVariant } from "@innobox/shared/avatars";
 import { useDirectoryCard } from "./DirectoryCard";
 
 export type AvatarSize = "sm" | "md" | "lg";
@@ -63,8 +63,10 @@ export function AvatarBubble({
     avatar: <AvatarBubble size="md" userId={userId} displayName={displayName} deactivated={deactivated} noCard />,
   });
 
+  const variant = avatarVariant({ userId, displayName, anonymous, deactivated });
+
   // Generic anonymous bubble: no photo, no initials, no per-user color (§9/§13.6).
-  if (anonymous || (userId === null && displayName === "Anonymous")) {
+  if (variant === "anon") {
     return (
       <span className={`avatar avatar-${size} avatar-anon`} title={title ?? "Anonymous"} aria-label={title ?? "Anonymous"} role="img">
         <PersonGlyph />
@@ -75,9 +77,29 @@ export function AvatarBubble({
   const label = title ?? displayName ?? "";
   const initials = avatarInitials(displayName);
 
-  // No linkable id (deleted user) or explicitly deactivated → greyed initials, never a photo.
+  // A scrubbed "Deleted User" (§3 erasure): the neutral bubble — no photo, no initials, no
+  // per-user color. A scrubbed row that still carries its id keeps the card ("No directory
+  // information", §13.8); an id-less one never has one.
+  if (variant === "deleted") {
+    return (
+      <>
+        <span
+          className={`avatar avatar-${size} avatar-off avatar-deleted`}
+          title={triggerProps ? undefined : label}
+          aria-label={label}
+          role="img"
+          {...(triggerProps ?? {})}
+        >
+          <PersonGlyph />
+        </span>
+        {card}
+      </>
+    );
+  }
+
+  // No linkable id or a deactivated user (§3.1 photo dropped) → greyed initials, never a photo.
   // A deactivated user still gets a card (it names the state); a user with no id never does.
-  if (userId === null || deactivated) {
+  if (variant === "off" || userId === null) {
     return (
       <>
         <span

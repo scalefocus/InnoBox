@@ -6,7 +6,8 @@
 import { isChallengeStatus, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds, markCommentNotificationsReadForChallenge } from "@/lib/notify";
+import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
+import { logNotifyFailure, notifyChallengeStatusChanged } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
@@ -49,10 +50,11 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
   switch (result.status) {
     case "ok": {
       if (result.changed) {
-        const followers = await getFollowerUserIds(pool, "challenge", result.challenge.id);
-        await fireStatusChangedNotification(result.challenge.id, result.challenge.number, result.challenge.title, parsed.value, gate.user.id, followers).catch(
-          (err) => console.error(JSON.stringify({ level: "error", msg: "challenge status notification failed", error: String(err) })),
-        );
+        await notifyChallengeStatusChanged(
+          { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
+          { id: result.challenge.id },
+          parsed.value,
+        ).catch(logNotifyFailure("challenge status notification failed"));
       }
       return Response.json({ challenge: result.challenge });
     }
@@ -120,10 +122,12 @@ async function handleDELETE(req: Request, context: { params: Promise<{ number: s
   const { number } = await context.params;
   if (!isEntityNumber(number)) return Response.json({ error: "challenge not found" }, { status: 404 });
 
+  // §10.3: a non-platform-admin is answered 404 BEFORE the body is looked at — a 422 for a
+  // missing reason would confirm the endpoint is live for them. Then the reason (422).
+  if (!gate.user.roles.isPlatformAdmin) return Response.json({ error: "challenge not found" }, { status: 404 });
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
-  const body = read.value;
-  const reason = validateDeleteReason(body.reason);
+  const reason = validateDeleteReason(read.value.reason);
   if (!reason.ok) return Response.json({ error: reason.error }, { status: 422 });
 
   const result = await deleteChallenge(
@@ -134,49 +138,6 @@ async function handleDELETE(req: Request, context: { params: Promise<{ number: s
   );
   if (result.status === "not_found") return Response.json({ error: "challenge not found" }, { status: 404 });
   return Response.json({ deleted: true, cascade: result.counts });
-}
-
-async function fireStatusChangedNotification(
-  challengeId: string,
-  challengeNumber: string,
-  title: string,
-  newStatus: string,
-  actorId: string,
-  followerIds: string[],
-): Promise<void> {
-  const { rows } = await pool.query<{ author_id: string; assignee_id: string | null }>(
-    `select author_id, assignee_id from challenges where id = $1`,
-    [challengeId],
-  );
-  const row = rows[0];
-  if (!row) return;
-  const numberDigits = challengeNumber.replace("CH-", "");
-  let type: "status_changed" | "rejected" | "needs_improvement" = "status_changed";
-  let message = `${challengeNumber} "${title}" moved to ${newStatus.replace(/_/g, " ")}.`;
-  if (newStatus === "rejected") {
-    type = "rejected";
-    message = `${challengeNumber} "${title}" was rejected.`;
-  } else if (newStatus === "needs_improvement") {
-    type = "needs_improvement";
-    message = `${challengeNumber} "${title}" needs improvement — edit and resubmit.`;
-  }
-  // §12.1: a plain status change (event 3) reaches author + assignee + followers; Rejected (4)
-  // and Needs improvement (5) are author-focused events — only the item author is notified, with
-  // the distinct rejected message / edit-&-resubmit CTA above.
-  const recipients =
-    type === "status_changed"
-      ? [row.author_id, ...(row.assignee_id ? [row.assignee_id] : []), ...followerIds]
-      : [row.author_id];
-  await dispatchEvent(
-    { pool, actorId, resolveRoles: resolveRolesForUser },
-    { parentType: "challenge", parentId: challengeId },
-    recipients,
-    type,
-    { message, link: `/challenges/${numberDigits}` },
-    // §12.1: only a plain status change (event 3) is mutable — rejected/needs-improvement are
-    // actionable author events and always arrive. The assignee holds per-item duty: exempt.
-    type === "status_changed" ? { preference: "followedStatus", exempt: row.assignee_id ? [row.assignee_id] : [] } : undefined,
-  );
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

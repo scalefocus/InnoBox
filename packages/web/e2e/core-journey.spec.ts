@@ -10,6 +10,7 @@
 // the reliable, high-value UI path is the better trade than a flaky full-chain click-through.
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { submitNewChallenge } from "./helpers/forms";
 
 // The challenge admin-override <select> carries every CHALLENGE status; `solved` is challenge-only,
 // so it uniquely identifies it (and is unaffected by the solution status <select>, if present).
@@ -30,11 +31,11 @@ test("core journey: submit → triage → propose", async ({ browser }) => {
   await author.locator("#description").fill("A problem worth solving, raised by the e2e suite.");
   await author.locator("#impactArea").selectOption({ label: "Internal" });
   // namespace defaults to global, visibility defaults to org — both fine for this journey.
-  await author.getByRole("button", { name: "Submit challenge" }).click();
-
-  await author.waitForURL(/\/challenges\/\d+$/);
+  await submitNewChallenge(author);
   const number = author.url().match(/\/challenges\/(\d+)$/)![1];
   await expect(author.locator(".pill", { hasText: "Awaiting triage" })).toBeVisible();
+  // §13.1: "Propose a solution" is visible to everyone but enabled only once the challenge is valid.
+  await expect(author.getByRole("button", { name: "Propose a solution" })).toBeDisabled();
 
   // ── 2. A platform admin triages the challenge to `valid` via the override control. ──
   const adminCtx = await browser.newContext();

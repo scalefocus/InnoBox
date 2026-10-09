@@ -16,6 +16,7 @@ import { cspResponseHeaders, resolveCspMode } from "./lib/csp-mode";
 import { isOriginAllowed } from "./lib/csrf";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER } from "./lib/presence-touch";
 import { isPublicPath } from "./lib/routeAccess";
+import { PATHNAME_HEADER } from "./lib/quick-start";
 import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
@@ -52,6 +53,9 @@ function withRequestContext(req: NextRequest, stamp: boolean, sec: Security): Ne
     forwarded.delete(PRESENCE_PATH_HEADER);
     forwarded.delete(PRESENCE_METHOD_HEADER);
   }
+  // §13.7: the root layout's server-side quick-start gate needs the route being rendered (Next gives
+  // layouts no pathname). set(), not append(), so a client-supplied value is always overwritten.
+  forwarded.set(PATHNAME_HEADER, req.nextUrl.pathname);
   // Always overwritten, so a client-supplied x-nonce / CSP can never reach the renderer.
   forwarded.set(NONCE_HEADER, sec.nonce);
   forwarded.set("Content-Security-Policy", sec.csp);

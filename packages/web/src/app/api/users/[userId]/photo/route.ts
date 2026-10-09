@@ -10,6 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
+import { photoContentType } from "@/lib/photo-type";
 
 export const dynamic = "force-dynamic";
 
@@ -32,10 +33,12 @@ async function handleGET(req: Request, context: { params: Promise<{ userId: stri
     return new Response(null, { status: 304, headers: { etag, "cache-control": "private, max-age=3600, must-revalidate" } });
   }
 
-  return new Response(new Uint8Array(row.photo), {
+  // §3.1: stored as-is (JPEG or PNG, as Graph returned it) — the type is sniffed from the bytes.
+  const bytes = new Uint8Array(row.photo);
+  return new Response(bytes, {
     status: 200,
     headers: {
-      "content-type": "image/jpeg",
+      "content-type": photoContentType(bytes),
       "cache-control": "private, max-age=3600, must-revalidate",
       ...(etag ? { etag } : {}),
     },

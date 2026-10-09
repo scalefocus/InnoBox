@@ -27,11 +27,13 @@ interface TriageRow {
   authorDisplayName: string;
   authorAnonymous: boolean;
   authorId: string | null;
+  authorActive?: boolean;
   status: string;
   impactAreaName: string;
   namespaceSlug: string;
   assigneeDisplayName: string | null;
   assigneeId: string | null;
+  assigneeActive: boolean | null;
   createdAt: string;
 }
 
@@ -426,7 +428,13 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                 </div>
               </div>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <AvatarBubble size="sm" userId={r.authorId} displayName={r.authorDisplayName} anonymous={r.authorAnonymous} />
+                <AvatarBubble
+                  size="sm"
+                  userId={r.authorId}
+                  displayName={r.authorDisplayName}
+                  anonymous={r.authorAnonymous}
+                  deactivated={r.authorActive === false}
+                />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
               </span>
               <span className={statusPillClass(r.status)}>{CHALLENGE_STATUS_LABEL[r.status] ?? r.status}</span>
@@ -472,6 +480,7 @@ interface TriageSolutionRow {
   authorDisplayName: string;
   authorAnonymous: boolean;
   authorId: string | null;
+  authorActive?: boolean;
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
@@ -534,7 +543,13 @@ function SolutionsQueue() {
                 </div>
               </div>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <AvatarBubble size="sm" userId={r.authorId} displayName={r.authorDisplayName} anonymous={r.authorAnonymous} />
+                <AvatarBubble
+                  size="sm"
+                  userId={r.authorId}
+                  displayName={r.authorDisplayName}
+                  anonymous={r.authorAnonymous}
+                  deactivated={r.authorActive === false}
+                />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
               </span>
               <span className="sub">{r.impactAreaName}</span>
@@ -648,7 +663,15 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
   if (TERMINAL_STATUSES.has(row.status)) {
     return (
       <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        {row.assigneeDisplayName && <AvatarBubble size="sm" userId={row.assigneeId} displayName={row.assigneeDisplayName} noCard />}
+        {row.assigneeDisplayName && (
+          <AvatarBubble
+            size="sm"
+            userId={row.assigneeId}
+            displayName={row.assigneeDisplayName}
+            deactivated={row.assigneeActive === false}
+            noCard
+          />
+        )}
         {row.assigneeDisplayName ?? "Unassigned"}
       </span>
     );
@@ -699,7 +722,15 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
     // stopPropagation: clicks inside the assignee cell must never bubble to the row's open-on-click.
     <span className="sub assignee-cell" onClick={(e) => e.stopPropagation()}>
       {/* noCard (§13.8): the inline editor is a popover host — a card here would nest one. */}
-      {assigned && !editing && <AvatarBubble size="sm" userId={row.assigneeId} displayName={row.assigneeDisplayName!} noCard />}
+      {assigned && !editing && (
+        <AvatarBubble
+          size="sm"
+          userId={row.assigneeId}
+          displayName={row.assigneeDisplayName!}
+          deactivated={row.assigneeActive === false}
+          noCard
+        />
+      )}
       <input
         ref={inputRef}
         className="assignee-input"

@@ -3,6 +3,7 @@
 // identity is only ever exposed through the audited admin reveal (not exercised here).
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { submitNewChallenge } from "./helpers/forms";
 
 test("anonymity: an anonymous challenge is masked as 'Anonymous', even to its author", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -18,9 +19,7 @@ test("anonymity: an anonymous challenge is masked as 'Anonymous', even to its au
   await page.locator("#description").fill("Raised anonymously by the e2e suite.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });
   await page.getByRole("checkbox", { name: "Submit anonymously" }).check();
-  await page.getByRole("button", { name: "Submit challenge" }).click();
-
-  await page.waitForURL(/\/challenges\/\d+$/);
+  await submitNewChallenge(page);
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
 
   // The author byline (a `.ttl`) must read "Anonymous" — masking is total, even in the author's

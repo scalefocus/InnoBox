@@ -22,6 +22,7 @@ import {
   type AttachmentScanStatus,
   type AttachmentView,
   type ClamdVerdict,
+  type ScanSource,
 } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -40,7 +41,8 @@ export const UPLOAD_SESSION_TTL_HOURS = 2;
 export interface AttachmentDeps {
   pool: Pool;
   storage: StorageClient;
-  scan?: (bytes: Uint8Array) => Promise<ClamdVerdict>;
+  /** Stand-in for clamd (tests): given the bytes or the object stream, the verdict. */
+  scan?: (source: ScanSource) => Promise<ClamdVerdict>;
 }
 
 interface AttachmentDbRow {
@@ -91,6 +93,19 @@ async function loadParent(
   );
   const row = rows[0];
   return row ? { authorId: row.author_id, status: row.status } : null;
+}
+
+/** The refusal for a bound upload by someone other than the parent's author (§11 author-only,
+ *  invariant 2 "404 before 403"): 403 only when the caller can actually see the parent — a
+ *  hidden parent answers the same 404 as a nonexistent one, so the refusal never confirms that
+ *  a parent the caller cannot see exists. */
+async function nonAuthorRefusal(
+  pool: Pool,
+  viewer: Viewer,
+  parentType: AttachmentParentType,
+  parentId: string,
+): Promise<{ status: "forbidden" } | { status: "not_found" }> {
+  return (await isParentVisible(pool, viewer, parentType, parentId)) ? { status: "forbidden" } : { status: "not_found" };
 }
 
 async function auditDownloadDenied(pool: Pool, viewerId: string, attachmentId: string): Promise<void> {
@@ -185,8 +200,9 @@ export async function uploadAttachment(
 ): Promise<UploadAttachmentResult> {
   const parent = await loadParent(deps.pool, input.parentType, input.parentId);
   if (!parent) return { status: "not_found" };
-  // Author-only, and only within the parent's §10.1 author-edit window.
-  if (parent.authorId !== viewer.userId) return { status: "forbidden" };
+  // Author-only (404 for a parent the caller cannot see), and only within the parent's §10.1
+  // author-edit window.
+  if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, input.parentId);
   if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
 
   // Allowlist (415) — both extension AND declared MIME must be in the set — and the content
@@ -604,7 +620,7 @@ export async function initiateChunkedUpload(
     if (typeof parentId !== "string" || !isUuid(parentId)) return { status: "not_found" };
     const parent = await loadParent(deps.pool, input.parentType, parentId);
     if (!parent) return { status: "not_found" };
-    if (parent.authorId !== viewer.userId) return { status: "forbidden" };
+    if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, parentId);
     if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
     if ((await countLiveAttachments(deps.pool, { kind: "parent", parentType: input.parentType, parentId })) >= limits.maxPerItem) {
       return { status: "too_many" };
@@ -744,7 +760,9 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
   if (capTarget.kind === "parent") {
     const parent = await loadParent(deps.pool, capTarget.parentType, capTarget.parentId);
     if (!parent) return abortAnd({ status: "not_found" });
-    if (parent.authorId !== viewer.userId) return abortAnd({ status: "forbidden" });
+    if (parent.authorId !== viewer.userId) {
+      return abortAnd(await nonAuthorRefusal(deps.pool, viewer, capTarget.parentType, capTarget.parentId));
+    }
     if (!parentAcceptsAttachmentChanges(session.parent_type, parent.status)) return abortAnd({ status: "not_editable" });
   }
   if ((await countLiveAttachments(deps.pool, capTarget)) >= limits.maxPerItem) return abortAnd({ status: "too_many" });

@@ -12,6 +12,7 @@ import { Providers } from "@/components/Providers";
 import { DateFormatProvider } from "@/components/DateFormat";
 import { AppShell } from "@/components/AppShell";
 import { NONCE_HEADER } from "@/lib/security-headers";
+import { enforceQuickStart } from "@/lib/quick-start-gate";
 
 const DESCRIPTION =
   "Challenge & solution management — raise challenges, propose solutions, drive them to implementation.";
@@ -51,6 +52,9 @@ export const metadata: Metadata = {
 const THEME_INIT = `(function(){try{var s=localStorage.getItem("innobox.theme");var t=s==="light"||s==="dark"?s:window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","light");}})();`;
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
+  // §13.7: a signed-in user who has never completed /quick-start is redirected there before the
+  // requested page renders (priority over a deep-link callbackUrl).
+  await enforceQuickStart();
   const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>

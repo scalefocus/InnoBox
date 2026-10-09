@@ -16,7 +16,7 @@ test("presence panel: platform-admin only, and a namespace-less member gets 403 
   // The panel lives inside the platform-admin console, so a member sees no card at all…
   const memberPage = await memberCtx.newPage();
   await memberPage.goto("/admin");
-  await expect(memberPage.getByRole("heading", { name: "Administration restricted" })).toBeVisible();
+  await expect(memberPage.getByRole("heading", { name: "Administration is restricted" })).toBeVisible();
   await expect(memberPage.getByRole("heading", { name: "Currently online" })).toHaveCount(0);
 
   // …and the endpoints behind it refuse them directly, not just in the UI.

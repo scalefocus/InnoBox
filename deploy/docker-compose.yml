@@ -207,6 +207,9 @@ services:
     depends_on:
       - web
       - worker
+    environment:
+      # Outer body cap = maximum upload size + 1 MB (see Caddyfile); default fits the 200 MB ceiling.
+      PROXY_MAX_BODY_SIZE: ${PROXY_MAX_BODY_SIZE:-201MiB}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     ports:

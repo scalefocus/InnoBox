@@ -8,19 +8,21 @@
 // with an error, or the object is unreadable) backs off and, at the attempt cap, makes the row
 // `unscannable` — purged, notified, audited. The S3 client and the scan function are injected
 // so the sweep is unit-testable without a live MinIO/clamd (the pure INSTREAM framing/parsing
-// and the retry policy live in @innobox/shared and are unit-tested there).
+// and the retry policy live in @innobox/shared and are unit-tested there). The object is
+// STREAMED from MinIO to clamd chunk by chunk (§11) — never buffered whole in worker memory.
 import net from "node:net";
 import type { Pool } from "pg";
 import {
   applyScanResult,
   CLAMD_INSTREAM_COMMAND,
   CLAMD_INSTREAM_TERMINATOR,
-  frameInstreamChunk,
+  instreamFrames,
   parseClamdResponse,
   ScanObjectReadError,
   type AttachmentParentType,
   type ClamdVerdict,
   type ScanResult,
+  type ScanSource,
 } from "@innobox/shared";
 import {
   AbortMultipartUploadCommand,
@@ -29,9 +31,16 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 
+/** An object being read from the store: its chunks, plus a way to close the underlying
+ *  connection when the scan stops early (or never starts reading, e.g. clamd is down). */
+export interface ScanObjectStream extends AsyncIterable<Uint8Array> {
+  destroy?(): void;
+}
+
 /** The object-store surface the sweep needs — injectable for tests. */
 export interface ScanS3Client {
-  getObject(key: string): Promise<Uint8Array>;
+  /** Opens the object for streaming; rejects when it cannot be opened (missing, store down). */
+  getObjectStream(key: string): Promise<ScanObjectStream>;
   deleteObject(key: string): Promise<void>;
 }
 
@@ -41,10 +50,11 @@ export interface WorkerS3Client extends ScanS3Client {
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;
 }
 
-/** A scan function: given the object bytes, return clamd's verdict, or throw — a
- *  `ClamdErrorReply` when clamd answered with an error for this stream (per-file), anything
- *  else when clamd could not be reached (outage). */
-export type ScanFn = (bytes: Uint8Array) => Promise<ClamdVerdict>;
+/** A scan function: given the object (bytes or a chunk stream), return clamd's verdict, or
+ *  throw — a `ClamdErrorReply` when clamd answered with an error for this stream (per-file), a
+ *  `ScanObjectReadError` when the object stream broke mid-read, anything else when clamd could
+ *  not be reached (outage). */
+export type ScanFn = (source: ScanSource) => Promise<ClamdVerdict>;
 
 export interface ScanDeps {
   s3: ScanS3Client;
@@ -93,13 +103,19 @@ export async function runScanSweep(pool: Pool, deps: ScanDeps): Promise<ScanSumm
     try {
       let result: ScanResult;
       try {
-        let bytes: Uint8Array;
+        let stream: ScanObjectStream;
         try {
-          bytes = await deps.s3.getObject(row.object_key);
+          stream = await deps.s3.getObjectStream(row.object_key);
         } catch (err) {
           throw new ScanObjectReadError(err);
         }
-        result = { verdict: await deps.scan(bytes) };
+        try {
+          result = { verdict: await deps.scan(stream) };
+        } finally {
+          // Idempotent: a stream read to the end is already closed; one the scan abandoned
+          // (clamd answered early, or was unreachable) must not leak its store connection.
+          stream.destroy?.();
+        }
       } catch (err) {
         result = { error: err };
       }
@@ -137,33 +153,16 @@ export async function runScanSweep(pool: Pool, deps: ScanDeps): Promise<ScanSumm
 // ── Real clamd scanner + S3 client (used by index.ts; not unit-tested — the pure protocol
 //    framing/parsing is covered by the @innobox/shared tests) ────────────────────────────────
 
-async function streamToUint8Array(body: unknown): Promise<Uint8Array> {
-  const b = body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
-  if (b && typeof b.transformToByteArray === "function") return b.transformToByteArray();
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
-  }
-  let total = 0;
-  for (const c of chunks) total += c.length;
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
-/** Build a `ScanFn` that streams the bytes to clamd via INSTREAM over a TCP socket, using the
- *  shared protocol helpers. Writes honour socket backpressure. clamd may answer EARLY and close
+/** Build a `ScanFn` that streams the object to clamd via INSTREAM over a TCP socket, using the
+ *  shared protocol helpers — one ≤64 KB frame at a time, read from the source only as fast as
+ *  the socket drains (writes honour backpressure), so memory stays flat whatever the file size. clamd may answer EARLY and close
  *  — `INSTREAM size limit exceeded. ERROR` when a stream passes its StreamMaxLength — while we
  *  are still writing, which surfaces here as EPIPE/ECONNRESET; a reply already received always
  *  wins over that socket error, so the limit reply is a per-file error (counted toward
  *  `unscannable`), never mistaken for an outage that would leave the row pending forever.
  *  Rejects with the socket/timeout error only when clamd gave no reply at all (outage). */
 export function createClamavScanner(opts: { host: string; port: number; timeoutMs?: number }): ScanFn {
-  return (bytes: Uint8Array) =>
+  return (source: ScanSource) =>
     new Promise<ClamdVerdict>((resolve, reject) => {
       const socket = net.connect({ host: opts.host, port: opts.port });
       let response = "";
@@ -199,12 +198,17 @@ export function createClamavScanner(opts: { host: string; port: number; timeoutM
               socket.on("drain", done);
               socket.on("close", done);
             });
-          await write(CLAMD_INSTREAM_COMMAND);
-          const CHUNK = 64 * 1024;
-          for (let off = 0; off < bytes.length && !settled && !socket.destroyed; off += CHUNK) {
-            await write(frameInstreamChunk(bytes.subarray(off, Math.min(off + CHUNK, bytes.length))));
+          try {
+            await write(CLAMD_INSTREAM_COMMAND);
+            for await (const frame of instreamFrames(source)) {
+              if (settled || socket.destroyed) break; // clamd already answered — stop reading
+              await write(frame);
+            }
+            if (!settled && !socket.destroyed) socket.write(CLAMD_INSTREAM_TERMINATOR);
+          } catch (err) {
+            // The object stream broke mid-read (a ScanObjectReadError from instreamFrames).
+            finish(() => reject(err instanceof Error ? err : new Error(String(err))));
           }
-          if (!settled && !socket.destroyed) socket.write(CLAMD_INSTREAM_TERMINATOR);
         })();
       });
       socket.on("data", (d) => {
@@ -235,9 +239,12 @@ export function createWorkerS3Client(opts: {
         : undefined,
   });
   return {
-    async getObject(key: string): Promise<Uint8Array> {
+    async getObjectStream(key: string): Promise<ScanObjectStream> {
       const res = await client.send(new GetObjectCommand({ Bucket: opts.bucket, Key: key }));
-      return streamToUint8Array(res.Body);
+      // In Node the SDK body is a Readable: async-iterable chunk by chunk, closable via destroy().
+      const body = res.Body as (AsyncIterable<Uint8Array> & { destroy?: () => void }) | undefined;
+      if (!body || typeof body[Symbol.asyncIterator] !== "function") throw new Error("object store returned no body");
+      return body;
     },
     async deleteObject(key: string): Promise<void> {
       await client.send(new DeleteObjectCommand({ Bucket: opts.bucket, Key: key }));

@@ -1,8 +1,9 @@
 // POST /api/challenges/:number/assign (INNOBOX_SPEC.md §7.3): namespace/platform admin
-// assigns or unassigns a user. Notifies the assignee (§12.1 event 7).
+// assigns or unassigns a user. Notifies the assignee — and, on a reassignment or unassignment,
+// the previous assignee (§12.1 event 7).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchToUser } from "@/lib/notify";
+import { logNotifyFailure, notifyAssignmentChanged } from "@/lib/notify-events";
 import { setChallengeAssignee } from "../../store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -26,19 +27,14 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
   const result = await setChallengeAssignee(pool, { userId: gate.user.id, roles: gate.user.roles }, number, assigneeUserId);
   switch (result.status) {
     case "ok": {
-      const ctx = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
-      if (assigneeUserId) {
-        await dispatchToUser(ctx, assigneeUserId, "challenge_assigned", {
-          message: `You were assigned to ${result.challenge.number} "${result.challenge.title}".`,
-          link: `/challenges/${number}`,
-        }).catch((err) => console.error(JSON.stringify({ level: "error", msg: "assignment notification failed", error: String(err) })));
-      } else if (result.previousAssigneeId) {
-        // §12.1 event 7 covers "assigned / unassigned" — the removed assignee is told too.
-        await dispatchToUser(ctx, result.previousAssigneeId, "challenge_assigned", {
-          message: `You were unassigned from ${result.challenge.number} "${result.challenge.title}".`,
-          link: `/challenges/${number}`,
-        }).catch((err) => console.error(JSON.stringify({ level: "error", msg: "unassignment notification failed", error: String(err) })));
-      }
+      // §12.1 event 7 ("assigned / unassigned"): on a reassignment the previous assignee is told
+      // they were unassigned AND the new one that they were assigned.
+      await notifyAssignmentChanged(
+        { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
+        result.challenge,
+        result.previousAssigneeId,
+        assigneeUserId,
+      ).catch(logNotifyFailure("assignment notification failed"));
       return Response.json({ challenge: result.challenge });
     }
     case "not_found":
