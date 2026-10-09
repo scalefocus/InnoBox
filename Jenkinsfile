@@ -257,8 +257,11 @@ pipeline {
             # Remove-then-copy: a stale .env owned by another user (e.g. root after manual
             # debugging on the host) fails the overwrite with EACCES, but unlinking only needs
             # write on the directory, which the deploy user has. chmod 600 keeps secrets tight.
+            # CRs are stripped in transit: a secret file saved on Windows has CRLF endings, which
+            # compose tolerates but `. ./.env` (step 4) does not — every value would carry a
+            # trailing \\r (e.g. an "invalid" bucket name). Piped, so no extra copy hits disk.
             $SSH "${DEPLOY_HOST}" "rm -f ${DEPLOY_PATH}/deploy/.env"
-            $SCP "${DEPLOY_ENV_FILE}" "${DEPLOY_HOST}:${DEPLOY_PATH}/deploy/.env"
+            tr -d '\\r' < "${DEPLOY_ENV_FILE}" | $SSH "${DEPLOY_HOST}" "umask 077 && cat > ${DEPLOY_PATH}/deploy/.env"
             $SSH "${DEPLOY_HOST}" "chmod 600 ${DEPLOY_PATH}/deploy/.env"
 
             # ── 3. Build images and (re)start the stack on the remote host ─────────────────
