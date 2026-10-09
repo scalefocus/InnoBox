@@ -3,6 +3,11 @@
 // FlatCompat — that bridge is for OLD shareable configs and double-wraps an
 // already-flat config, which crashes ("Converting circular structure to JSON") on this
 // version's plugin objects.
+//
+// This package pins ESLint 9 (shared/worker run 10): the eslint-plugin-react, -jsx-a11y and
+// -import that eslint-config-next bundles cap their peer range at ESLint 9 and crash on 10
+// (`context.getFilename is not a function`, `scopeManager.addGlobals is not a function`
+// from Next's bundled Babel parser). Lift the pin once those plugins support ESLint 10.
 import nextConfig from "eslint-config-next";
 
 const eslintConfig = [

@@ -1,4 +1,4 @@
-// InnoBox — Jenkins declarative pipeline: CI (typecheck/test/db-test/build) + gated deploy.
+// InnoBox — Jenkins declarative pipeline: CI (typecheck/lint/test/db-test/build) + gated deploy.
 // (INNOBOX_SPEC.md §2.3) Mirrors the GitHub Actions CI workflow and deploys via Docker remote context (no registry).
 //
 // AGENT PREREQUISITES (label: linux):
@@ -93,6 +93,12 @@ pipeline {
     stage('Typecheck') {
       steps {
         sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r typecheck'
+      }
+    }
+
+    stage('Lint') {
+      steps {
+        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r lint'
       }
     }
 

@@ -58,6 +58,7 @@ export default function QuickStartPage() {
     } finally {
       // Hard navigation: a fresh load remounts the shell so it fetches /api/me anew,
       // instead of client-routing off the stale cached "unseen" state (see file header).
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- the full reload is the point
       window.location.href = "/";
     }
   };

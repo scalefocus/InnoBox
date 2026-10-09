@@ -22,6 +22,12 @@ updates:
       # `next build`. Blocked until Next.js supports it; 6.x minors/patches still flow.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # ESLint 10 removed the context.getFilename()/scopeManager APIs that the plugins
+      # eslint-config-next bundles (eslint-plugin-react, -jsx-a11y, -import; all peer
+      # ESLint <=9) still call, so `pnpm --filter @innobox/web lint` crashes on 10.
+      # packages/web stays on ESLint 9 until they support 10 (shared/worker are on 10).
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions used in .github/workflows/
   - package-ecosystem: github-actions
