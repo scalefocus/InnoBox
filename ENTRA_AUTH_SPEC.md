@@ -171,19 +171,19 @@ tolerates; exact file follows `db/migrations/README.md` rules.)
   `pages: { signIn: "/", error: "/" }` so there is **no** default Auth.js sign-in **or
   error** page — the Home landing is the sign-in surface and shows any `?error=` (§5
   sign-in UI, below).
-
-  > **⚠ GAP-11** (see `INNOBOX_SPEC.md` §3): `pages.error` is not set, so refusals land
-  > on Auth.js's built-in error page.
 - **Token validation** is delegated to the library and pinned by config: issuer
   `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`, audience = client id,
   RS256 via the tenant JWKS (rotation-safe), `nonce`/`state` enforced. A production
-  build **refuses to start** when `ENTRA_TENANT_ID` is unset (fatal structured error
-  naming the variable, like the `INNOBOX_DEV_AUTH` guard), because the AzureAD provider
-  would otherwise fall back to the multi-tenant `common` authority.
+  build **refuses to start** when `ENTRA_TENANT_ID` is unset or blank, **or** is one of
+  the multi-tenant authorities `common`, `organizations` or `consumers` (compared
+  case-insensitively) — a fatal structured error naming the variable, then exit 1, like
+  the `INNOBOX_DEV_AUTH` guard — because sign-in must be pinned to the one tenant, and
+  an unset value would otherwise make the AzureAD provider fall back to `common`.
 
-  > **⚠ GAP-52 · code fix:** there is no such guard; `authOptions.ts` passes the tenant
-  > through, so an unset `ENTRA_TENANT_ID` silently means `common`. Add the start-up
-  > refusal.
+  > **⚠ GAP-52 · code fix:** there is no such guard: `lib/authOptions.ts` passes
+  > `process.env.ENTRA_TENANT_ID` straight to the provider. Add the refusal to
+  > `web/src/instrumentation.ts` `register()` beside the dev-auth and `CSP_MODE` checks
+  > (a pure helper in `lib/`, unit-tested — see GAP-56).
 - **`signIn` callback**: look up `users` by `oid`.
   - Missing → JIT-insert a stub (`external_id=oid`, `user_name=preferred_username`,
     `email`, `display_name`, `scim_synced=false`), audited as `user.jit_created`.
@@ -239,39 +239,52 @@ provisioning contract, including the Entra dialect quirks:
   RFC 7644 `ListResponse`, 1-based `startIndex`, empty = 200 + `totalResults: 0` —
   `totalResults` is the full match count, not the page size, and `startIndex` echoes the
   request, for `/Users` **and** `/Groups`. A `{id}` that is not a well-formed UUID is
-  **404** without reaching the database.
+  **404** without reaching the database, on **every** id-addressed verb — `GET`, `PUT`,
+  `PATCH` and `DELETE` alike; only a well-formed id that matches no row keeps `DELETE`'s
+  idempotent 204. A scrubbed (GDPR-erased) user is excluded from `/Users` lists and
+  filters, `totalResults` included (INNOBOX_SPEC.md §3).
 
-  > **⚠ GAP-53 · code fix:** unfiltered `GET /Groups` (`worker/src/scim/router.ts`)
-  > calls `scimListResponse(resources, resources.length)`, so `totalResults` is the page
-  > size and `startIndex` is always 1 (`/Users` is correct). And `/Users/:id` /
-  > `/Groups/:id` pass a non-UUID id straight to a uuid column, answering 500.
+  > **⚠ GAP-53 · code fix:** in `worker/src/scim/router.ts`, unfiltered `GET /Groups`
+  > calls `scimListResponse(resources, resources.length)` with no count query and no
+  > `startIndex`, so `totalResults` is the page size and `startIndex` is always 1
+  > (`/Users` is correct). And `findUserById` / `findGroupById` pass any `:id` straight
+  > to the uuid column, so a malformed id on `GET`/`PUT`/`PATCH`/`DELETE` reaches the
+  > error tail as a 500. Validate the id first and answer 404 (on `DELETE` too).
 - **Writes are idempotent upserts keyed on `externalId`** (fall back to `id`; neither → 400).
   Duplicate POST returns the existing resource logic per contract (409 on `userName`
   uniqueness conflicts). All SCIM writes set `scim_synced=true` and stamp `updated_at` —
   on groups too, including a membership-only change. A scrubbed (GDPR-erased) user is
-  never written: id-addressed writes answer 404, a POST matching it by `externalId`
-  answers 409 (INNOBOX_SPEC.md §3).
+  never written or returned: every id-addressed `/Users/{id}` verb answers 404, a POST
+  matching it by `externalId` answers 409, and a group membership add naming it is
+  treated as an unknown member — nothing written (INNOBOX_SPEC.md §3). Each refusal is
+  audited `scim.anomaly`.
 
-  > **⚠ GAP-54 · code fix:** (a) a POST `/Users` whose `externalId` already exists calls
-  > `updateUserFull` without the `userName` conflict check PUT and PATCH run, so a clash
-  > hits the unique index and answers **500**; run the check, and map Postgres `23505`
-  > to 409 in the error tail as a backstop. (b) `markGroupScimSynced` sets only
-  > `scim_synced`, so membership-only writes never bump `groups.updated_at`.
-  > (c) Scrubbed rows: GAP-12.
+  > **⚠ GAP-54 · code fix:** (a) in `worker/src/scim/router.ts`, a POST `/Users` whose
+  > `externalId` already exists calls `updateUserFull` without the `userName` conflict
+  > check PUT and PATCH run, so a clash hits the unique index and answers **500**; run
+  > the check, and map Postgres `23505` to 409 `uniqueness` in the error tail as a
+  > backstop. (b) `markGroupScimSynced` runs
+  > `update groups set scim_synced = true where id = $1 and not scim_synced`, so
+  > membership-only writes never bump `groups.updated_at`; always set
+  > `updated_at = now()`. (c) Scrubbed rows: GAP-12.
 - **PATCH quirks handled**: case-insensitive `op`; `active` deactivation in all three
   serializations (bool, string `"False"`, path-less `{value:{active:false}}`); the work
   e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less
   `emails` array); `externalId` (which is how a re-mapped tenant undoes a sign-in relink,
-  INNOBOX_SPEC.md §3); unknown paths applied-if-stored else ignored — the response is
+  INNOBOX_SPEC.md §3) — a value that collides with another row's `external_id` answers
+  **409** `uniqueness` and writes nothing; unknown paths applied-if-stored else ignored — the response is
   **200 with the resource or 204**, both of which Entra accepts (never fail the sync);
   group membership `Add`/`Remove` including the `members[value eq "…"]` filter-path form;
   unknown member ids ignored (reconciliation heals ordering races).
 
   > **⚠ GAP-55 · code fix:** `applyUserAttr` in `worker/src/scim/patch.ts` has no case
   > for `emails` in either form, and `NormalizedUserPatch.email` is never set, so a PATCH
-  > can never change a user's e-mail (only POST/PUT do); `externalId` is ignored too. Add
-  > both, with `patch.test.ts` cases using Entra's literal payloads.
-- **DELETE `/Users/{id}`** → deactivate (leaver semantics, §2), idempotent 204.
+  > can never change a user's e-mail (only POST/PUT do); `externalId` has no field in
+  > `NormalizedUserPatch` and is ignored. Add both, apply `externalId` in the
+  > `PATCH /Users/:id` handler with the 409 `uniqueness` check against other rows, and
+  > cover both with `patch.test.ts` cases using Entra's literal payloads.
+- **DELETE `/Users/{id}`** → deactivate (leaver semantics, §2), idempotent 204 (an
+  unknown well-formed id included); a malformed id or a scrubbed user → 404 (above).
   **DELETE `/Groups/{id}`** → remove group + memberships; `role_mappings` rows survive and
   are flagged "dead" in the admin UI.
 - **Audit**: `scim.user_created|updated|deactivated|reactivated|deleted_received`,
@@ -294,8 +307,9 @@ provisioning contract, including the Entra dialect quirks:
      three ride the `$select` this pass already issues: **no extra request, no new
      permission** (default properties of the user resource, covered by application
      `User.Read.All`). Because this pass visits *every* local active user, a user who
-     belongs to no role-mapped group still gets a current directory profile. (Empty
-     strings → NULL: GAP-13 in INNOBOX_SPEC.md §3.)
+     belongs to no role-mapped group still gets a current directory profile. `mail` is
+     normalized the same way: an empty or blank value writes NULL. (Remaining work for
+     `mail`: GAP-13 in INNOBOX_SPEC.md §3.)
   2. Every synced group ∪ every group referenced by `role_mappings` ∪ the bootstrap group →
      `GET /groups/{id}/members` → replace local membership (creating JIT-grade stubs for
      unknown members); group gone in Entra → drop group + memberships (audited).
@@ -374,12 +388,18 @@ provisioning contract, including the Entra dialect quirks:
 - **Negative**: missing/wrong bearer → 401 SCIM error (and no token in logs); deactivated
   user with a live session cookie loses access on next request; wrong-tenant issuer refused
   (config-level unit test).
-- **Reconciliation**: an integration test of one full pass against a stubbed Graph —
-  deactivation of a missing/disabled user, attribute refresh including empty → NULL, photo
-  etag skip, and membership replacement.
+- **Reconciliation**: a live-DB integration test (`*.dbtest.ts`, run by `test:db`) of one
+  full pass against a stubbed Graph client — deactivation of a missing/disabled user,
+  attribute refresh including empty → NULL (the three directory fields **and** `mail`),
+  photo etag skip, and membership replacement.
+- **Tenant pinning (web unit test)**: the provider's issuer is pinned to
+  `ENTRA_TENANT_ID`, and the production start-up guard (Layer 1 above) refuses an unset,
+  blank, `common`, `organizations` or `consumers` value.
 
-  > **⚠ GAP-56 · code fix:** neither test exists. No web test covers the issuer/tenant
-  > configuration, and the worker has only `recon/diff.test.ts`, no pass-level test.
+  > **⚠ GAP-56 · code fix:** neither test exists. No web test covers the tenant-pinned
+  > issuer or the GAP-52 guard, and `worker/src/recon/` has only `diff.test.ts`, no
+  > pass-level test of `reconcile.ts`. Add `recon/reconcile.dbtest.ts` and the web unit
+  > test above.
 - Verification checklists of all three layers (authentication, provisioning, authorization), walked against the
   Entra portal (Test Connection, provision-on-demand, leaver, group→role, re-enable).
 
