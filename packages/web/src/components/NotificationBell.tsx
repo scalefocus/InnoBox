@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SystemBanner } from "@innobox/shared/system-banner";
+import { useDateFmt } from "@/components/DateFormat";
 
 interface NotificationItem {
   id: string;
@@ -20,6 +21,7 @@ interface NotificationItem {
  *  shell can render the topbar pill without a second poller. */
 export function NotificationBell({ onBanner }: { onBanner?: (banner: SystemBanner | null) => void } = {}) {
   const router = useRouter();
+  const fmt = useDateFmt();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[] | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -118,7 +120,7 @@ export function NotificationBell({ onBanner }: { onBanner?: (banner: SystemBanne
                     <div className="ttl" style={{ fontWeight: item.read ? 400 : 600 }}>
                       {item.message}
                     </div>
-                    <div className="sub mono">{new Date(item.createdAt).toLocaleString()}</div>
+                    <div className="sub mono">{fmt.dateTime(item.createdAt)}</div>
                   </div>
                 </button>
               ))}

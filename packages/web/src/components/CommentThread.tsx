@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { readJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { DiscussionSummary } from "@/components/DiscussionSummary";
+import { useDateFmt } from "@/components/DateFormat";
 
 interface CommentRecord {
   id: string;
@@ -37,6 +38,7 @@ export function CommentThread({
    *  shows their real name (comments are never anonymous), without revealing them as the author. */
   authoredAnonymously?: boolean;
 }) {
+  const fmt = useDateFmt();
   const [comments, setComments] = useState<CommentRecord[] | null>(null);
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -121,7 +123,7 @@ export function CommentThread({
                   {c.deleted ? <span className="muted">—</span> : c.authorDisplayName}
                 </span>
                 {c.authorIsCommittee && !c.deleted && <span className="chip chip-accent">Committee</span>}
-                <span className="sub mono">{new Date(c.createdAt).toLocaleString()}</span>
+                <span className="sub mono">{fmt.dateTime(c.createdAt)}</span>
                 {c.editedAt && !c.deleted && <span className="chip">edited</span>}
               </div>
               {editingId === c.id ? (

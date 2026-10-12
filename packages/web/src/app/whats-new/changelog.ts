@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.7",
+    date: "2026-10-12",
+    summary:
+      "Dates in the triage queue, in comments and in the notification bell now follow the platform's date style (EU or US), like everywhere else in InnoBox, instead of your browser's own settings.",
+  },
+  {
     version: "0.51.6",
     date: "2026-10-12",
     summary:
