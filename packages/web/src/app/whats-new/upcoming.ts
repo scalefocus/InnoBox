@@ -25,7 +25,33 @@ export interface UpcomingViewer {
   namespaceAdmin: readonly string[];
 }
 
-export const UPCOMING: UpcomingEntry[] = [];
+export const UPCOMING: UpcomingEntry[] = [
+  {
+    ids: ["GAP-74"],
+    title: "Challenges from outside",
+    teaser:
+      "Customers and partners will be able to send a challenge through a public form, without an account. Each one is reviewed before it joins the list.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-75"],
+    title: "Replies to comments",
+    teaser: "Reply directly to a comment and keep the conversation in one thread, and see when someone answers you.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-76"],
+    title: "E-mail digests",
+    teaser: "Prefer fewer e-mails? Get a daily or weekly summary of what you follow instead of one e-mail per update.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-77"],
+    title: "Trash and restore",
+    teaser: "Deleted challenges and solutions will wait in a trash for 30 days, so a mistaken delete can be undone.",
+    audience: "platform_admin",
+  },
+];
 
 /** True when an entry applies to a viewer with these roles. */
 export function appliesTo(audience: UpcomingAudience, viewer: UpcomingViewer): boolean {

@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.13 — draft for review** (2026-10-12; v0.2 added the UI and CI/CD
+> Status: **v0.14 — draft for review** (2026-10-12; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -38,7 +38,11 @@
 > feedback survey with its admin results (§13.10, §14.11), and the AI integration with
 > Open WebUI or OpenAI and its four tasks (§22); v0.13 (2026-10-12) specified
 > gamification — points, levels, achievement and leader badges — as a new-feature gap
-> (§23), lifting the former "no reward points" non-goal (§19)).
+> (§23), lifting the former "no reward points" non-goal (§19); v0.14 (2026-10-12)
+> specified four more features, each a new-feature gap: public submissions from people
+> outside the organization (§24), one-level replies to comments (§10.2), daily and weekly
+> e-mail digests (§12.1), and a 30-day trash with restore for deleted challenges and
+> solutions (§10.4), lifting the matching §19 non-goals).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -154,10 +158,16 @@ Cross-cutting requirements:
 2. **All access is auth-required and strictly visibility-filtered.** A
    namespace-restricted challenge must never leak through lists, search,
    autocomplete, counts, KPIs, leaderboards, notifications, or outbound channel
-   webhooks (§12.4) to users outside its namespace (§4.3). The **sole** unauthenticated surface is the Home route (`/`),
+   webhooks (§12.4) to users outside its namespace (§4.3). There are exactly **two**
+   unauthenticated surfaces. The first is the Home route (`/`),
    which doubles as the sign-in landing: while unauthenticated it renders a static
    welcome and the sign-in control **only** — no challenge/solution/user data, KPIs,
    counts, spotlights, search, or notifications are fetched or shown (§2.2, §13.2).
+   The second is the **public submission form** (`/submit` and its confirmation page,
+   §24), present only while a platform admin has switched it on: it **writes** a
+   submission into a separate intake table and **reads nothing** — no challenge,
+   solution, user, namespace, impact area, count or setting other than its own privacy
+   notice ever reaches it.
 3. **Anonymity is enforced at the API layer, everywhere** — lists, details, search,
    exports, e-mails, in-app notifications, and webhook payloads (§12.4). The true
    identity is stored but is exposed
@@ -171,8 +181,9 @@ Cross-cutting requirements:
    database trigger and verifiable from the audit browser (§15).
 6. **Status transitions follow the enforced state machines** (§7.2, §8.2) for
    committee members and assignees; namespace/platform admins may set any status
-   freely — every transition, enforced or override, is audited with `from → to` and
-   actor.
+   freely (the one exception: `needs_improvement` is refused for a challenge accepted
+   from the public form, which has no author to act on it, §24.6) — every transition,
+   enforced or override, is audited with `from → to` and actor.
 7. **At most one Solution per Challenge advances past `valid`** (single accepted
    solution, §8.3).
 
@@ -323,6 +334,8 @@ including theme-aware scrollbars and form controls. Pinned values:
   card) plus the matching Twitter tags (`twitter:card` = `summary_large_image`,
   `twitter:title`, `twitter:description`, `twitter:image`). **There are deliberately no
   per-challenge/per-solution preview images:** every route except the Home page (`/`)
+  and, while that feature is on, the §24 public form (`/submit`, `/submit/confirm`,
+  which carry only the static site-wide tags and read no application data)
   redirects an unauthenticated request to `/` (invariant 2), so an OG scraper — always
   unauthenticated — can never reach resource content, and generating per-resource cards
   would leak titles/authors/namespaces in violation of invariants 2 and 3. The card
@@ -489,6 +502,10 @@ The delivery pipeline, pinned:
     provider write answers `ai_key_missing`. Deliberately not the e-mail or webhook key:
     the three rotate independently. Compose passes `${AI_TOKEN_ENC_KEY:-}` to both
     services.
+  - **`PUBLIC_INTAKE_KEY`** (web; added in v0.14) — 32 bytes, base64; signs the §24
+    proof-of-work challenges and derives nothing else. Unset or invalid → the public
+    submissions switch cannot be turned on, and if it was on, the public form answers
+    404. Compose passes `${PUBLIC_INTAKE_KEY:-}` to `web`.
   - **`TRUST_PROXY`** — now read by **web** as well as the worker, for the CSP report
     sink's per-IP key (§2.4); compose passes the same `${TRUST_PROXY:-1}` to `web`.
   - **Egress:** web and worker need outbound HTTPS (443) to channel-webhook receivers
@@ -545,8 +562,9 @@ these rules close the generic web-platform paths by which it could.
     script therefore stay nonce-tagged, and switching modes needs no rebuild. (The
     implementation verifies that the renderer still applies the nonce when the response
     header is report-only.)
-  - **CSP violation reports — `POST /api/csp-report`** (the report sink). The **one
-    public API endpoint**: browsers send reports without a session, so it is on the
+  - **CSP violation reports — `POST /api/csp-report`** (the report sink). A **public
+    API endpoint** (the only other ones are the §24 public submission routes, which
+    exist only while that feature is on): browsers send reports without a session, so it is on the
     public-path allowlist (no session required) and **exempt from the CSRF `Origin`
     check** below (a report carries no reliable `Origin` and changes no application
     state). Its rules:
@@ -643,9 +661,9 @@ these rules close the generic web-platform paths by which it could.
   warning with user id and bucket), **not audited** — a flood must not become an audit
   flood — and, like any web-tier 429, are recorded in the system log (§14.7), which is
   operational telemetry, not the audit log. The limits apply to every role; a bulk
-  triage action is one request. The CSP report sink is the one exception to *per
-  signed-in user*: it is limited per client IP (above), and its 429s are not recorded in
-  the system log.
+  triage action is one request. The CSP report sink and the §24 public submission
+  routes are the exceptions to *per signed-in user*: they are limited per client IP
+  (above, and §24.4), and their 429s are not recorded in the system log.
 - **SCIM rate limiting** — the worker's SCIM endpoints are limited per **client IP**:
   **2 000 requests per 15 minutes**, sized so an initial Entra sync of a few thousand
   users never trips it (Entra honours a 429 with `Retry-After` if it does). The worker
@@ -982,7 +1000,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **survey_self_shown_at** (the §13.10 per-user survey state),
   **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
-  default true — the §12.1 per-event preferences), **gamification_public** /
+  default true — the §12.1 per-event preferences), **email_delivery** (`immediate |
+  daily | weekly`, not null, default `immediate` — the §12.1 digest choice),
+  **gamification_public** /
   **notify_achievements** / **achievements_seen_at** (the §23 opt-out, achievement
   notification preference and toast marker), deactivated_at.
 - **`groups`** — id, external_id (Entra group object id), display_name,
@@ -1022,16 +1042,36 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   non-null only while status is `valid` or `solved`, DB-checked — the §13.2 Home pin).
   Curation columns are not content: writing them bumps neither `updated_at` nor
   `edited_at`.
+  **trashed_at** + **trashed_by** + **trash_reason** (nullable timestamptz / user FK /
+  text ≤ 500, set and cleared together — the §10.4 trash; not content, so writing them
+  bumps neither `updated_at` nor `edited_at`).
+  **public_submission_id** (nullable FK → `public_submissions`, unique — set only on a
+  challenge accepted from the §24 public form). For such a challenge **`author_id` is
+  null**; a check constraint requires exactly one of `author_id` and
+  `public_submission_id` to be non-null, so every other challenge keeps a real author.
   A platform admin may **hard-delete** a challenge, cascading to every child row
   (§10.3); that is the only path that removes the row.
 - **`solutions`** — id, **number** (`SOL-<n>`), challenge_id, description (≤ 10 000),
   cost_vs_benefits (≤ 5 000, optional), is_anonymous, author_id, status (§8.1),
-  status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at.
+  status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at,
+  trashed_at + trashed_by + trash_reason (as challenges, §10.4).
   Hard-deletable by a platform admin on the same terms (§10.3), and removed with its
   parent challenge when that is deleted.
 - **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
-  created_at, edited_at, deleted_at + deleted_by (soft delete, §10.2); rows are
-  hard-deleted only inside the §10.3 parent-delete cascade.
+  **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
+  for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
+  reply answers: the root itself or another reply in the same thread), both null
+  together or set together (§10.2), created_at, edited_at, deleted_at + deleted_by (soft
+  delete, §10.2); rows are hard-deleted only inside the §10.3 parent-delete cascade.
+- **`public_submissions`** — the §24 intake: id (uuid), status (`unconfirmed |
+  pending_review | accepted | declined`), title (≤ 120), description (≤ 10 000),
+  submitter_name (≤ 120, nullable once erased), submitter_email (≤ 254, nullable once
+  erased), company (≤ 200, optional), confirm_token_hash (SHA-256; nullable once
+  used), confirm_expires_at, pow_salt (unique — a proof-of-work challenge is spendable
+  once), created_at, confirmed_at, decided_at + decided_by, decline_note (≤ 1 000,
+  optional), contact_erase_due_at, contact_erased_at. **Not** a challenge: it carries no
+  number, no namespace and no visibility, and it is never read by any surface except the
+  platform-admin review queue (§24.5).
 - **`likes`** — (user_id, parent) unique; created_at. Toggling like/unlike
   inserts/deletes the row.
 - **`follows`** — (user_id, parent) unique; created_at.
@@ -1047,7 +1087,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   created_at. Deletable working state (unlike `attachments`).
 - **`notifications`** — id, user_id, type, payload (jsonb), read_at, created_at
   (in-app inbox, §12.2); plus an **outbox** table driving e-mail dispatch from the
-  worker. Rows targeting a challenge/solution are deleted with it (§10.3), so no
+  worker. An outbox row may be **held for a digest** (nullable `digest_due_at`, §12.1),
+  and may address an outside submitter by e-mail instead of a user (nullable
+  `recipient_email` with `user_id` null, a check constraint requiring exactly one —
+  §24.6). Rows targeting a challenge/solution are deleted with it (§10.3), so no
   inbox item ever points at a vanished entity. **Comment rows coalesce** (§12.1): a
   partial unique index on `(user_id, payload->>'parentType', payload->>'parentId')
   WHERE read_at IS NULL AND type = 'comment_posted'` lets the insert become an atomic
@@ -1499,16 +1542,80 @@ reveal actions never apply to it.
   hard-deletes a single comment. Comment rows disappear only as part of the §10.3
   parent-delete cascade.
 
+#### Replies (one level)
+
+> **⚠ GAP-75 · new feature:** comment replies do not exist. Build: a migration adding
+> `comments.thread_root_id` and `comments.reply_to_id` (§5; existing rows stay top-level);
+> the `replyTo` field on comment create and its validation; the grouped rendering in
+> `CommentThread`; the reply count in the coalesced comment notification (§12.1); the
+> audit payload field; and the tests below. Ships as one minor release.
+
+A comment can answer another comment. Threads are **one level deep**: a reply always
+hangs under a **top-level** comment, never under another reply.
+
+- **Data.** A reply stores `thread_root_id` (its top-level comment) and `reply_to_id`
+  (the comment it answers — the root itself, or another reply in the same thread).
+  Both are null on a top-level comment. Replying to a reply files the new reply under
+  the **same root**, with `reply_to_id` pointing at the reply it answers. Every comment
+  that existed before this ships is top-level.
+- **Create.** `POST` a comment with an optional `replyTo: <comment id>`. The server
+  resolves the root, and rejects the reply with **422** when the target is on a
+  different parent item, is soft-deleted, or does not exist. A target the caller can't
+  see is **404**, as today (the parent's visibility decides). The comment rate limit
+  (§2.4), the 5 000-character body limit, and the 15-minute edit and delete window
+  apply to replies exactly as to top-level comments. A reply cannot be moved to
+  another thread, and editing never changes `replyTo`.
+- **Rendering.** Top-level comments stay in chronological order (oldest first, as
+  today). Each one's replies follow it, indented one step, also oldest first. A thread
+  with more than **3** replies shows the first 3 and a **"Show N more replies"** button
+  that expands the rest in place. A reply whose `reply_to_id` is another reply carries
+  a small muted **"↪ replying to <name>"** line above its body, which scrolls to and
+  briefly highlights the comment it answers. Comments carry no anonymity option (§9), so
+  naming the person replied to is safe. Every comment has a **Reply** action, shown
+  to anyone who may comment on the item. It opens a composer directly under that
+  thread and puts focus in it. On a phone the indent shrinks to a thin left rule, so
+  replies never lose width.
+- **Deleted comments.** A soft-deleted top-level comment that has replies still
+  renders its usual placeholder (*"Comment removed by a moderator"*, neutral bubble),
+  and its replies stay underneath. A soft-deleted reply renders the same placeholder in
+  its place. Neither can be replied to. A reply that answered a since-deleted comment
+  shows *"↪ replying to a removed comment"*, never the deleted author's name.
+- **Notifications.** A reply is a comment: it fires §12.1 event 6 to the same
+  recipients, under the same preference and coalescing rules. The author of the
+  comment being answered is always among the recipients, through the "other
+  commenters" route, unless they wrote the reply themselves. The coalesced row's
+  payload also counts **`repliesToYou`**: the number of the coalesced comments that
+  answer one of the recipient's own comments. The copy adds it when it is non-zero:
+  *"3 new comments on CH-412, 1 reply to you — latest by Alice"*.
+- **Discussion summary.** The §22.13 summary reads the comments in thread order and
+  marks each reply as one, so the model sees who answered whom.
+- **Audit.** `comment.created` gains `replyTo` (the comment id answered), absent on a
+  top-level comment.
+- **Tests.** Unit: root resolution (reply to a root, reply to a reply), the
+  validation errors, the `repliesToYou` count and the copy. Integration: create a
+  reply, refuse one across parents, to a deleted comment, or to an invisible item
+  (404), and check the coalesced row. E2e: reply, reply to a reply, the "Show N more
+  replies" expansion.
+
 ### §10.3 Admin delete (platform admin)
 
 A **platform admin** — and nobody else — may **permanently delete** a challenge or a
 solution. This is a **hard delete**: the row is physically removed together with every
 child row, and the object-store objects behind it are purged. It is **not** reversible —
-no restore, no undelete window, no trash, no tombstone; the item ceases to exist. It
+no restore, no tombstone; the item ceases to exist. It
 exists for the one case the soft paths cannot serve — content that must actually be gone
 (confidential material posted by mistake, a legal takedown) — and not for routine
 cleanup, which stays with admin override to `rejected`/`withdrawn` (§7.2, §8.2) plus
 comment deletion (§10.2).
+
+**Trash first, purge later.** The danger zone's ordinary action is **Move to trash**
+(§10.4), which hides the item at once and can be undone for **30 days**. The hard delete
+this section describes is the **purge**. It runs in exactly three ways: automatically
+when a trashed item's 30 days are up, when a platform admin chooses **Delete
+permanently** on an item in the trash, or **at once** through **Delete permanently** in
+the danger zone, for content that must not wait out the window. Every rule below (who,
+cascade, object-store purge, parent effects, no notifications, audit) is the purge's,
+whichever way it runs.
 
 **Who.** Platform admins only. Namespace admins do **not** get delete inside their
 namespaces, committee members and assignees never do, and an author's only removal path
@@ -1574,7 +1681,10 @@ solution retroactively removes its author's credit and can change historical ran
 **Audit.** The delete writes `challenge.deleted` / `solution.deleted` carrying: the
 number, entity type, author id, status at deletion, namespace, the per-type counts of
 cascaded child rows (including `webhookDeliveries`), and the **mandatory reason** the
-admin supplied (free text, required, ≤ 500 chars). It carries **no content** — no title, no description, no client
+admin supplied (free text, required, ≤ 500 chars), plus **`trigger`** — `manual` (Delete
+permanently, from the danger zone or the trash) or `retention` (the automatic purge at
+the end of the trash window, §10.4, written with the system as actor and the reason
+given when the item was trashed) — and **`trashedAt`** when the item was in the trash. It carries **no content** — no title, no description, no client
 name, no comment bodies, no attachment filenames. That omission is deliberate: the
 action exists to destroy sensitive content, and `audit_log` is exempt from GDPR erasure
 (§3, §15), so a content snapshot there would defeat the purpose. Audit rows written
@@ -1583,10 +1693,13 @@ action exists to destroy sensitive content, and `audit_log` is exempt from GDPR 
 longer resolves as plain text rather than a link.
 
 **Surface.** A **danger zone** on the §13.1 detail page, rendered only for platform
-admins — one for the challenge, one per listed solution. The confirm dialog requires the
+admins — one for the challenge, one per listed solution. It holds two actions:
+**Move to trash** (the primary one, §10.4) and **Delete permanently**. The **Delete
+permanently** confirm dialog requires the
 admin to **type the item's number back** (`CH-42` / `SOL-17`) to enable the button and
 to enter the reason; it states plainly that the item, its solutions, comments, and files
-are removed permanently and cannot be restored. This mirrors the deliberate friction of
+are removed permanently, skip the trash, and cannot be restored. The same dialog
+guards **Delete permanently** on the trash page (§10.4). This mirrors the deliberate friction of
 the §14.3 impact-area delete. There is **no bulk delete** — the §14.1 triage queue keeps
 bulk assign and bulk status only.
 
@@ -1612,6 +1725,113 @@ trim too, so it is not cascade-only.
 **Out of scope.** The GDPR "Delete user info" action (§3) gains no "and delete all their
 challenges and solutions" option; it continues to de-identify. `audit_log` rows are
 never deleted, by anyone, for any reason (invariant 5).
+
+### §10.4 Trash & restore (platform admin)
+
+> **⚠ GAP-77 · new feature:** the trash does not exist; the danger zone's only action
+> today is the immediate §10.3 delete. Build: a migration adding `trashed_at`,
+> `trashed_by` and `trash_reason` to `challenges` and `solutions` (§5); the trashed
+> exclusion in the shared visibility predicate and in every derived query listed
+> below; the trash and restore endpoints; the worker's daily purge job; the
+> `/admin/trash` page and its console card; the two-action danger zone (§10.3); the
+> read-only trashed detail view; and the tests below. Ships as one minor release.
+
+A deleted challenge or solution goes to a **trash** first, where it waits **30 days**
+before it is purged for good (§10.3). In that time a platform admin can **restore** it
+exactly as it was. It is a safety net against a mistaken delete, not an archive: a
+trashed item is gone for everyone else from the moment it is trashed.
+
+- **Who.** Platform admins only, for trashing, restoring and purging alike — the same
+  people as the §10.3 delete. Namespace admins, committee members, assignees and authors
+  never see the trash and have no control over it.
+- **Move to trash.** The danger zone's primary action (§10.3). The confirm dialog asks
+  for the **reason** (required, ≤ 500 characters — the same reason the eventual purge
+  records) and states that the item, its solutions, comments and files are hidden at
+  once and will be deleted permanently after 30 days unless restored. It does not ask
+  for the number to be typed back; that friction belongs to the irreversible action.
+  Trashing sets `trashed_at`, `trashed_by` and `trash_reason` on the item's own row
+  **only**. Nothing else is copied, moved or deleted: comments, likes, follows,
+  attachments (and their stored objects), assignments, inbox rows and gamification
+  awards all stay where they are, hidden through the item. Trashing is allowed from any
+  status, like the delete.
+- **What "trashed" hides.** A trashed challenge, and every solution under it, drops out
+  of **everything** exactly as a deleted one would (§10.3 *Derived state*): lists,
+  search, the duplicate check (§6.1), counts, KPIs, spotlights, the Home featured
+  section, leaderboards, profiles, the triage queue and its attention badge, CSV
+  exports, the hover card, AI tasks. A trashed solution drops out the same way, and
+  its challenge stays. The rule lives in the **shared visibility predicate** (§4.3),
+  not in each query, so a new surface cannot forget it. A request about a trashed item
+  answers **404** to everyone except a platform admin (below). That is the same answer
+  as for an item that never existed (invariant 2).
+- **Side effects at trash time,** in the same transaction as the flag:
+  - A featured challenge is unfeatured, `challenge.unfeatured` with
+    `trigger: "trashed"` (§13.2). Restore does **not** re-feature it.
+  - Every **unsent** `notification_outbox` row and every undelivered
+    `webhook_deliveries` row about the trashed subtree is removed, so no e-mail or
+    channel post about it goes out. They are not recreated on restore.
+  - Inbox rows about the subtree are **kept but hidden**: the inbox list and the unread
+    count skip them while the item is trashed, and they come back on restore.
+  - Any in-flight chunked-upload session for the subtree is aborted (§11).
+  - **No parent effect.** Trashing an `implemented` solution does **not** revert its
+    `solved` challenge, and a trashed solution past `valid` still **holds the
+    single-winner slot** (invariant 7 counts trashed rows). The §10.3 revert happens
+    only if the solution is actually purged. This is what makes every restore safe.
+  - **No notification** to anyone, like the delete (§12.1).
+- **Nested trash.** A solution may be trashed on its own, and its challenge trashed
+  later, or the other way round. Restoring a challenge brings back every solution that
+  was **not** individually trashed. A solution trashed on its own stays in the trash
+  with its own clock. A solution cannot be restored while its challenge is in the
+  trash (**409** — *"Restore the challenge first."*). Purging a challenge purges every
+  solution under it, trashed or not.
+- **Restore.** Clears the three columns. The item reappears everywhere with the
+  status, assignee, visibility, number, comments, likes, follows and files it had. The
+  status is not changed and no transition is written. There is no notification, and
+  `updated_at` and `edited_at` are not bumped. If the namespace was archived in the
+  meantime, the item returns into the archived namespace like any other item there.
+- **The trash page — `/admin/trash`.** A platform-admin card on the Administration
+  console (§14) opens it, with the §14 breadcrumb. It shows one table of every trashed
+  challenge and solution, newest first: number, type, title, namespace, author (masked
+  per §9 — the trash is not a reveal path), trashed by, trashed at, reason, and
+  **purges on** (`trashed_at + 30 days`, shown as a date). It has a free-text filter on
+  number and title. Each row offers **Restore** (a single confirm) and **Delete
+  permanently** (the §10.3 dialog). A solution row whose challenge is also trashed
+  shows its Restore disabled, with the 409 reason as a tooltip. An empty trash shows
+  *"The trash is empty."* No bulk actions.
+- **Trashed detail view.** A platform admin who opens a trashed item's link, from the
+  trash page or an old link, sees the normal detail page **read-only**, under a
+  banner: *"This challenge is in the trash. It will be deleted permanently on
+  <date>."* with **Restore** and **Delete permanently** buttons. Every other control
+  (edit, status, assign, comment, like, follow, upload, feature, AI) is absent, and
+  the API refuses the matching writes with **409**. Attachments of a trashed item can
+  still be downloaded by that platform admin through the gateway (§11), so a mistaken
+  trash can be checked before restoring. Opening the view does not stamp any
+  "seen" marker.
+- **Automatic purge.** A daily worker job purges every item whose `trashed_at` is more
+  than 30 days ago, oldest first, each in its own §10.3 transaction. A failure leaves
+  that item trashed for the next run and is recorded in the system log (§14.7).
+  The audit row is `challenge.deleted` / `solution.deleted` with `trigger: "retention"`
+  (§10.3).
+- **API.** `POST /api/challenges/:number/trash` and `POST /api/solutions/:number/trash`
+  `{ reason }`; `POST …/restore`; `GET /api/admin/trash`. The existing `DELETE`
+  routes (§10.3) remain the permanent delete, from the danger zone and from the trash.
+  All are platform admin only, with **404 (not 403)** to anyone else, checked first, as
+  for the delete. Trashing an item already in the trash, or restoring one that is not
+  in it, is **409**. The detail payload gains `trashed: { at, by, reason, purgesOn } |
+  null`, sent only to platform admins, and `canTrash` beside `canDelete`.
+- **Audit.** `challenge.trashed` / `solution.trashed` (number, namespace, status, reason)
+  and `challenge.restored` / `solution.restored` (number, namespace, days spent in the
+  trash). Like the delete, they carry **no content**.
+- **Database.** The migration adds the three columns, a partial index on
+  `trashed_at IS NOT NULL` for the trash page and the purge job, and grants nothing new:
+  trash and restore are UPDATEs, and the purge reuses the §10.3 DELETE grants.
+- **Tests.** Unit: the visibility predicate excludes a trashed challenge, its
+  solutions, and a trashed solution alone; the 30-day due date; the nested-restore
+  rule. Integration: trash then restore round-trips every child row untouched; a
+  trashed implemented solution keeps the challenge `solved` and blocks a second winner;
+  the purge job deletes only items past 30 days and audits `trigger: "retention"`;
+  404 for non-platform-admins on every route; inbox rows hidden while trashed and back
+  after restore; unsent outbox and webhook rows removed. E2e: move a challenge to the
+  trash, check it is gone from the list, restore it from `/admin/trash`.
 
 ---
 
@@ -1950,6 +2170,7 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 | 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader — bound files only; a staged file's failure shows in the form (§11) |
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
+| 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
 
 Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
 in-app only, by design (§23.1).
@@ -1966,8 +2187,66 @@ rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL
 its status, a comment on it, its proposal (there is no standalone solution page,
 §13.1).
 
-Delivery is immediate — there is no scheduled digest (§19); the one batching
-mechanism is the per-item coalescing of comment notifications below.
+Delivery is immediate unless the recipient has chosen an **e-mail digest** (below).
+In-app items are always immediate. The other batching mechanism is the per-item
+coalescing of comment notifications below.
+
+**E-mail digests.**
+
+> **⚠ GAP-76 · new feature:** digests do not exist; every e-mail is sent immediately.
+> Build: a migration adding `users.email_delivery` and `notification_outbox.digest_due_at`
+> (§5); the hold at insert time; the worker's digest job and the digest template; the
+> *E-mail delivery* choice on the profile (§13.5) and in `PATCH /api/profile`; and the
+> tests below. Ships as one minor release.
+
+A user may swap the per-event e-mails about what they follow for **one summary e-mail**
+a day or a week.
+
+- **The choice.** `users.email_delivery`: **Immediately** (`immediate`, the default and
+  today's behaviour), **Daily digest** (`daily`), or **Weekly digest** (`weekly`). It is
+  set on the profile (§13.5) and is silent (not audited), like the other preferences.
+- **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
+  challenge author and followers, not the admin and committee route), 3 (status
+  changed), 6 (comments, including replies) and 8 (solution implemented). Everything
+  else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
+  10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
+  12). Event 13 has no e-mail at all.
+- **Hold, don't send.** When a covered event's outbox row is written for a recipient
+  on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
+  and the dispatcher skips it until then. The inbox row is written and shown exactly as
+  today. The §12.1 preference toggles still apply first: a muted event writes nothing,
+  so it never reaches a digest.
+- **Send slots.** Daily: every day at **06:00 UTC**. Weekly: every **Monday at 06:00
+  UTC**. These are fixed for the whole platform, with no per-user time or time zone
+  (§19).
+- **The digest job.** At each slot the worker gathers each recipient's held rows that
+  are due, and sends **one** e-mail through the normal transport, wrapper and retry
+  policy. Then it marks the rows sent. Before rendering, it drops a row when:
+  - its item is no longer visible to the recipient, has been trashed (§10.4) or has been
+    deleted — the visibility check runs again at send time (invariant 2);
+  - the recipient has **already read** the matching inbox row. They have seen it, so
+    the digest is not a second copy.
+  
+  When nothing is left, no e-mail is sent. When the e-mail switch (§13.5) is off, held
+  rows are discarded at the slot, as an immediate row would be.
+- **Content.** Subject: *"Your daily InnoBox digest — N updates"* (or *weekly*). The
+  body groups the updates **by item**, most recently active first. Each item gets a
+  heading with its number and title, linked, and one line per kind of update:
+  *"2 status changes — now In review"*, *"5 new comments, 1 reply to you"*, *"1 new
+  solution"*, *"Solution SOL-17 was implemented"*. It shows at most **25 items**, then
+  *"and K more — open InnoBox to see everything"*. It never quotes comment bodies or
+  descriptions. Authors are masked per §9, and the §12.1 e-mail content-safety rules
+  apply.
+- **Changing the choice.** It applies to events written from then on. Rows already
+  held are sent at the next slot of the **new** choice. Switching to **Immediately**
+  releases them at once, as a single digest, so nothing held is lost or duplicated.
+- **Coalescing.** Event 6 still coalesces in the inbox. In a digest, the comment line
+  reports the total count across the coalesced rows.
+- **Tests.** Unit: which events are digestable, the slot calculation (daily and weekly,
+  including a write just after 06:00 UTC on a Monday), the grouping and copy, and the
+  25-item cap. Integration: a held row is not dispatched before its slot; the job
+  drops rows that are read, invisible or trashed; a switch to immediate releases the
+  held rows in one e-mail; admin and actionable events bypass the hold.
 
 **Per-event preferences (follower-derived events).** Three profile toggles (§13.5),
 all default **on**, stored on `users` as `notify_followed_comments`,
@@ -2653,7 +2932,11 @@ items I follow — **only those the owner can currently see** (§4.3); a follow 
 that has since become hidden is kept, not deleted, and the item reappears if it becomes
 visible again; latest activity (newest first, any status — fixing the legacy
 "oldest in-review only" bug); notification preferences (the e-mail opt-out
-**switch**, below, followed by the three §12.1 per-event toggles — *Comments on items
+**switch**, below, then the §12.1 **E-mail delivery** choice — a three-option
+segmented control, *Immediately · Daily digest · Weekly digest*, with a muted line
+under it naming the next send (*"Next digest: 13/10/2026 09:00"* — the 06:00 UTC slot
+in the viewer's local time, through `useDateFmt()`), disabled while the e-mail switch is off
+— followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
 flip and inline-error revert), followed by the §13.10 **Feedback** section (*Ask me for
@@ -3546,7 +3829,7 @@ All auth-required (401 otherwise), Origin-checked mutations (§2.4).
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
 admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
 system log §14.7, channel webhooks §12.4, identity sync §14.10, survey results
-§14.11 — are hidden from
+§14.11, the trash §10.4, public submissions §24.5 — are hidden from
 namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform settings
 (§14.3), the audit browser (§15), and the system log (§14.7) — each render a
 **breadcrumb** above the page title, via a shared component: **Administration** (a link back to `/admin`) › *current
@@ -3698,6 +3981,10 @@ delegated per namespace.**
 - **Gamification** — one switch, *Points, levels and badges*, **off by default**: shows
   or hides every §23 surface and the Points leaderboard metric; points keep accruing
   while it is off (§23.10). Audited as `settings.gamification_enabled_changed`.
+- **Public submissions** — the §24.2 card: the *Accept public submissions* switch
+  (**off** by default; it can be turned on only with `PUBLIC_INTAKE_KEY` set, a privacy
+  notice entered and an e-mail transport available), the privacy notice, and the
+  read-only public address. Audited as `settings.public_submissions_changed`.
 
 All settings changes are audited.
 
@@ -4295,7 +4582,8 @@ optional and composable (each an additional `AND`):
   (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
   (`user.*`, `scim.*`, `role_mapping.*`, `recon.*`) / Admin (`settings.*`,
   `namespace.*`, `impact_area.*`, `system_banner.*`, `presence.*`, `email.*`,
-  `audit.*`, `webhook.*`, `survey.*`, `ai.*`, every `*.exported`) / **Anonymity** (`anonymity.*` — admin
+  `audit.*`, `webhook.*`, `survey.*`, `ai.*`, `public_submission.*`, every
+  `*.exported`) / **Anonymity** (`anonymity.*` — admin
   reveals and self-reveals, the most sensitive reads to review). The curation events (`challenge.featured` /
   `challenge.unfeatured`) fall under Challenges by prefix; `like.*` rows appear under
   All only. The triage CSV export (§14.1) is audited as **`triage.exported`**, so it
@@ -4344,8 +4632,10 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   page model of §13.1), `solutions/:number` (edit/withdraw/resubmit/transition/reveal/
   self-reveal/**delete**) — `DELETE` on a challenge or solution is the platform-admin
   hard delete (§10.3): reason required in the body, cascading, irreversible, **404 (not
-  403)** to anyone else
-- `comments` (list/create/edit/delete on either parent type); `likes`, `follows` (one
+  403)** to anyone else; `challenges/:number/trash`, `solutions/:number/trash` and
+  `…/restore` (`POST`) are the §10.4 trash, platform admin only on the same 404 terms
+- `comments` (list/create/edit/delete on either parent type; create takes an optional
+  `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
   a like toggle on a closed challenge is **409**, §8.3)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
@@ -4359,7 +4649,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   feedback survey, and `GET` carries `openSurvey` and `selfSurvey`, plus the §23
   `gamification` block and `newAchievements`; `me/achievements-seen` `POST` advances the
   §23.7 toast marker), `profile` (own and other users'
-  profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the three §12.1 per-event
+  profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the §12.1
+  `emailDelivery` choice, the three §12.1 per-event
   toggles, the §13.10 `surveysEnabled` switch and the §23 `gamificationPublic` and
   `notifyAchievements` switches)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
@@ -4389,15 +4680,22 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   **`admin/survey/summary`, `admin/survey/comments` (`GET`) and
   `admin/survey/responses/:id` (`DELETE`)** (§14.11); **`admin/ai`** (`GET`/`PUT`/
   `PATCH`/`DELETE`), **`admin/ai/models`**, **`admin/ai/test`**,
-  **`admin/ai/display-name`**, **`admin/ai/timeouts`**, **`admin/ai/switches`** (§22.9)
+  **`admin/ai/display-name`**, **`admin/ai/timeouts`**, **`admin/ai/switches`** (§22.9);
+  **`admin/trash`** (`GET`, §10.4); **`admin/public-submissions`** with its `:id`,
+  `accept`, `decline`, `discard`, `erase-contact` and `count` routes (§24.9)
   — all platform admin only)
 - `ai/draft` (`GET` availability, `POST` a draft — §22.10), `ai/summary/:parentType/:number`
   (`GET` the cached summary, `POST` to make or refresh it — §22.13); triage notes ride on
   the challenge detail and triage-queue payloads for the roles that may see them (§22.11)
-- **The one unauthenticated API route:** `POST /api/csp-report` — the CSP report sink
-  (§2.4): `application/csp-report` or `application/reports+json`, 64 KB cap, per-IP
-  rate limit, **204** with no body; exempt from the `Origin` check; never stored, not
-  system-logged, not audited.
+- **Unauthenticated API routes** — exactly these:
+  - `POST /api/csp-report` — the CSP report sink
+    (§2.4): `application/csp-report` or `application/reports+json`, 64 KB cap, per-IP
+    rate limit, **204** with no body; exempt from the `Origin` check; never stored, not
+    system-logged, not audited.
+  - `GET /api/public/settings`, `GET /api/public/pow`, `POST /api/public/submissions`,
+    `POST /api/public/confirm` — the §24 public submission form, present only while
+    that feature is on (404 otherwise): per-IP rate limits, 64 KB cap, `Origin`-checked,
+    never read a session, not system-logged, not audited (§24.4, §24.9).
 
 Exact shapes are defined during implementation and documented alongside the code;
 any change to a shipped shape is a spec change first (§17). Responses apply
@@ -4461,10 +4759,15 @@ No data migration from SharePoint; no Power Apps/old-link compatibility; no link
 the legacy SharePoint site; no campaigns/challenge deadlines; for §23 gamification: no
 redeemable rewards (points buy and unlock nothing), no admin-tunable weights, caps or
 level curve, no custom or manually granted or revoked badges, no point deductions, no
-per-namespace boards, and no e-mail for achievements; no
-comment threading; no scheduled digest e-mails (the per-item coalescing of comment
-notifications, §12.1, is in scope and is not a digest); no undelete, trash, or restore for a deleted
-challenge or solution (§10.3 is permanent by design); no i18n;
+per-namespace boards, and no e-mail for achievements; for comment replies (§10.2): no
+nesting deeper than one level, no @mentions that notify anyone other than the person
+replied to, and no rich text; for e-mail digests (§12.1): no per-user send time or time
+zone, and no digest of the admin attention or actionable events; for the trash (§10.4):
+no namespace-admin trash, no configurable retention window, and no trash for comments or
+attachments; for public submissions (§24): no accounts, sign-in or status page for
+outside submitters, no attachments on the public form, no public listing or search of
+challenges, no third-party CAPTCHA service, and no comments or messages exchanged with the
+submitter inside InnoBox; no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
 audit chain (timestamping service, transparency log — recording the reported head
@@ -5463,3 +5766,292 @@ next start.
   surfaces and suppresses event 13 while accrual continues; the backfill's idempotence
   and silence. e2e: a solution implemented → the author's toast, the badge on their
   profile and the inbox row.
+
+## §24 Public submissions (outside the organization)
+
+> **⚠ GAP-74 · new feature:** public submissions do not exist. Build: a migration
+> (`public_submissions`, `challenges.public_submission_id` and the nullable
+> `author_id` with its check constraint, `notification_outbox.recipient_email`, the
+> `public_submissions_enabled` and `public_privacy_notice` settings, grants — the app
+> role gets INSERT/SELECT/UPDATE/DELETE on `public_submissions`); the `/submit` and
+> `/submit/confirm` pages outside AppShell; the proof-of-work issue and verify
+> helpers; the four public API routes and their middleware allowlist; the per-IP and
+> per-address limits; the submitter e-mails; the `/admin/public-submissions`
+> review queue and its console card; the accept, decline, discard and erase actions;
+> the "External submission" author rendering everywhere an author is shown; the §14.3
+> settings card; event 14 (§12.1); the worker's retention job; the
+> `PUBLIC_INTAKE_KEY` wiring (§2.3); and the tests in §24.9. Ships as one minor
+> release.
+
+People outside the organization — customers, partners, suppliers — can send a
+challenge through a **public web form**, without an account and without signing in.
+Nothing they send reaches InnoBox's challenge list directly: it waits in a separate
+**intake queue** until a platform admin accepts it, which turns it into an ordinary
+challenge in `awaiting_triage`, or declines or discards it. This is the second, and only
+other, unauthenticated surface (§2.1 invariant 2).
+
+### §24.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Off by default**; a platform admin switches it on in Platform settings. | A public write path is a deliberate choice for each deployment. |
+| 2 | **Self-hosted proof-of-work** plus a honeypot field and per-IP and per-address limits. No third-party CAPTCHA. | No visitor data to a third party, no cookies, no consent banner, and it works on any self-hosted deployment. |
+| 3 | **Name and a verified e-mail** are required, and the company is optional. A submission is held until the submitter clicks the confirmation link. | It stops most spam, and admins have a verified address to write to. |
+| 4 | A **separate intake queue**, reviewed by **platform admins only**. Accepting creates the challenge; declining or discarding never does. | Spam never gets a challenge number, notifications or webhook posts. |
+| 5 | **Text only**, no attachments. | Anonymous uploads are the riskiest part of a public form. |
+| 6 | Inside InnoBox the author shows as **"External submission"** plus the company. Name and e-mail are visible to the item's admins only. | Personal data of a non-employee stays with the people who need it. |
+| 7 | The submitter gets **key e-mails only**: confirm, accepted or declined, and the final outcome. | They are kept informed without a public status page or an account. |
+| 8 | Contact details are **erased 90 days after closure**; unconfirmed submissions are deleted after **7 days**. | Data minimization for people with no other relationship to the platform. |
+
+### §24.2 The switch and its preconditions
+
+The §14.3 **Public submissions** card holds:
+
+- **Accept public submissions** — a switch, **off** by default.
+- **Privacy notice** — plain text, ≤ 4 000 characters, shown on the public form above
+  the consent checkbox. `https` URLs in it render as links (`rel="noopener
+  noreferrer"`); everything else is escaped text. It ships empty, and no default text
+  lives in the repository (§2.3): what to tell outside submitters is each deployment's
+  decision.
+- **The public address** — `<PUBLIC_BASE_URL>/submit`, read-only, with a copy button.
+  InnoBox does not link to it from anywhere, not even the signed-out Home: the
+  organization shares it wherever it wants outside submissions to come from.
+
+The switch can be turned **on** only when all three hold: `PUBLIC_INTAKE_KEY` is valid
+(§2.3), the privacy notice is not empty, and an e-mail transport is available (Graph
+connected with a saved wrapper, or the SMTP fallback, §12.1). Otherwise it is disabled,
+with the missing item named in a hint. If a precondition stops holding later (the key is
+removed, or the mailbox disconnected), the public routes answer **404** until it is
+fixed. The queue stays usable for anything already received. Changing the switch or the
+notice is audited as `settings.public_submissions_changed` (`after: { enabled,
+noticeLength }`).
+
+While the switch is off, `/submit`, `/submit/confirm` and every `/api/public/*` route
+answer **404**, so the feature cannot be discovered. Rows already in the queue stay
+reviewable.
+
+### §24.3 The public form — `/submit`
+
+A standalone page **outside AppShell**: the logo and product name on top, no sidebar,
+no account menu, no search, no colophon and no version number. It follows the system
+light/dark preference, works at phone width, and makes **no** request that returns
+application data. Its only data request is `GET /api/public/settings`, which returns the
+privacy notice alone. A small *"Work here? Sign in"* link points to `/`.
+
+Fields, with the §6.1 limits where one exists:
+
+- **Title** (required, ≤ 120) and **Description** (required, ≤ 10 000), each with a
+  character counter.
+- **Your name** (required, ≤ 120), **Your e-mail** (required, ≤ 254, syntax-checked),
+  **Company** (optional, ≤ 200).
+- The **privacy notice**, then **"I have read the privacy notice"** (required checkbox).
+- A **honeypot** field, hidden from people and from assistive tech (`aria-hidden`,
+  `tabindex="-1"`, off-screen, `autocomplete="off"`).
+- **Submit**, disabled until the proof-of-work is solved. While it is being solved, a
+  muted line reads *"Checking your browser…"*, and it needs no interaction.
+
+There is no impact area, namespace, visibility or anonymity choice. The admin decides
+those on accept. There is no duplicate check either: it would expose existing
+challenges to the public. After a successful submit the form is replaced with: *"Check
+your inbox. We've sent a confirmation link to <the address typed>. Your submission is
+sent for review only after you confirm it, and the link works for 24 hours."*
+
+### §24.4 Bot defence and abuse limits
+
+- **Proof-of-work.** `GET /api/public/pow` issues a challenge in the ALTCHA style: a
+  random `salt` carrying its own expiry (**10 minutes**), `challenge = SHA-256(salt ‖
+  n)` for a secret random `n ≤ maxNumber`, and an HMAC-SHA-256 `signature` under
+  `PUBLIC_INTAKE_KEY`. The browser searches for `n` and sends it with the submission.
+  `maxNumber` is a server constant sized so a mid-range phone finds `n` in about one
+  second. The solver is part of the page's own bundle, runs in small chunks that yield
+  to the event loop, and uses no Web Worker, `blob:` URL or third-party script, so the
+  §2.4 policy is unchanged. The server checks the signature, the expiry and the hash,
+  and then that the salt is **unspent**: `pow_salt` is unique on `public_submissions`,
+  so a solved challenge buys exactly one row.
+- **Honeypot and timing.** A filled honeypot, or a submission arriving less than **3
+  seconds** after its challenge was issued, is **silently dropped**. The response is the
+  normal 202, nothing is stored or sent, and only the metric counts it.
+- **Per-IP limits** (token buckets in the web process, keyed by the client IP chosen by
+  `TRUST_PROXY`, like the CSP sink, §2.4): `GET /api/public/pow` and
+  `GET /api/public/settings` **30 per minute**; `POST /api/public/submissions` **5 per
+  hour**; `POST /api/public/confirm` **20 per hour**. Exceeded → **429** with
+  `Retry-After` and *"Too many requests — try again later."*
+- **Per-address limit.** At most **3** confirmation e-mails per address per 24 hours,
+  counted over the `public_submissions` rows (addresses compared lower-cased). Beyond
+  that a submission is **silently dropped** with the normal 202, so the form never tells
+  anyone whether an address has been used.
+- **Platform ceiling.** At most **100** confirmation e-mails per hour across the whole
+  platform, so the service mailbox cannot be turned into a mail cannon. Beyond that,
+  submissions answer **429** until the hour rolls over.
+- **The confirmation e-mail carries nothing the submitter wrote**: not the title, not
+  the description, not even the name. An unverified address may belong to someone else,
+  and the organization's mailbox must not deliver a stranger's text to it.
+- **Web baseline (§2.4).** The public routes keep the `Origin` check and the JSON
+  `Content-Type` rule (the form posts with `fetch` from the same origin). Their bodies
+  are capped at **64 KB**. They never read a session, even when one is present, and they
+  answer a signed-in employee exactly as they answer anyone else. Like the CSP sink,
+  their 4xx and 429 responses are **not** recorded in the system log (§14.7) and are
+  **not** audited: an unauthenticated route must not become a write path into either
+  table. They are counted in **`innobox_public_submissions_total{outcome}`** instead,
+  with `outcome` one of `received`, `confirmed`, `honeypot`, `too_fast`, `pow_failed`,
+  `address_capped`, `ip_limited` and `ceiling`.
+
+### §24.5 Confirmation and the review queue
+
+- **Received.** A valid submission inserts a `public_submissions` row in `unconfirmed`,
+  with a random 32-byte token (only its SHA-256 is stored) expiring in **24 hours**, and
+  sends the confirmation e-mail. Its subject is *"Confirm your submission"* and its text
+  is fixed: someone used this address to send a challenge to InnoBox, it will be
+  reviewed only after they confirm, and if it was not them they can ignore the e-mail
+  and nothing will be kept. The link is `<PUBLIC_BASE_URL>/submit/confirm#<token>`. The
+  token sits in the **fragment**, so it never reaches a server log, a proxy log or a
+  `Referer`.
+- **Confirm.** `/submit/confirm` reads the fragment and shows a **"Confirm my
+  submission"** button; it never confirms on load. E-mail security scanners open links
+  automatically, and a scanner must not confirm for the submitter. The button POSTs the
+  token. Valid, unexpired and unused → the row becomes `pending_review`, `confirmed_at`
+  is stamped, the token hash is cleared, and §12.1 **event 14** goes to every platform
+  admin. The page then reads *"Thank you — your submission is with our team. We'll
+  e-mail you once it has been reviewed."* Anything else (unknown, expired, already
+  used) → one generic *"This link is invalid or has expired."*, with no distinction
+  between the cases.
+- **The queue — `/admin/public-submissions`.** A **Public submissions** card on the
+  Administration console, platform admins only, with a count bubble for
+  `pending_review` rows (`1`–`9`, then `9+`, hidden at zero). The page has the §14
+  breadcrumb and two tabs. **Pending review** (the default) lists rows oldest first;
+  **Decided** lists accepted and declined rows from the last 90 days, newest first. Each
+  row shows when it was confirmed, the title, the company, the name and the e-mail.
+  Selecting a row opens a review panel with the full title and description, the contact
+  details, and **Similar challenges**: the §6.1 similarity check run as the reviewing
+  admin, authors masked per §9. The panel offers three actions:
+  - **Accept** — a dialog to choose the **namespace** (non-archived; default `global`),
+    **visibility** (default `org`) and **impact area** (active areas). Choosing *Client*
+    pre-fills the client name with the company. The dialog also shows the **title and
+    description**, pre-filled and editable under the §6.1 limits, so the admin can, say,
+    remove a phone number before it reaches every employee.
+  - **Decline** — an optional note to the submitter (≤ 1 000 characters, plain text),
+    included in the decline e-mail.
+  - **Discard as spam** — a single confirm. It sends nothing and **deletes** the row at
+    once.
+
+  A decision on a row someone else has already decided is **409** (*"Another admin has
+  already reviewed this submission."*).
+
+### §24.6 Accepting — the challenge inside InnoBox
+
+**Accept** runs **one transaction**. It creates the challenge through the normal §6.1
+create path, in `awaiting_triage` with a new number, the chosen namespace, visibility
+and impact area, `author_id` null, `public_submission_id` set and `is_anonymous` false.
+It marks the submission `accepted` with `decided_at`/`decided_by`. After commit,
+everything a new challenge triggers follows: §12.1 event 1 to the namespace's admins
+(and all platform admins), the §12.4 `challenge.created` webhook, and the audit row,
+`challenge.created` with `source: "public"` plus `editedOnAccept: ["title",
+"description"]` naming whichever fields the admin changed. Nobody is auto-followed
+(there is no author), and the accepting admin is recorded in the audit log, not as the
+author.
+
+How an external challenge appears:
+
+- **Author.** Wherever an author is shown — cards, list rows, the detail page, search
+  results, the triage queue, e-mails to employees, webhook payloads, the triage CSV
+  export — it reads **"External submission"**, followed by **"· <company>"** when one
+  was given. It uses the neutral bubble, like an anonymous author, with this label in
+  place of "Anonymous". It is **not** anonymous in the §9 sense: there is nothing to
+  reveal, and the reveal action is absent.
+- **Contact details.** The detail page shows a **"Submitted from outside"** panel to the
+  item's namespace admins and to platform admins only, with the name, the e-mail and
+  the date confirmed. After erasure it reads *"Contact details erased on <date>"*. The
+  panel is the **only** place the name and e-mail appear. They are never in search,
+  exports, webhooks, e-mails to employees, AI prompts (§22.7) or audit payloads.
+- **No author.** The author-only actions (edit, withdraw, resubmit, self-reveal, §10.1)
+  belong to nobody, and the author recipient route of every §12.1 event is empty. An
+  admin may still edit the challenge as on any other. **`needs_improvement` is
+  refused** for an external challenge, for every role (**422**, *"An outside submission
+  has no author who can improve it."*), because nobody could act on it. The enforced
+  transition list and the admin status picker both leave it out.
+- **Everything else is ordinary.** Solutions, comments, likes, follows, assignment,
+  state machines, featuring, trash and delete, AI tasks and KPIs apply as to any
+  challenge. Leaderboards, profiles and gamification ignore it: it has no author to
+  credit. The duplicate check (§6.1) finds it like any other challenge.
+
+### §24.7 E-mails to the submitter
+
+These are outbox rows with `recipient_email` set and no `user_id` (§5), sent from the
+service mailbox through the normal transport, wrapper and retry policy. They are never
+held for a digest and no user preference applies. They carry **no link into InnoBox**
+(the submitter cannot sign in), no employee names, no comments and no solution content,
+and the §12.1 content-safety rules apply. No mail is sent once the contact details are
+erased.
+
+| When | Subject | Body |
+|---|---|---|
+| Submission received | *Confirm your submission* | §24.5: fixed text and the confirm link only |
+| Accepted | *Your submission is under review* | The title as submitted, and that the team will now look at it |
+| Declined | *About your submission* | The title as submitted, that it will not be taken further, and the admin's note when there is one |
+| The challenge first reaches `solved` | *Your submission has been solved* | The title as submitted, and that a solution has been put in place |
+| The challenge first reaches `rejected` | *An update on your submission* | The title as submitted, and that it has been closed without a solution |
+
+The outcome mail is sent **at most once per submission**, on the challenge's first
+transition into `solved` or `rejected`. A flag on the row enforces this, and a later
+status change does not re-arm it. A challenge that is trashed or deleted (§10.3,
+§10.4) sends nothing.
+
+### §24.8 Retention and erasure
+
+A daily worker job enforces:
+
+- **Unconfirmed** rows are **deleted** 7 days after `created_at`.
+- **Declined** rows have `submitter_name` and `submitter_email` set to null 90 days
+  after `decided_at`.
+- **Accepted** rows are erased the same way 90 days after the challenge **first**
+  reaches `solved` or `rejected`; that transition sets `contact_erase_due_at`. A
+  challenge that never closes keeps its contact details while it is open.
+- **Discarded** rows were already deleted (§24.5). A purged challenge (§10.3) takes its
+  submission row with it.
+
+The company name and the submission's own text are kept: they are the challenge's
+content, not contact data. A platform admin can also **Erase contact details** at any
+time, from the review panel or the *Submitted from outside* panel, for example when the
+submitter asks. Every erasure writes `public_submission.contact_erased` (`trigger:
+"manual" | "retention"`). The §3 user erasure does not apply: the submitter is not a
+user.
+
+### §24.9 API, audit, tests
+
+- **Public routes**, all 404 while the switch is off (§24.2):
+  `GET /api/public/settings` → `{ privacyNotice }`; `GET /api/public/pow` →
+  `{ algorithm, salt, challenge, maxNumber, signature }`;
+  `POST /api/public/submissions` `{ title, description, name, email, company?, consent:
+  true, website (the honeypot), pow: { salt, number, signature } }` → **202**
+  `{ ok: true }`, **400/422** for invalid fields, **403** for a missing, invalid,
+  expired or spent proof-of-work (*"Verification failed — reload the page and try
+  again."*), **429** per §24.4; `POST /api/public/confirm` `{ token }` → **200**, or
+  **410** for the generic invalid-or-expired answer.
+- **Admin routes**, platform admin only (**403** for namespace admins, like the other
+  platform-only admin routes): `GET /api/admin/public-submissions?status=pending|decided`,
+  `GET /api/admin/public-submissions/:id` (with `similar[]`), `POST …/:id/accept`
+  `{ namespaceId, visibility, impactAreaId, clientName?, title, description }` →
+  `{ number }`, `POST …/:id/decline` `{ note? }`, `POST …/:id/discard`,
+  `POST …/:id/erase-contact`, and `GET /api/admin/public-submissions/count` →
+  `{ pending }` for the console bubble. The challenge detail payload gains
+  `external: { company } | null` for every viewer, and `externalContact: { name, email,
+  confirmedAt, erasedAt } | null` for the item's admins only.
+- **Audit (§15)**, every row under the Admin chip (`public_submission.*` joins its
+  patterns), each carrying the submission id and **never** a name or an e-mail:
+  `public_submission.accepted` (with the challenge number), `public_submission.declined`
+  (whether a note was sent, not the note), `public_submission.discarded`,
+  `public_submission.contact_erased`, and `settings.public_submissions_changed`.
+  Receiving and confirming are unauthenticated and are **not** audited (§24.4); the
+  metric counts them.
+- **Tests.** Unit: proof-of-work issue and verify (signature, expiry, wrong number,
+  spent salt); the honeypot and timing drops; the per-address and platform caps; the
+  e-mail templates (the confirmation carries no submitted text); the retention due
+  dates; the author label and masking helpers; `needs_improvement` refused for an
+  external challenge. Integration: every public route 404s while the switch is off;
+  receive → confirm → accept creates exactly one challenge with a null author, fires
+  event 1 and the webhook, and audits `source: "public"`; decline and discard create
+  nothing; two concurrent decisions → one 409; the contact panel appears only for the
+  item's admins, and no list, search, export, webhook or employee e-mail carries the
+  name or e-mail; the retention job deletes and erases on schedule; the outcome mail is
+  sent once. E2e: submit on `/submit`, confirm through the link, accept in the queue,
+  and find the challenge in the triage queue labelled "External submission".

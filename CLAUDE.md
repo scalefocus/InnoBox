@@ -85,7 +85,10 @@ touched.**
    OIDC token claims** (Entra ~200-group claim overage).
 2. **All access is auth-required and strictly visibility-filtered.** A
    namespace-restricted challenge must never leak via lists, search, autocomplete,
-   counts, KPIs, leaderboards, or notifications (§4.3).
+   counts, KPIs, leaderboards, or notifications (§4.3). The only unauthenticated
+   surfaces are the signed-out Home (`/`) and, while a platform admin has it switched
+   on, the public submission form (`/submit`, §24). The form writes to its own intake
+   table and reads no application data.
 3. **Anonymity is enforced at the API layer, everywhere** — lists, details, search,
    exports, e-mails, notifications. True identity is exposed only through the
    audited admin **reveal** action (§9).
