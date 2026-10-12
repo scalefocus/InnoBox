@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.11 — draft for review** (2026-10-09; v0.2 added the UI and CI/CD
+> Status: **v0.13 — draft for review** (2026-10-12; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -36,7 +36,9 @@
 > (2026-10-09) specified four features still to be built, each marked as a new-feature
 > gap: the What's new update notice with a greyed-out *Coming soon* list (§13.9), the
 > feedback survey with its admin results (§13.10, §14.11), and the AI integration with
-> Open WebUI or OpenAI and its four tasks (§22)).
+> Open WebUI or OpenAI and its four tasks (§22); v0.13 (2026-10-12) specified
+> gamification — points, levels, achievement and leader badges — as a new-feature gap
+> (§23), lifting the former "no reward points" non-goal (§19)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -836,7 +838,9 @@ Entra runbook); on conflict this document wins.
   and `whats_new_since_date`), deletes the user's §13.10 `user_feature_uses` rows, clears
   the survey state (`survey_last_shown_at`, `survey_offer`, `survey_self_shown_at`;
   `surveys_enabled` back to its default) — survey responses reference no one and are
-  untouched — nulls `ai_usage.user_id` (§22.3), and resets the notification preferences
+  untouched — nulls `ai_usage.user_id` (§22.3), deletes the user's §23
+  `gamification_ledger` and `user_badges` rows (resetting `gamification_public` and
+  `notify_achievements` to their defaults and nulling `achievements_seen_at`), and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
   `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
@@ -1052,7 +1056,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **survey_self_shown_at** (the §13.10 per-user survey state),
   **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
-  default true — the §12.1 per-event preferences), deactivated_at.
+  default true — the §12.1 per-event preferences), **gamification_public** /
+  **notify_achievements** / **achievements_seen_at** (the §23 opt-out, achievement
+  notification preference and toast marker), deactivated_at.
 - **`groups`** — id, external_id (Entra group object id), display_name,
   **scim_synced** (boolean, not null, default false; set true by every SCIM group
   create/replace/patch and left untouched by reconciliation's mirroring of mapped
@@ -1066,6 +1072,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`user_feature_uses`**, **`survey_responses`**, **`survey_answers`**,
   **`survey_daily`** — the §13.10 feedback survey; responses carry **no user
   reference**.
+- **`gamification_ledger`** and **`user_badges`** — the §23 append-only points ledger
+  (one row per `(user, award key)`; its item id carries no FK and is never returned by
+  the API) and the earned badge tiers.
 - **`impact_areas`** — id, name, active flag. Seeded: **Client, Internal,
   Accelerator**. Platform-admin managed (§14.3); retiring an area keeps it on
   historical items but removes it from the submission form. A **retired** area may
@@ -1513,6 +1522,9 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
 - **Leaderboard exclusion:** contributions made anonymously do not count toward any
   leaderboard (challenges submitted, solutions proposed/implemented, likes received
   on anonymous items). After self-reveal, they count.
+- **Gamification exclusion:** the same holds for §23 points, levels and badges — no
+  award exists for an anonymous item's author, and a self-reveal replays the item's
+  awards in its own transaction (§23.2).
 
 *Implementation note:* the §13.1 Challenges page ships full masking — anonymous items
 always show "Anonymous" to every viewer, no exceptions. Both the audited admin
@@ -2073,6 +2085,10 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 | 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/followers already had it) |
 | 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader — bound files only; a staged file's failure shows in the form (§11) |
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
+| 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
+
+Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
+in-app only, by design (§23.1).
 
 "Assignee" in events 3 and 9 means the **challenge's** assignee, including for an
 event on one of its solutions. "Challenge author" in event 8 is a recipient in its own
@@ -2688,7 +2704,12 @@ are unchanged and keep their own place below the KPI tiles.
 A dedicated **`/leaderboard`** page (own app-shell nav
 item). **Top 10**, two windows — **last 30 days** and **all time** — across four
 metrics: **solutions implemented (default)**, challenges submitted, solutions
-proposed, likes received. Ranked by count descending; ties go to the user whose
+proposed, likes received — and, while gamification is on, a fifth, **points** (§23):
+the sum of a user's §23 ledger points whose item passes the org-visible test below,
+windowed and tie-broken by the award's `occurred_at`, excluding users who hide their
+gamification (§23.9). Every row carries a small level chip beside the name, on every
+metric, unless that user hides it (§23.6); the people tied at the top of each metric
+and window hold its leader badge (§23.5). Ranked by count descending; ties go to the user whose
 **earliest counted contribution** in the window is oldest. A contribution's time is its
 creation (a submitted challenge, a proposed solution, a like), except for a solution
 implemented, which counts from the moment it became `implemented` — its
@@ -2788,7 +2809,12 @@ visible again; latest activity (newest first, any status — fixing the legacy
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
 flip and inline-error revert), followed by the §13.10 **Feedback** section (*Ask me for
-feedback* switch and *Give feedback now*).
+feedback* switch and *Give feedback now*). While gamification is on (§23), the own
+profile also shows the **Achievements** section (level, points, progress, *Currently
+leading*, earned and locked badges, §23.6) and two more switches of the same kind:
+*Achievements* (the §12.1 event 13 notification and toast, §23.7) and *Show my level
+and badges to others* (§23.9). Another user's profile shows their level, leader badges
+and earned badges unless they hide them.
 Other users' profiles show display name, department, job title, **office location**,
 photo, and their **non-anonymous** org-visible contributions. "Org-visible" is the full
 §4.3 test that an arbitrary authenticated viewer would pass, applied to **both** the item
@@ -2894,6 +2920,11 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   would race and overlap the card on the very same element) — the `aria-label` stays,
   and the card itself shows the name. Bubbles with **no** user id — anonymous authors,
   deleted/unknown actors — keep their `title`, gain no tab stop, and open no card.
+- **Level-progress ring (§23.6):** medium and large bubbles — profile pages, the hover
+  card, leaderboard rows and the sidebar account bubble — carry a thin ring showing the
+  user's level progress while gamification is on. Never on small list bubbles, nor on
+  anonymous, deactivated or scrubbed bubbles, nor for a user who hides their
+  gamification when someone else is looking.
 - **Loading/perf:** list rows lazy-load bubble images; the browser cache +
   `ETag` revalidation (§3.1) means each distinct user's photo is fetched at most
   once per session in practice. No base64 inlining in list payloads.
@@ -2981,7 +3012,9 @@ Top to bottom, in a fixed max-width (~280 px) card:
 2. **Job title**.
 3. **Department**.
 4. **Office location**.
-5. **"View profile"** — a link to `/profile/<id>` (to `/profile` for your own bubble,
+5. While gamification is on and the user does not hide it (§23.6, §23.9): a **level
+   chip**, their **leader badges**, and their **3 most recently earned badges**.
+6. **"View profile"** — a link to `/profile/<id>` (to `/profile` for your own bubble,
    decided by comparing the bubble's user id to the signed-in user — no caller has to
    mark a bubble as "self").
 
@@ -3009,7 +3042,10 @@ Top to bottom, in a fixed max-width (~280 px) card:
   namespace badge. The last two are excluded **because of invariant 2** — per-namespace
   roles and per-viewer contribution counts would leak the existence of namespaces and
   restricted items through a surface that renders for every viewer identically. The
-  card carries **no** challenge, solution or namespace data of any kind.
+  card carries **no** challenge, solution or namespace data of any kind. The §23 level
+  and badges are **not** contribution counts in this sense: they are one
+  viewer-independent figure per person that names no item, namespace or count of
+  hidden items (§23.9).
 
 #### Interaction — pointer (mouse only)
 
@@ -3066,7 +3102,8 @@ Top to bottom, in a fixed max-width (~280 px) card:
 #### Data & delivery
 
 - **`GET /api/users/:id/card`** → `{ userId, displayName, jobTitle, officeLocation,
-  department, deactivated, scrubbed }`. **Any authenticated user** may call it for
+  department, deactivated, scrubbed, gamification }` — `gamification` is the §23.12
+  block, or `null` when the feature is off or the user hides it. **Any authenticated user** may call it for
   **any** user id — InnoBox has no per-user visibility model (invariant 2 governs
   *challenges*), and `/api/profile/:userId` already exposes the same fields to any
   signed-in caller. **401** unauthenticated; **404** for an unknown **or malformed**
@@ -3095,7 +3132,9 @@ Top to bottom, in a fixed max-width (~280 px) card:
   exclusively on a user id, and an anonymous author's id never reaches the client.
 - **Visibility (invariant 2) is untouched:** the card carries no challenge, solution,
   namespace, role or count data, so it cannot leak restricted items — which is why
-  those were excluded from its contents above.
+  those were excluded from its contents above. The §23 level and badges name no item
+  (§23.9). Hiding them is the §23.9 switch, which covers the profile and the card
+  together.
 
 ### §13.9 What's new (release notes & the update notice)
 
@@ -3887,6 +3926,9 @@ delegated per namespace.**
   nothing; new pins are refused until the count is below the new limit. Audited as
   `settings.featured_limit_changed` (`after: { limit }`), following the existing
   `settings.<name>_changed` pattern.
+- **Gamification** — one switch, *Points, levels and badges*, **off by default**: shows
+  or hides every §23 surface and the Points leaderboard metric; points keep accruing
+  while it is off (§23.10). Audited as `settings.gamification_enabled_changed`.
 
 All settings changes are audited.
 
@@ -4327,14 +4369,18 @@ anomalies. Since v0.10 also:
   `survey.response_deleted` (never the response text, §14.11);
 - **AI integration** — `ai.config_updated` (never the token or its last 4),
   `ai.enabled`, `ai.disabled`, `ai.config_cleared`, and `settings.ai_*_changed` for the
-  display name, timeouts and switches (§22.9).
+  display name, timeouts and switches (§22.9);
+- **gamification** — `settings.gamification_enabled_changed` and the one-time
+  `gamification.backfilled` (actor system, counts only, §23.11).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
 (§14.10), CSP reports (§2.4), the purely presentational view toggle and submission
 lock, the §13.9 What's new marker, every §13.10 survey action of a user — first
 uses, opening, closing and submitting are never audited, by design — and AI tests,
-model lists, runtime calls and drafts (telemetry in `ai_usage`, §22.9).
+model lists, runtime calls and drafts (telemetry in `ai_usage`, §22.9), and §23
+point awards, badges, level-ups, the gamification opt-out and the achievements-seen
+marker (the append-only ledger is their record, §23.12).
 
 Platform admins get a read-only,
 filterable audit browser. A target that resolves — a challenge or solution that still
@@ -4564,13 +4610,16 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `POST {version}` advances the §13.9 marker — 400 on an invalid or future version,
   returns `{ previous, current }`; `me/features/used`, `me/survey/check`,
   `me/survey/start`, `me/survey/close` and `me/survey/responses` drive the §13.10
-  feedback survey, and `GET` carries `openSurvey` and `selfSurvey`), `profile` (own and other users'
-  profiles, §13.5; `PATCH` carries the e-mail switch, the three §12.1 per-event
-  toggles and the §13.10 `surveysEnabled` switch)
+  feedback survey, and `GET` carries `openSurvey` and `selfSurvey`, plus the §23
+  `gamification` block and `newAchievements`; `me/achievements-seen` `POST` advances the
+  §23.7 toast marker), `profile` (own and other users'
+  profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the three §12.1 per-event
+  toggles, the §13.10 `surveysEnabled` switch and the §23 `gamificationPublic` and
+  `notifyAchievements` switches)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
   malformed id, §13.8)
-- `leaderboards`, `dashboard` (KPIs, spotlights, **featured** — visibility-filtered
+- `leaderboards` (incl. `metric=points` and each row's level, §23.12), `dashboard` (KPIs, spotlights, **featured** — visibility-filtered
   pins, §13.2)
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
@@ -4663,7 +4712,10 @@ error messages carry no `§` references (§21.9).
 ## §19 Non-goals (v1)
 
 No data migration from SharePoint; no Power Apps/old-link compatibility; no links to
-the legacy SharePoint site; no campaigns/challenge deadlines; no reward points; no
+the legacy SharePoint site; no campaigns/challenge deadlines; for §23 gamification: no
+redeemable rewards (points buy and unlock nothing), no admin-tunable weights, caps or
+level curve, no custom or manually granted or revoked badges, no point deductions, no
+per-namespace boards, and no e-mail for achievements; no
 comment threading; no scheduled digest e-mails (the per-item coalescing of comment
 notifications, §12.1, is in scope and is not a digest); no undelete, trash, or restore for a deleted
 challenge or solution (§10.3 is permanent by design); no i18n;
@@ -5380,3 +5432,315 @@ transitions, assigns, rejects or notifies (invariant 6).
 - **Tests.** Unit: pseudonymization (stable letters, author not marked, no names),
   deleted comments excluded. Integration: visibility of the cached result, staleness,
   cascade. e2e (stub): summarize a long thread.
+
+---
+
+## §23 Gamification: points, levels & badges
+
+Recognition for the people who make the process work. Every authenticated user earns
+**points** for outcomes, climbs **levels**, and collects **achievement badges**; whoever
+currently tops a §13.3 leaderboard metric also holds a live **leader badge**. It is pure
+recognition: points buy nothing, unlock nothing and never affect a permission, a
+status, an assignment or a ranking of challenges.
+
+> **⚠ GAP-73 · new feature:** gamification does not exist. Build: migration
+> `0039_gamification.sql` (`gamification_ledger`, `user_badges`, the three `users`
+> columns, the `gamification_enabled` setting, grants — the app role gets INSERT/SELECT
+> on the ledger and badges, plus DELETE for the §3 erasure only); the
+> `@innobox/shared/gamification` module (the weights, caps, level curve and badge
+> catalogue below, as pure data plus the pure evaluation functions); the award hook
+> called inside every triggering transaction; the self-reveal replay; the worker's
+> one-time backfill; the Points metric and level chips on `/leaderboard`; the profile
+> *Achievements* section and the two profile preferences; the hover-card block; the
+> progress ring on `AvatarBubble`; the achievement toast; the §14.3 switch; the
+> erasure additions; and the tests in §23.12. Ships as one minor release.
+
+### §23.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Points, levels, achievement badges and live leader badges** — all four. | Points give a continuous signal; badges mark milestones; leader badges reuse the existing rankings. |
+| 2 | **Outcome-weighted points.** Most points come from triage and implementation outcomes; social activity earns little and is capped per day. | Rewards impact over volume, so spamming submissions or comments does not pay. |
+| 3 | **Append-only, never deducted.** An award is written once per `(user, award key)`; nothing that happens later — unlike, a status reverted, a withdrawal, the §10.3 delete — removes points or a badge. | A user never "loses" recognition, and like/unlike or status bouncing can't farm points. |
+| 4 | **Anonymous contributions earn nothing until self-reveal** (§9); a self-reveal replays the item's awards. | A badge appearing right after an anonymous submission would identify its author (invariant 3). |
+| 5 | **Restricted-namespace work counts toward a person's total, levels and badges**, but no surface ever names the item behind an award. | People who work mainly in restricted namespaces are not penalized; a total cannot identify a challenge. |
+| 6 | **The Points ranking counts only org-visible awards** (the §13.3 test, live). | Rankings keep their viewer-independent, org-visible rule (invariant 2). |
+| 7 | **Weights, caps, curve and catalogue are fixed in code**; a platform admin can only switch the feature on or off. | No retroactive recalculation, no tuning debates in production. |
+| 8 | **In-app notification only** — no e-mail, no channel webhook. | Recognition is a nicety, not a work item. |
+| 9 | **Users can hide their gamification from others** (they still earn). | Not everyone wants public scoring. |
+| 10 | **Silent retroactive backfill** at rollout. | Long-time contributors don't start at zero. |
+
+### §23.2 Points
+
+Points are awarded to the **user who did the thing** — the item's author for item
+milestones, the liker's target for likes, the commenter for comments, the assignee for a
+solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
+
+| Reason (`reason`) | Points | Awarded to | When | Award key |
+|---|---|---|---|---|
+| `challenge_submitted` | **5** | challenge author | the challenge is created | `challenge_submitted:<challengeId>` |
+| `challenge_validated` | **20** | challenge author | its first entry into `valid` (`first_valid_at` is set) | `challenge_validated:<challengeId>` |
+| `challenge_solved` | **15** | challenge author | its first entry into `solved` | `challenge_solved:<challengeId>` |
+| `assignment_solved` | **15** | the challenge's assignee at that moment | its first entry into `solved`, when it has an assignee who is not also the author | `assignment_solved:<challengeId>` |
+| `solution_proposed` | **5** | solution author | the solution is created | `solution_proposed:<solutionId>` |
+| `solution_validated` | **20** | solution author | its first entry into `valid` | `solution_validated:<solutionId>` |
+| `solution_implemented` | **50** | solution author | its first entry into `implemented` | `solution_implemented:<solutionId>` |
+| `like_received` | **1** | the liked item's author | a like by someone **other than the author** | `like_received:<parentType>:<parentId>:<likerId>` |
+| `comment_posted` | **1** | the commenter | a comment is posted | `comment_posted:<commentId>` |
+
+- **Who moved it doesn't matter.** A milestone counts whether the transition was an
+  enforced one by a committee member or assignee, or an admin override (§7.2, §8.2).
+- **First entry only.** The award key makes every milestone once-per-item: a solution
+  that goes `valid → needs_improvement → valid` earns `solution_validated` once, and a
+  §10.3 revert out of `solved` followed by a second solve earns nothing new.
+- **Daily caps** (per recipient, per **UTC day** of the event): `comment_posted` earns
+  points for the first **5** comments of the day and `like_received` for the first
+  **25** likes received that day. Past the cap the award row is still written, with
+  **0 points**, so badges that count events (§23.4) still see it.
+- **Never points for:** giving a like, following, editing, attaching a file, a comment
+  on a deleted thread, a `not_selected` or `rejected` outcome, or liking your own item
+  (no row at all). Withdrawing or deleting an item, deleting a comment, and unliking
+  deduct nothing (decision 3).
+- **Anonymous items.** While a challenge or solution is anonymous, none of its
+  item-bound awards are written: no `*_submitted`, `*_validated`, `*_solved`,
+  `*_implemented` or `like_received` for its author. Comments are never anonymous
+  (§9), so `comment_posted` is always awarded — including the author's own comments on
+  their anonymous item, which already show their name — and `assignment_solved` goes to
+  the assignee, who is never anonymous. **On self-reveal** (§9) the item's awards are
+  replayed in the reveal's transaction: every milestone the item has already reached,
+  and one `like_received` per current like, each with `occurred_at` set to the original
+  event time, taken from the item's first matching status audit row (or its creation,
+  or the like's `created_at`). The daily caps apply per original UTC day. Badges and
+  levels reached by the replay notify normally (§23.7).
+- **Restricted namespaces** count in full (decision 5).
+- **The level total is the user's points over all their ledger rows, all time.**
+
+### §23.3 Levels
+
+A fixed curve of ten levels on cumulative points:
+
+| Level | Name | Points needed |
+|---|---|---|
+| 1 | Newcomer | 0 |
+| 2 | Contributor | 25 |
+| 3 | Explorer | 75 |
+| 4 | Problem Solver | 150 |
+| 5 | Innovator | 300 |
+| 6 | Catalyst | 500 |
+| 7 | Trailblazer | 800 |
+| 8 | Visionary | 1 200 |
+| 9 | Pioneer | 1 800 |
+| 10 | Luminary | 2 500 |
+
+**Progress** is `(points − this level's threshold) / (next threshold − this level's
+threshold)`, between 0 and 1. At level 10 progress is 1 and stays there; there is no
+level 11. Levels are computed from the total on read, never stored.
+
+### §23.4 Achievement badges
+
+Permanent once earned (decision 3). **Tiered** badges have Bronze, Silver and Gold
+tiers that upgrade in place: the badge shows its highest tier, and each tier keeps its
+own earned date. **One-off** badges have a single step. Counts come from the ledger
+(§23.8), so they follow the same anonymity and restricted-namespace rules as points,
+and count capped (0-point) rows too.
+
+| Badge (`badge_key`) | Kind | Earned for | Bronze / Silver / Gold |
+|---|---|---|---|
+| **Problem Spotter** (`problem_spotter`) | tiered | challenges you wrote that reached `valid` | 1 / 5 / 15 |
+| **Solution Architect** (`solution_architect`) | tiered | solutions you wrote that reached `valid` | 1 / 5 / 15 |
+| **Implementer** (`implementer`) | tiered | solutions you wrote that were implemented | 1 / 3 / 10 |
+| **Challenge Closer** (`challenge_closer`) | tiered | challenges you wrote that were solved | 1 / 3 / 10 |
+| **Champion** (`champion`) | tiered | challenges solved while you were the assignee | 1 / 5 / 15 |
+| **Crowd Favorite** (`crowd_favorite`) | tiered | likes received from other people | 10 / 50 / 200 |
+| **Conversation Starter** (`conversation_starter`) | tiered | comments posted | 10 / 50 / 200 |
+| **Icebreaker** (`icebreaker`) | one-off | your first challenge submitted | — |
+| **First Idea** (`first_idea`) | one-off | your first solution proposed | — |
+| **Full Circle** (`full_circle`) | one-off | a solution you wrote is implemented on a challenge you also wrote | — |
+
+- **Evaluation.** After writing award rows, the same transaction re-counts the affected
+  user's relevant reasons and inserts any newly reached `(badge, tier)` rows
+  (`ON CONFLICT DO NOTHING`). A jump across several tiers at once (a self-reveal, the
+  backfill) inserts each tier reached.
+- **Full Circle** is checked when a `solution_implemented` award is written: the
+  solution's author also wrote the parent challenge and has an award row for it. While
+  either item is anonymous no award exists, so the badge waits for both reveals; the
+  replay of the second reveal earns it.
+- The **catalogue is fixed in code**. There is no manual grant or revocation (§19).
+
+### §23.5 Leader badges
+
+A live marker that a person **currently tops** a §13.3 leaderboard metric. Purely
+derived from the leaderboard's own data; nothing is stored.
+
+- **Metrics × windows:** the five §13.3 metrics (solutions implemented, challenges
+  submitted, solutions proposed, likes received, points), each in the **30-day** and
+  **all-time** windows — up to ten per person.
+- **Who leads:** everyone **tied** at the single highest value of a metric in a window.
+  A metric with nobody above zero in a window has no leader. Computed from the same
+  per-(metric, window) query results the leaderboard uses, cached alongside them —
+  the tied-for-first rows are the contiguous prefix sharing the top row's value, so no
+  new aggregate is needed.
+- **Glyphs:** 🚀 implemented, 💡 challenges, 🧩 solutions, ❤️ likes, ⭐ points, each in a
+  small colored circle (§2.2 tokens: `--accent`, `--accent-2`, `--ok`, `--warn`,
+  `--accent` respectively). The **all-time** variant carries a small crown overlay; the
+  30-day variant has none. Tooltip and `aria-label`: *"<Metric> leader — all time"* /
+  *"<Metric> leader — last 30 days"*.
+- **Where:** the *Currently leading* strip on the profile (§23.6) and the hover card
+  (§13.8). **Not** under avatar bubbles elsewhere.
+- **Opt-out:** a hidden user's leader badges are not shown to others (§23.9); the
+  computation is unchanged, so their hiding never promotes someone else to leader.
+
+### §23.6 Surfaces
+
+When the feature is **off** (§23.10) none of this renders and the payloads below carry
+`null` in place of each gamification block.
+
+- **Profile — own (§13.5).** An **Achievements** section below identity: a level card
+  (level number and name, total points, a progress bar with *"N points to <next
+  level name>"*, or *"Top level reached"* at level 10); the *Currently leading* strip
+  (omitted when empty); then the badge grid — earned badges first, newest first, each
+  showing its tier and the date it was earned (through the shared formatter); then the
+  **locked** badges, greyed, each with its criterion and progress (*"3 of 5 challenges
+  validated"*). The owner always sees all of it, whatever their opt-out.
+- **Profile — someone else's.** The same level card, *Currently leading* strip and
+  earned badges; **no locked badges** and no per-badge progress. A user who has hidden
+  their gamification (§23.9) shows no Achievements section at all.
+- **Hover card (§13.8).** Below the directory lines: a level chip (*"Lv 4 · Problem
+  Solver"*), the leader glyphs, and the **3 most recently earned** badges (highest tier
+  each). Omitted for a hidden user.
+- **Leaderboard (§13.3).** A small level chip (*"Lv 4"*) beside each row's name, on
+  every metric. Omitted for a hidden user.
+- **Progress ring (§13.6).** A thin ring around the avatar bubble, filled clockwise
+  from 12 o'clock to the user's level progress: `--accent` arc on a `--line` track, and
+  a full ring in `--warn` (gold) at level 10. **Only on medium and large bubbles** —
+  profile pages, the hover card, leaderboard rows and the sidebar account bubble (your
+  own); never on the small list bubbles (cards, comments, chips, triage rows, search
+  results), where a ring at 24 px is noise. No ring on an anonymous, deactivated or
+  scrubbed bubble, nor for a hidden user when someone else is looking. The ring is
+  decorative; the bubble's `aria-label` gains *", level 4"*. It does not animate under
+  `prefers-reduced-motion: reduce`.
+- **Nothing ever names the item behind an award** — not the profile, the card, the
+  ledger API or a notification. That is what lets restricted work count (decision 5).
+
+### §23.7 Notifications & the achievement toast
+
+- **§12.1 event 13 — "Achievement earned"**: a new badge, a badge tier upgrade, or a
+  new level. **In-app only**: it writes an inbox row and **no outbox row** — no e-mail,
+  no channel webhook. One inbox row **per triggering transaction** listing everything
+  that transaction earned (*"You earned Implementer (Silver) and reached level 5 —
+  Innovator."*), linked to `/profile`. The row references no challenge or solution, so
+  the §10.3 cascade never removes it.
+- **Recipient:** only the earner. Gated by the **Achievements** preference
+  (`notify_achievements`, §13.5, default on) at insert time, like the §12.1 per-event
+  toggles: when off, no inbox row is written. Not written while the feature is off.
+- **Toast.** On page load, when the `me` payload's `newAchievements` is non-empty, the
+  app shell shows **one** celebratory toast summarizing them (the same copy as the inbox
+  row), then posts `me/achievements-seen`, which advances `achievements_seen_at`.
+  `newAchievements` lists badge tiers and levels earned after
+  `max(achievements_seen_at, gamification_enabled_at)`, so enabling the feature never
+  floods anyone with old news. The toast is suppressed when `notify_achievements` is
+  off. Seeing the toast does not mark the inbox row read.
+
+### §23.8 Data model (migration 0039)
+
+- **`gamification_ledger`** — id (bigint identity), user_id (FK `users`), reason (the
+  §23.2 enum), points (smallint ≥ 0), award_key (text), item_type (`challenge |
+  solution`), item_id (uuid, **no FK**), occurred_at (timestamptz — the event time,
+  which drives the 30-day window), created_at. **Unique `(user_id, award_key)`**.
+  Indexes on `(user_id, reason)` and `(occurred_at)`.
+  **Append-only:** the app role has INSERT/SELECT only, plus DELETE solely for the §3
+  erasure; no UPDATE. `item_id` carries no FK on purpose: the §10.3 delete cascade does
+  **not** touch the ledger (decision 3), and the id is never returned by any API — it
+  exists only so the Points ranking can apply the live org-visible test.
+- **`user_badges`** — user_id (FK), badge_key, tier (`1 | 2 | 3`, null for a one-off),
+  earned_at. Unique `(user_id, badge_key, coalesce(tier, 0))`. Same grants as the
+  ledger.
+- **`users`** gains **gamification_public** (boolean, not null, default true — §23.9),
+  **notify_achievements** (boolean, not null, default true — §23.7) and
+  **achievements_seen_at** (nullable timestamptz; the toast marker, set to the backfill's
+  run time for every existing user).
+- **`platform_settings`** gains **`gamification_enabled`** (default **false**),
+  **`gamification_enabled_at`** (stamped on each off → on flip) and
+  **`gamification_backfilled_at`** (§23.11).
+- **Concurrency.** Award writing takes a transaction-scoped advisory lock per
+  recipient, so two concurrent comments can't both slip under the daily cap, and uses
+  `INSERT … ON CONFLICT (user_id, award_key) DO NOTHING` so a retried or concurrent
+  trigger can't double-award.
+- **In the triggering transaction.** Awards and badge evaluation run inside the same
+  transaction as the action that earns them: the create, the status transition (incl.
+  the §8.3 auto-close, which awards `solution_implemented`, `challenge_solved` and
+  `assignment_solved` together), the like toggle, the comment post, the self-reveal. A
+  failed award fails the action — but the award code does no I/O beyond these inserts.
+- **Accrual is independent of the switch.** Awards are written whether the feature is
+  on or off; the switch hides surfaces and suppresses notifications only, so turning it
+  on shows accurate totals at once.
+
+### §23.9 Privacy & visibility
+
+- **Hide from others** — the profile switch **"Show my level and badges to others"**
+  (`gamification_public`, default on). When off: other viewers see no level, ring,
+  badge, leader badge or level chip for that user, anywhere; the user is **excluded from
+  the Points ranking** (the next person moves up); the other four §13.3 metrics are
+  unchanged. They keep earning and see everything themselves. Toggling is silent (not
+  audited, like the e-mail switch) and immediate.
+- **Invariant 2.** A person's total, level and badges are viewer-independent numbers
+  that name no item, namespace or count of hidden items — accepted as not leaking a
+  restricted challenge (decision 5). The **Points ranking** applies the live §13.3
+  org-visible test to each ledger row's item (rows whose item no longer exists, or is
+  no longer org-visible, drop out of the ranking — not out of the person's total).
+- **Invariant 3.** No award exists for an anonymous item's author until self-reveal,
+  so nothing in the ledger, a badge's earned date, a level change or a notification
+  can correlate a person with an anonymous item. The replay at reveal backdates
+  `occurred_at` but writes the rows only then.
+- **Deactivated users** keep everything and show it (their profile still renders,
+  §13.5), with no ring on the greyed bubble. **Erasure (§3)** deletes the user's ledger
+  rows and badges and resets the three `users` columns.
+
+### §23.10 Platform switch (§14.3)
+
+A **Gamification** card on `/admin/settings` with one switch, **"Points, levels and
+badges"**, off by default. Audited as `settings.gamification_enabled_changed`
+(`after: { enabled }`). Off hides every surface in §23.6, the Points metric on
+`/leaderboard` and the two profile preferences; accrual continues (§23.8).
+
+### §23.11 Backfill
+
+A one-time **worker** job, run when `gamification_backfilled_at` is null, replays the
+existing history into the ledger under §23.2's rules: challenges and solutions
+(creation; first entry into `valid`, `solved` and `implemented`, from the
+`*.status_changed` audit rows, falling back to `first_valid_at` / `status_changed_at`),
+the challenge's **current** assignee for `assignment_solved` (the history of who held
+an assignment at the solve is not reconstructed), likes, and non-deleted comments.
+Anonymous items are skipped. Every row keeps its original `occurred_at`, and the daily
+caps apply per original day. Then it evaluates badges for every user, writes **no
+notifications**, stamps `gamification_backfilled_at`, and writes one
+`gamification.backfilled` audit row (actor system; `after: { users, awards, badges }` —
+counts only). The job is idempotent (award keys), so a crash mid-run is resumed by the
+next start.
+
+### §23.12 API, audit, tests
+
+- **API (§16).** `me` `GET` carries `gamification: { points, level, levelName,
+  progress } | null` (for the sidebar ring) and `newAchievements[]`;
+  `POST me/achievements-seen`. `profile` (own) carries the full block — points, level,
+  progress, leading, earned and locked badges; `profile/:userId` the public block, or
+  `null` when hidden or off; `PATCH profile` accepts `gamificationPublic` and
+  `notifyAchievements`. `users/:id/card` carries `gamification: { level, levelName,
+  progress, leading[], recentBadges[] } | null`. `leaderboards` accepts
+  `metric=points`, and every row carries `level` / `progress` (null when hidden or off).
+  No endpoint returns ledger rows or item ids.
+- **Audit (§15).** `settings.gamification_enabled_changed` and
+  `gamification.backfilled`. Awards, badges, level-ups, the opt-out and the
+  achievements-seen marker are **not** audited — the ledger is their own append-only
+  record.
+- **Tests.** Unit: the weights, caps (5 comments, 25 likes per UTC day, 0-point rows
+  beyond), the level curve and progress, tier evaluation including multi-tier jumps,
+  Full Circle, award-key idempotence. Integration: awards written in the triggering
+  transaction for create, transition (enforced and override), §8.3 auto-close, like,
+  comment; no award while anonymous and the replay on self-reveal with backdated
+  `occurred_at`; no deduction on unlike, revert, withdraw or §10.3 delete; the Points
+  ranking's org-visible test and opt-out exclusion; leader-badge ties; hidden users
+  masked in profile, card and leaderboard; erasure clears the rows; switch off hides
+  surfaces and suppresses event 13 while accrual continues; the backfill's idempotence
+  and silence. e2e: a solution implemented → the author's toast, the badge on their
+  profile and the inbox row.
