@@ -120,8 +120,9 @@ export function createGraphClient(env: GraphEnv): GraphClient {
         accountEnabled: j.accountEnabled === true,
         displayName: j.displayName ?? "",
         userPrincipalName: j.userPrincipalName ?? "",
-        mail: j.mail ?? null,
-        // Directory profile: absent, empty or whitespace-only → NULL (§3 — clearing upstream clears it).
+        // Mail and the directory profile: absent, empty or whitespace-only → NULL (§3 — clearing
+        // upstream clears it, and an empty string is never stored as an address).
+        mail: directoryAttr(j.mail),
         department: directoryAttr(j.department),
         jobTitle: directoryAttr(j.jobTitle),
         officeLocation: directoryAttr(j.officeLocation),

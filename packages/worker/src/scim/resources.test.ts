@@ -119,6 +119,7 @@ test("toScimUser: shape includes id, externalId, meta.resourceType, enterprise e
     job_title: "Principal Engineer",
     active: true,
     deactivated_at: null,
+    scrubbed_at: null,
     created_at: now,
     updated_at: now,
   });
@@ -142,6 +143,7 @@ test("toScimUser: no email -> empty emails array; no title -> omitted", () => {
     job_title: null,
     active: false,
     deactivated_at: null,
+    scrubbed_at: null,
     created_at: now,
     updated_at: now,
   });

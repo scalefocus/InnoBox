@@ -266,7 +266,7 @@ provisioning contract, including the Entra dialect quirks:
   > backstop. (b) `markGroupScimSynced` runs
   > `update groups set scim_synced = true where id = $1 and not scim_synced`, so
   > membership-only writes never bump `groups.updated_at`; always set
-  > `updated_at = now()`. (c) Scrubbed rows: GAP-12.
+  > `updated_at = now()`.
 - **PATCH quirks handled**: case-insensitive `op`; `active` deactivation in all three
   serializations (bool, string `"False"`, path-less `{value:{active:false}}`); the work
   e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less
@@ -308,8 +308,7 @@ provisioning contract, including the Entra dialect quirks:
      permission** (default properties of the user resource, covered by application
      `User.Read.All`). Because this pass visits *every* local active user, a user who
      belongs to no role-mapped group still gets a current directory profile. `mail` is
-     normalized the same way: an empty or blank value writes NULL. (Remaining work for
-     `mail`: GAP-13 in INNOBOX_SPEC.md §3.)
+     normalized the same way: an empty or blank value writes NULL.
   2. Every synced group ∪ every group referenced by `role_mappings` ∪ the bootstrap group →
      `GET /groups/{id}/members` → replace local membership (creating JIT-grade stubs for
      unknown members); group gone in Entra → drop group + memberships (audited).
