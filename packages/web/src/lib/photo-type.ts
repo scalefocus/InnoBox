@@ -13,3 +13,26 @@ export function photoContentType(bytes: Uint8Array): PhotoContentType {
   if (bytes.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((b, i) => bytes[i] === b)) return "image/png";
   return "image/jpeg";
 }
+
+const QUOTED_ETAG = /^(W\/)?"[^"]*"$/;
+
+/** The stored Graph photo etag as one well-formed entity tag (§3.1): a value that is already
+ *  quoted — strong `"…"`, or weak `W/"…"` — passes through unchanged; only an unquoted value is
+ *  wrapped in quotes (with any stray `"` dropped, which an entity tag cannot carry). Blank or
+ *  absent → undefined (no ETag header). */
+export function photoEtag(stored: string | null | undefined): string | undefined {
+  const value = stored?.trim();
+  if (!value) return undefined;
+  if (QUOTED_ETAG.test(value)) return value;
+  return `"${value.replace(/"/g, "")}"`;
+}
+
+/** Whether an `If-None-Match` header names `etag` — compared against the same form
+ *  `photoEtag` sends. Accepts a comma-separated list and the `*` wildcard. */
+export function ifNoneMatchHits(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  return header.split(",").some((t) => {
+    const tag = t.trim();
+    return tag === "*" || tag === etag;
+  });
+}

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.1",
+    date: "2026-10-12",
+    summary:
+      "Every link InnoBox sends, in e-mails, Teams cards and sign-in redirects, now comes from the one public address the server is configured with, and the e-mail status card recognises the SMTP fallback only when a sender address is set. Profile photos refresh more reliably. Operators: a production server without PUBLIC_BASE_URL now refuses to start.",
+  },
+  {
     version: "0.51.0",
     date: "2026-10-12",
     summary:
