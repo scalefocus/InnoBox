@@ -4,7 +4,8 @@
 // the end-user name for AI features (§22.8, `aiDisplayName`, "AI" by default), the §13.9
 // What's new marker + rollout boundary the AppShell update notice evaluates, and the open
 // feedback-survey offer (§13.10, `openSurvey` — null whenever the platform switch is off), so the
-// account menu's "Take the survey" needs no extra request.
+// account menu's "Take the survey" needs no extra request — and `selfSurvey` (null while the
+// switch is off, else `{ nextAt }`, null when an on-demand survey can start now).
 import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
@@ -12,7 +13,7 @@ import { getAiDisplayNameSetting } from "@/app/api/admin/ai/store";
 import { aiDisplayName } from "@innobox/shared/ai";
 import { APP_VERSION } from "@innobox/shared/version";
 import { markQuickStartSeen, markWhatsNewSeen } from "./store";
-import { readOpenSurvey } from "./survey/store";
+import { readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -21,10 +22,11 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
+    readSelfSurvey(pool, user.id),
   ]);
 
   const byRole = (role: "namespace_admin" | "committee"): string[] => [
@@ -55,6 +57,7 @@ async function handleGET(): Promise<Response> {
     whatsNewSinceDate: user.whatsNewSinceDate,
     aiDisplayName: aiDisplayName(aiName),
     openSurvey,
+    selfSurvey,
   });
 }
 

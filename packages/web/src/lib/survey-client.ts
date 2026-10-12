@@ -10,6 +10,8 @@ import type { SurveyFeature } from "@innobox/shared/survey";
 
 /** The profile asks the shell to reopen the open offer ("Take the survey"). */
 export const SURVEY_OPEN_EVENT = "innobox:survey-open";
+/** The profile asks the shell to start an on-demand survey ("Give feedback now"). */
+export const SURVEY_START_EVENT = "innobox:survey-start";
 /** The shell tells listeners (the profile) that the open offer or the opt-out changed. */
 export const SURVEY_CHANGED_EVENT = "innobox:survey-changed";
 
@@ -37,6 +39,11 @@ export function subscribeFeatureUse(fn: (feature: SurveyFeature) => void): () =>
 export function requestSurveyOpen(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new Event(SURVEY_OPEN_EVENT));
+}
+
+export function requestSurveyStart(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(SURVEY_START_EVENT));
 }
 
 export function announceSurveyChanged(): void {

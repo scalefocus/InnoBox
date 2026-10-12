@@ -25,11 +25,12 @@ test("dashboard: a signed-in member sees KPIs, quick links, and the account menu
   await expect(page.getByRole("menuitem", { name: "My profile" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "What's new" })).toBeVisible();
   await expect(page.getByRole("link", { name: /^v\d+\.\d+\.\d+$/ })).toBeVisible();
-  // Colophon attribution (§2.2): version, then both attribution lines, in that order.
-  await expect(page.locator(".colophon .colophon-sub")).toHaveText([
-    "Created by Scalefocus",
-    "Powered by the community",
-  ]);
+  // Colophon attribution (§2.2): version, then both attribution lines, in that order. Signed in,
+  // the community line may end in the §13.10 "· Have your say" link.
+  const colophonLines = page.locator(".colophon .colophon-sub");
+  await expect(colophonLines).toHaveCount(2);
+  await expect(colophonLines.first()).toHaveText("Created by Scalefocus");
+  await expect(colophonLines.nth(1)).toContainText("Powered by the community");
 
   await ctx.close();
 });

@@ -33,13 +33,6 @@ export const UPCOMING: UpcomingEntry[] = [
       "Earn points when your challenges and solutions move forward, level up, and collect badges for your milestones. You can choose whether others see them.",
     audience: "everyone",
   },
-  {
-    ids: ["GAP-63"],
-    title: "Give feedback any time",
-    teaser:
-      "Open the feedback survey yourself whenever you have something to say — from your profile, the account menu or the sidebar — and tell us about the part of InnoBox you choose.",
-    audience: "everyone",
-  },
 ];
 
 /** True when an entry applies to a viewer with these roles. */

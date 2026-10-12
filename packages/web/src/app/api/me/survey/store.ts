@@ -21,6 +21,8 @@ import {
   offerPayload,
   parseStoredOffer,
   rollSurvey,
+  selfSurveyGate,
+  selfSurveyNextAt,
   surveySegment,
   validateSurveySubmission,
   type StoredSurveyOffer,
@@ -139,6 +141,15 @@ export async function readOpenSurvey(db: Db, userId: string, now: Date = new Dat
   return offerPayload(live.offer, live.shownAt);
 }
 
+/** `selfSurvey` for the `me` resource: null while the switch is off, else `{ nextAt }` — the end of
+ *  the on-demand cooldown, or null when a survey can start now. */
+export async function readSelfSurvey(db: Db, userId: string, now: Date = new Date()): Promise<{ nextAt: string | null } | null> {
+  if (!(await getSurveyEnabled(db))) return null;
+  const row = await loadState(db, userId);
+  if (!row) return null;
+  return { nextAt: selfSurveyNextAt(row.survey_self_shown_at, now)?.toISOString() ?? null };
+}
+
 // ── The funnel (aggregate only) ───────────────────────────────────────────────────────────
 
 const DAILY_COLUMNS = ["shown", "closed", "submitted", "submitted_from_menu", "shown_self", "submitted_self"] as const;
@@ -247,6 +258,45 @@ export async function checkSurveyFallback(
   const used = rows.map((r) => r.feature).filter(isSurveyFeature);
   const feature = used.length > 0 ? used[Math.min(used.length - 1, Math.floor(opts.rng() * used.length))]! : null;
   return { survey: await openRandomOffer(pool, userId, "visit", feature, { ...opts, fallback: true }) };
+}
+
+// ── On-demand start ("Give feedback", "Have your say") ──────────────────────────────────────
+
+export type StartSurveyResult =
+  | { status: "ok"; survey: SurveyOfferPayload; created: boolean }
+  | { status: "surveys_off" }
+  | { status: "unavailable" }
+  | { status: "cooldown"; nextAt: string };
+
+/**
+ * `POST /api/me/survey/start` (§13.10). An open offer — random or on-demand — is returned as is
+ * (`created: false`, no stamp, nothing counted). Otherwise, in one transaction with the user row
+ * locked so concurrent starts serialize, the on-demand gate is re-checked; on success the cooldown
+ * is stamped ON OPEN, the `self` offer stored (no feature — the user picks one in the card) and
+ * `shown_self` bumped. Bypasses the roll, the floor, the grace and the random opt-out.
+ */
+export async function startSelfSurvey(pool: Pool, userId: string, opts: { rng: () => number; now?: Date }): Promise<StartSurveyResult> {
+  const now = opts.now ?? new Date();
+  return inTransaction(pool, async (client) => {
+    const switchOn = await getSurveyEnabled(client);
+    if (!switchOn) return { status: "surveys_off" };
+    const row = await loadState(client, userId, true);
+    if (!row) return { status: "unavailable" };
+    const live = liveOffer(row, now);
+    if (live) return { status: "ok", survey: offerPayload(live.offer, live.shownAt), created: false };
+    await clearIfDead(client, userId, row, now);
+
+    const gate = selfSurveyGate({ active: row.active, scrubbed: row.scrubbed_at !== null, selfShownAt: row.survey_self_shown_at }, switchOn, now);
+    if (!gate.ok) return gate.reason === "cooldown" ? { status: "cooldown", nextAt: gate.nextAt.toISOString() } : { status: gate.reason };
+
+    const offer = composeOffer("self", null, opts.rng);
+    const { rows } = await client.query<{ survey_self_shown_at: Date }>(
+      `update users set survey_self_shown_at = now(), survey_offer = $2::jsonb where id = $1 returning survey_self_shown_at`,
+      [userId, JSON.stringify(offer)],
+    );
+    await bumpDaily(client, ["shown_self"]);
+    return { status: "ok", survey: offerPayload(offer, rows[0]!.survey_self_shown_at), created: true };
+  });
 }
 
 // ── Close ─────────────────────────────────────────────────────────────────────────────────

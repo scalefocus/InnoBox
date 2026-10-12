@@ -158,3 +158,78 @@ test("admin: the Survey results card shows the funnel; its switch works while co
   await member.close();
   await ctx.close();
 });
+
+// ── On-demand ("Give feedback", "Have your say") ──────────────────────────────────────────
+// These personas sign in WITHOUT the survey flag: the on-demand path bypasses the random opt-out.
+
+test("Give feedback now opens the on-demand card; a picked feature adds its questions; then the cooldown", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const ctx = await browser.newContext();
+  await signIn(ctx, { name: `E2E Give Feedback ${stamp}` });
+  const page = await ctx.newPage();
+
+  await page.goto("/profile");
+  const give = page.getByTestId("profile-give-feedback");
+  await expect(give).toBeEnabled();
+  await expect(page.getByText("Tell us what you think, any time. Once a week at most.")).toBeVisible();
+  await give.click();
+
+  const card = page.getByTestId("survey-card");
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("button", { name: "Don't ask me again" })).toHaveCount(0);
+  await expect(card.getByText("About search")).toHaveCount(0);
+  await card.getByTestId("survey-topic").selectOption("search");
+  await expect(card.getByText("About search")).toBeVisible();
+  await card.getByRole("radiogroup", { name: "How easy was search to use?" }).getByRole("radio", { name: "5 stars" }).click();
+  await card.getByRole("button", { name: "Submit" }).click();
+  await expect(card.getByText("Thanks — your feedback helps shape InnoBox.")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByTestId("profile-give-feedback")).toBeDisabled();
+  await expect(page.getByTestId("profile-give-feedback-help")).toContainText("You can share feedback again on");
+  // The menu item and the colophon link are hidden during the cooldown too.
+  await page.locator(".user-trigger").click();
+  await expect(page.getByRole("menuitem", { name: "My profile" })).toBeVisible();
+  await expect(page.getByTestId("menu-give-feedback")).toHaveCount(0);
+  await expect(page.getByTestId("colophon-have-your-say")).toHaveCount(0);
+  await ctx.close();
+});
+
+test("the colophon's Have your say: absent signed out; opens the card; survives a close and reopens the same offer", async ({ browser }) => {
+  const anon = await browser.newContext();
+  const anonPage = await anon.newPage();
+  await anonPage.goto("/");
+  await expect(anonPage.locator(".colophon")).toBeVisible();
+  await expect(anonPage.getByTestId("colophon-have-your-say")).toHaveCount(0);
+  await expect(anonPage.locator(".colophon .colophon-sub").nth(1)).toHaveText("Powered by the community");
+  await anon.close();
+
+  const stamp = Date.now().toString(36);
+  const ctx = await browser.newContext();
+  await signIn(ctx, { name: `E2E Have Your Say ${stamp}` });
+  const page = await ctx.newPage();
+  await page.goto("/");
+  // The account menu offers it too, above Sign out.
+  await page.locator(".user-trigger").click();
+  await expect(page.getByTestId("menu-give-feedback")).toBeVisible();
+  await page.locator(".user-trigger").click();
+
+  const link = page.getByTestId("colophon-have-your-say");
+  await expect(link).toBeVisible();
+  await link.click();
+  const card = page.getByTestId("survey-card");
+  await expect(card).toBeVisible();
+  await card.getByTestId("survey-topic").selectOption("comment");
+  await card.getByRole("button", { name: "Close survey" }).click();
+  await expect(card).toBeHidden();
+
+  // The offer stays open: the link stays, and reopens it blank (the picked feature is not kept).
+  await expect(link).toBeVisible();
+  await link.click();
+  await expect(card).toBeVisible();
+  await expect(card.getByTestId("survey-topic")).toHaveValue("");
+  await page.locator(".user-trigger").click();
+  await expect(page.getByTestId("menu-take-survey")).toBeVisible();
+  await expect(page.getByTestId("menu-give-feedback")).toHaveCount(0);
+  await ctx.close();
+});

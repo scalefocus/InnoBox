@@ -23,7 +23,7 @@ import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
 import { SurveyCard } from "./SurveyCard";
 import { isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
-import { SURVEY_OPEN_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
+import { SURVEY_OPEN_EVENT, SURVEY_START_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
 import { WHATS_NEW_SEEN_EVENT, WhatsNewNotice } from "./WhatsNewNotice";
 import { whatsNewAction } from "../lib/whats-new";
 
@@ -38,6 +38,8 @@ interface MeResponse {
   whatsNewSinceDate: string | null;
   /** §13.10 the open survey offer (null when none, or while the platform switch is off). */
   openSurvey?: SurveyOfferPayload | null;
+  /** §13.10 on-demand survey: null while the switch is off, else the cooldown's end (null = now). */
+  selfSurvey?: { nextAt: string | null } | null;
 }
 
 /** The mobile layout's breakpoint — where the nav becomes a drawer and the bell a full sheet. */
@@ -91,6 +93,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
   // §13.9 → §13.10: the update notice was dismissed (or acknowledged on /whats-new) this load.
   const [whatsNewClosed, setWhatsNewClosed] = useState(false);
+  // §13.10: an on-demand survey opened by a click hides an on-screen notice WITHOUT stamping it.
+  const [noticeSuppressed, setNoticeSuppressed] = useState(false);
 
   // Navigating closes the mobile drawer.
   useEffect(() => setDrawerOpen(false), [pathname]);
@@ -258,14 +262,50 @@ export function AppShell({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, [shellReady, quickStartGate, me, openCard, refreshSurvey]);
 
-  // "Take the survey" from the profile's Feedback section.
-  useEffect(() => {
-    const onOpen = () => {
-      if (survey) openCard(survey, "menu");
-    };
-    window.addEventListener(SURVEY_OPEN_EVENT, onOpen);
-    return () => window.removeEventListener(SURVEY_OPEN_EVENT, onOpen);
+  // "Take the survey" from the profile's Feedback section. A deliberate click overrides canShow,
+  // so an on-screen What's new notice steps aside (unstamped) for the rest of this load.
+  const reopenSurvey = useCallback(() => {
+    if (!survey) return;
+    setNoticeSuppressed(true);
+    openCard(survey, "menu");
   }, [survey, openCard]);
+  useEffect(() => {
+    window.addEventListener(SURVEY_OPEN_EVENT, reopenSurvey);
+    return () => window.removeEventListener(SURVEY_OPEN_EVENT, reopenSurvey);
+  }, [reopenSurvey]);
+
+  // The on-demand survey ("Give feedback", "Have your say"): an open offer is returned as is and
+  // reopens like Take the survey; a new one opens a `self` card. Bypasses canShow (the user asked).
+  const startSurvey = useCallback(async () => {
+    setDrawerOpen(false);
+    try {
+      const res = await fetch("/api/me/survey/start", { method: "POST" });
+      const json = (await res.json().catch(() => ({}))) as { survey?: SurveyOfferPayload; created?: boolean; error?: string };
+      if (res.ok && json.survey) {
+        setNoticeSuppressed(true);
+        openCard(json.survey, json.created ? "popup" : "menu");
+      } else if (json.error === "cooldown") {
+        showToast("You've shared feedback recently — you can again in a few days.");
+      } else {
+        showToast("Feedback isn't available right now.");
+      }
+    } catch {
+      showToast("Feedback isn't available right now.");
+    }
+    refreshSurvey();
+  }, [openCard, refreshSurvey, showToast]);
+  useEffect(() => {
+    const onStart = () => void startSurvey();
+    window.addEventListener(SURVEY_START_EVENT, onStart);
+    return () => window.removeEventListener(SURVEY_START_EVENT, onStart);
+  }, [startSurvey]);
+
+  // Where the on-demand entry points show (§13.10): signed in, past Quick start, switch on; the menu
+  // item and the profile button only outside the cooldown and with no offer open; the colophon link
+  // also while an offer is open (it then reopens it).
+  const selfSurvey = me?.selfSurvey ?? null;
+  const canStartSelf = selfSurvey !== null && selfSurvey.nextAt === null && survey === null;
+  const showHaveYourSay = shellReady && !quickStartGate && me?.quickStartSeenAt != null && selfSurvey !== null && (survey !== null || selfSurvey.nextAt === null);
 
   // ✕ / Escape: "not now". Optimistic — a failed call is neither retried nor surfaced.
   const closeCard = useCallback(() => {
@@ -445,14 +485,37 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
 
         <div className="sidebar-foot">
-          {authed && <AccountMenu me={me} survey={survey} onTakeSurvey={() => survey && openCard(survey, "menu")} />}
+          {authed && <AccountMenu me={me} survey={survey} onTakeSurvey={reopenSurvey} canGiveFeedback={canStartSelf} onGiveFeedback={() => void startSurvey()} />}
           {status === "unauthenticated" && <SignInButton />}
           <div className="colophon">
             <span className="colophon-version">
               <Link href="/whats-new">v{APP_VERSION}</Link>
             </span>
             <span className="colophon-sub">Created by Scalefocus</span>
-            <span className="colophon-sub">Powered by the community</span>
+            <span className="colophon-sub">
+              Powered by the community
+              {showHaveYourSay && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    className="colophon-link"
+                    data-testid="colophon-have-your-say"
+                    onClick={() => {
+                      // With an offer open it reopens that offer; otherwise it starts one.
+                      if (survey) {
+                        setDrawerOpen(false);
+                        reopenSurvey();
+                      } else {
+                        void startSurvey();
+                      }
+                    }}
+                  >
+                    Have your say
+                  </button>
+                </>
+              )}
+            </span>
           </div>
         </div>
       </aside>
@@ -482,7 +545,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       )}
       {/* §13.9 update notice — portaled to <body>; renders nothing unless a release is unacknowledged. */}
-      {authed && <WhatsNewNotice me={me} pathname={pathname} onClosed={() => setWhatsNewClosed(true)} />}
+      {authed && <WhatsNewNotice me={me} pathname={pathname} onClosed={() => setWhatsNewClosed(true)} suppressed={noticeSuppressed} />}
     </div>
   );
 }
@@ -494,11 +557,17 @@ function AccountMenu({
   me,
   survey,
   onTakeSurvey,
+  canGiveFeedback,
+  onGiveFeedback,
 }: {
   me: { user: { id: string; displayName: string; email: string | null } } | null;
   /** §13.10: while an offer is open, "Take the survey" leads the menu. */
   survey: SurveyOfferPayload | null;
   onTakeSurvey: () => void;
+  /** §13.10: "Give feedback" (above Sign out) — hidden in the cooldown, with an offer open, or
+   *  while the switch is off. */
+  canGiveFeedback: boolean;
+  onGiveFeedback: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -553,6 +622,21 @@ function AccountMenu({
             <SparkIcon />
             What&apos;s new
           </Link>
+          {canGiveFeedback && (
+            <button
+              type="button"
+              className="user-menu-item"
+              role="menuitem"
+              data-testid="menu-give-feedback"
+              onClick={() => {
+                setOpen(false);
+                onGiveFeedback();
+              }}
+            >
+              <ChatIcon />
+              Give feedback
+            </button>
+          )}
           <button
             type="button"
             className="user-menu-item"
@@ -726,6 +810,15 @@ function StarIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3.5l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16.5l-5.1 2.7 1-5.7-4.1-4 5.7-.8L12 3.5z" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" />
+      <path d="M8.5 9.5h7M8.5 12.5h4.5" />
     </svg>
   );
 }
