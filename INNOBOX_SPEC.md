@@ -1884,11 +1884,6 @@ never deleted, by anyone, for any reason (invariant 5).
     `not_editable` (the parent has left its author-edit window); and `too_many` (the
     §14.3 cap was reached in the meantime — whether found before reassembly or by the
     locked re-count after it, in which case the reassembled object is deleted).
-
-    > **⚠ GAP-26 · code fix:** in `completeChunkedUpload` (`api/attachments/store.ts`),
-    > the `abortAnd` paths for `not_found` / `forbidden` / `not_editable` / `too_many`,
-    > and the post-assembly `too_many` refusal (`dropAssembled`), drop the session
-    > without an audit row. Audit each with the reason above.
   - **Failure** — a failed part is **retried by the browser** when the failure is a
     network error, a 5xx or a 429: up to **3** attempts in all for that part, waiting
     **1 s** before the second and **2 s** before the third (re-sending a part number
@@ -1898,11 +1893,6 @@ never deleted, by anyone, for any reason (invariant 5).
     (`POST …/abort`, or the GC) runs `AbortMultipartUpload`, frees the orphaned MinIO parts,
     drops the session row, and audits `attachment.upload_aborted`. No partial object is ever
     exposed (no `attachments` row exists until complete).
-
-    > **⚠ GAP-27 · code fix:** `uploadFileInChunks` in `web/src/lib/chunked-upload.ts` aborts
-    > the whole session on the first failed part (its header comment calls this the
-    > approved design; this spec supersedes it). Retry each part as above before
-    > aborting, with unit tests for the retry classification.
 - **Binding at submit** — `POST /api/challenges` and the solution-create endpoint accept
   an optional `draftKey`. Inside the create transaction the server takes the caller's
   staged rows for that key (`uploaded_by = caller`, `parent_id is null`, `removed_at is
@@ -1922,14 +1912,6 @@ never deleted, by anyone, for any reason (invariant 5).
   its message: an unclean staged row → `code: "attachments_not_clean"`; more staged rows
   than the cap allows → `code: "attachments_over_limit"` (rather than binding some and
   silently dropping the rest).
-
-  > **⚠ GAP-28 · code fix:** `hasUncleanStagedAttachments` (`api/attachments/store.ts`)
-  > runs on the pool before `inTransaction` in `createChallenge`/`createSolution`
-  > (`api/challenges/store.ts`), so a row staged in between can bind while `pending`;
-  > `bindStagedAttachments` skips rows over the cap (`limit $5` = `maxPerItem`) instead
-  > of refusing; and the 409s in `api/challenges/route.ts` and
-  > `api/challenges/[number]/solutions/route.ts` carry no `code`. Lock the staged rows
-  > `FOR UPDATE` inside the transaction, run both checks there, and return the two codes.
 - **Author removal** — `DELETE /api/attachments/:id`: allowed **only** to the
   uploader (who is the parent's author) and **only while the parent is in an
   author-edit window** (§10.1); **unbound staged rows are removable by their uploader at
@@ -2032,9 +2014,6 @@ never deleted, by anyone, for any reason (invariant 5).
   scanned) the control is labelled **Remove**. While a file is **Scanning…** the
   control polls its status so the phase advances without a page reload, and the
   progress bar carries `role="progressbar"` with its value.
-
-  > **⚠ GAP-30 · code fix:** `components/AttachmentControl.tsx` labels the in-flight
-  > row's cancel button "Remove"; label it "Cancel".
 
 ---
 

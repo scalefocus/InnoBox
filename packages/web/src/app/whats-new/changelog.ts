@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.47.1",
+    date: "2026-10-12",
+    summary:
+      "Attachment uploads are sturdier. A large file no longer fails because of one dropped piece: each piece is retried a couple of times before the upload gives up. Submitting now reliably waits for every attached file to finish scanning, and a submission with too many files is refused with a clear message instead of quietly leaving some behind. A file that is still uploading now offers Cancel instead of Remove.",
+  },
+  {
     version: "0.47.0",
     date: "2026-10-12",
     summary:

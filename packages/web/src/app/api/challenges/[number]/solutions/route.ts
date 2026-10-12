@@ -44,7 +44,12 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     case "not_valid_status":
       return Response.json({ error: "solutions can only be proposed while the challenge is valid" }, { status: 409 });
     case "attachments_not_clean":
-      return Response.json({ error: "wait for all attachments to finish scanning (or remove any that failed) before submitting" }, { status: 409 });
+      return Response.json(
+        { error: "wait for all attachments to finish scanning (or remove any that failed) before submitting", code: "attachments_not_clean" },
+        { status: 409 },
+      );
+    case "attachments_over_limit":
+      return Response.json({ error: "too many attachments — remove some before submitting", code: "attachments_over_limit" }, { status: 409 });
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
   }
