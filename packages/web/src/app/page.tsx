@@ -173,6 +173,7 @@ function DevSignInPanel() {
   const [email, setEmail] = useState("dev@innobox.innovate");
   const [admin, setAdmin] = useState("1");
   const [freshOnboarding, setFreshOnboarding] = useState("0");
+  const [survey, setSurvey] = useState("0");
   return (
     <form
       className="card card-pad reveal"
@@ -180,7 +181,7 @@ function DevSignInPanel() {
       onSubmit={(e) => {
         e.preventDefault();
         const callbackUrl = new URLSearchParams(window.location.search).get("callbackUrl") || "/";
-        void signIn("dev", { name, email, admin, freshOnboarding, callbackUrl });
+        void signIn("dev", { name, email, admin, freshOnboarding, survey, callbackUrl });
       }}
     >
       <div className="sub mono">DEVELOPER SIGN-IN</div>
@@ -213,6 +214,12 @@ function DevSignInPanel() {
           value={freshOnboarding}
           onChange={(e) => setFreshOnboarding(e.target.value)}
         />
+      </div>
+      <div>
+        <label style={devLabelStyle} htmlFor="dev-survey">
+          Feedback survey (&quot;1&quot; = eligible, every roll wins)
+        </label>
+        <input id="dev-survey" className="field" style={{ width: "100%" }} value={survey} onChange={(e) => setSurvey(e.target.value)} />
       </div>
       <button type="submit" className="btn btn-primary" style={{ justifyContent: "center" }}>
         Dev sign-in

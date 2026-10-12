@@ -10,9 +10,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signIn, signOut, useSession } from "next-auth/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { APP_VERSION } from "@innobox/shared/version";
-import { cachedGet } from "../lib/ui";
+import { cachedGet, invalidateApi } from "../lib/ui";
 import { isChallengesSurface, leavesChallengesSurface } from "../lib/challenges-surface";
 import { QUICK_START_PATH, shouldRedirectToQuickStart } from "../lib/quick-start";
 import { ThemeToggle } from "./ThemeToggle";
@@ -21,6 +21,9 @@ import { SystemBanner } from "./SystemBanner";
 import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
+import { SurveyCard } from "./SurveyCard";
+import { isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
+import { SURVEY_OPEN_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
 
 // Shape of the §16 `me` resource (packages/web/src/app/api/me/route.ts) — only the fields
 // this shell needs (identity for the account menu, the admin role hints for nav gating).
@@ -28,7 +31,12 @@ interface MeResponse {
   user: { id: string; displayName: string; email: string | null; userName: string };
   roles: { platformAdmin: boolean; namespaceAdmin: string[] };
   quickStartSeenAt: string | null;
+  /** §13.10 the open survey offer (null when none, or while the platform switch is off). */
+  openSurvey?: SurveyOfferPayload | null;
 }
+
+/** The mobile layout's breakpoint — where the nav becomes a drawer and the bell a full sheet. */
+const MOBILE_QUERY = "(max-width: 880px)";
 
 interface NavItem {
   href: string;
@@ -69,6 +77,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   // §13.1 "new since your last visit" — the count behind the Challenges nav bubble.
   const [newChallenges, setNewChallenges] = useState(0);
   const previousPath = useRef<string | null>(null);
+  // §13.10 feedback survey: the open offer, the card (and how it was opened), the bell's open
+  // state (its mobile sheet blocks the card), and the shell's toast.
+  const [survey, setSurvey] = useState<SurveyOfferPayload | null>(null);
+  const [card, setCard] = useState<{ via: SurveyVia; key: number } | null>(null);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
 
   // Navigating closes the mobile drawer.
   useEffect(() => setDrawerOpen(false), [pathname]);
@@ -81,7 +96,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     let live = true;
     cachedGet<MeResponse>("/api/me")
       .then((res) => {
-        if (live) setMe(res);
+        if (!live) return;
+        setMe(res);
+        setSurvey(res.openSurvey ?? null);
       })
       .catch(() => {
         /* keep the neutral look on a transient error */
@@ -125,6 +142,140 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [quickStartPending, router]);
 
   const isAdmin = Boolean(me?.roles.platformAdmin || (me?.roles.namespaceAdmin?.length ?? 0) > 0);
+
+  // ── §13.10 feedback survey ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  const mobileOverlayOpen = isMobile && (drawerOpen || bellOpen);
+  // The §13.9 What's new decision: the update notice is not built yet, so nothing is ever due —
+  // but the decision is "made" only once `me` has loaded, which is what `shellReady` waits for.
+  const whatsNewDue = false;
+  const shellReady = authed && me !== null;
+  const quickStartGate = quickStartPending || pathname === QUICK_START_PATH;
+  const canShow = surveyCanShow({ shellReady, whatsNewDue, quickStartGate, cardOpen: card !== null, mobileOverlayOpen });
+  // Async handlers read the latest canShow without re-subscribing.
+  const canShowRef = useRef(canShow);
+  useEffect(() => {
+    canShowRef.current = canShow;
+  }, [canShow]);
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast((current) => (current === message ? null : current)), 4000);
+  }, []);
+
+  /** Re-reads `me` after start, close, submit and opt-out, so the menu item follows the offer. */
+  const refreshSurvey = useCallback(() => {
+    invalidateApi("/api/me");
+    cachedGet<MeResponse>("/api/me")
+      .then((res) => {
+        setMe(res);
+        setSurvey(res.openSurvey ?? null);
+      })
+      .catch(() => {});
+    announceSurveyChanged();
+  }, []);
+
+  const openCard = useCallback((offer: SurveyOfferPayload, via: SurveyVia) => {
+    setSurvey(offer);
+    setCard({ via, key: Date.now() }); // a fresh key: a reopened card starts blank
+  }, []);
+
+  // First-use reports: pages dispatch them after a successful action; the shell queues them until
+  // it has made its What's new decision (page-view features fire on load), then sends each with
+  // the real canShow. Each tab reports a feature at most once per session.
+  const featureQueue = useRef<SurveyFeature[]>([]);
+  const [queued, setQueued] = useState(0);
+  useEffect(() => {
+    if (!authed) return;
+    return subscribeFeatureUse((feature) => {
+      if (!isSurveyFeature(feature) || !claimFeatureReport(feature)) return;
+      featureQueue.current.push(feature);
+      setQueued((n) => n + 1);
+    });
+  }, [authed]);
+  useEffect(() => {
+    if (!shellReady || featureQueue.current.length === 0) return;
+    for (const feature of featureQueue.current.splice(0)) {
+      fetch("/api/me/features/used", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ feature, canShow: canShowRef.current }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json: { survey?: SurveyOfferPayload | null } | null) => {
+          if (json?.survey) {
+            openCard(json.survey, "popup");
+            refreshSurvey();
+          }
+        })
+        .catch(() => {});
+    }
+  }, [shellReady, queued, openCard, refreshSurvey]);
+
+  // The 90-day fallback: once per full page load, after the What's new decision, only when the
+  // survey could show and no offer is open.
+  const checkedFallback = useRef(false);
+  useEffect(() => {
+    if (!shellReady || quickStartGate || checkedFallback.current) return;
+    checkedFallback.current = true;
+    if (!canShowRef.current || me?.openSurvey) return;
+    fetch("/api/me/survey/check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ canShow: true }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { survey?: SurveyOfferPayload | null } | null) => {
+        if (json?.survey) {
+          openCard(json.survey, "popup");
+          refreshSurvey();
+        }
+      })
+      .catch(() => {});
+  }, [shellReady, quickStartGate, me, openCard, refreshSurvey]);
+
+  // "Take the survey" from the profile's Feedback section.
+  useEffect(() => {
+    const onOpen = () => {
+      if (survey) openCard(survey, "menu");
+    };
+    window.addEventListener(SURVEY_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(SURVEY_OPEN_EVENT, onOpen);
+  }, [survey, openCard]);
+
+  // ✕ / Escape: "not now". Optimistic — a failed call is neither retried nor surfaced.
+  const closeCard = useCallback(() => {
+    setCard(null);
+    fetch("/api/me/survey/close", { method: "POST" }).catch(() => {});
+  }, []);
+
+  // Submitted, or expired meanwhile: the offer is gone.
+  const finishCard = useCallback(() => {
+    setCard(null);
+    setSurvey(null);
+    refreshSurvey();
+  }, [refreshSurvey]);
+
+  // "Don't ask me again": the profile opt-out, then the toast.
+  const optOut = useCallback(async () => {
+    const res = await fetch("/api/profile", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ surveysEnabled: false }),
+    });
+    if (!res.ok) throw new Error("opt-out failed");
+    setCard(null);
+    setSurvey(null);
+    refreshSurvey();
+    showToast("Got it — no more surveys. You can turn them back on in your profile.");
+  }, [refreshSurvey, showToast]);
 
   // §14.4: poll the unseen-actionable count while an admin is signed in, on the same 30s cadence
   // as the notification bell. The triage-queue page dispatches `innobox:triage-seen` after it
@@ -277,7 +428,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
 
         <div className="sidebar-foot">
-          {authed && <AccountMenu me={me} />}
+          {authed && <AccountMenu me={me} survey={survey} onTakeSurvey={() => survey && openCard(survey, "menu")} />}
           {status === "unauthenticated" && <SignInButton />}
           <div className="colophon">
             <span className="colophon-version">
@@ -299,11 +450,20 @@ export function AppShell({ children }: { children: ReactNode }) {
           {authed && <TopbarSearch ref={searchRef} />}
           <div className="topbar-spacer" />
           {authed && <SystemBanner banner={banner} />}
-          {authed && <NotificationBell onBanner={setBanner} />}
+          {authed && <NotificationBell onBanner={setBanner} onOpenChange={setBellOpen} />}
           <ThemeToggle />
         </header>
         <main className="content">{quickStartPending ? null : children}</main>
       </div>
+
+      {authed && survey && card && (
+        <SurveyCard key={card.key} offer={survey} via={card.via} hidden={mobileOverlayOpen} onClose={closeCard} onDone={finishCard} onOptOut={optOut} />
+      )}
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
@@ -311,7 +471,16 @@ export function AppShell({ children }: { children: ReactNode }) {
 /** Bottom-left account menu: the signed-in user (name, avatar bubble) with What's new
  *  and Sign out. Falls back to the Phase 0 "Account" look while `me` hasn't loaded yet
  *  (or never will, e.g. a fetch error) — the person icon and generic label. */
-function AccountMenu({ me }: { me: { user: { id: string; displayName: string; email: string | null } } | null }) {
+function AccountMenu({
+  me,
+  survey,
+  onTakeSurvey,
+}: {
+  me: { user: { id: string; displayName: string; email: string | null } } | null;
+  /** §13.10: while an offer is open, "Take the survey" leads the menu. */
+  survey: SurveyOfferPayload | null;
+  onTakeSurvey: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -337,6 +506,22 @@ function AccountMenu({ me }: { me: { user: { id: string; displayName: string; em
     <div className="user-foot" ref={rootRef}>
       {open && (
         <div className="user-menu menu-pop" role="menu">
+          {survey && (
+            <button
+              type="button"
+              className="user-menu-item"
+              role="menuitem"
+              data-testid="menu-take-survey"
+              onClick={() => {
+                setOpen(false);
+                onTakeSurvey();
+              }}
+            >
+              <StarIcon />
+              Take the survey
+              <span className="menu-dot" aria-hidden="true" />
+            </button>
+          )}
           <Link className="user-menu-item" role="menuitem" href="/profile" onClick={() => setOpen(false)}>
             <PersonIcon />
             My profile
@@ -514,6 +699,14 @@ function SparkIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3.5l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16.5l-5.1 2.7 1-5.7-4.1-4 5.7-.8L12 3.5z" />
     </svg>
   );
 }

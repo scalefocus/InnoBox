@@ -5,7 +5,7 @@
 // is operational telemetry, not the audit log.)
 import { resolveRateLimitMultiplier } from "@innobox/shared";
 
-export type RateLimitBucket = "create" | "comment" | "upload" | "search" | "mutation" | "csp-report";
+export type RateLimitBucket = "create" | "comment" | "upload" | "search" | "mutation" | "survey" | "csp-report";
 
 /** §2.4 limits: `limit` requests per `windowMs`, refilled continuously. */
 export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: number }> = {
@@ -14,6 +14,7 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   upload: { limit: 60, windowMs: 60 * 60 * 1000 }, // single-shot or chunked initiate
   search: { limit: 120, windowMs: 60 * 1000 }, // search, autocomplete, the §6.1 similarity check
   mutation: { limit: 120, windowMs: 60 * 1000 }, // every other state-changing request
+  survey: { limit: 10, windowMs: 60 * 1000 }, // survey start + submit (§13.10)
   // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
   // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
   "csp-report": { limit: 120, windowMs: 60 * 1000 },
@@ -73,11 +74,18 @@ function pruneFull(now: number, multiplier: number): void {
   }
 }
 
-/** For route handlers: null when allowed, else the 429 response to return. */
-export function rateLimit(userId: string, bucket: RateLimitBucket): Response | null {
+/** The warning line for a refused request. `anonymous` drops the user id: the survey routes'
+ *  refusals must not put a named, exact-time line next to a date-only response (§13.10). */
+export function rateLimitWarning(userId: string, bucket: RateLimitBucket, anonymous = false): Record<string, unknown> {
+  return anonymous ? { level: "warn", msg: "rate limit exceeded", bucket } : { level: "warn", msg: "rate limit exceeded", userId, bucket };
+}
+
+/** For route handlers: null when allowed, else the 429 response to return. Pass
+ *  `{ anonymous: true }` from the survey routes so the warning carries no user id. */
+export function rateLimit(userId: string, bucket: RateLimitBucket, opts: { anonymous?: boolean } = {}): Response | null {
   const decision = takeToken(userId, bucket);
   if (decision.ok) return null;
-  console.warn(JSON.stringify({ level: "warn", msg: "rate limit exceeded", userId, bucket }));
+  console.warn(JSON.stringify(rateLimitWarning(userId, bucket, opts.anonymous)));
   return Response.json(
     { error: "Too many requests — try again shortly." },
     { status: 429, headers: { "Retry-After": String(decision.retryAfterSeconds) } },

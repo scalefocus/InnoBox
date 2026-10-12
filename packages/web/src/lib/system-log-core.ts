@@ -40,6 +40,12 @@ export interface SystemLogDeps {
 
 type Handler<A extends unknown[]> = (...args: A) => Response | Promise<Response>;
 
+export interface SystemLogOptions {
+  /** Record the row with NO user id and NO actor snapshot — the survey routes (§13.10): a named,
+   *  exact-time row next to a date-only response would identify it. The session is not even read. */
+  anonymousActor?: boolean;
+}
+
 /** The user-facing 500 body for an unhandled throw. Deliberately generic — the detail is in the
  *  system log and stdout, never in the response. */
 export const INTERNAL_ERROR_MESSAGE = "something went wrong on our side — please try again";
@@ -66,7 +72,15 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? ((line: Record<string, unknown>) => console.error(JSON.stringify(line)));
 
-  async function capture(template: string, req: Request | null, status: number, message: string, errorCode: string | null, startedAt: number): Promise<void> {
+  async function capture(
+    template: string,
+    req: Request | null,
+    status: number,
+    message: string,
+    errorCode: string | null,
+    startedAt: number,
+    opts: SystemLogOptions,
+  ): Promise<void> {
     const method = req?.method ?? "GET";
     const concretePath = req ? pathWithoutQuery(new URL(req.url).pathname) : template;
     let path = concretePath;
@@ -81,10 +95,12 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
       if (mask) path = template;
     }
     let actor: ActorSnapshot | null = null;
-    try {
-      actor = await deps.resolveActor();
-    } catch {
-      actor = null;
+    if (!opts.anonymousActor) {
+      try {
+        actor = await deps.resolveActor();
+      } catch {
+        actor = null;
+      }
     }
     await deps.record({
       status,
@@ -102,7 +118,11 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
     });
   }
 
-  return function withSystemLog<A extends unknown[]>(template: string, handler: Handler<A>): (...args: A) => Promise<Response> {
+  return function withSystemLog<A extends unknown[]>(
+    template: string,
+    handler: Handler<A>,
+    opts: SystemLogOptions = {},
+  ): (...args: A) => Promise<Response> {
     return async (...args: A): Promise<Response> => {
       const startedAt = now();
       const req = requestOf(args);
@@ -112,13 +132,13 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         log({ level: "error", msg: "unhandled route error", route: template, error: error.message, stack: error.stack });
-        void capture(template, req, 500, error.message, error.name && error.name !== "Error" ? error.name : null, startedAt).catch(() => {});
+        void capture(template, req, 500, error.message, error.name && error.name !== "Error" ? error.name : null, startedAt, opts).catch(() => {});
         return Response.json({ error: INTERNAL_ERROR_MESSAGE }, { status: 500 });
       }
       if (shouldRecordSystemEvent(res.status)) {
         void (async () => {
           const message = await errorMessageOf(res);
-          await capture(template, req, res.status, message, null, startedAt);
+          await capture(template, req, res.status, message, null, startedAt, opts);
         })().catch(() => {
           // Deliberately silent (property 1): a logging failure must never surface.
         });

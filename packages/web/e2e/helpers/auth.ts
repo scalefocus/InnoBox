@@ -20,7 +20,7 @@ export function devSlug(name: string): string {
  *  their test's own navigation. */
 export async function signIn(
   context: BrowserContext,
-  opts: { name: string; admin?: boolean; freshOnboarding?: boolean },
+  opts: { name: string; admin?: boolean; freshOnboarding?: boolean; survey?: boolean },
 ): Promise<{ userId: string }> {
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
   const page = await context.newPage();
@@ -30,6 +30,8 @@ export async function signIn(
     await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
     await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");
     await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
+    // §13.10: "1" = survey-eligible with every roll forced to win; otherwise surveys are off.
+    await page.locator("#dev-survey").fill(opts.survey ? "1" : "0");
     await page.getByRole("button", { name: "Dev sign-in" }).click();
     // On success the app returns to "/" authenticated and the account menu (.user-trigger, rendered
     // only when signed in) appears; on failure it stays on the signed-out landing with the dev

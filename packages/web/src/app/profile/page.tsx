@@ -1,11 +1,14 @@
 "use client";
 // Own profile (INNOBOX_SPEC.md §13.5): identity, challenges/solutions by status (incl.
 // awaiting triage — the author can always see their own), likes received, items followed,
-// recent activity (newest first, any status), and the e-mail notification opt-out switch.
+// recent activity (newest first, any status), the e-mail notification opt-out switch, and the
+// Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open.
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
+import { cachedGet, invalidateApi } from "@/lib/ui";
+import { SURVEY_CHANGED_EVENT, announceSurveyChanged, requestSurveyOpen } from "@/lib/survey-client";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import {
@@ -26,6 +29,7 @@ interface OwnProfile {
   };
   emailNotificationsEnabled: boolean;
   notificationPreferences: NotificationPreferences;
+  surveysEnabled: boolean;
   challengesByStatus: Record<string, number>;
   solutionsByStatus: Record<string, number>;
   likesReceived: number;
@@ -41,6 +45,9 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<OwnProfile | null>(null);
   const [emailPrefError, setEmailPrefError] = useState<string | null>(null);
   const [prefErrors, setPrefErrors] = useState<Partial<Record<NotificationPreference, string>>>({});
+  const [surveyPrefError, setSurveyPrefError] = useState<string | null>(null);
+  // §13.10: whether a survey offer is open (from the `me` resource), kept in step with the shell.
+  const [surveyOpen, setSurveyOpen] = useState(false);
 
   const refresh = () => {
     fetch("/api/profile", { headers: { accept: "application/json" } })
@@ -52,6 +59,41 @@ export default function ProfilePage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    const readOffer = () => {
+      cachedGet<{ openSurvey?: unknown }>("/api/me")
+        .then((me) => setSurveyOpen(Boolean(me.openSurvey)))
+        .catch(() => {});
+    };
+    readOffer();
+    window.addEventListener(SURVEY_CHANGED_EVENT, readOffer);
+    return () => window.removeEventListener(SURVEY_CHANGED_EVENT, readOffer);
+  }, []);
+
+  // §13.10 "Ask me for feedback": the same optimistic flip + slide-back-with-reason. Switching off
+  // also ends an open random offer, so the shell re-reads `me` (the menu item goes).
+  const toggleSurveys = async () => {
+    if (!profile) return;
+    const previous = profile.surveysEnabled;
+    const next = !previous;
+    setSurveyPrefError(null);
+    setProfile({ ...profile, surveysEnabled: next });
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ surveysEnabled: next }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not update preference");
+      invalidateApi("/api/me");
+      announceSurveyChanged();
+    } catch (err) {
+      setProfile((current) => (current ? { ...current, surveysEnabled: previous } : current));
+      setSurveyPrefError(err instanceof Error ? err.message : "Could not update preference");
+    }
+  };
 
   // The switch flips optimistically so it feels like a switch, then reconciles with the
   // server; a rejected PATCH slides the knob back and says why (INNOBOX_SPEC.md §13.5).
@@ -167,6 +209,54 @@ export default function ProfilePage() {
             </div>
           );
         })}
+      </div>
+
+      <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="profile-feedback">
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 16, marginBottom: 12 }}>Feedback</h3>
+        <div className="row" style={{ border: 0, padding: 0 }}>
+          <div className="grow">
+            <div className="ttl">Ask me for feedback</div>
+            <div className="sub">
+              {profile.surveysEnabled
+                ? "Now and then, at most once a month, InnoBox asks how it's doing. Answers are anonymous."
+                : "You won't be asked to take surveys."}
+            </div>
+            {surveyPrefError && (
+              <div className="sub" style={{ color: "var(--danger)" }} role="status">
+                {surveyPrefError}
+              </div>
+            )}
+          </div>
+          <div className="toggle-field">
+            <span className={`toggle-state${profile.surveysEnabled ? " is-on" : ""}`} aria-hidden="true">
+              {profile.surveysEnabled ? "On" : "Off"}
+            </span>
+            <button
+              type="button"
+              className="toggle toggle-pref"
+              role="switch"
+              aria-checked={profile.surveysEnabled}
+              aria-label="Ask me for feedback"
+              data-testid="profile-survey-switch"
+              onClick={toggleSurveys}
+            >
+              <span className="toggle-knob" aria-hidden="true">
+                {profile.surveysEnabled ? "💬" : "🔕"}
+              </span>
+            </button>
+          </div>
+        </div>
+        {surveyOpen && (
+          <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }}>
+            <div className="grow">
+              <div className="ttl">A short survey is waiting for you</div>
+              <div className="sub">About a minute, and anonymous.</div>
+            </div>
+            <button type="button" className="btn btn-sm" data-testid="profile-take-survey" onClick={requestSurveyOpen}>
+              Take the survey
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>

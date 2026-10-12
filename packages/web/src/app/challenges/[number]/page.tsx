@@ -5,6 +5,7 @@
 // admin transient in a dialog + author self-reveal, on the challenge and on each solution), the
 // §11 attachment control, the §8.3 like freeze, and the platform-admin danger zone (§10.3).
 import { useParams, useRouter } from "next/navigation";
+import { reportFeatureUse } from "@/lib/survey-client";
 import { useEffect, useRef, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
@@ -198,6 +199,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not update like");
+      if (json.liked === true) reportFeatureUse("like"); // §13.10 first use: adding a like
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not update like");
@@ -216,6 +218,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not update follow");
+      if (json.following === true) reportFeatureUse("follow"); // §13.10: an explicit follow only
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not update follow");
@@ -225,8 +228,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
   };
 
   // Serves both modes: an admin free-set (override) and a committee/assignee enforced
-  // transition (§7.2) — the endpoint decides which from the caller's role.
-  const changeChallengeStatus = async (status: string) => {
+  // transition (§7.2) — the endpoint decides which from the caller's role. `enforced` marks the
+  // committee/assignee control, whose success is the §13.10 "review" first use.
+  const changeChallengeStatus = async (status: string, enforced = false) => {
     setBusy(true);
     try {
       const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}`, {
@@ -236,6 +240,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not change status");
+      if (enforced) reportFeatureUse("review");
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not change status");
@@ -262,7 +267,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     }
   };
 
-  const changeSolutionStatus = async (solutionNumber: string, status: string) => {
+  const changeSolutionStatus = async (solutionNumber: string, status: string, enforced = false) => {
     setBusy(true);
     try {
       const res = await fetch(`/api/solutions/${solutionNumber.replace("SOL-", "")}`, {
@@ -272,6 +277,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not change status");
+      if (enforced) reportFeatureUse("review");
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not change status");
@@ -505,7 +511,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       {!s.canOverrideStatus && s.allowedTransitions.length > 0 && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
           {s.allowedTransitions.map((st) => (
-            <button key={st} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeSolutionStatus(s.number, st)}>
+            <button key={st} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeSolutionStatus(s.number, st, true)}>
               → {SOLUTION_STATUS_LABEL[st] ?? st}
             </button>
           ))}
@@ -681,7 +687,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             </label>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {challenge.allowedTransitions.map((s) => (
-                <button key={s} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeChallengeStatus(s)}>
+                <button key={s} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeChallengeStatus(s, true)}>
                   → {CHALLENGE_STATUS_LABEL[s] ?? s}
                 </button>
               ))}
@@ -1058,6 +1064,7 @@ function ProposeSolutionForm({
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not propose solution");
+      reportFeatureUse("propose_solution");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not propose solution");
       lock.release();

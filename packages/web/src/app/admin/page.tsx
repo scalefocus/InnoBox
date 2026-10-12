@@ -6,7 +6,7 @@
 // stays functional, not fancy: reuses the .admin-card-*/.create-ns-form/.mapping-row/
 // .rows/.row/.chip/.pill/.btn class contract from globals.css, no new CSS.
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { deleteReq, patchJson, postJson } from "@/lib/api-client";
 import { CurrentlyOnline } from "./CurrentlyOnline";
@@ -14,6 +14,8 @@ import { SystemBannerCard } from "./SystemBannerCard";
 import { GdprCard } from "./GdprCard";
 import { IdentitySyncCard } from "./IdentitySyncCard";
 import { ChannelWebhooksCard } from "./ChannelWebhooksCard";
+import { AdminCard } from "./AdminCard";
+import { SurveyResultsCard } from "./SurveyResultsCard";
 
 const NAMESPACES_URL = "/api/admin/namespaces";
 const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
@@ -21,7 +23,7 @@ const ROLE_MAPPINGS_URL = "/api/admin/role-mappings";
 // The admin console's collapsible cards remember their open/closed state per browser
 // (localStorage) so a chosen layout survives reloads. Default: everything expanded.
 const ADMIN_CARDS_STORAGE_KEY = "innobox:admin-cards-open";
-const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, webhooks: true, presence: true, namespaces: true, mappings: true, identity: true };
+const DEFAULT_ADMIN_CARDS: Record<string, boolean> = { banner: true, webhooks: true, presence: true, survey: true, namespaces: true, mappings: true, identity: true };
 const ADMIN_CARD_IDS = Object.keys(DEFAULT_ADMIN_CARDS);
 
 function loadAdminCardState(): Record<string, boolean> {
@@ -255,6 +257,8 @@ function AdminConsole() {
         <CurrentlyOnline onTotal={setOnlineTotal} />
       </AdminCard>
 
+      <SurveyResultsCard open={openCards.survey ?? true} onToggle={() => toggleCard("survey")} onNotify={notify} />
+
       <AdminCard
         id="namespaces"
         title="Namespaces"
@@ -298,42 +302,6 @@ function AdminConsole() {
 
       {toast && <div className="toast">{toast}</div>}
     </>
-  );
-}
-
-function AdminCard({
-  title,
-  summary,
-  open,
-  onToggle,
-  children,
-}: {
-  id: string;
-  title: string;
-  summary: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="card reveal" style={{ marginBottom: 18 }}>
-      <button type="button" className="admin-card-head" onClick={onToggle} aria-expanded={open}>
-        <h3 className="admin-card-title" style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-          {title}
-        </h3>
-        <span className="admin-card-accessory">
-          <span className="chip">{summary}</span>
-        </span>
-        <span className="admin-card-chevron" data-open={open} aria-hidden="true">
-          <ChevronIcon />
-        </span>
-      </button>
-      <div className="admin-card-body" data-open={open}>
-        <div className="admin-card-body-inner">
-          <div className="admin-card-body-pad">{children}</div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -606,13 +574,5 @@ function RoleMappingsPanel({
         </div>
       )}
     </>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 9l6 6 6-6" />
-    </svg>
   );
 }

@@ -41,17 +41,11 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-62", "GAP-63", "GAP-64"],
-    title: "Have your say",
+    ids: ["GAP-63"],
+    title: "Give feedback any time",
     teaser:
-      "A short, anonymous survey about how InnoBox works for you. It asks now and then, and you can also open it yourself from the menu or your profile.",
+      "Open the feedback survey yourself whenever you have something to say — from your profile, the account menu or the sidebar — and tell us about the part of InnoBox you choose.",
     audience: "everyone",
-  },
-  {
-    ids: ["GAP-65", "GAP-66"],
-    title: "Survey results",
-    teaser: "Scores and comments from the feedback survey, by feature and by role, with trends over time.",
-    audience: "platform_admin",
   },
 ];
 

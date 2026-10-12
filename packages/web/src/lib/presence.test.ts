@@ -155,3 +155,10 @@ test("chart buckets are UTC days, not the viewer's local days (invariant 8)", ()
   assert.equal(utcDayKey(new Date("2026-07-13T23:30:00Z")), "2026-07-13");
   assert.equal(utcDayKey(new Date("2026-07-14T00:30:00Z")), "2026-07-14");
 });
+
+test("every survey route is silent for presence (§13.10)", () => {
+  // A named, exact-time "last seen" next to a date-only response would identify it.
+  for (const p of ["/api/me/features/used", "/api/me/survey/check", "/api/me/survey/close", "/api/me/survey/responses", "/api/me/survey/start"]) {
+    assert.equal(presenceTouchFor(p, "POST"), null, `${p} must be silent`);
+  }
+});

@@ -142,3 +142,29 @@ test("a request id header is kept; a zero-argument handler still records method 
   assert.equal(recorded[0]!.path, "/api/me");
   assert.ok((recorded[0]!.durationMs ?? -1) >= 0);
 });
+
+test("anonymousActor: the row carries no user id and no actor snapshot, and the session is never read (§13.10)", async () => {
+  let resolved = 0;
+  const { recorded, withSystemLog } = fakeDeps({
+    resolveActor: async () => {
+      resolved++;
+      return { userId: "u-1", name: "Alice", email: "alice@example.test" };
+    },
+  });
+  const POST = withSystemLog("/api/me/survey/responses", async (_req: Request) => Response.json({ error: "no_open_survey" }, { status: 409 }), {
+    anonymousActor: true,
+  });
+  const THROWS = withSystemLog("/api/me/features/used", async (_req: Request): Promise<Response> => {
+    throw new Error("boom");
+  }, { anonymousActor: true });
+  await POST(req("POST", "/api/me/survey/responses"));
+  await THROWS(req("POST", "/api/me/features/used"));
+  await settle();
+  assert.equal(recorded.length, 2);
+  for (const row of recorded) {
+    assert.equal(row.userId, null);
+    assert.equal(row.actorName, null);
+    assert.equal(row.actorEmail, null);
+  }
+  assert.equal(resolved, 0);
+});

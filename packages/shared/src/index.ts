@@ -80,3 +80,10 @@ export * from "./webhook-address.js";
 // subpath) and the SMTP fallback rule web and worker share.
 export * from "./public-url.js";
 export * from "./smtp-env.js";
+
+// §13.10/§14.11 feedback survey: the versioned catalog, offer composition, the eligibility
+// predicate and roll, submission validation, and the results' privacy rules (minimum group size,
+// current-day exclusion, trend buckets). Client-safe, also exposed at `@innobox/shared/survey` and
+// `@innobox/shared/survey-results`.
+export * from "./survey.js";
+export * from "./survey-results.js";

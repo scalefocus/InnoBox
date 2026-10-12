@@ -2983,8 +2983,10 @@ Top to bottom, in a fixed max-width (~280 px) card:
 > `POST /api/me/whats-new-seen` route and `markWhatsNewSeen` store (guarded UPDATE);
 > `whatsNewSeenVersion` and `whatsNewSinceDate` on `GET /api/me`; the quick-start
 > `PATCH /api/me` also stamping the marker; `components/WhatsNewNotice.tsx` rendered by
-> AppShell with its CSS on the §2.2 tokens; the dev/e2e seam. Tests as listed at the end
-> of this section. Ships as its own minor release.
+> AppShell with its CSS on the §2.2 tokens; the dev/e2e seam; and the notice's input to the
+> feedback survey's `canShow` (§13.10) — AppShell's `whatsNewDue` is a constant `false` until
+> the notice exists, and the survey e2e's *notice due → no survey* case lands with it. Tests
+> as listed at the end of this section. Ships as its own minor release.
 
 > **⚠ GAP-60 · new feature:** the `/whats-new` **page** changes below (the read receipt,
 > the "New since your last visit" highlighting, the **current** label) are not built; the
@@ -3206,29 +3208,13 @@ see where InnoBox is heading.
 
 ### §13.10 Feedback survey ("Have your say")
 
-> **⚠ GAP-62 · new feature:** the **random survey** does not exist. Build: migration
-> `0037_feedback_survey.sql` (the `users` columns, the four tables, the grants, the
-> backfill, the launch stagger and the `survey_enabled` setting, below); the client-safe
-> catalog module `@innobox/shared/survey` (`SURVEY_VERSION`, questions, features); the
-> server-side eligibility predicate, roll and offer logic; the `me/features/used`,
-> `me/survey/check`, `me/survey/close` and `me/survey/responses` routes; `openSurvey` and
-> `surveysEnabled` on the `me`/`profile` resources; the shared `StarInput` and the
-> AppShell-owned survey card; the account-menu **Take the survey** entry and the profile
-> **Feedback** section; the first-use reports from the ten features' success paths. Tests
-> as listed in this section. Ships as its own minor release, together with GAP-65.
-
 > **⚠ GAP-63 · new feature:** the **on-demand survey** (*Give feedback*, the profile
-> button and the colophon's **Have your say**) does not exist. Build:
-> `users.survey_self_shown_at`, the `survey_daily` `_self` counters, the `self` trigger
-> (folded into the same migration if both ship together, otherwise its own), the
-> `me/survey/start` route, `selfSurvey` on the `me` resource, the card's feature picker,
-> and the three entry points. Ships as its own minor release after GAP-62.
-
-> **⚠ GAP-64 · new feature:** the **survey privacy hardening** is not in place, because
-> nothing exists yet: the `me/features/used` and `me/survey/*` routes must write their
-> §14.7 system-log rows with **no `user_id` and no actor snapshot**, the §2.4 rate-limit
-> warning for the `survey` bucket must omit the user id, and every survey route must stay
-> silent for presence (§14.5). Lands with GAP-62 and is pinned by its tests.
+> button and the colophon's **Have your say**) does not exist. Its schema already shipped
+> in migration 0037 (`users.survey_self_shown_at`, the `survey_daily` `_self` counters, the
+> `self` trigger), and the store already honours an open `self` offer (no random roll, kept
+> by the opt-out, counted in the `_self` columns). Build: the `me/survey/start` route,
+> `selfSurvey` on the `me` resource, the card's feature picker, and the three entry points.
+> Ships as its own minor release.
 
 An occasional, **anonymous** in-app survey asks signed-in users how satisfied they are
 with InnoBox in general and with **one feature they have just started using**. It floats
@@ -4081,18 +4067,6 @@ group object ids, no personal data (unlike the §14.5 presence read).
   (timestamps UTC ISO or `null`).
 
 ### §14.11 Survey results (platform admin)
-
-> **⚠ GAP-65 · new feature:** the **Survey results** card does not exist. Build: the
-> `admin/survey/summary`, `admin/survey/comments` and `admin/survey/responses/:id`
-> routes with the server-side size-5 withholding and the current-day exclusion; the
-> `survey_enabled` setting on `admin/settings`; an **`action` slot** on the console's
-> `AdminCard` (its header is a `<button>`, so a switch cannot nest inside it); the card
-> itself with its hand-rolled SVG trend; the `survey.*` pattern on the Admin audit chip.
-> Ships with GAP-62.
-
-> **⚠ GAP-66 · new feature:** the results' **Source** filter, the *Self-initiated* funnel
-> line and the feed's *Self-initiated* tag (the on-demand parts) are not built. Ship with
-> GAP-63.
 
 A collapsible **"Survey results"** card in the Administration console's platform-admin
 section, after **Currently online** (§14.5). **Platform admins only** — the API answers

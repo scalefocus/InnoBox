@@ -17,6 +17,7 @@
 // fill changes the form signature, so it re-arms the duplicate check like any edit; the button
 // is unavailable while the form is locked, and Submit waits while a draft is in flight.
 import Link from "next/link";
+import { reportFeatureUse } from "@/lib/survey-client";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
@@ -151,6 +152,7 @@ export default function NewChallengePage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Could not submit challenge");
       const number = (json.challenge.number as string).replace("CH-", "");
+      reportFeatureUse("submit_challenge"); // §13.10: the key only — never the (maybe anonymous) item
       lock.succeed();
       router.push(`/challenges/${number}`);
     } catch (err) {

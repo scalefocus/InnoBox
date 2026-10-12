@@ -61,6 +61,10 @@ if (devAuthEnabled) {
         // used only by the dedicated onboarding e2e spec; every other dev/e2e sign-in defaults
         // to already-seen so it isn't interrupted by the onboarding redirect.
         freshOnboarding: { label: "Fresh onboarding (\"1\" = yes)", type: "text", value: "0" },
+        // "1" makes the persona survey-eligible with every roll forced to win (INNOBOX_SPEC.md
+        // §13.10) — the survey e2e only. Anything else switches surveys OFF for the persona, so
+        // other specs and screenshots stay free of the card.
+        survey: { label: "Feedback survey (\"1\" = yes)", type: "text", value: "0" },
       },
       // Upserts a REAL local user (+ dev admin group/mapping/membership when requested)
       // so RBAC still resolves from the database — the session never carries roles.
@@ -72,6 +76,7 @@ if (devAuthEnabled) {
           email: credentials?.email?.trim() || null,
           admin: credentials?.admin === "1",
           freshOnboarding: credentials?.freshOnboarding === "1",
+          survey: credentials?.survey === "1",
         });
         if (!user.active) return null; // deactivated dev users are refused like real leavers
         return { id: user.externalId, name: user.displayName, email: user.email };

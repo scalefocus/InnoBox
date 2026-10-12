@@ -18,8 +18,12 @@ interface NotificationItem {
 }
 
 /** `onBanner` receives the §14.6 system banner (or null) that rides every inbox poll, so the
- *  shell can render the topbar pill without a second poller. */
-export function NotificationBell({ onBanner }: { onBanner?: (banner: SystemBanner | null) => void } = {}) {
+ *  shell can render the topbar pill without a second poller. `onOpenChange` reports the panel's
+ *  open state — on mobile it is a full sheet, which keeps the §13.10 survey card off screen. */
+export function NotificationBell({
+  onBanner,
+  onOpenChange,
+}: { onBanner?: (banner: SystemBanner | null) => void; onOpenChange?: (open: boolean) => void } = {}) {
   const router = useRouter();
   const fmt = useDateFmt();
   const [open, setOpen] = useState(false);
@@ -50,6 +54,11 @@ export function NotificationBell({ onBanner }: { onBanner?: (banner: SystemBanne
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report changes of `open` only
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
