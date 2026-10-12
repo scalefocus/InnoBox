@@ -46,8 +46,11 @@ pipeline {
   parameters {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
-    booleanParam(name: 'RUN_E2E', defaultValue: false, description: 'Run Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed)')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent as separate Playwright containers against ONE shared Postgres + web dev server; 1 = the whole suite in one container. Specs that change platform-wide settings always stay together in shard 1. More shards = more concurrent browsers sharing the agent\'s CPU and RAM and the one dev server.')
+    // RUN_E2E and RUN_E2E_QUICK are mutually exclusive (tick one, or neither); ticking both fails
+    // the build up front, in the Parameters stage.
+    booleanParam(name: 'RUN_E2E', defaultValue: false, description: 'Run the full Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed). Not together with RUN_E2E_QUICK.')
+    booleanParam(name: 'RUN_E2E_QUICK', defaultValue: false, description: 'Run a quick Playwright e2e instead: a random 20% of the e2e tests, in a single shard (E2E_SHARDS is ignored). The picked tests are listed in the log and archived as e2e-quick.txt. Not together with RUN_E2E.')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Full e2e only (RUN_E2E): split the e2e suite into this many shards (1-9), run in parallel on this agent as separate Playwright containers against ONE shared Postgres + web dev server; 1 = the whole suite in one container. Specs that change platform-wide settings always stay together in shard 1. More shards = more concurrent browsers sharing the agent\'s CPU and RAM and the one dev server.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy from a non-main branch (main deploys automatically; never on pull-request builds)')
     // Deploy target (host + checkout path) comes from Jenkins credentials, not build parameters —
     // see innobox-deploy-host / innobox-deploy-path in the credentials list above.
@@ -75,6 +78,16 @@ pipeline {
   }
 
   stages {
+    stage('Parameters') {
+      steps {
+        script {
+          if (params.RUN_E2E && params.RUN_E2E_QUICK) {
+            error('RUN_E2E and RUN_E2E_QUICK are mutually exclusive: tick one of them, or neither.')
+          }
+        }
+      }
+    }
+
     stage('Toolchain') {
       steps {
         sh '''
@@ -185,19 +198,35 @@ pipeline {
         }
 
         stage('E2E (Playwright)') {
-          when { expression { return params.RUN_E2E } }
+          // The full run (RUN_E2E) or the quick one (RUN_E2E_QUICK); the Parameters stage has
+          // already refused both at once.
+          when { expression { return params.RUN_E2E || params.RUN_E2E_QUICK } }
           steps {
             sh '''
               set -eu
               . "${HOME}/.asdf/asdf.sh"
 
-              # The E2E_SHARDS build parameter (validated up front, before anything is started). The
-              # fallback covers the first build after the parameter is added, when it isn't defined yet.
-              SHARDS="${E2E_SHARDS:-2}"
-              case "${SHARDS}" in
-                [1-9]) ;;
-                *) echo "E2E_SHARDS must be a whole number from 1 to 9, got '${SHARDS}'"; exit 1 ;;
-              esac
+              # Full run: the E2E_SHARDS build parameter (validated up front, before anything is
+              # started; the fallback covers the first build after the parameter is added, when it
+              # isn't defined yet). Quick run: a random 20% of the tests, picked now by
+              # scripts/e2e-specs.mjs as Playwright test locations (e2e/<file>.spec.ts:<line>), run
+              # as shard 1 of 1 narrowed to those locations. The pick is logged and archived, so a
+              # failing quick run can be rerun locally with the same tests.
+              QUICK_ARGS=""
+              rm -f e2e-quick.txt   # never archive a previous build's pick
+              if [ "${RUN_E2E_QUICK:-false}" = true ]; then
+                SHARDS=1
+                node packages/web/scripts/e2e-specs.mjs quick > e2e-quick.txt
+                [ -s e2e-quick.txt ] || { echo "the quick e2e picked no tests"; exit 1; }
+                cat e2e-quick.txt
+                QUICK_ARGS="$(cat e2e-quick.txt)"
+              else
+                SHARDS="${E2E_SHARDS:-2}"
+                case "${SHARDS}" in
+                  [1-9]) ;;
+                  *) echo "E2E_SHARDS must be a whole number from 1 to 9, got '${SHARDS}'"; exit 1 ;;
+                esac
+              fi
 
               # Ephemeral Postgres for the browser e2e; the dev server connects to it.
               docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
@@ -274,6 +303,7 @@ pipeline {
               #   E2E_NO_WEBSERVER  : the host owns the dev server (started above); the container has no
               #                       pnpm to start one, so the config omits its webServer block and
               #                       fails fast with a clear connection error if the host server died.
+              #   QUICK_ARGS        : the quick run's picked test locations (empty on a full run)
               # The test runner itself never touches the DB, so only the base-URL env goes in.
               PW_VERSION="$(node -p "require('./packages/web/node_modules/@playwright/test/package.json').version")"
               run_shard() {
@@ -285,11 +315,16 @@ pipeline {
                     -e E2E_SHARD="$1" -e E2E_SHARD_TOTAL="${SHARDS}" \
                     -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
                     "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
-                    ./node_modules/.bin/playwright test -c e2e/playwright.config.ts || rc=$?
+                    ./node_modules/.bin/playwright test -c e2e/playwright.config.ts ${QUICK_ARGS} || rc=$?
+                  # (QUICK_ARGS is unquoted on purpose: one argument per picked location.)
                   echo "${rc}" > "${PWD}/e2e-shard-$1.exit"
                 } 2>&1 | sed -u "s/^/[shard $1] /"
               }
-              echo "=== running the e2e in ${SHARDS} shard(s) ==="
+              if [ -n "${QUICK_ARGS}" ]; then
+                echo "=== running the quick e2e: $(wc -l < e2e-quick.txt) randomly picked test(s), in 1 shard ==="
+              else
+                echo "=== running the e2e in ${SHARDS} shard(s) ==="
+              fi
               SHARD_PIDS=""
               for n in $(seq 1 "${SHARDS}"); do
                 run_shard "${n}" &
@@ -341,7 +376,7 @@ pipeline {
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
               '''
               // Kept even when the build is aborted (where the in-step `cat` never runs).
-              archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
+              archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log, e2e-quick.txt', allowEmptyArchive: true
             }
           }
         }
