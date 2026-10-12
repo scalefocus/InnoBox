@@ -272,7 +272,7 @@ test(
     const pool = new Pool({ connectionString: url });
     const PREFIX = "scimtest-erased-";
     const bearerToken = "scimtest-bearer-8f2c1a9b7e6d4f30"; // gitleaks:allow — test-only fixture
-    const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const runId = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
     const cleanup = () => pool.query(`delete from groups where external_id like $1`, [`${PREFIX}%`]);
     await cleanup();
 
