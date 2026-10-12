@@ -162,9 +162,9 @@ It is a soft guideline, not enforced; every release's entry also drives the in-a
 notice (§13.9). No bump → no entry.
 
 **Specified but not built.** A feature specified ahead of its implementation carries a
-`⚠ GAP-nn · new feature` marker in the spec. Once the *Coming soon* list exists (§13.9,
-GAP-67), each such marker also needs an entry in
-`packages/web/src/app/whats-new/upcoming.ts` (a test enforces it), and the commit that
+`⚠ GAP-nn · new feature` marker in the spec. Each such marker also needs an entry in the
+*Coming soon* list (§13.9), `packages/web/src/app/whats-new/upcoming.ts` (a test enforces
+it), and the commit that
 ships the feature deletes the marker, removes the teaser and adds the changelog entry.
 
 **`changelog.ts` is itself the source of truth for past versions.** The history was

@@ -3158,12 +3158,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
 > strictly descending; every date a valid `YYYY-MM-DD`). The notice depends on these
 > properties, so the test lands with GAP-59.
 
-> **⚠ GAP-67 · new feature:** the **Coming soon** teaser below does not exist. Build
-> `app/whats-new/upcoming.ts` (the hand-maintained list), the greyed-out section at the
-> top of `/whats-new`, its audience filter, and the spec-sync unit test that ties the
-> list to this document's open new-feature markers. Can ship with GAP-60 or on its own
-> (minor release).
-
 Every release reaches every user. The **What's new** page lists the full shipped
 history, and a small **update notice** tells a returning user that something changed
 since they last acknowledged it — and lets them jump straight to exactly what they
@@ -3231,6 +3225,15 @@ see where InnoBox is heading.
   no version and no ETA** — nothing that reads as a promise. Rows are not links and not
   focusable; the section is a plain list (`aria-label="Coming soon"`). Hidden entirely
   when no entry applies to the viewer.
+- **Collapsed by default.** The section opens **collapsed** on every visit to the page:
+  only its heading block shows — a compass glyph, **"Coming soon"** with the number of
+  entries that apply to this viewer (*"Coming soon · 9"*), the sub-line, and a chevron.
+  The whole heading block is one `<button>` (`aria-expanded`, `aria-controls` the list)
+  that expands and collapses the list in place; Enter and Space work as on any button.
+  The open state is **not remembered** — no storage, no server state — so the release
+  history stays the first thing a visitor reads. Expanding fades the list in, with no
+  motion under `prefers-reduced-motion: reduce`. While collapsed the list is not
+  rendered, so its rows are neither visible nor read out by assistive tech.
 - **Copy rules.** Titles and teasers follow the §21.9 rule (no `§`, no marker ids), name
   no person, item or namespace, and describe the feature in user terms — they are product
   copy, written when the feature is specified.
@@ -3342,8 +3345,9 @@ see where InnoBox is heading.
   equal, rollback, invalid version, quick start not seen; the missed-entries selector —
   marker, rollout date (on-or-after), neither; the excerpt cap of 3 and the full count N;
   the link's `since` (newest unmissed version, `0.0.0` when all were missed); the page's
-  boundary resolution order. Plus the GAP-61 changelog integrity test and the GAP-67
-  spec-sync test (both directions), and the `UPCOMING` audience filter per role.
+  boundary resolution order. Plus the GAP-61 changelog integrity test. (The *Coming
+  soon* spec-sync test, both directions, and the `UPCOMING` audience filter per role
+  live in `app/whats-new/upcoming.test.ts`.)
 - **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →
   unchanged with `previous == current`, invalid or future version → 400, unauthenticated
   → 401, `whats_new_since_date` cleared on stamp; Continue on Quick start sets the marker;
@@ -5444,7 +5448,7 @@ recognition: points buy nothing, unlock nothing and never affect a permission, a
 status, an assignment or a ranking of challenges.
 
 > **⚠ GAP-73 · new feature:** gamification does not exist. Build: migration
-> `0039_gamification.sql` (`gamification_ledger`, `user_badges`, the three `users`
+> `0040_gamification.sql` (`gamification_ledger`, `user_badges`, the three `users`
 > columns, the `gamification_enabled` setting, grants — the app role gets INSERT/SELECT
 > on the ledger and badges, plus DELETE for the §3 erasure only); the
 > `@innobox/shared/gamification` module (the weights, caps, level curve and badge
@@ -5641,7 +5645,7 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   floods anyone with old news. The toast is suppressed when `notify_achievements` is
   off. Seeing the toast does not mark the inbox row read.
 
-### §23.8 Data model (migration 0039)
+### §23.8 Data model (migration 0040)
 
 - **`gamification_ledger`** — id (bigint identity), user_id (FK `users`), reason (the
   §23.2 enum), points (smallint ≥ 0), award_key (text), item_type (`challenge |
