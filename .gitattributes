@@ -1,0 +1,17 @@
+# Line endings. The repository stores LF; text=auto lets git normalize every text file
+# and leaves the working-tree ending to the platform (core.autocrlf / core.eol).
+* text=auto
+
+# Files read or executed inside Linux containers or by a POSIX shell must stay LF on every
+# checkout, Windows included — a CRLF here breaks at runtime (e.g. `/bin/sh /migrate.sh`
+# fails with "set: illegal option -" on the trailing \r).
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Caddyfile       text eol=lf
+Jenkinsfile     text eol=lf
+*.sql           text eol=lf
+deploy/**       text eol=lf
+.dockerignore   text eol=lf
+
+# Binary assets — never normalized or diffed as text.
+*.png           binary
