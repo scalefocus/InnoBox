@@ -61,7 +61,8 @@ test("the link lands on the page with exactly the missed entries highlighted abo
   const link = notice(page).getByRole("link");
   await expect(link).toHaveText("See what's new since your last visit (3)");
   await link.click();
-  await expect(page).toHaveURL(new RegExp(`/whats-new\\?since=${seen.replace(/\./g, "\\.")}$`));
+  // Compare the parsed URL rather than building a regex from the version string.
+  await expect(page).toHaveURL((url) => url.pathname === "/whats-new" && url.searchParams.get("since") === seen);
   await expect(notice(page)).toHaveCount(0);
 
   await expect.poll(() => highlightedVersions(page)).toEqual(missed);
