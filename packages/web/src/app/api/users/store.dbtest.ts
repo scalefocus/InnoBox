@@ -335,6 +335,9 @@ test(
       const outsiderId = await mkUser("outsider", null);
       const everyone = [authorId, adminId, committeeId, memberId, platformId, outsiderId];
       const admin = { userId: adminId, roles: await rolesOf(adminId) };
+      // Audiences are read as the platform admin: an admin of every namespace, global included (the
+      // filtered picker answers only an admin of the challenge's namespace).
+      const platform = { userId: platformId, roles: await rolesOf(platformId) };
       // Every fixture user's name carries the stamp, so this query matches exactly the six.
       const q = stamp;
       const offeredIds = async (audience: Parameters<typeof searchActiveUsers>[2]) =>
@@ -356,8 +359,8 @@ test(
 
       // The picker's SQL agrees with canSeeChallenge for every user and every case.
       for (const number of [restrictedTriage, openTriage, restricted, openOrg, restrictedGlobal]) {
-        const audience = await getAssignmentAudience(pool, admin, number);
-        assert.ok(audience, `the admin sees CH-${number}`);
+        const audience = await getAssignmentAudience(pool, platform, number);
+        assert.ok(audience, `the platform admin gets the audience of CH-${number}`);
         const expected = new Set<string>();
         for (const id of everyone) if (canSeeChallenge({ userId: id, roles: await rolesOf(id) }, audience!)) expected.add(id);
         assert.deepEqual(await offeredIds(audience!), expected, `picker for ${audience!.visibility}/${audience!.status} CH-${number}`);
@@ -382,7 +385,8 @@ test(
       assert.equal(await getAssignmentAudience(pool, outsider, restricted), null);
       assert.equal(await getAssignmentAudience(pool, { userId: memberId, roles: await rolesOf(memberId) }, restricted), null);
       assert.equal(await getAssignmentAudience(pool, { userId: authorId, roles: await rolesOf(authorId) }, restrictedTriage), null);
-      assert.ok(await getAssignmentAudience(pool, { userId: platformId, roles: await rolesOf(platformId) }, restricted));
+      assert.ok(await getAssignmentAudience(pool, admin, restricted), "the namespace's own admin gets it");
+      assert.equal(await getAssignmentAudience(pool, admin, restrictedGlobal), null, "not an admin of the global namespace");
       assert.equal(await getAssignmentAudience(pool, admin, "999999999"), null);
 
       // Single assignment: refused for a user who cannot see the challenge, accepted for one who can.
