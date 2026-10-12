@@ -142,7 +142,7 @@ test(
         if (!roles.isPlatformAdmin) return { ok: false as const, response: Response.json({ error: "forbidden" }, { status: 403 }) };
         return {
           ok: true as const,
-          user: { id: userId, externalId: userId, userName: userId, displayName: userId, email: null, emailNotificationsEnabled: true, quickStartSeenAt: null, roles },
+          user: { id: userId, externalId: userId, userName: userId, displayName: userId, email: null, emailNotificationsEnabled: true, quickStartSeenAt: null, whatsNewSeenVersion: null, whatsNewSinceDate: null, roles },
         };
       };
 

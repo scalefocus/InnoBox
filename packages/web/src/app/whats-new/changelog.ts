@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.52.0",
+    date: "2026-10-12",
+    summary:
+      "After each release, a small card in the corner now tells you what changed since your last visit, with a link straight to the entries you missed. Close it with ✕ or follow the link. This page now highlights the releases that are new to you and marks the current one.",
+  },
+  {
     version: "0.51.9",
     date: "2026-10-12",
     summary:

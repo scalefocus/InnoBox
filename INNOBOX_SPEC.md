@@ -2976,26 +2976,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
 
 ### §13.9 What's new (release notes & the update notice)
 
-> **⚠ GAP-59 · new feature:** the **update notice** below does not exist yet. Build:
-> migration `0036_whats_new_seen.sql` (the two `users` columns and the one-time rollout
-> snapshot); a pure, dependency-free `lib/whats-new.ts` (strict `x.y.z` parse/compare,
-> the trigger rule, the missed-entries selector, the `since` resolver); the
-> `POST /api/me/whats-new-seen` route and `markWhatsNewSeen` store (guarded UPDATE);
-> `whatsNewSeenVersion` and `whatsNewSinceDate` on `GET /api/me`; the quick-start
-> `PATCH /api/me` also stamping the marker; `components/WhatsNewNotice.tsx` rendered by
-> AppShell with its CSS on the §2.2 tokens; the dev/e2e seam. Tests as listed at the end
-> of this section. Ships as its own minor release.
-
-> **⚠ GAP-60 · new feature:** the `/whats-new` **page** changes below (the read receipt,
-> the "New since your last visit" highlighting, the **current** label) are not built; the
-> page is a static server component today. Keep the server `page.tsx` for its metadata
-> and add a client child for everything that reads `/api/me` or the query string.
-
-> **⚠ GAP-61 · new feature:** the changelog **integrity unit test** does not exist
-> (`CHANGELOG[0].version === APP_VERSION`; every version strict `x.y.z`, unique, and
-> strictly descending; every date a valid `YYYY-MM-DD`). The notice depends on these
-> properties, so the test lands with GAP-59.
-
 Every release reaches every user. The **What's new** page lists the full shipped
 history, and a small **update notice** tells a returning user that something changed
 since they last acknowledged it — and lets them jump straight to exactly what they
@@ -3043,7 +3023,7 @@ see where InnoBox is heading.
   `app/whats-new/upcoming.ts`, beside the changelog: `UPCOMING: { ids, title, teaser,
   audience }[]`, in the order to display. `ids` lists the open **new-feature** markers in
   this document that the entry covers — one teaser may cover a feature's several markers
-  (e.g. `["GAP-59", "GAP-60", "GAP-61"]` for this very section) — and is internal only,
+  (e.g. `["GAP-62", "GAP-63", "GAP-64"]` for the §13.10 survey) — and is internal only,
   **never rendered**. `title` is a short user-facing name (*"Have your say"*), `teaser` one or two
   plain sentences on what it will do for the user. `audience` is `everyone`, `admins`
   (platform or namespace admins) or `platform_admin`; an entry is shown only to viewers
@@ -3107,7 +3087,8 @@ see where InnoBox is heading.
     silent advance. Several releases skipped in a row still produce **one** notice.
 - **Missed entries** (shared with the page's rule above): with a valid marker, every entry
   with `version > seen`; with a null marker, every entry dated on or after
-  `whatsNewSinceDate`; with neither, the current version's entry alone. Newest first.
+  `whatsNewSinceDate`; with neither — or when that date is later than every entry — the
+  current version's entry alone, so a notice that is due never comes up empty. Newest first.
 - **The card.** A floating card — `.update-notice`, `role="status"` (a polite live
   region: it announces itself but **never takes focus**; no focus trap, no Escape
   handling), portaled to the end of `<body>`, `data-testid="whats-new-notice"`, owned by
@@ -3172,10 +3153,10 @@ see where InnoBox is heading.
   static changelog — no challenge, user or namespace data — and changelog summaries must
   never describe a restricted item (an authoring rule, §17).
 - **Dev / e2e seam.** Dev sign-in (§2.3) stamps the marker at `APP_VERSION` on **every**
-  dev sign-in, so ordinary e2e runs and screenshots are never interrupted; a dev-only
-  field on the dev sign-in panel seeds a lower marker (or none, plus a rollout boundary
-  date) for the specs that exercise the notice. It lives behind the same production guard
-  as the rest of dev auth.
+  dev sign-in, so ordinary e2e runs and screenshots are never interrupted; two dev-only
+  fields on the dev sign-in panel — the marker (blank for the running release, an `x.y.z`,
+  or `none`) and, with `none`, a rollout boundary date — seed the state for the specs that
+  exercise the notice. They live behind the same production guard as the rest of dev auth.
 
 #### Tests
 
@@ -3183,7 +3164,9 @@ see where InnoBox is heading.
   equal, rollback, invalid version, quick start not seen; the missed-entries selector —
   marker, rollout date (on-or-after), neither; the excerpt cap of 3 and the full count N;
   the link's `since` (newest unmissed version, `0.0.0` when all were missed); the page's
-  boundary resolution order. Plus the GAP-61 changelog integrity test. (The *Coming
+  boundary resolution order. Plus the changelog integrity test (`CHANGELOG[0].version ===
+  APP_VERSION`; every version strict `x.y.z`, unique and strictly descending; every date a
+  valid `YYYY-MM-DD`), which the notice depends on. (The *Coming
   soon* spec-sync test, both directions, and the `UPCOMING` audience filter per role
   live in `app/whats-new/upcoming.test.ts`.)
 - **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →

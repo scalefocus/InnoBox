@@ -20,7 +20,16 @@ export function devSlug(name: string): string {
  *  their test's own navigation. */
 export async function signIn(
   context: BrowserContext,
-  opts: { name: string; admin?: boolean; freshOnboarding?: boolean },
+  opts: {
+    name: string;
+    admin?: boolean;
+    freshOnboarding?: boolean;
+    /** §13.9 update notice: an x.y.z seeds that marker, "none" leaves it unset; omitted stamps
+     *  the running release so the notice never interrupts an ordinary spec. */
+    whatsNewSeen?: string;
+    /** With `whatsNewSeen: "none"`: the rollout boundary date to seed (YYYY-MM-DD). */
+    whatsNewSinceDate?: string;
+  },
 ): Promise<{ userId: string }> {
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
   const page = await context.newPage();
@@ -30,6 +39,8 @@ export async function signIn(
     await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
     await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");
     await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
+    await page.locator("#dev-whats-new-seen").fill(opts.whatsNewSeen ?? "");
+    await page.locator("#dev-whats-new-since").fill(opts.whatsNewSinceDate ?? "");
     await page.getByRole("button", { name: "Dev sign-in" }).click();
     // On success the app returns to "/" authenticated and the account menu (.user-trigger, rendered
     // only when signed in) appears; on failure it stays on the signed-out landing with the dev

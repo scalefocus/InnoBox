@@ -21,13 +21,17 @@ import { SystemBanner } from "./SystemBanner";
 import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
+import { WhatsNewNotice } from "./WhatsNewNotice";
 
 // Shape of the §16 `me` resource (packages/web/src/app/api/me/route.ts) — only the fields
-// this shell needs (identity for the account menu, the admin role hints for nav gating).
+// this shell needs (identity for the account menu, the admin role hints for nav gating, the
+// §13.9 What's new marker for the update notice).
 interface MeResponse {
   user: { id: string; displayName: string; email: string | null; userName: string };
   roles: { platformAdmin: boolean; namespaceAdmin: string[] };
   quickStartSeenAt: string | null;
+  whatsNewSeenVersion: string | null;
+  whatsNewSinceDate: string | null;
 }
 
 interface NavItem {
@@ -304,6 +308,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <main className="content">{quickStartPending ? null : children}</main>
       </div>
+      {/* §13.9 update notice — portaled to <body>; renders nothing unless a release is unacknowledged. */}
+      {authed && <WhatsNewNotice me={me} pathname={pathname} />}
     </div>
   );
 }
