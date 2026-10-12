@@ -79,7 +79,12 @@ async function handlePOST(req: Request): Promise<Response> {
     case "inactive_impact_area":
       return Response.json({ error: "impact area is retired" }, { status: 400 });
     case "attachments_not_clean":
-      return Response.json({ error: "wait for all attachments to finish scanning (or remove any that failed) before submitting" }, { status: 409 });
+      return Response.json(
+        { error: "wait for all attachments to finish scanning (or remove any that failed) before submitting", code: "attachments_not_clean" },
+        { status: 409 },
+      );
+    case "attachments_over_limit":
+      return Response.json({ error: "too many attachments — remove some before submitting", code: "attachments_over_limit" }, { status: 409 });
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
   }
