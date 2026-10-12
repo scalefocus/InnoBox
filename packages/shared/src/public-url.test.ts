@@ -2,7 +2,22 @@
 // NEXTAUTH_URL), the development default outside production, and the production start-up refusal.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEV_PUBLIC_BASE_URL, configuredPublicBaseUrl, publicBaseUrl, publicBaseUrlStartupViolation } from "./public-url.js";
+import { DEV_PUBLIC_BASE_URL, configuredPublicBaseUrl, publicBaseUrl, publicBaseUrlStartupViolation, stripTrailingSlashes } from "./public-url.js";
+
+test("stripTrailingSlashes: drops every trailing slash, nothing else", () => {
+  assert.equal(stripTrailingSlashes("https://innobox.example.com///"), "https://innobox.example.com");
+  assert.equal(stripTrailingSlashes("https://innobox.example.com/sub"), "https://innobox.example.com/sub");
+  assert.equal(stripTrailingSlashes("///"), "");
+  assert.equal(stripTrailingSlashes(""), "");
+});
+
+test("stripTrailingSlashes: linear on a long run of slashes (no regex backtracking)", () => {
+  const run = "/".repeat(200_000);
+  const started = performance.now();
+  assert.equal(stripTrailingSlashes(`${run}x`), `${run}x`);
+  assert.equal(configuredPublicBaseUrl({ PUBLIC_BASE_URL: `https://innobox.example.com${run}` }), "https://innobox.example.com");
+  assert.ok(performance.now() - started < 1_000, "a quadratic strip would take far longer");
+});
 
 test("configuredPublicBaseUrl: trimmed, trailing slashes dropped", () => {
   assert.equal(configuredPublicBaseUrl({ PUBLIC_BASE_URL: " https://innobox.example.com// " }), "https://innobox.example.com");

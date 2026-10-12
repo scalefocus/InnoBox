@@ -3,6 +3,14 @@
 // fallback, and no deployment-specific host lives in the repository. Dependency-free, so the edge
 // middleware can import it through the `@innobox/shared/public-url` subpath.
 
+/** Drops every trailing `/`. A loop, not a `/\/+$/` replace: that regex backtracks
+ *  quadratically on a long run of slashes followed by any other character. */
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end--;
+  return value.slice(0, end);
+}
+
 /** The documented development default, used only outside production. */
 export const DEV_PUBLIC_BASE_URL = "http://localhost:3000";
 
@@ -15,7 +23,7 @@ export interface PublicUrlEnv {
  *  or blank (compose passes an unset variable as ""). No development default: the edge
  *  consumers (CSRF origin check, CSP report endpoint, HSTS) use the request's own origin then. */
 export function configuredPublicBaseUrl(env: PublicUrlEnv = process.env): string | undefined {
-  const value = env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+  const value = stripTrailingSlashes(env.PUBLIC_BASE_URL?.trim() ?? "");
   return value || undefined;
 }
 
