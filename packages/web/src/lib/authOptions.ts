@@ -4,13 +4,13 @@
 // cookie carries `oid` + display basics ONLY — roles resolve from SCIM-synced group
 // membership on every request (lib/auth.ts), NEVER from token claims (invariant 1).
 import type { NextAuthOptions } from "next-auth";
-import AzureADProvider from "next-auth/providers/azure-ad";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { pool } from "./db";
 import { upsertDevUser } from "./users";
 import { resolveEntraSignIn } from "./signin-relink";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
 import { AUTH_PAGES } from "./auth-pages";
+import { buildEntraProvider } from "./entra-tenant";
 
 declare module "next-auth" {
   interface Session {
@@ -36,26 +36,13 @@ interface EntraClaims {
 // Credentials provider below can never be registered there — the flag is a no-op.
 const devAuthEnabled = process.env.INNOBOX_DEV_AUTH === "1" && process.env.NODE_ENV !== "production";
 
+// Tenant-pinned Entra provider (lib/entra-tenant.ts); a production build without a single
+// tenant never gets this far — instrumentation.ts refuses to start.
 const providers: NextAuthOptions["providers"] = [
-  AzureADProvider({
-    // Display name shown on any provider-labeled control ("Sign in with Entra ID") — never
-    // the library default "Azure Active Directory". The sign-in UI is in-shell (AppShell),
-    // not the removed default Auth.js page (ENTRA_AUTH_SPEC.md §5, layer 1).
-    name: "Entra ID",
-    tenantId: process.env.ENTRA_TENANT_ID,
-    clientId: process.env.ENTRA_CLIENT_ID ?? "",
-    clientSecret: process.env.ENTRA_CLIENT_SECRET ?? "",
-    authorization: { params: { scope: "openid profile email" } },
-    checks: ["pkce", "state", "nonce"],
-    // Replaces the provider default, which also fetches the user photo from Graph —
-    // reconciliation owns photos (spec §5); sign-in needs claims only.
-    profile(claims) {
-      return {
-        id: (claims.oid as string | undefined) ?? claims.sub,
-        name: (claims.name as string | undefined) ?? null,
-        email: claims.email ?? null,
-      };
-    },
+  buildEntraProvider({
+    ENTRA_TENANT_ID: process.env.ENTRA_TENANT_ID,
+    ENTRA_CLIENT_ID: process.env.ENTRA_CLIENT_ID,
+    ENTRA_CLIENT_SECRET: process.env.ENTRA_CLIENT_SECRET,
   }),
 ];
 

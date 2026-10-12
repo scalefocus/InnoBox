@@ -421,3 +421,165 @@ test(
     }
   },
 );
+
+// ENTRA_AUTH_SPEC.md §5 contract details: ListResponse paging on /Groups, malformed ids, the
+// userName check on a duplicate POST, updated_at on membership-only group writes, and the PATCH
+// forms for the work e-mail and externalId — each with Entra's literal payload shapes.
+test(
+  "SCIM 2.0 server: paging, malformed ids, uniqueness and PATCH e-mail/externalId",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const [{ Pool }, express, { default: request }, { createScimRouter }] = await Promise.all([
+      import("pg"),
+      import("express").then((m) => m.default),
+      import("supertest"),
+      import("./router.js"),
+    ]);
+
+    const pool = new Pool({ connectionString: url });
+    const runId = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
+    const PREFIX = `scimtest2-${runId}-`;
+    const bearerToken = "scimtest-bearer-2b7d9e4f1a6c8350"; // gitleaks:allow — test-only fixture
+    const app = express();
+    app.use("/scim/v2", createScimRouter(pool, { bearerToken }));
+    const auth = (req: import("supertest").Test) => req.set("Authorization", `Bearer ${bearerToken}`);
+    const userPayload = (suffix: string) => ({
+      schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+      externalId: `${PREFIX}${suffix}`,
+      userName: `${PREFIX}${suffix}@example.com`,
+      active: true,
+      displayName: `User ${suffix}`,
+      emails: [{ value: `${PREFIX}${suffix}@example.com`, type: "work", primary: true }],
+    });
+    const cleanup = () => pool.query(`delete from groups where external_id like $1`, [`${PREFIX}%`]);
+
+    try {
+      const a = await auth(request(app).post("/scim/v2/Users")).send(userPayload("a"));
+      const b = await auth(request(app).post("/scim/v2/Users")).send(userPayload("b"));
+      assert.equal(a.status, 201);
+      assert.equal(b.status, 201);
+      const aId: string = a.body.id;
+
+      // ── a duplicate POST whose new userName belongs to another row → 409, nothing written ──
+      const clash = await auth(request(app).post("/scim/v2/Users")).send({
+        ...userPayload("a"),
+        userName: userPayload("b").userName,
+      });
+      assert.equal(clash.status, 409, JSON.stringify(clash.body));
+      assert.equal(clash.body.scimType, "uniqueness");
+      const { rows: aAfterClash } = await pool.query(`select user_name from users where id = $1`, [aId]);
+      assert.equal(aAfterClash[0].user_name, userPayload("a").userName);
+
+      // ── PATCH the work e-mail — the filter-path form ─────────────────────────────────────
+      const filterPath = await auth(request(app).patch(`/scim/v2/Users/${aId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Replace", path: 'emails[type eq "work"].value', value: `${PREFIX}a-new@example.com` }],
+      });
+      assert.equal(filterPath.status, 200, JSON.stringify(filterPath.body));
+      assert.equal(filterPath.body.emails[0].value, `${PREFIX}a-new@example.com`);
+
+      // ── … and the path-less emails array ─────────────────────────────────────────────────
+      const pathLess = await auth(request(app).patch(`/scim/v2/Users/${aId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [
+          { op: "Replace", value: { emails: [{ type: "work", value: `${PREFIX}a-third@example.com`, primary: true }] } },
+        ],
+      });
+      assert.equal(pathLess.status, 200, JSON.stringify(pathLess.body));
+      const { rows: aEmail } = await pool.query(`select email from users where id = $1`, [aId]);
+      assert.equal(aEmail[0].email, `${PREFIX}a-third@example.com`);
+
+      // ── PATCH externalId: re-key the row, audited ────────────────────────────────────────
+      const rekeyed = `${PREFIX}a-rekeyed`;
+      const rekey = await auth(request(app).patch(`/scim/v2/Users/${aId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Replace", path: "externalId", value: rekeyed }],
+      });
+      assert.equal(rekey.status, 200, JSON.stringify(rekey.body));
+      assert.equal(rekey.body.externalId, rekeyed);
+      const { rows: rekeyAudit } = await pool.query(
+        `select before, after from audit_log where action = 'scim.user_updated' and target_id = $1 order by id desc limit 1`,
+        [aId],
+      );
+      assert.equal(rekeyAudit[0].before.externalId, `${PREFIX}a`);
+      assert.equal(rekeyAudit[0].after.externalId, rekeyed);
+
+      // ── … onto another row's externalId → 409, nothing written ───────────────────────────
+      const taken = await auth(request(app).patch(`/scim/v2/Users/${aId}`)).send({
+        Operations: [
+          { op: "Replace", path: "externalId", value: `${PREFIX}b` },
+          { op: "Replace", path: "displayName", value: "Must not land" },
+        ],
+      });
+      assert.equal(taken.status, 409, JSON.stringify(taken.body));
+      assert.equal(taken.body.scimType, "uniqueness");
+      const { rows: aAfterTaken } = await pool.query(`select external_id, display_name from users where id = $1`, [aId]);
+      assert.equal(aAfterTaken[0].external_id, rekeyed);
+      assert.equal(aAfterTaken[0].display_name, "User a");
+
+      // ── malformed ids → 404 on every verb; a well-formed unknown id keeps DELETE's 204 ───
+      const malformed: Array<["get" | "put" | "patch" | "delete", string]> = [
+        ["get", "/scim/v2/Users/not-a-uuid"],
+        ["put", "/scim/v2/Users/not-a-uuid"],
+        ["patch", "/scim/v2/Users/not-a-uuid"],
+        ["delete", "/scim/v2/Users/not-a-uuid"],
+        ["get", "/scim/v2/Groups/not-a-uuid"],
+        ["put", "/scim/v2/Groups/not-a-uuid"],
+        ["patch", "/scim/v2/Groups/not-a-uuid"],
+        ["delete", "/scim/v2/Groups/not-a-uuid"],
+      ];
+      for (const [method, path] of malformed) {
+        const res = await auth(request(app)[method](path)).send(
+          method === "put" || method === "patch" ? { Operations: [] } : undefined,
+        );
+        assert.equal(res.status, 404, `${method.toUpperCase()} ${path}`);
+      }
+      const delUnknownGroup = await auth(request(app).delete(`/scim/v2/Groups/${randomUUID()}`));
+      assert.equal(delUnknownGroup.status, 204);
+
+      // ── /Groups paging: totalResults is the full count, startIndex echoes the request ────
+      const groupIds: string[] = [];
+      for (const n of [1, 2, 3]) {
+        const g = await auth(request(app).post("/scim/v2/Groups")).send({
+          schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+          externalId: `${PREFIX}group-${n}`,
+          displayName: `${PREFIX}Group ${n}`,
+        });
+        assert.equal(g.status, 201);
+        groupIds.push(g.body.id);
+      }
+      const page = await auth(request(app).get("/scim/v2/Groups?startIndex=2&count=1"));
+      assert.equal(page.status, 200);
+      const { rows: groupCount } = await pool.query(`select count(*)::int as n from groups`);
+      assert.equal(page.body.totalResults, groupCount[0].n, "totalResults is the full match count");
+      assert.ok(page.body.totalResults >= 3);
+      assert.equal(page.body.startIndex, 2, "startIndex echoes the request");
+      assert.equal(page.body.itemsPerPage, 1);
+      assert.equal(page.body.Resources.length, 1);
+
+      // ── a membership-only PATCH still stamps updated_at ──────────────────────────────────
+      const groupId = groupIds[0]!;
+      await pool.query(`update groups set updated_at = now() - interval '1 hour' where id = $1`, [groupId]);
+      const { rows: stale } = await pool.query<{ updated_at: Date }>(`select updated_at from groups where id = $1`, [
+        groupId,
+      ]);
+      const add = await auth(request(app).patch(`/scim/v2/Groups/${groupId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Add", path: "members", value: [{ value: aId }, { value: "not-a-uuid" }] }],
+      });
+      assert.equal(add.status, 200, "a malformed member id is an unknown member, tolerated");
+      const { rows: fresh } = await pool.query<{ updated_at: Date }>(`select updated_at from groups where id = $1`, [
+        groupId,
+      ]);
+      assert.ok(fresh[0]!.updated_at.getTime() > stale[0]!.updated_at.getTime(), "membership-only write bumps updated_at");
+      assert.equal(add.body.meta.lastModified, fresh[0]!.updated_at.toISOString(), "the response carries the new stamp");
+      assert.deepEqual(
+        add.body.members.map((m: { value: string }) => m.value),
+        [aId],
+      );
+    } finally {
+      await cleanup();
+      await pool.end();
+    }
+  },
+);

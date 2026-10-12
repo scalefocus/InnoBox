@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.8",
+    date: "2026-10-12",
+    summary:
+      "Sign-in is now always tied to your organization's own directory: a server without that setting refuses to start rather than accept accounts from other organizations. Changes to your work e-mail in the directory now reach InnoBox straight away, and user and group sync answers more requests with a clear refusal instead of an error.",
+  },
+  {
     version: "0.51.7",
     date: "2026-10-12",
     summary:

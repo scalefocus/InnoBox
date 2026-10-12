@@ -179,11 +179,6 @@ tolerates; exact file follows `db/migrations/README.md` rules.)
   case-insensitively) — a fatal structured error naming the variable, then exit 1, like
   the `INNOBOX_DEV_AUTH` guard — because sign-in must be pinned to the one tenant, and
   an unset value would otherwise make the AzureAD provider fall back to `common`.
-
-  > **⚠ GAP-52 · code fix:** there is no such guard: `lib/authOptions.ts` passes
-  > `process.env.ENTRA_TENANT_ID` straight to the provider. Add the refusal to
-  > `web/src/instrumentation.ts` `register()` beside the dev-auth and `CSP_MODE` checks
-  > (a pure helper in `lib/`, unit-tested — see GAP-56).
 - **`signIn` callback**: look up `users` by `oid`.
   - Missing → JIT-insert a stub (`external_id=oid`, `user_name=preferred_username`,
     `email`, `display_name`, `scim_synced=false`), audited as `user.jit_created`.
@@ -243,13 +238,6 @@ provisioning contract, including the Entra dialect quirks:
   `PATCH` and `DELETE` alike; only a well-formed id that matches no row keeps `DELETE`'s
   idempotent 204. A scrubbed (GDPR-erased) user is excluded from `/Users` lists and
   filters, `totalResults` included (INNOBOX_SPEC.md §3).
-
-  > **⚠ GAP-53 · code fix:** in `worker/src/scim/router.ts`, unfiltered `GET /Groups`
-  > calls `scimListResponse(resources, resources.length)` with no count query and no
-  > `startIndex`, so `totalResults` is the page size and `startIndex` is always 1
-  > (`/Users` is correct). And `findUserById` / `findGroupById` pass any `:id` straight
-  > to the uuid column, so a malformed id on `GET`/`PUT`/`PATCH`/`DELETE` reaches the
-  > error tail as a 500. Validate the id first and answer 404 (on `DELETE` too).
 - **Writes are idempotent upserts keyed on `externalId`** (fall back to `id`; neither → 400).
   Duplicate POST returns the existing resource logic per contract (409 on `userName`
   uniqueness conflicts). All SCIM writes set `scim_synced=true` and stamp `updated_at` —
@@ -258,15 +246,6 @@ provisioning contract, including the Entra dialect quirks:
   matching it by `externalId` answers 409, and a group membership add naming it is
   treated as an unknown member — nothing written (INNOBOX_SPEC.md §3). Each refusal is
   audited `scim.anomaly`.
-
-  > **⚠ GAP-54 · code fix:** (a) in `worker/src/scim/router.ts`, a POST `/Users` whose
-  > `externalId` already exists calls `updateUserFull` without the `userName` conflict
-  > check PUT and PATCH run, so a clash hits the unique index and answers **500**; run
-  > the check, and map Postgres `23505` to 409 `uniqueness` in the error tail as a
-  > backstop. (b) `markGroupScimSynced` runs
-  > `update groups set scim_synced = true where id = $1 and not scim_synced`, so
-  > membership-only writes never bump `groups.updated_at`; always set
-  > `updated_at = now()`.
 - **PATCH quirks handled**: case-insensitive `op`; `active` deactivation in all three
   serializations (bool, string `"False"`, path-less `{value:{active:false}}`); the work
   e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less
@@ -276,13 +255,6 @@ provisioning contract, including the Entra dialect quirks:
   **200 with the resource or 204**, both of which Entra accepts (never fail the sync);
   group membership `Add`/`Remove` including the `members[value eq "…"]` filter-path form;
   unknown member ids ignored (reconciliation heals ordering races).
-
-  > **⚠ GAP-55 · code fix:** `applyUserAttr` in `worker/src/scim/patch.ts` has no case
-  > for `emails` in either form, and `NormalizedUserPatch.email` is never set, so a PATCH
-  > can never change a user's e-mail (only POST/PUT do); `externalId` has no field in
-  > `NormalizedUserPatch` and is ignored. Add both, apply `externalId` in the
-  > `PATCH /Users/:id` handler with the 409 `uniqueness` check against other rows, and
-  > cover both with `patch.test.ts` cases using Entra's literal payloads.
 - **DELETE `/Users/{id}`** → deactivate (leaver semantics, §2), idempotent 204 (an
   unknown well-formed id included); a malformed id or a scrubbed user → 404 (above).
   **DELETE `/Groups/{id}`** → remove group + memberships; `role_mappings` rows survive and
@@ -394,11 +366,6 @@ provisioning contract, including the Entra dialect quirks:
 - **Tenant pinning (web unit test)**: the provider's issuer is pinned to
   `ENTRA_TENANT_ID`, and the production start-up guard (Layer 1 above) refuses an unset,
   blank, `common`, `organizations` or `consumers` value.
-
-  > **⚠ GAP-56 · code fix:** neither test exists. No web test covers the tenant-pinned
-  > issuer or the GAP-52 guard, and `worker/src/recon/` has only `diff.test.ts`, no
-  > pass-level test of `reconcile.ts`. Add `recon/reconcile.dbtest.ts` and the web unit
-  > test above.
 - Verification checklists of all three layers (authentication, provisioning, authorization), walked against the
   Entra portal (Test Connection, provision-on-demand, leaver, group→role, re-enable).
 
