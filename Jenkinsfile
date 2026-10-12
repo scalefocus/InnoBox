@@ -168,6 +168,10 @@ pipeline {
           export INNOBOX_DEV_AUTH=1
           export NEXTAUTH_SECRET="e2e-ci-secret-not-used-in-production-0123456789"
           export NEXTAUTH_URL="http://127.0.0.1:3000"
+          # The CSRF Origin check accepts only PUBLIC_BASE_URL's origin (NEXTAUTH_URL is never a
+          # fallback). Unset, dev falls back to Next's own request origin — which it reports as
+          # localhost — so every mutation from the 127.0.0.1 browser would be refused with a 403.
+          export PUBLIC_BASE_URL="http://127.0.0.1:3000"
           export E2E_BASE_URL="http://127.0.0.1:3000"
           # The suites submit far more than the per-user rate budgets allow; the dev server reads
           # this to scale them (ignored under NODE_ENV=production).
