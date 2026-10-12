@@ -399,21 +399,6 @@ The delivery pipeline, pinned:
     worker apply the one rule: SMTP counts as configured only with `SMTP_HOST` **and** a
     sender (`SMTP_FROM` or `SMTP_USER`), blank values counting as unset; compose passes
     `SMTP_USER` and `SMTP_FROM` to both services.
-
-    > **⚠ GAP-04 · code fix:** (a) there is no shared helper. `app/layout.tsx` uses
-    > `PUBLIC_BASE_URL ?? "http://localhost:3000"` regardless of `NODE_ENV`;
-    > `lib/security-headers.ts` `canonicalBaseUrl()` (behind `lib/email.ts`
-    > `webBaseUrl()`), `lib/csrf.ts` `allowedOrigins()`, `lib/auth-cookie-sweep.ts` and
-    > `api/admin/webhooks/responses.ts` fall back to `NEXTAUTH_URL`; the worker passes
-    > `PUBLIC_BASE_URL ?? ""` to the notification sweep (`worker/src/index.ts`) and the
-    > webhook sweep (`webhooks/deliver.ts` `startWebhookSweeps`), and
-    > `scim/resources.ts` reads the variable directly. Add `publicBaseUrl()` to
-    > `@innobox/shared`, route every consumer through it, drop the `NEXTAUTH_URL`
-    > fallbacks, and add the production refusal to `web/src/instrumentation.ts` and the
-    > worker's start-up. (b) Web: `lib/email.ts` sets `smtpConfigured` from `SMTP_HOST`
-    > alone — reuse the worker's `buildSmtpEnv` rule (`worker/src/notifications/smtp-env.ts`,
-    > moved to `@innobox/shared`), and pass `SMTP_USER` / `SMTP_FROM` to the `web`
-    > service in `deploy/docker-compose.yml`.
   - **Committed files carry placeholders, never real values** — `deploy/.env.example`,
     `docker-compose.yml`, the `Caddyfile`, the `Jenkinsfile`, `README.md`, and the
     specs use `https://innobox.example.com`, `innobox@example.com`, and
@@ -422,15 +407,6 @@ The delivery pipeline, pinned:
     (`@example.test`) — plus the dev sign-in default `dev@innobox.innovate`, which
     names the product, not a deployment. The same rule binds product code: the
     synthetic user name of a dev sign-in persona is `<slug>@dev.test`.
-
-    > **⚠ GAP-05 · code fix:** non-reserved domains remain. Product code:
-    > `web/src/lib/users.ts` builds the dev persona's `userName` as `<slug>@dev.local` —
-    > make it `@dev.test`, with `lib/users.test.ts` and `e2e/helpers/auth.ts` (which
-    > fills `@dev.local`). Fixtures → `@example.com`: `@contoso.com`
-    > (`worker/src/scim/filter.test.ts`, `resources.test.ts`, `scim.dbtest.ts`),
-    > `a@x.com` / `b@x.com` (`resources.test.ts`), `a@b.com`
-    > (`worker/src/notifications/dispatch.test.ts`) and `svc@corp.com`
-    > (`shared/src/email-graph.test.ts`).
   - **Real values reach production only through the Jenkins credentials vault** —
     the `innobox-deploy-env` secret file (the production `deploy/.env`, carrying
     `PUBLIC_BASE_URL`, `SMTP_FROM`, and every secret) plus the `innobox-deploy-host`,
@@ -450,10 +426,6 @@ The delivery pipeline, pinned:
   `db/migrations/*.sql` applied in order. `.gitlab-ci.yml` is removed — it mirrors
   stages nobody outside the organization can run and duplicates the Actions
   workflow.
-
-  > **⚠ GAP-06 · code fix:** the `build` job in `.github/workflows/ci.yml` builds only
-  > `@innobox/shared` and `@innobox/web`; it must run the recursive `pnpm -r build`, so
-  > the worker is built too.
 - **CI (Jenkins declarative pipeline) — retained for deploy, and as the internal
   pre-deploy gate:** stages —
   **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
@@ -526,11 +498,6 @@ The delivery pipeline, pinned:
   `S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}`, so setting the
   overrides points both services at a separate key without touching how MinIO itself
   starts. `deploy/.env.example` documents both as optional.
-
-  > **⚠ GAP-08 · code fix:** `deploy/docker-compose.yml` wires `S3_ACCESS_KEY` /
-  > `S3_SECRET_KEY` for `web` and `worker` straight from `MINIO_ROOT_*`, so the
-  > documented `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` overrides do nothing. Use the
-  > nested defaults above for both services.
 
 ### §2.4 Web security baseline
 
@@ -935,11 +902,6 @@ shown (§13.6).
   that is already quoted — strong, or weak with a `W/` prefix — is sent unchanged, and
   only an unquoted value is wrapped in quotes. `If-None-Match` is compared against that
   same form.
-
-  > **⚠ GAP-15 · code fix:** `api/users/[userId]/photo/route.ts` always wraps the stored
-  > `photo_etag` in quotes (`` `"${row.photo_etag}"` ``), which yields a malformed `ETag`
-  > when Graph's value is already quoted or weak. Quote only an unquoted value, pass a
-  > `W/"…"` value through, and compare `If-None-Match` against the result.
 - **Deactivation:** when a user deactivates (SCIM or reconciliation), the cached
   photo bytes + etag are cleared; the user renders as a greyed initials bubble
   thereafter (§13.6).
@@ -4913,10 +4875,6 @@ exist), `CLAUDE.md` and this spec (§21.3 reference rewrites, §2.2 authority
 inversion), `.gitignore` (`.claude/skills/`).
 
 Deleted: `START_PROMPT.md`, `.gitlab-ci.yml`.
-
-> **⚠ GAP-50 · code fix:** `packages/web/src/app/globals.css` still opens with the
-> "STARTER-KIT NOTE: carried over from a proven sibling app …" paragraph in its header
-> comment, a starter-kit artefact; replace it with a plain description of the file.
 
 ### §21.7 The attribution test
 

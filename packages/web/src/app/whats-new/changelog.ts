@@ -11,10 +11,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "0.51.1",
+    version: "0.51.2",
     date: "2026-10-12",
     summary:
       "The audit log has a new Anonymity filter that lists every admin reveal and self-reveal in one place. Before, these only showed under All. The audit CSV export now writes the before and after values exactly as the database stores them, instead of reformatting them.",
+  },
+  {
+    version: "0.51.1",
+    date: "2026-10-12",
+    summary:
+      "Every link InnoBox sends, in e-mails, Teams cards and sign-in redirects, now comes from the one public address the server is configured with, and the e-mail status card recognises the SMTP fallback only when a sender address is set. Profile photos refresh more reliably. Operators: a production server without PUBLIC_BASE_URL now refuses to start.",
   },
   {
     version: "0.51.0",

@@ -13,6 +13,7 @@
 import { getToken } from "next-auth/jwt";
 import { NextResponse, type NextRequest } from "next/server";
 import { cspResponseHeaders, resolveCspMode } from "./lib/csp-mode";
+import { configuredPublicBaseUrl } from "@innobox/shared/public-url";
 import { isOriginAllowed } from "./lib/csrf";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER } from "./lib/presence-touch";
 import { isPublicPath } from "./lib/routeAccess";
@@ -20,7 +21,6 @@ import { PATHNAME_HEADER } from "./lib/quick-start";
 import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
-  canonicalBaseUrl,
   generateNonce,
   isAttachmentDownload,
   NONCE_HEADER,
@@ -73,7 +73,7 @@ async function route(req: NextRequest, sec: Security): Promise<NextResponse> {
       pathname,
       origin: req.headers.get("origin"),
       requestOrigin: req.nextUrl.origin,
-      env: { PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL, NEXTAUTH_URL: process.env.NEXTAUTH_URL },
+      env: { PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL },
       dev: isDev(),
     })
   ) {
@@ -108,7 +108,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
   const sec: Security = { nonce, csp: buildContentSecurityPolicy({ nonce, dev, report }) };
 
   const res = await route(req, sec);
-  const baseUrl = canonicalBaseUrl(process.env);
+  const baseUrl = configuredPublicBaseUrl({ PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL });
   const origin = report ? reportingOrigin(baseUrl, req.nextUrl.origin, dev) : null;
   const headers = cspResponseHeaders({
     mode,

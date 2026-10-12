@@ -191,7 +191,7 @@ export async function upsertDevUser(db: Pool, input: DevUserInput): Promise<User
       // lower(user_name) while getting DIFFERENT external_ids. The JIT INSERT's
       // `on conflict (external_id) do nothing` can't catch that, so the second sign-in 500s
       // on the users_user_name_lower_idx unique index. The email still lands in the email column.
-      userName: `${slug}@dev.local`,
+      userName: `${slug}@dev.test`,
       email: input.email,
       displayName: input.name,
     },

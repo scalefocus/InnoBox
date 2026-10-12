@@ -61,6 +61,10 @@
     "./ai": {
       "types": "./dist/ai.d.ts",
       "default": "./dist/ai.js"
+    },
+    "./public-url": {
+      "types": "./dist/public-url.d.ts",
+      "default": "./dist/public-url.js"
     }
   },
   "scripts": {

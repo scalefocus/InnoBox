@@ -6,6 +6,8 @@
 //
 // User-facing strings here never carry a spec reference (invariant 9) or the provider token.
 
+import { stripTrailingSlashes } from "./public-url.js";
+
 // ── Providers ────────────────────────────────────────────────────────────────────────────
 
 export const AI_PROVIDERS = ["openwebui", "openai"] as const;
@@ -154,13 +156,6 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 function looksPrivateLiteral(hostname: string, isPublic: (address: string) => boolean): boolean {
   const literal = /^[0-9.]+$/.test(hostname) || hostname.includes(":");
   return literal && !isPublic(hostname);
-}
-
-/** Linear-time trailing-slash strip (a `/\/+$/` replace backtracks quadratically on many slashes). */
-function stripTrailingSlashes(path: string): string {
-  let end = path.length;
-  while (end > 0 && path.charCodeAt(end - 1) === 0x2f) end--;
-  return path.slice(0, end);
 }
 
 /**

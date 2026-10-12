@@ -5,6 +5,7 @@
 // InnoBox auth state and no orphaned session chunk can be re-assembled with a newer one.
 // Non-auth browser state (theme, collapsed cards, view choice) is never touched.
 // Pure helpers + one Response mutator; unit-tested in auth-cookie-sweep.test.ts.
+import { configuredPublicBaseUrl } from "@innobox/shared/public-url";
 
 const COOKIE_PREFIXES = ["__Secure-", "__Host-"] as const;
 
@@ -38,9 +39,9 @@ export function authCookiesToExpire(names: Iterable<string>): string[] {
   return [...out].sort();
 }
 
-/** True when PUBLIC_BASE_URL is an https URL (falls back to NEXTAUTH_URL, like csrf.ts). */
+/** True when PUBLIC_BASE_URL is an https URL (§2.3: no other variable is consulted). */
 export function isHttpsBase(env: Record<string, string | undefined> = process.env): boolean {
-  const base = env.PUBLIC_BASE_URL || env.NEXTAUTH_URL || "";
+  const base = configuredPublicBaseUrl(env) ?? "";
   try {
     return new URL(base).protocol === "https:";
   } catch {
