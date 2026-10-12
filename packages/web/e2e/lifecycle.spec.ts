@@ -65,9 +65,13 @@ test("single-winner: implementing a solution solves the challenge and closes its
   await closedSection.getByText("Closed solutions (1)").click();
   await expect(admin.locator(`#SOL-${runnerUp.digits}`).locator(".pill", { hasText: "Not selected" })).toBeVisible();
 
-  // A deep link to a closed solution opens the section for it.
-  await admin.goto(`/challenges/${challenge.digits}#SOL-${runnerUp.digits}`);
-  await expect(admin.locator(`#SOL-${runnerUp.digits}`).locator(".pill", { hasText: "Not selected" })).toBeVisible();
+  // A deep link to a closed solution opens the section for it. Loaded in a fresh page: a hash-only
+  // goto on `admin` would be a same-document navigation — no remount, and the section is already
+  // open from the click above — so it would pass without exercising the deep-link path.
+  const deepLinked = await adminCtx.newPage();
+  await deepLinked.goto(`/challenges/${challenge.digits}#SOL-${runnerUp.digits}`);
+  await expect(deepLinked.getByTestId("closed-solutions")).toHaveAttribute("open", "");
+  await expect(deepLinked.locator(`#SOL-${runnerUp.digits}`).locator(".pill", { hasText: "Not selected" })).toBeVisible();
 
   await adminCtx.close();
   await winnerCtx.close();
