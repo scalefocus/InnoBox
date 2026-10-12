@@ -1,11 +1,18 @@
 // Data layer for /api/dashboard (INNOBOX_SPEC.md §13.2): visibility-filtered KPI tiles and
-// spotlight cards for the Home page. Mirrors challenges/store.ts's visibility pattern (skip
-// the namespace restriction entirely for platform admins; otherwise org-visible or member
-// namespaces only) — none of the KPI/spotlight statuses fall in the awaiting_triage/withdrawn
-// special-hidden set, so no extra author/admin carve-out is needed here.
+// spotlight cards for the Home page. Every query applies the full §4.3 predicate per viewer —
+// the shared SQL twins of canSeeChallenge (namespace rule AND state rule) and, for the solution
+// KPIs and spotlights, canSeeSolution. The solution statuses counted here are never
+// awaiting_triage/withdrawn themselves, but their PARENT challenge can be (withdrawn, or moved
+// back to awaiting_triage by an admin), and such a solution must neither count nor surface its
+// challenge's title to a viewer who cannot see that challenge (invariant 2).
 import type { Pool } from "pg";
 import { formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeStatus, type MaskedAuthor, type SolutionStatus } from "@innobox/shared";
-import type { ChallengeListItem, Viewer } from "../challenges/store";
+import {
+  pushChallengeVisibilityConditions,
+  pushSolutionVisibilityConditions,
+  type ChallengeListItem,
+  type Viewer,
+} from "../challenges/store";
 import { listFeaturedForViewer } from "../challenges/featured";
 
 export const CHALLENGE_KPI_STATUSES: ChallengeStatus[] = ["in_review", "valid", "solved", "rejected"];
@@ -35,37 +42,49 @@ export interface DashboardData {
   };
 }
 
-/** Builds the `visibility = 'org' or namespace_id = ANY(...)` clause for a viewer, or no
- *  restriction at all for platform admins (who see every namespace). Returns the clause
- *  text (referencing `$N`) and appends the param when needed. */
-function visibilityClause(viewer: Viewer, params: unknown[], namespaceColumn: string): string {
-  if (viewer.roles.isPlatformAdmin) return "true";
-  params.push(viewer.roles.memberNamespaces());
-  return `(${namespaceColumn}.visibility = 'org' or ${namespaceColumn}.namespace_id = ANY($${params.length}::uuid[]))`;
+/** A fresh parameter list plus its `$N` pusher, for one query. */
+function queryParams(): { params: unknown[]; push: (v: unknown) => string } {
+  const params: unknown[] = [];
+  return {
+    params,
+    push: (v) => {
+      params.push(v);
+      return `$${params.length}`;
+    },
+  };
+}
+
+/** The §4.3 conditions for a `solutions s join challenges c` read: the parent challenge's gate
+ *  plus the solution's own `proposed` narrowing (`true` for platform admins). */
+function solutionVisibility(viewer: Viewer, push: (v: unknown) => string): string {
+  const conditions: string[] = [];
+  pushChallengeVisibilityConditions(viewer, push, conditions);
+  pushSolutionVisibilityConditions(viewer, push, conditions);
+  return conditions.length > 0 ? conditions.join(" and ") : "true";
 }
 
 export async function getDashboard(pool: Pool, viewer: Viewer): Promise<DashboardData> {
-  const challengeParams: unknown[] = [];
-  const challengeVisibility = visibilityClause(viewer, challengeParams, "c");
-  challengeParams.push(CHALLENGE_KPI_STATUSES);
+  const challengeQuery = queryParams();
+  const challengeConditions: string[] = [];
+  pushChallengeVisibilityConditions(viewer, challengeQuery.push, challengeConditions);
+  challengeConditions.push(`c.status = ANY(${challengeQuery.push(CHALLENGE_KPI_STATUSES)})`);
   const { rows: challengeRows } = await pool.query<{ status: string; count: string }>(
-    `select status, count(*)::text as count
+    `select c.status, count(*)::text as count
        from challenges c
-      where ${challengeVisibility} and status = ANY($${challengeParams.length})
-      group by status`,
-    challengeParams,
+      where ${challengeConditions.join(" and ")}
+      group by c.status`,
+    challengeQuery.params,
   );
 
-  const solutionParams: unknown[] = [];
-  const solutionVisibility = visibilityClause(viewer, solutionParams, "c");
-  solutionParams.push(SOLUTION_KPI_STATUSES);
+  const solutionQuery = queryParams();
+  const solutionVisible = solutionVisibility(viewer, solutionQuery.push);
   const { rows: solutionRows } = await pool.query<{ status: string; count: string }>(
     `select s.status, count(*)::text as count
        from solutions s
        join challenges c on c.id = s.challenge_id
-      where ${solutionVisibility} and s.status = ANY($${solutionParams.length})
+      where ${solutionVisible} and s.status = ANY(${solutionQuery.push(SOLUTION_KPI_STATUSES)})
       group by s.status`,
-    solutionParams,
+    solutionQuery.params,
   );
 
   const challenges: Record<string, number> = Object.fromEntries(CHALLENGE_KPI_STATUSES.map((s) => [s, 0]));
@@ -74,9 +93,8 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
   for (const row of solutionRows) solutions[row.status] = Number(row.count);
 
   const spotlight = async (status: SolutionStatus): Promise<SpotlightSolution | null> => {
-    const params: unknown[] = [];
-    const visibility = visibilityClause(viewer, params, "c");
-    params.push(status);
+    const { params, push } = queryParams();
+    const visible = solutionVisibility(viewer, push);
     const { rows } = await pool.query<{
       number: string;
       description: string;
@@ -94,7 +112,7 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
          from solutions s
          join challenges c on c.id = s.challenge_id
          join users u on u.id = s.author_id
-        where ${visibility} and s.status = $${params.length}
+        where ${visible} and s.status = ${push(status)}
         order by s.updated_at desc
         limit 1`,
       params,

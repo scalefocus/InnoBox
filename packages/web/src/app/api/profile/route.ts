@@ -15,7 +15,7 @@ async function handleGET(): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
 
-  const profile = await getOwnProfile(pool, gate.user.id);
+  const profile = await getOwnProfile(pool, { userId: gate.user.id, roles: gate.user.roles });
   if (!profile) return Response.json({ error: "profile not found" }, { status: 404 });
   return Response.json({ profile });
 }

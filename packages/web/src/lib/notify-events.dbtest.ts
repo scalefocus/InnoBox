@@ -47,6 +47,9 @@ test(
       const member = (userId: string) => ({ userId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) });
       const admin = { userId: adminId!, roles: buildRoleSet([{ role: "namespace_admin", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const resolveRoles = async () => member("x").roles;
+      // The §7.3 assignee gate: the challenge below is still awaiting triage when it is assigned,
+      // which only the author and the namespace's admins can see — so the assignees are admins.
+      const assigneeRoles = async () => admin.roles;
       const ctx = { pool, actorId: adminId!, resolveRoles };
 
       const internal = (await listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
@@ -84,7 +87,7 @@ test(
       const usersOf = (rows: { user_id: string }[]) => rows.map((r) => r.user_id).sort();
 
       // ── Event 7 via bulk assign: assigned → auto-follow; reassigned → both told; same → nothing ──
-      assert.deepEqual(await bulkAssign(pool, admin, [chNum], assigneeA!, resolveRoles), [{ number: `CH-${chNum}`, status: "ok" }]);
+      assert.deepEqual(await bulkAssign(pool, admin, [chNum], assigneeA!, assigneeRoles), [{ number: `CH-${chNum}`, status: "ok" }]);
       assert.deepEqual(usersOf(await inbox("challenge_assigned", "You were assigned%")), [assigneeA]);
       const { rows: autoFollow } = await pool.query(`select 1 from follows where user_id = $1 and parent_type = 'challenge' and parent_id = $2`, [
         assigneeA,
@@ -92,16 +95,16 @@ test(
       ]);
       assert.equal(autoFollow.length, 1, "bulk assign auto-follows the assignee, like the detail-page assignment");
 
-      await bulkAssign(pool, admin, [chNum], assigneeB!, resolveRoles);
+      await bulkAssign(pool, admin, [chNum], assigneeB!, assigneeRoles);
       assert.deepEqual(usersOf(await inbox("challenge_assigned", "You were unassigned%")), [assigneeA], "the previous assignee is told");
       assert.deepEqual(usersOf(await inbox("challenge_assigned", "You were assigned%")), [assigneeA, assigneeB].sort(), "the new one too");
 
-      await bulkAssign(pool, admin, [chNum], assigneeB!, resolveRoles);
+      await bulkAssign(pool, admin, [chNum], assigneeB!, assigneeRoles);
       assert.equal((await inbox("challenge_assigned")).length, 3, "re-assigning the same person is no change and notifies nobody");
 
-      await bulkAssign(pool, admin, [chNum], null, resolveRoles);
+      await bulkAssign(pool, admin, [chNum], null, assigneeRoles);
       assert.deepEqual(usersOf(await inbox("challenge_assigned", "You were unassigned%")), [assigneeA, assigneeB].sort(), "unassigning tells the assignee");
-      await bulkAssign(pool, admin, [chNum], assigneeA!, resolveRoles);
+      await bulkAssign(pool, admin, [chNum], assigneeA!, assigneeRoles);
 
       // ── Events 3/4/5 via bulk status ────────────────────────────────────────────────────
       await bulkSetStatus(pool, admin, [chNum], "in_review", resolveRoles);

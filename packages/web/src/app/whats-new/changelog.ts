@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.3",
+    date: "2026-10-12",
+    summary:
+      "Restricted work stays hidden in more places. Home's counters and highlights skip solutions under challenges you can't open, and the items you follow hide what you can no longer see. Search no longer misses solutions you are allowed to see, and your own pending or withdrawn challenges stay findable even after you lose access to their namespace. Assignment now offers only people who can see the challenge.",
+  },
+  {
     version: "0.51.2",
     date: "2026-10-12",
     summary:

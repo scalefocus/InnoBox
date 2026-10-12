@@ -24,20 +24,26 @@ test("erasing a user hands visible open assignments to the chosen successor and 
   const { userId: successorId } = await signIn(successorCtx, { name: successorName });
 
   // One org-visible open challenge (moves) and one restricted to a namespace the successor is
-  // not a member of (skipped), both assigned to the leaver.
+  // not a member of (skipped), both assigned to the leaver. The assignee must see a challenge at
+  // assignment time (§7.3), so the second is restricted only AFTER the leaver is assigned — an
+  // existing assignee keeps an assignment they lose visibility of.
   const ns = await createNamespaceViaApi(adminCtx.request, { slug: `e2e-erasure-${stamp}`, displayName: `E2E Erasure ${stamp}` });
   const open = await createChallengeViaApi(adminCtx.request, { title: `E2E handed over ${stamp}`, description: "Moves to the successor." });
   const hidden = await createChallengeViaApi(adminCtx.request, {
     title: `E2E stays behind ${stamp}`,
     description: "The successor cannot see this one.",
     namespaceId: ns.id,
-    visibility: "namespace",
   });
   for (const c of [open, hidden]) {
     await setChallengeStatusViaApi(adminCtx.request, c.digits, "in_review");
     const assigned = await adminCtx.request.post(`${base}/api/challenges/${c.digits}/assign`, { data: { userId: victimId }, headers: json });
     expect(assigned.status()).toBe(200);
   }
+  const restricted = await adminCtx.request.post(`${base}/api/challenges/${hidden.digits}/visibility`, {
+    data: { visibility: "namespace" },
+    headers: json,
+  });
+  expect(restricted.status()).toBe(200);
 
   // The API refuses the leaver as their own successor before anything changes.
   const self = await adminCtx.request.post(`${base}/api/admin/users/${victimId}/scrub`, { data: { reassignTo: victimId }, headers: json });

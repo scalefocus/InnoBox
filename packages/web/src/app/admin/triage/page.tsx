@@ -695,7 +695,8 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
       setResults([]);
       return;
     }
-    const res = await fetch(`/api/users?q=${encodeURIComponent(value)}`);
+    // §7.3: the per-row picker offers only users who can see this row's challenge.
+    const res = await fetch(`/api/users?q=${encodeURIComponent(value)}&challenge=${row.number.replace("CH-", "")}`);
     const json = await res.json();
     setResults(json.users ?? []);
   };

@@ -3,6 +3,7 @@
 // authenticated user may search (enforced in route.ts); this module only returns the
 // minimal id/displayName/email projection, never roles or namespace membership.
 import type { Pool } from "pg";
+import type { ChallengeVisibilityInput } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { scrubSystemEventsForUser } from "../admin/system-log/store";
@@ -16,12 +17,53 @@ export interface UserSearchResult {
 
 const RESULT_LIMIT = 10;
 
-export async function searchActiveUsers(pool: Pool, query: string): Promise<UserSearchResult[]> {
+/**
+ * §7.3: the SQL condition "user `u` can see this challenge" — canSeeChallenge evaluated for every
+ * candidate at once, with roles resolved the way resolveRolesForUser resolves them (SCIM-synced
+ * group membership joined through role_mappings, plus the bootstrap admin group; invariant 1).
+ * In SQL so the picker's limit applies to assignable users only. Pinned to the JS predicate by
+ * store.dbtest.ts.
+ */
+function canSeeChallengeCondition(audience: ChallengeVisibilityInput, push: (v: unknown) => string): string {
+  const stateRule = audience.status === "awaiting_triage" || audience.status === "withdrawn";
+  // Org-visible and past triage: every active user can see it. Return before pushing anything —
+  // an unreferenced parameter has no type and Postgres refuses the query.
+  if (!stateRule && audience.visibility === "org") return "true";
+
+  const grant = (namespaceCondition: string) =>
+    `exists (select 1 from group_members gm
+               join groups g on g.id = gm.group_id
+               join role_mappings rm on rm.group_external_id = g.external_id
+              where gm.user_id = u.id and (rm.role = 'platform_admin' or ${namespaceCondition}))`;
+  const bootstrapGroup = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
+  const bootstrap = bootstrapGroup
+    ? ` or exists (select 1 from group_members gm join groups g on g.id = gm.group_id
+                    where gm.user_id = u.id and g.external_id = ${push(bootstrapGroup)})`
+    : "";
+  const namespace = push(audience.namespaceId);
+
+  if (stateRule) {
+    return `(u.id = ${push(audience.authorId)} or ${grant(`(rm.role = 'namespace_admin' and rm.namespace_id = ${namespace})`)}${bootstrap})`;
+  }
+  // Namespace-visible: members of the namespace — and every active user is an implicit member
+  // of the built-in global namespace (§4.1).
+  return `(${namespace} = (select id from namespaces where slug = 'global')
+           or ${grant(`rm.namespace_id = ${namespace}`)}${bootstrap})`;
+}
+
+/** The directory search. With `audience`, only users who can see that challenge (§7.3). */
+export async function searchActiveUsers(pool: Pool, query: string, audience?: ChallengeVisibilityInput): Promise<UserSearchResult[]> {
+  const params: unknown[] = [`%${query}%`];
+  const push = (v: unknown) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const visible = audience ? canSeeChallengeCondition(audience, push) : "true";
   const { rows } = await pool.query<{ id: string; display_name: string; email: string | null }>(
-    `select id, display_name, email from users
-      where active = true and (display_name ilike $1 or email ilike $1)
-      order by display_name limit ${RESULT_LIMIT}`,
-    [`%${query}%`],
+    `select u.id, u.display_name, u.email from users u
+      where u.active = true and (u.display_name ilike $1 or u.email ilike $1) and ${visible}
+      order by u.display_name limit ${RESULT_LIMIT}`,
+    params,
   );
   return rows.map((r) => ({ id: r.id, displayName: r.display_name, email: r.email }));
 }

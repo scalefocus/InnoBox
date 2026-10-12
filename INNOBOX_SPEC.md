@@ -960,15 +960,6 @@ A user may hold different roles in different namespaces. Roles are additive.
     `namespace`-visible item keeps seeing it even after losing membership of its
     namespace. The same predicate holds in every list, count and search (the SQL form)
     as on the detail page.
-
-    > **⚠ GAP-58 · code fix:** the SQL twin of `canSeeChallenge`
-    > (`pushChallengeVisibilityConditions`, `api/challenges/store.ts`) ANDs the namespace
-    > condition with the state condition, so an author who has lost membership of a
-    > restricted namespace no longer finds their own `awaiting_triage`/`withdrawn` item
-    > in the gallery, the new-count or search, while `canSeeChallenge`
-    > (`shared/src/challenges.ts`) still shows it on the detail page. Make the SQL match:
-    > for those two statuses, author or namespace admin of the item's namespace (or
-    > platform admin) regardless of membership.
   - Solutions in `proposed` status: visible only to their author, the challenge's
     assignee, and the namespace's committee/admins (mirrors the legacy behavior of
     hiding un-reviewed solutions).
@@ -1337,16 +1328,6 @@ that they were unassigned. Assignment is possible from `awaiting_triage` onward 
 blocked on terminal statuses. The assignee gains the per-challenge powers in §4.2. The
 detail-page control both **assigns** and **unassigns** (an "Unassign" action beside
 the current assignee); the §14.1 triage queue offers the same through its inline field.
-
-> **⚠ GAP-19 · code fix:** nothing checks that the assignee can see the challenge.
-> `GET /api/users` (`api/users/route.ts` → `searchActiveUsers`) ignores any
-> `challenge` parameter, and `loadChallengeForAssignment` (`api/challenges/store.ts`,
-> shared by `setChallengeAssignee` and `setChallengeAssigneeLean`/`bulkAssign`) checks
-> only that the user is active. Add the `challenge=` filter (evaluated with the
-> candidate's roles resolved from SCIM-synced membership, as the §3 hand-over does),
-> pass it from the detail-page and per-row triage pickers, answer 422 from
-> `api/challenges/[number]/assign/route.ts`, and return `assignee_cannot_see` per item
-> from `bulkAssign`.
 
 **Search-result presentation.** The assignee search input opens a popover listing
 matching active users. Each result row is a single control laid out as: the user's
@@ -2549,14 +2530,6 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
   spotlight, only if its parent challenge is visible to the viewer — namespace rule
   **and** state rule (not `awaiting_triage`/`withdrawn` unless the viewer is its author
   or an admin of its namespace).
-
-  > **⚠ GAP-35 · code fix:** `api/dashboard/store.ts` uses its own namespace-only
-  > `visibilityClause` (its header comment claiming no carve-out is needed is wrong), so
-  > a solution under a `withdrawn` or re-triaged challenge is counted and can be a
-  > spotlight — showing that challenge's title — to viewers who cannot see it
-  > (invariant 2). Replace it with `pushChallengeVisibilityConditions` for the parent
-  > plus the SQL form of `canSeeSolution` (see GAP-38) for the solution KPIs and both
-  > spotlights.
 - Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
   rankings; neither is duplicated here.
 
@@ -2674,15 +2647,6 @@ accepts them as query parameters beside `q`. Autocomplete stays query-only. Visi
 is applied **inside** the ranked query, before any result limit, so the viewer's top
 results are never displaced by items they cannot see.
 
-> **⚠ GAP-38 · code fix:** `solutionCandidates` (`api/search/store.ts`) applies the
-> parent's predicate in SQL (`pushChallengeVisibilityConditions`), but the solution's
-> own `proposed` rule runs only in JS (`canSeeSolution` in `toSolutionResults`), after
-> the `limit ${CANDIDATE_LIMIT}`, so hidden `proposed` matches can still fill the cut
-> and displace visible ones. Add a SQL form of `canSeeSolution` (status not `proposed`,
-> or the viewer is its author, the challenge's assignee, or committee/admin of its
-> namespace) beside `pushChallengeVisibilityConditions` and apply it before the limit;
-> GAP-35 and GAP-39 reuse it.
-
 **Keyboard shortcut:** `Ctrl+K` (`Cmd+K` on macOS) focuses the topbar search
 input from anywhere in the app while authenticated — it's a global `keydown`
 listener in `AppShell`, not scoped to a single page. The browser/OS default for
@@ -2778,13 +2742,6 @@ for one.
 
 A scrubbed user's `/profile/<id>` renders the same generic not-found state as an
 unknown id — *"That profile doesn't exist."* — never a "Deleted User" page.
-
-> **⚠ GAP-39 · code fix:** the two "items I follow" queries in `getOwnProfile`
-> (`api/profile/store.ts`) join `follows` to challenges/solutions with no visibility
-> predicate, so they list titles and statuses of items the owner can no longer see.
-> Pass the owner's `Viewer` (the function takes only `userId` today) and apply
-> `pushChallengeVisibilityConditions` and the SQL `canSeeSolution` (GAP-38) in the
-> SQL, before the `limit 50`.
 
 > **⚠ GAP-40 · code fix:** `getPublicProfile` (`api/profile/store.ts`) returns null
 > for `!active`, so `/profile/<id>` is a 404 for every deactivated user while the
