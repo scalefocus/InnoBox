@@ -71,6 +71,15 @@ export async function createNamespaceViaApi(
   return body.namespace;
 }
 
+/** Archive or unarchive a namespace (platform-admin only). */
+export async function setNamespaceArchivedViaApi(request: APIRequestContext, namespaceId: string, archived: boolean): Promise<void> {
+  await jsonOrThrow(
+    await request.patch(`${base()}/api/admin/namespaces/${namespaceId}`, { data: { archived }, headers: JSON_HEADERS }),
+    200,
+    `PATCH /api/admin/namespaces/${namespaceId} → archived=${archived}`,
+  );
+}
+
 export interface CreatedChallenge {
   id: string;
   /** Display form, e.g. "CH-123". */

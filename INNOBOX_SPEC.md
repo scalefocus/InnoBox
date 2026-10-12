@@ -899,6 +899,9 @@ shown (§13.6).
   challenge into the namespace and no new solution on any of its challenges, each
   refused with **409** and `code: "namespace_archived"`; an id that matches no
   namespace at all stays a 400; existing content remains readable per its visibility).
+  The UI never invites the refused action: the submit form lists only non-archived
+  namespaces (§6.1), and a challenge's **Propose a solution** button is disabled with
+  its own hint (§13.1).
 - A built-in **`global`** namespace always exists; **every authenticated user is an
   implicit member** of `global`.
 - Namespace membership and roles come from Entra groups mapped in `role_mappings`
@@ -1103,7 +1106,7 @@ Reached at **`/challenges/new`**, via the **Submit a Challenge** sidebar nav ite
 (§2.2, directly above **Challenges**) — shown to every authenticated user.
 
 Form: title, description, impact area (active areas), client name (only when
-impact = Client; at most 200 characters, §2.4), namespace (memberships; default `global`), visibility (default
+impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11), **"Submit
 anonymously"** checkbox (§9).
 
@@ -2406,9 +2409,14 @@ whole visit, and the next visit flags only genuinely newer items.
   and the namespace's committee/admins), with `rejected`/`not_selected` ones in the
   collapsed "Closed solutions" section (§4.3). Each solution shows its own like button.
 - **Propose a solution** (§6.2): visible to anyone who can see the challenge,
-  enabled only while status = `valid`; opens the solution form (description, cost
-  vs benefits, "Submit anonymously"). While disabled it carries a hint that depends on
-  the status:
+  enabled only while status = `valid` **and the challenge's namespace is not archived**
+  (§4.1 — the detail payload's `canPropose` carries both conditions, so the button
+  never opens a form the API would refuse with 409 `namespace_archived`); opens the
+  solution form (description, cost vs benefits, "Submit anonymously"). While disabled it
+  carries a hint; an archived namespace takes precedence over every status, otherwise
+  the hint depends on the status:
+  - namespace archived (any status) — *"This challenge's namespace is archived, so it
+    no longer accepts solutions."*
   - `solved` — *"This challenge is solved, so it no longer accepts solutions."*
   - `rejected` or `withdrawn` — *"This challenge is closed, so it does not accept
     solutions."*

@@ -3,6 +3,7 @@
 //     distinct from an id that matches no namespace at all (`unknown_namespace`, the route's 400);
 //   • a solution on a `valid` challenge of an archived namespace is refused as `namespace_archived`;
 //   • a challenge the proposer cannot see still answers `not_found` first (invariant 2);
+//   • the detail payload's `canPropose` is false while archived (§13.1), with `namespaceArchived` set;
 //   • unarchiving lifts both blocks.
 // Self-skips when DATABASE_URL is unset. Mirrors challenges/likes-frozen.dbtest.ts.
 import { test } from "node:test";
@@ -17,7 +18,7 @@ test(
     const { Pool } = await import("pg");
     const { randomUUID } = await import("node:crypto");
     const { buildRoleSet } = await import("@innobox/shared");
-    const { createChallenge, createSolution, listActiveImpactAreas, setChallengeStatus } = await import("./store");
+    const { createChallenge, createSolution, getChallengeByNumber, listActiveImpactAreas, setChallengeStatus } = await import("./store");
 
     const pool = new Pool({ connectionString: url });
     try {
@@ -67,7 +68,17 @@ test(
       assert.equal((await setChallengeStatus(pool, admin, openNum, "valid")).status, "ok");
       assert.equal((await setChallengeStatus(pool, admin, restrictedNum, "valid")).status, "ok");
 
+      const live = await getChallengeByNumber(pool, outsider, openNum);
+      assert.equal(live?.canPropose, true, "a valid challenge in a live namespace is open for proposals");
+      assert.equal(live?.namespaceArchived, false);
+
       await pool.query(`update namespaces set archived_at = now() where id = $1`, [nsId]);
+
+      // ── The detail payload stops inviting a proposal the API would refuse (§13.1). ─────────
+      const archived = await getChallengeByNumber(pool, outsider, openNum);
+      assert.equal(archived?.status, "valid", "the challenge itself is untouched");
+      assert.equal(archived?.canPropose, false);
+      assert.equal(archived?.namespaceArchived, true);
 
       // ── New challenges: archived ≠ unknown. ────────────────────────────────────────────────
       assert.deepEqual(await submit(nsId, "org"), { status: "namespace_archived" });
@@ -87,6 +98,7 @@ test(
       // ── Unarchiving lifts both blocks. ─────────────────────────────────────────────────────
       await pool.query(`update namespaces set archived_at = null where id = $1`, [nsId]);
       assert.equal((await submit(nsId, "org")).status, "ok");
+      assert.equal((await getChallengeByNumber(pool, outsider, openNum))?.canPropose, true, "unarchiving reopens the button");
       assert.equal((await propose(outsider, openNum)).status, "ok");
     } finally {
       await pool.end();

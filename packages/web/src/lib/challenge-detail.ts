@@ -4,9 +4,11 @@
 // where an item is listed.
 
 /** §6.2/§13.1: "Propose a solution" is visible to every viewer of the challenge and enabled only
- *  while it is `valid`. Returns the short reason shown beside the disabled button, or null when
- *  proposing is open. */
-export function proposeDisabledReason(status: string): string | null {
+ *  while it is `valid` and its namespace is not archived (§4.1). Returns the short reason shown
+ *  beside the disabled button, or null when proposing is open. An archived namespace outranks
+ *  every status. */
+export function proposeDisabledReason(status: string, namespaceArchived = false): string | null {
+  if (namespaceArchived) return "This challenge's namespace is archived, so it no longer accepts solutions.";
   switch (status) {
     case "valid":
       return null;

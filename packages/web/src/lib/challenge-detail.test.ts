@@ -18,8 +18,16 @@ test("proposeDisabledReason: solved and closed statuses say so; pre-validation o
   assert.match(proposeDisabledReason("in_review")!, /validated/);
 });
 
+test("proposeDisabledReason: an archived namespace disables proposing and outranks every status", () => {
+  for (const s of ["valid", "awaiting_triage", "in_review", "solved", "rejected", "withdrawn"]) {
+    assert.match(proposeDisabledReason(s, true)!, /namespace is archived/, `${s} in an archived namespace`);
+  }
+  assert.equal(proposeDisabledReason("valid", false), null);
+});
+
 test("the copy carries no spec references (invariant 9)", () => {
   for (const s of ["valid", "solved", "rejected", "in_review"]) assert.ok(!(proposeDisabledReason(s) ?? "").includes("§"));
+  assert.ok(!proposeDisabledReason("valid", true)!.includes("§"));
   assert.ok(!LIKES_FROZEN_HINT.includes("§"));
 });
 
