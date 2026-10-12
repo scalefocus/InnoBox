@@ -73,3 +73,10 @@ test("parseSettingsPatch: surveyEnabled is a boolean and may be sent alone (§14
   if (parsed.ok) assert.deepEqual(parsed.value, { surveyEnabled: false });
   for (const bad of ["false", 0, null]) assert.equal(parseSettingsPatch({ surveyEnabled: bad }).ok, false, String(bad));
 });
+
+test("parseSettingsPatch: gamificationEnabled is a boolean and may be sent alone (§23.10)", () => {
+  const parsed = parseSettingsPatch({ gamificationEnabled: true });
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.deepEqual(parsed.value, { gamificationEnabled: true });
+  for (const bad of ["true", 1, null]) assert.equal(parseSettingsPatch({ gamificationEnabled: bad }).ok, false, String(bad));
+});

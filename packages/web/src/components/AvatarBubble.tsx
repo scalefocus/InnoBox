@@ -13,11 +13,37 @@
 // and opens the card on mouse-hover or keyboard focus. Bubbles with no id — anonymous authors,
 // deleted/unknown actors — and the surfaces that opt out via `noCard` keep their `title`, gain no
 // tab stop, and issue no card request.
-import { useState } from "react";
+//
+// Level-progress ring (§23.6): callers that hold a §23 level block pass `ring`; it renders only on
+// medium and large bubbles of a real, active, non-scrubbed user — never on small list bubbles, nor
+// on an anonymous, deactivated or scrubbed one. Decorative: the label gains ", level N".
+import { useState, type ReactNode } from "react";
 import { avatarInitials, avatarColorIndex, avatarVariant } from "@innobox/shared/avatars";
 import { useDirectoryCard } from "./DirectoryCard";
 
 export type AvatarSize = "sm" | "md" | "lg";
+
+/** The §23 level progress the ring draws (0…1), and the level for the label. */
+export interface AvatarRing {
+  level: number;
+  progress: number;
+  /** Level 10 — a full gold ring. */
+  top?: boolean;
+}
+
+/** Thin ring around the bubble, filled clockwise from 12 o'clock to the level progress. */
+function withRing(bubble: ReactNode, ring: AvatarRing): ReactNode {
+  const pct = ring.top ? 100 : Math.round(Math.min(1, Math.max(0, ring.progress)) * 100);
+  return (
+    <span className={`avatar-ring-wrap${ring.top ? " is-top" : ""}`}>
+      <svg className="avatar-ring" viewBox="0 0 36 36" aria-hidden="true">
+        <circle className="avatar-ring-track" cx="18" cy="18" r="16.5" pathLength={100} />
+        <circle className="avatar-ring-arc" cx="18" cy="18" r="16.5" pathLength={100} strokeDasharray={`${pct} 100`} />
+      </svg>
+      {bubble}
+    </span>
+  );
+}
 
 export function AvatarBubble({
   userId,
@@ -28,6 +54,7 @@ export function AvatarBubble({
   scrubbed = false,
   title,
   noCard = false,
+  ring = null,
 }: {
   /** The user's id — the key for the photo + fallback color. Null = no linkable identity
    *  (anonymous author, or an unknown actor): renders a neutral bubble
@@ -49,6 +76,8 @@ export function AvatarBubble({
    *  on the same element, and bubbles inside an already-open popover (§7.3 assignee search,
    *  §14.1 inline assignee editor), where a card would nest a popover in a popover. */
   noCard?: boolean;
+  /** §23.6 level-progress ring — only drawn on md/lg bubbles of a real, active user. */
+  ring?: AvatarRing | null;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
 
@@ -60,7 +89,9 @@ export function AvatarBubble({
     displayName,
     enabled: cardEligible,
     // Rendered inside the card at medium size, with the card itself disabled (no recursion).
-    avatar: <AvatarBubble size="md" userId={userId} displayName={displayName} deactivated={deactivated} scrubbed={scrubbed} noCard />,
+    avatar: (cardRing) => (
+      <AvatarBubble size="md" userId={userId} displayName={displayName} deactivated={deactivated} scrubbed={scrubbed} noCard ring={cardRing} />
+    ),
   });
 
   const variant = avatarVariant({ userId, displayName, anonymous, deactivated, scrubbed });
@@ -118,12 +149,14 @@ export function AvatarBubble({
 
   // Real user: colored initials bubble with the gateway photo layered on top; the photo is
   // hidden if it 404s (no photo cached) or fails to decode, leaving the initials visible.
-  return (
+  const ringed = ring && size !== "sm" ? ring : null;
+  const ringLabel = ringed ? `${label}, level ${ringed.level}` : label;
+  const bubble = (
     <>
       <span
         className={`avatar avatar-${size} avatar-c${avatarColorIndex(userId)}`}
         title={triggerProps ? undefined : label}
-        aria-label={label}
+        aria-label={ringLabel}
         role="img"
         {...(triggerProps ?? {})}
       >
@@ -143,6 +176,7 @@ export function AvatarBubble({
       {card}
     </>
   );
+  return ringed ? withRing(bubble, ringed) : bubble;
 }
 
 /** Neutral person silhouette for the anonymous bubble — deliberately identical for every

@@ -16,6 +16,8 @@ export interface SettingsPatch {
   featuredLimit?: number;
   /** §14.11 the feedback-survey platform switch. */
   surveyEnabled?: boolean;
+  /** §23.10 the gamification switch. */
+  gamificationEnabled?: boolean;
 }
 
 const MAX_ATTACHMENTS_PER_ITEM = 50;
@@ -75,13 +77,19 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.surveyEnabled = rec.surveyEnabled;
   }
 
+  if (rec.gamificationEnabled !== undefined) {
+    if (typeof rec.gamificationEnabled !== "boolean") return fail("gamificationEnabled must be a boolean");
+    value.gamificationEnabled = rec.gamificationEnabled;
+  }
+
   if (
     value.dateFormat === undefined &&
     value.attachmentLimits === undefined &&
     value.featuredLimit === undefined &&
-    value.surveyEnabled === undefined
+    value.surveyEnabled === undefined &&
+    value.gamificationEnabled === undefined
   ) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled");
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled");
   }
 
   return { ok: true, value };

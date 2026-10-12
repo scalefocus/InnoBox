@@ -87,3 +87,7 @@ export * from "./smtp-env.js";
 // `@innobox/shared/survey-results`.
 export * from "./survey.js";
 export * from "./survey-results.js";
+// §23 gamification: the fixed weights, caps, level curve and badge catalogue (client-safe, also at
+// `@innobox/shared/gamification`) and the server-only award writer web and worker share.
+export * from "./gamification.js";
+export * from "./gamification-awards.js";

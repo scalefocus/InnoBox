@@ -5,12 +5,15 @@
 // CANONICAL view of the directory profile; the hover card (§13.8) shows the same three fields
 // and never more. A deactivated user's profile still renders — greyed bubble and a muted
 // "Deactivated" notice — so the card's "View profile" link always lands somewhere; only a
-// scrubbed user (or an unknown id) is the not-found state.
+// scrubbed user (or an unknown id) is the not-found state. While gamification is on and the user
+// does not hide it (§23.6): their level card, leader badges and earned badges, and the level ring.
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { Achievements, type EarnedBadgeData, type LevelData } from "@/components/Gamification";
+import type { LeaderBadge } from "@innobox/shared/gamification";
 
 interface PublicProfile {
   user: {
@@ -26,6 +29,8 @@ interface PublicProfile {
     challenges: { number: string; title: string; status: string }[];
     solutions: { number: string; description: string; status: string; challengeNumber: string }[];
   };
+  /** §23.6 — null when the feature is off or the user hides it. */
+  gamification: (LevelData & { leading: LeaderBadge[]; earned: EarnedBadgeData[] }) | null;
 }
 
 export default function PublicProfilePage() {
@@ -58,6 +63,7 @@ export default function PublicProfilePage() {
   }
 
   if (!profile) return <p className="muted">Loading…</p>;
+  const g = profile.gamification;
 
   return (
     <>
@@ -68,6 +74,7 @@ export default function PublicProfilePage() {
           displayName={profile.user.displayName}
           deactivated={!profile.user.active}
           scrubbed={profile.user.scrubbed}
+          ring={g ? { level: g.level, progress: g.progress, top: g.next === null } : null}
         />
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow">Profile</div>
@@ -78,6 +85,8 @@ export default function PublicProfilePage() {
           {!profile.user.active && <span className="profile-deactivated">Deactivated</span>}
         </div>
       </div>
+
+      {g && <Achievements level={g} leading={g.leading} earned={g.earned} />}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 19, margin: "0 0 12px" }}>Challenges</h2>
       {profile.contributions.challenges.length === 0 && <p className="muted" style={{ marginBottom: 22 }}>No public challenges yet.</p>}

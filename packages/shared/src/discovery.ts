@@ -17,6 +17,8 @@ export const LEADERBOARD_METRICS = [
   "challenges_submitted",
   "solutions_proposed",
   "likes_received",
+  // §23: the fifth metric, served only while gamification is on (the route refuses it otherwise).
+  "points",
 ] as const;
 export type LeaderboardMetric = (typeof LEADERBOARD_METRICS)[number];
 

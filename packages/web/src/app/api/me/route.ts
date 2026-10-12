@@ -14,6 +14,7 @@ import { aiDisplayName } from "@innobox/shared/ai";
 import { APP_VERSION } from "@innobox/shared/version";
 import { markQuickStartSeen, markWhatsNewSeen } from "./store";
 import { readOpenSurvey, readSelfSurvey } from "./survey/store";
+import { meGamification, newAchievements } from "@/lib/gamification-read";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -22,11 +23,13 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, gamification, achievements] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
     readSelfSurvey(pool, user.id),
+    meGamification(pool, user.id),
+    newAchievements(pool, user.id),
   ]);
 
   const byRole = (role: "namespace_admin" | "committee"): string[] => [
@@ -58,6 +61,9 @@ async function handleGET(): Promise<Response> {
     aiDisplayName: aiDisplayName(aiName),
     openSurvey,
     selfSurvey,
+    // §23.12: the sidebar ring's level (null while the feature is off) and the §23.7 toast queue.
+    gamification,
+    newAchievements: achievements,
   });
 }
 

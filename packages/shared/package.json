@@ -73,6 +73,10 @@
     "./survey-results": {
       "types": "./dist/survey-results.d.ts",
       "default": "./dist/survey-results.js"
+    },
+    "./gamification": {
+      "types": "./dist/gamification.d.ts",
+      "default": "./dist/gamification.js"
     }
   },
   "scripts": {

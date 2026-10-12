@@ -3,7 +3,15 @@
 // Platform-admin only; every change audited.
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { getAttachmentLimits, getDateFormat, listAllImpactAreas, setAttachmentLimits, setDateFormat } from "./store";
+import {
+  getAttachmentLimits,
+  getDateFormat,
+  getGamificationEnabled,
+  listAllImpactAreas,
+  setAttachmentLimits,
+  setDateFormat,
+  setGamificationEnabled,
+} from "./store";
 import { parseSettingsPatch } from "./validation";
 import { getFeaturedLimit, setFeaturedLimit } from "../../challenges/featured";
 import { getSurveyEnabled, setSurveyEnabled } from "../../me/survey/store";
@@ -17,14 +25,15 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled] = await Promise.all([
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     listAllImpactAreas(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
+    getGamificationEnabled(pool),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled });
+  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled });
 }
 
 async function handlePATCH(req: Request): Promise<Response> {
@@ -43,14 +52,16 @@ async function handlePATCH(req: Request): Promise<Response> {
   if (parsed.value.attachmentLimits) await setAttachmentLimits(pool, parsed.value.attachmentLimits, gate.user.id);
   if (parsed.value.featuredLimit !== undefined) await setFeaturedLimit(pool, parsed.value.featuredLimit, gate.user.id);
   if (parsed.value.surveyEnabled !== undefined) await setSurveyEnabled(pool, parsed.value.surveyEnabled, gate.user.id);
+  if (parsed.value.gamificationEnabled !== undefined) await setGamificationEnabled(pool, parsed.value.gamificationEnabled, gate.user.id);
 
-  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled] = await Promise.all([
+  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
+    getGamificationEnabled(pool),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled });
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

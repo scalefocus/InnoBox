@@ -9,6 +9,7 @@ import { Suspense } from "react";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
+import { GamificationSettingsCard } from "@/components/GamificationSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
 
 interface MeResponse {
@@ -70,6 +71,7 @@ interface SettingsData {
   attachmentLimits: { maxPerItem: number; maxUploadSizeMb: number; chunkSizeMb: number };
   impactAreas: ImpactArea[];
   featuredLimit: number;
+  gamificationEnabled: boolean;
 }
 
 interface EmailStatus {
@@ -132,6 +134,7 @@ function SettingsConsole() {
       <AttachmentLimitsCard limits={data.attachmentLimits} onChanged={refresh} onError={notify} />
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />
       <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />
+      <GamificationSettingsCard key={String(data.gamificationEnabled)} enabled={data.gamificationEnabled} onChanged={refresh} onError={notify} />
       <EmailSenderCard status={email} onChanged={refreshEmail} onError={notify} />
       <AiProviderCard onNotice={notify} />
       {toast && <div className="toast">{toast}</div>}

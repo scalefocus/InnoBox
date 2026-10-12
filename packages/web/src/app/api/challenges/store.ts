@@ -41,6 +41,15 @@ import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { isScanAvailable } from "../../../lib/clamav";
 import { onChallengeStatusChanged, onSolutionImplemented } from "../../../lib/webhooks";
+import {
+  awardChallengeCreated,
+  awardLikeReceived,
+  awardSolutionCreated,
+  challengeStatusAwards,
+  replayOnSelfReveal,
+  solutionStatusAwards,
+  writeLiveAwards,
+} from "../../../lib/gamification";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
@@ -775,6 +784,8 @@ export async function createChallenge(
         ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
       },
     });
+    // §23.2: challenge_submitted (none while anonymous).
+    await awardChallengeCreated(client, { id, authorId: author.userId, isAnonymous: validated.value.isAnonymous });
     if (draftKey && staged) await bindStagedAttachments(client, author, "challenge", id, draftKey, staged.ids);
     const { rows: full } = await client.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [
       id,
@@ -856,6 +867,7 @@ export async function createSolution(
       targetId: id,
       after: { challengeId: challenge.id, isAnonymous: validated.value.isAnonymous },
     });
+    await awardSolutionCreated(client, { id, authorId: author.userId, isAnonymous: validated.value.isAnonymous }); // §23.2
     if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
     const solutionRows = await fetchSolutionRows(client, challenge.id, author.userId);
     const row = solutionRows.find((s) => s.id === id)!;
@@ -903,6 +915,9 @@ async function applyChallengeStatusChange(
     before: { status: current.status },
     after: { status: newStatus, override: mode === "override" },
   });
+  // §23.2: entering valid/solved awards its milestones (first entry only — the award key), whether
+  // the move was enforced or an admin override.
+  await writeLiveAwards(client, await challengeStatusAwards(client, current.id, newStatus));
 }
 
 async function loadChallengeForStatusChange(
@@ -1076,6 +1091,9 @@ export async function setSolutionStatus(
           before: { status: current.status },
           after: { status: newStatus, override: mode === "override" },
         });
+        // §23.2: the solution's own milestone; the §8.3 auto-close adds the challenge's below, and
+        // all of them are written together (one event 13 row per transaction).
+        const awards = await solutionStatusAwards(client, current.id, newStatus);
 
         if (newStatus === "implemented") {
           // §8.3 auto-close cascade: the parent challenge becomes solved, and every other
@@ -1124,7 +1142,9 @@ export async function setSolutionStatus(
           };
           // §12.4: solution.implemented, then challenge.solved (when the parent really transitioned).
           await onSolutionImplemented(client, current.id, current.challenge_id, current.challenge_status === "solved");
+          awards.push(...(await challengeStatusAwards(client, current.challenge_id, "solved")));
         }
+        await writeLiveAwards(client, awards);
       }
       const solutionRows = await fetchSolutionRows(client, current.challenge_id, actor.userId);
       const row = solutionRows.find((s) => s.id === current.id)!;
@@ -1208,6 +1228,7 @@ export async function toggleLike(
         targetType: parentType,
         targetId: parentId,
       });
+      await awardLikeReceived(client, parentType, parentId, viewer.userId); // §23.2
       liked = true;
     }
     const { rows: countRows } = await client.query<{ count: string }>(
@@ -1861,6 +1882,8 @@ export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: st
       targetType: "challenge",
       targetId: row.id,
     });
+    // §23.2: the item's awards are replayed now, backdated to their original event times.
+    await replayOnSelfReveal(client, "challenge", row.id);
     const { rows: full } = await client.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [
       row.id,
       viewer.userId,
@@ -1896,6 +1919,7 @@ export async function selfRevealSolution(pool: Pool, viewer: Viewer, number: str
       targetType: "solution",
       targetId: row.id,
     });
+    await replayOnSelfReveal(client, "solution", row.id); // §23.2
     return { status: "ok" as const };
   });
 }

@@ -5169,18 +5169,6 @@ currently tops a §13.3 leaderboard metric also holds a live **leader badge**. I
 recognition: points buy nothing, unlock nothing and never affect a permission, a
 status, an assignment or a ranking of challenges.
 
-> **⚠ GAP-73 · new feature:** gamification does not exist. Build: migration
-> `0040_gamification.sql` (`gamification_ledger`, `user_badges`, the three `users`
-> columns, the `gamification_enabled` setting, grants — the app role gets INSERT/SELECT
-> on the ledger and badges, plus DELETE for the §3 erasure only); the
-> `@innobox/shared/gamification` module (the weights, caps, level curve and badge
-> catalogue below, as pure data plus the pure evaluation functions); the award hook
-> called inside every triggering transaction; the self-reveal replay; the worker's
-> one-time backfill; the Points metric and level chips on `/leaderboard`; the profile
-> *Achievements* section and the two profile preferences; the hover-card block; the
-> progress ring on `AvatarBubble`; the achievement toast; the §14.3 switch; the
-> erasure additions; and the tests in §23.12. Ships as one minor release.
-
 ### §23.1 Decisions
 
 | # | Decision | Why |
@@ -5437,7 +5425,8 @@ existing history into the ledger under §23.2's rules: challenges and solutions
 `*.status_changed` audit rows, falling back to `first_valid_at` / `status_changed_at`),
 the challenge's **current** assignee for `assignment_solved` (the history of who held
 an assignment at the solve is not reconstructed), likes, and non-deleted comments.
-Anonymous items are skipped. Every row keeps its original `occurred_at`, and the daily
+Anonymous items earn their author nothing (the assignee, never anonymous, still earns
+`assignment_solved`, exactly as live). Every row keeps its original `occurred_at`, and the daily
 caps apply per original day. Then it evaluates badges for every user, writes **no
 notifications**, stamps `gamification_backfilled_at`, and writes one
 `gamification.backfilled` audit row (actor system; `after: { users, awards, badges }` —
@@ -5456,7 +5445,8 @@ next start.
   `metric=points`, and every row carries `level` / `progress` (null when hidden or off).
   No endpoint returns ledger rows or item ids.
 - **Audit (§15).** `settings.gamification_enabled_changed` and
-  `gamification.backfilled`. Awards, badges, level-ups, the opt-out and the
+  `gamification.backfilled` (both under the Admin audit chip — `gamification.*` joins its
+  patterns). Awards, badges, level-ups, the opt-out and the
   achievements-seen marker are **not** audited — the ledger is their own append-only
   record.
 - **Tests.** Unit: the weights, caps (5 comments, 25 likes per UTC day, 0-point rows

@@ -36,6 +36,7 @@ import { createScimEventRecorder, trimSystemEvents } from "./system-log/record.j
 import { runSystemLogAlertSweep } from "./system-log/alert.js";
 import { startWebhookSweeps } from "./webhooks/deliver.js";
 import { startTriageAssistSweeps } from "./ai/triage.js";
+import { runGamificationBackfill } from "./gamification/backfill.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -151,6 +152,15 @@ const leaderElection = startLeaderElection(dbUrl, {
     // the end (§2): pure-DB work must never be skipped because a Graph or object-store
     // integration is unconfigured. Integration-dependent parts are gated individually.
     const scanDeps = buildScanDeps();
+
+    // §23.11: the one-time gamification backfill — pure DB work, skipped once stamped, resumed by
+    // the next start after a crash (idempotent by award key). Runs in the background so the
+    // sweeps below are scheduled at once.
+    runGamificationBackfill(pool)
+      .then((summary) => {
+        if (summary.ran) console.log(JSON.stringify({ level: "info", msg: "gamification backfill", ...summary }));
+      })
+      .catch((err) => console.error(JSON.stringify({ level: "error", msg: "gamification backfill failed", error: String(err) })));
 
     // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.7 system-log
     // trim, §22.3 AI usage prune, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what

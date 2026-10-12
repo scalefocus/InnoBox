@@ -1,11 +1,14 @@
 "use client";
 // Leaderboard (INNOBOX_SPEC.md §13.3): top 10 across four metrics, two windows (last 30
 // days / all time). Computed over org-visible, non-anonymous, non-rejected contributions —
-// the API already applies that filter, so this page only renders the ranked entries.
+// the API already applies that filter, so this page only renders the ranked entries. While
+// gamification is on (§23.6) a fifth metric, Points, appears, and each row carries the user's level
+// chip and progress ring (null from the API when that user hides them).
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { reportFeatureUse } from "@/lib/survey-client";
+import { LevelChip } from "@/components/Gamification";
 
 interface LeaderboardEntry {
   userId: string;
@@ -13,6 +16,8 @@ interface LeaderboardEntry {
   active?: boolean;
   scrubbed?: boolean;
   count: number;
+  level?: number | null;
+  progress?: number | null;
 }
 
 const METRICS: { key: string; label: string }[] = [
@@ -31,6 +36,8 @@ export default function LeaderboardPage() {
   const [metric, setMetric] = useState("solutions_implemented");
   const [window_, setWindow] = useState("all");
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
+  // §23: the server reports whether gamification is on; the Points metric shows only then.
+  const [gamification, setGamification] = useState(false);
 
   // §13.10 first use: opening the leaderboard (queued by the shell until its What's new decision).
   useEffect(() => {
@@ -41,9 +48,14 @@ export default function LeaderboardPage() {
     setEntries(null);
     fetch(`/api/leaderboards?metric=${metric}&window=${window_}`, { headers: { accept: "application/json" } })
       .then((res) => res.json())
-      .then((json) => setEntries(json.entries ?? []))
+      .then((json) => {
+        setEntries(json.entries ?? []);
+        setGamification(json.gamification === true);
+      })
       .catch(() => setEntries([]));
   }, [metric, window_]);
+
+  const metrics = gamification ? [...METRICS, { key: "points", label: "Points" }] : METRICS;
 
   return (
     <>
@@ -57,7 +69,7 @@ export default function LeaderboardPage() {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-        {METRICS.map((m) => (
+        {metrics.map((m) => (
           <button
             key={m.key}
             type="button"
@@ -97,10 +109,20 @@ export default function LeaderboardPage() {
               <span className="chip mono" style={{ minWidth: 32, textAlign: "center" }}>
                 {i + 1}
               </span>
-              <AvatarBubble size="sm" userId={entry.userId} displayName={entry.displayName} deactivated={entry.active === false} scrubbed={entry.scrubbed === true} />
-              <Link href={`/profile/${entry.userId}`} className="ttl grow">
-                {entry.displayName}
-              </Link>
+              <AvatarBubble
+                size="md"
+                userId={entry.userId}
+                displayName={entry.displayName}
+                deactivated={entry.active === false}
+                scrubbed={entry.scrubbed === true}
+                ring={typeof entry.level === "number" ? { level: entry.level, progress: entry.progress ?? 0, top: entry.level >= 10 } : null}
+              />
+              <span className="grow" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <Link href={`/profile/${entry.userId}`} className="ttl">
+                  {entry.displayName}
+                </Link>
+                {typeof entry.level === "number" && <LevelChip level={entry.level} />}
+              </span>
               <span className="pill pill-accent mono">{entry.count}</span>
             </div>
           ))}

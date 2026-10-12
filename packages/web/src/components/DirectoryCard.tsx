@@ -19,6 +19,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { createPortal } from "react-dom";
 import { focusNeighbor, profileHref, TABBABLE_SELECTOR } from "@/lib/directory-card";
 import { cachedGet } from "@/lib/ui";
+import type { LeaderBadge } from "@innobox/shared/gamification";
+import type { AvatarRing } from "./AvatarBubble";
+import { LeaderGlyphs, LevelChip, badgeGlyph } from "./Gamification";
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
 const CLOSE_DELAY_MS = 150; // grace period so the pointer can travel into the card ("View profile")
@@ -35,6 +38,14 @@ export interface UserCardData {
   department: string | null;
   deactivated: boolean;
   scrubbed: boolean;
+  /** §23.12 — level, leader badges and the 3 newest badges; null when off or the user hides it. */
+  gamification?: {
+    level: number;
+    levelName: string;
+    progress: number;
+    leading: LeaderBadge[];
+    recentBadges: { badgeKey: string; name: string; tier: 1 | 2 | 3 | null; tierName: string | null }[];
+  } | null;
 }
 
 // Per-page-session dedupe + cache: two bubbles for the same person share one request, and
@@ -87,8 +98,9 @@ export function useDirectoryCard(opts: {
   userId: string | null;
   displayName: string;
   enabled: boolean;
-  /** The caller's own bubble element, re-rendered inside the card at medium size. */
-  avatar: ReactNode;
+  /** The caller's own bubble, re-rendered inside the card at medium size — given the §23.6 level
+   *  ring once the card data has loaded (null until then, or when hidden/off). */
+  avatar: (ring: AvatarRing | null) => ReactNode;
 }): { triggerProps: TriggerProps | null; card: ReactNode } {
   const { userId, displayName, enabled, avatar } = opts;
   const [open, setOpen] = useState(false);
@@ -285,7 +297,11 @@ export function useDirectoryCard(opts: {
             onKeyDown={onCardKeyDown}
           >
             <div className="dir-card-head">
-              {avatar}
+              {avatar(
+                data?.gamification && !data.deactivated
+                  ? { level: data.gamification.level, progress: data.gamification.progress, top: data.gamification.level >= 10 }
+                  : null,
+              )}
               <span className="dir-card-name">{data?.displayName ?? displayName}</span>
             </div>
             <DirectoryBlock data={data} loaded={loaded} />
@@ -327,6 +343,32 @@ function DirectoryBlock({ data, loaded }: { data: UserCardData | null; loaded: b
         </span>
       ))}
       {data?.deactivated && <span className="dir-card-flag">Deactivated</span>}
+      {data?.gamification && <GamificationLines g={data.gamification} />}
+    </div>
+  );
+}
+
+/** §23.6: "Lv 4 · Problem Solver", the leader glyphs, and the 3 most recently earned badges. */
+function GamificationLines({ g }: { g: NonNullable<UserCardData["gamification"]> }) {
+  return (
+    <div className="dir-card-gamification">
+      <span>
+        <LevelChip level={g.level} levelName={g.levelName} />
+      </span>
+      <LeaderGlyphs leading={g.leading} />
+      {g.recentBadges.length > 0 && (
+        <span className="dir-card-badges">
+          {g.recentBadges.map((b) => {
+            const label = b.tierName ? `${b.name} (${b.tierName})` : b.name;
+            return (
+              <span key={b.badgeKey} className="chip" title={label} aria-label={label}>
+                <span aria-hidden="true">{badgeGlyph(b.badgeKey)}</span>
+                {b.tierName ?? ""}
+              </span>
+            );
+          })}
+        </span>
+      )}
     </div>
   );
 }
