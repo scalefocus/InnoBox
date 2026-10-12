@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.47.0",
+    date: "2026-10-12",
+    summary:
+      "Platform admins can now connect InnoBox to one AI provider, Open WebUI or OpenAI, from Platform settings: test the connection, pick a model, then switch AI on. The API key is stored encrypted and never shown again, and usage is counted. No feature uses AI yet. To enable the card, set AI_TOKEN_ENC_KEY on web and worker.",
+  },
+  {
     version: "0.46.0",
     date: "2026-10-12",
     summary:

@@ -156,6 +156,8 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §14.7: the system log is mutable operational telemetry, so — unlike audit_log — the
     // user's actor snapshots are scrubbed and their rows detached from the user id.
     await scrubSystemEventsForUser(client, userId);
+    // §22.3: AI usage telemetry keeps its counts but loses the person it ran for.
+    await client.query(`update ai_usage set user_id = null where user_id = $1`, [userId]);
     // §3 optional successor: hand over the open assignments the successor can see, same transaction.
     const reassignment = handover ? await handOverOpenAssignments(client, adminUserId, userId, handover) : null;
     await appendAudit(client, {

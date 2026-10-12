@@ -57,6 +57,10 @@
     "./webhook-send": {
       "types": "./dist/webhook-send.d.ts",
       "default": "./dist/webhook-send.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "default": "./dist/ai.js"
     }
   },
   "scripts": {

@@ -172,6 +172,9 @@ pipeline {
           # The suites submit far more than the per-user rate budgets allow; the dev server reads
           # this to scale them (ignored under NODE_ENV=production).
           export RATE_LIMIT_MULTIPLIER=50
+          # A throwaway AI key so the AI provider e2e drives the full configure → test → save →
+          # enable flow against its local provider stub (never a real provider).
+          export AI_TOKEN_ENC_KEY="$(openssl rand -base64 32)"
 
           # Start the dev server on the agent and health-check it before Playwright runs (the
           # config reuses the already-listening server). Kill it on the way out.
