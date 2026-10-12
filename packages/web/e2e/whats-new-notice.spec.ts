@@ -143,10 +143,16 @@ for (const viewport of [
     const list = notice(page).locator(".update-notice-list");
     await expect(list).toHaveAttribute("tabindex", "0");
     await expect(list).toHaveAttribute("aria-label", "Release notes");
+    // Poll the bottom edge: the notice slides up on mount, so a single read can land mid-animation.
+    await expect
+      .poll(async () => {
+        const b = await notice(page).boundingBox();
+        return b ? b.y + b.height : Infinity;
+      })
+      .toBeLessThanOrEqual(360 + 0.5);
     const box = await notice(page).boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y).toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height).toBeLessThanOrEqual(360 + 0.5);
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 0.5);
     await expect(notice(page).getByRole("button", { name: "Dismiss" })).toBeInViewport();
