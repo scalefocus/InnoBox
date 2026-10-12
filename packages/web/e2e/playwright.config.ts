@@ -6,10 +6,11 @@
 // The suites run against whatever database the dev server points at and create uniquely-named
 // (timestamped) fixtures, asserting on those specific rows — so they don't depend on a clean
 // database. (A fully isolated e2e database + server, like the dbtest harness, is a later CI step.)
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
+import { specTests } from "../scripts/e2e-specs.mjs";
 
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 
@@ -23,7 +24,8 @@ const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 // 1, where they keep running serially as before; every other spec only touches its own
 // uniquely-named fixtures. The rest are dealt out greedily by test count so the slices come out
 // roughly equal (shard 1 gets no more once its pinned specs exceed a fair share). Every spec
-// lands in exactly one shard. E2E_SHARD unset → the whole suite, as before.
+// lands in exactly one shard. E2E_SHARD unset → the whole suite, as before. (Jenkins' quick run,
+// RUN_E2E_QUICK, is shard 1 of 1 narrowed by test-location arguments — see scripts/e2e-specs.mjs.)
 // A NEW spec that changes platform-wide state must be added here.
 const PLATFORM_STATE_SPECS = [
   "admin-ai.spec.ts",
@@ -43,8 +45,9 @@ const e2eDir = path.dirname(fileURLToPath(import.meta.url));
 
 /** The spec files of shard `shard` of `total`. */
 function shardSpecs(shard: number, total: number): string[] {
-  const testCount = (file: string) =>
-    (readFileSync(path.join(e2eDir, file), "utf8").match(/^\s*test(?:\.(?:only|skip|fixme))?\(\s*["'`]/gm) ?? []).length;
+  const counts = new Map<string, number>();
+  for (const t of specTests(e2eDir)) counts.set(t.file, (counts.get(t.file) ?? 0) + 1);
+  const testCount = (file: string) => counts.get(file) ?? 0;
   const specs = readdirSync(e2eDir).filter((f) => f.endsWith(".spec.ts")).sort();
   const slices = Array.from({ length: total }, () => ({ files: [] as string[], tests: 0 }));
   for (const f of specs.filter((s) => PLATFORM_STATE_SPECS.includes(s))) {
