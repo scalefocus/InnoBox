@@ -787,15 +787,6 @@ Entra runbook); on conflict this document wins.
   written. Nothing on the row changes, so erased personal data cannot flow back from
   Entra, and each refusal on an erased row is audited as `scim.anomaly`.
   Reconciliation already skips scrubbed rows.
-
-  > **⚠ GAP-12 · code fix:** `worker/src/scim/router.ts` never checks `scrubbed_at`:
-  > `findUserById`, `findUserByExternalId` and `findUserByUserNameCI` return erased
-  > rows, so `GET`/`PUT`/`PATCH`/`DELETE /Users/:id` act on them (a `PUT`/`PATCH`
-  > refills name, e-mail and UPN, sets `scim_synced`, and can reactivate the row), a
-  > `POST /Users` with a matching `externalId` runs `updateUserFull` on one, the
-  > `GET /Users` page, filter and count include them, and `addMembersTolerantly`
-  > (via `userExists`) adds them to groups. Add the refusals above, each audited
-  > `scim.anomaly`, with `scim.dbtest.ts` cases.
 - **User attributes:** display name, e-mail, department, job title, **office
   location**, photo (Entra); cached locally, refreshed by reconciliation. Department,
   job title and office location are the **directory profile** — display-only data
@@ -812,11 +803,6 @@ Entra runbook); on conflict this document wins.
   user resource, covered by the granted application `User.Read.All`). Sign-in still
   fetches nothing from Graph (§3.1); a JIT stub therefore shows no office location for
   at most one reconciliation interval, exactly as it shows no photo.
-
-  > **⚠ GAP-13 · code fix:** `worker/src/recon/graph.ts` `getUser` normalizes the three
-  > directory fields through `directoryAttr`, but still maps `mail: j.mail ?? null`, so
-  > an empty or blank `mail` from Graph is stored as `""`. Route `mail` through
-  > `directoryAttr` too.
 - **SCIM stays unmapped for office location.** The SCIM payload carries `title` and the
   enterprise `department` as today, but **no** office attribute — SCIM writes must never
   touch `office_location` (leaving it to reconciliation), so **no Entra provisioning
@@ -892,10 +878,6 @@ Entra runbook); on conflict this document wins.
   **The `user.scrubbed` audit row** records `reassignedTo` (user id or null),
   `reassignedCount` and `skippedCount` — numbers and ids only, never content.
 
-  > **⚠ GAP-14 · code fix:** the `scrubUser` UPDATE in `api/users/store.ts` sets
-  > `email_notifications_enabled = default` (true); it must be `false`. Flip the
-  > assertion in `api/users/store.dbtest.ts`, which currently expects `true`.
-
   **The "Delete user info (GDPR)" card** (Administration console, platform admins).
   Choosing **Delete info** on a search result opens an inline confirmation, replacing
   the browser confirm dialog. It holds an **optional "Reassign open assignments to"**
@@ -935,11 +917,6 @@ shown (§13.6).
   that is already quoted — strong, or weak with a `W/` prefix — is sent unchanged, and
   only an unquoted value is wrapped in quotes. `If-None-Match` is compared against that
   same form.
-
-  > **⚠ GAP-15 · code fix:** `api/users/[userId]/photo/route.ts` always wraps the stored
-  > `photo_etag` in quotes (`` `"${row.photo_etag}"` ``), which yields a malformed `ETag`
-  > when Graph's value is already quoted or weak. Quote only an unquoted value, pass a
-  > `W/"…"` value through, and compare `If-None-Match` against the result.
 - **Deactivation:** when a user deactivates (SCIM or reconciliation), the cached
   photo bytes + etag are cleared; the user renders as a greyed initials bubble
   thereafter (§13.6).

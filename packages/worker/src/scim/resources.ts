@@ -49,6 +49,8 @@ export interface UserRow {
   job_title: string | null;
   active: boolean;
   deactivated_at: Date | string | null;
+  /** Set by the GDPR erasure (INNOBOX_SPEC.md §3) — SCIM never writes to or returns such a row. */
+  scrubbed_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }

@@ -89,6 +89,25 @@ async function findUserById(pool: Pool, id: string): Promise<UserRow | null> {
   return rows[0] ?? null;
 }
 
+// GDPR erasure (INNOBOX_SPEC.md §3): SCIM never writes to — or returns — a scrubbed row, so erased
+// personal data cannot flow back from Entra. The lookups above still return such rows (the
+// userName uniqueness checks must see them); each handler refuses them explicitly instead.
+function isScrubbed(user: UserRow | null): user is UserRow & { scrubbed_at: Date | string } {
+  return user !== null && user.scrubbed_at !== null;
+}
+
+/** Records a refused SCIM request on an erased row as `scim.anomaly` — the user id and the
+ *  request only, never payload content (the payload would carry the erased personal data). */
+async function auditScrubbedRefusal(pool: Pool, userId: string, request: string): Promise<void> {
+  await appendAudit(pool, {
+    actorUserId: null,
+    action: "scim.anomaly",
+    targetType: "user",
+    targetId: userId,
+    after: { reason: "scrubbed_user", request },
+  });
+}
+
 // NOTE (§13.8): `office_location` is deliberately absent from every users write below. SCIM carries
 // no office attribute, and reconciliation overwrites the directory profile unconditionally — adding
 // the column here would wipe it on every sync cycle. scim.dbtest.ts pins that contract.
@@ -273,14 +292,16 @@ async function removeGroupMember(pool: Pool, groupId: string, userId: string): P
   await pool.query(`delete from group_members where group_id = $1 and user_id = $2`, [groupId, userId]);
 }
 
+/** A user a membership add may name: known and not erased (a scrubbed row counts as unknown). */
 async function userExists(pool: Pool, userId: string): Promise<boolean> {
-  const { rows } = await pool.query(`select 1 from users where id = $1`, [userId]);
+  const { rows } = await pool.query(`select 1 from users where id = $1 and scrubbed_at is null`, [userId]);
   return rows.length > 0;
 }
 
 /** Adds members, tolerating ids that don't correspond to any locally-known user — Entra can
  *  send a membership PATCH before the member's own creation POST has landed. Unknown ids are
- *  skipped (reconciliation heals them later) and logged as an anomaly, never a failure. */
+ *  skipped (reconciliation heals them later) and logged as an anomaly, never a failure. A
+ *  scrubbed user is treated exactly like an unknown one: nothing is written (§3). */
 async function addMembersTolerantly(pool: Pool, groupId: string, memberIds: string[]): Promise<void> {
   const added: string[] = [];
   const unknown: string[] = [];
@@ -384,14 +405,18 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
         filtered.parsed.attr === "username"
           ? await findUserByUserNameCI(pool, filtered.parsed.value)
           : await findUserByExternalId(pool, filtered.parsed.value);
-      const rows = user ? [user] : [];
+      // An erased row is excluded from filter reads (§3) — Entra sees "no such user".
+      const rows = user && !isScrubbed(user) ? [user] : [];
       res.status(200).json(scimListResponse(rows.map(toScimUser), rows.length));
       return;
     }
     const { startIndex, count } = pagination(req);
     const [{ rows: page }, { rows: totalRows }] = await Promise.all([
-      pool.query<UserRow>(`select * from users order by created_at limit $1 offset $2`, [count, startIndex - 1]),
-      pool.query<{ count: string }>(`select count(*)::text as count from users`),
+      pool.query<UserRow>(`select * from users where scrubbed_at is null order by created_at limit $1 offset $2`, [
+        count,
+        startIndex - 1,
+      ]),
+      pool.query<{ count: string }>(`select count(*)::text as count from users where scrubbed_at is null`),
     ]);
     res.status(200).json(scimListResponse(page.map(toScimUser), Number(totalRows[0]?.count ?? page.length), startIndex));
   });
@@ -405,6 +430,12 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     const externalId = parsedBody.externalId;
 
     const existing = await findUserByExternalId(pool, externalId);
+    if (isScrubbed(existing)) {
+      // §3: never re-provision an erased row — answering 409 leaves it untouched.
+      await auditScrubbedRefusal(pool, existing.id, "POST /Users");
+      res.status(409).json(scimError(409, "This user's information was deleted and cannot be re-provisioned", "uniqueness"));
+      return;
+    }
     if (existing) {
       // Idempotent upsert: a duplicate POST (retry, replayed sync cycle) must not create a
       // second row — bring the existing one in line with the latest payload instead.
@@ -435,6 +466,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
   router.get("/Users/:id", async (req, res) => {
     const user = await findUserById(pool, req.params.id!);
+    if (isScrubbed(user)) {
+      await auditScrubbedRefusal(pool, user.id, "GET /Users/:id");
+      res.status(404).json(scimError(404, "User not found"));
+      return;
+    }
     if (!user) {
       res.status(404).json(scimError(404, "User not found"));
       return;
@@ -444,6 +480,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
   router.put("/Users/:id", async (req, res) => {
     const existing = await findUserById(pool, req.params.id!);
+    if (isScrubbed(existing)) {
+      await auditScrubbedRefusal(pool, existing.id, "PUT /Users/:id");
+      res.status(404).json(scimError(404, "User not found"));
+      return;
+    }
     if (!existing) {
       res.status(404).json(scimError(404, "User not found"));
       return;
@@ -464,6 +505,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
   router.patch("/Users/:id", async (req, res) => {
     const existing = await findUserById(pool, req.params.id!);
+    if (isScrubbed(existing)) {
+      await auditScrubbedRefusal(pool, existing.id, "PATCH /Users/:id");
+      res.status(404).json(scimError(404, "User not found"));
+      return;
+    }
     if (!existing) {
       res.status(404).json(scimError(404, "User not found"));
       return;
@@ -491,6 +537,12 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
   router.delete("/Users/:id", async (req, res) => {
     const existing = await findUserById(pool, req.params.id!);
+    if (isScrubbed(existing)) {
+      // §3: an erased row is "not found", not "already gone" — and is never touched.
+      await auditScrubbedRefusal(pool, existing.id, "DELETE /Users/:id");
+      res.status(404).json(scimError(404, "User not found"));
+      return;
+    }
     if (!existing) {
       // Idempotent leaver semantics: an unknown id is already "gone" from our perspective.
       res.status(204).end();

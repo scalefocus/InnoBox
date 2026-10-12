@@ -256,3 +256,167 @@ test(
     }
   },
 );
+
+test(
+  "SCIM 2.0 server: never writes to or returns a GDPR-erased user (INNOBOX_SPEC.md §3)",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const [{ Pool }, express, { default: request }, { createScimRouter }] = await Promise.all([
+      import("pg"),
+      import("express").then((m) => m.default),
+      import("supertest"),
+      import("./router.js"),
+    ]);
+
+    const pool = new Pool({ connectionString: url });
+    const PREFIX = "scimtest-erased-";
+    const bearerToken = "scimtest-bearer-8f2c1a9b7e6d4f30"; // gitleaks:allow — test-only fixture
+    const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const cleanup = () => pool.query(`delete from groups where external_id like $1`, [`${PREFIX}%`]);
+    await cleanup();
+
+    const app = express();
+    app.use("/scim/v2", createScimRouter(pool, { bearerToken }));
+    const auth = (req: import("supertest").Test) => req.set("Authorization", `Bearer ${bearerToken}`);
+
+    try {
+      // Provision a user through SCIM, then erase it the way scrubUser does (the web tier owns the
+      // real erasure; the columns that matter to SCIM are scrubbed_at, user_name and the PII).
+      const externalId = `${PREFIX}${runId}-user`;
+      const userName = `${PREFIX}${runId}-grace@example.com`;
+      const userPayload = {
+        schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        externalId,
+        userName,
+        active: true,
+        displayName: "Grace Hopper",
+        emails: [{ value: userName, type: "work", primary: true }],
+        title: "Rear Admiral",
+      };
+      const created = await auth(request(app).post("/scim/v2/Users").send(userPayload));
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const userId: string = created.body.id;
+      await pool.query(
+        `update users
+            set display_name = 'Deleted User', user_name = 'deleted-' || id, email = null, job_title = null,
+                department = null, active = false, deactivated_at = now(), scim_synced = false, scrubbed_at = now()
+          where id = $1`,
+        [userId],
+      );
+      const snapshot = async () =>
+        (
+          await pool.query(
+            `select display_name, user_name, email, job_title, active, scim_synced, external_id, updated_at
+               from users where id = $1`,
+            [userId],
+          )
+        ).rows[0];
+      const erased = await snapshot();
+
+      // ── every id-addressed verb answers 404, and nothing on the row changes ──────────────
+      const get = await auth(request(app).get(`/scim/v2/Users/${userId}`));
+      assert.equal(get.status, 404, "GET on an erased user is 404");
+      assert.equal(get.body.schemas?.[0], "urn:ietf:params:scim:api:messages:2.0:Error");
+
+      const put = await auth(request(app).put(`/scim/v2/Users/${userId}`).send(userPayload));
+      assert.equal(put.status, 404, "PUT on an erased user is 404 — it never refills the PII");
+
+      const patch = await auth(
+        request(app)
+          .patch(`/scim/v2/Users/${userId}`)
+          .send({
+            Operations: [
+              { op: "replace", path: "active", value: true },
+              { op: "replace", path: "displayName", value: "Grace Hopper" },
+            ],
+          }),
+      );
+      assert.equal(patch.status, 404, "PATCH on an erased user is 404 — it never reactivates the row");
+
+      const del = await auth(request(app).delete(`/scim/v2/Users/${userId}`));
+      assert.equal(del.status, 404, "DELETE on an erased user is 404, not the idempotent 204");
+
+      // ── a POST keyed on the erased row's externalId answers 409 ──────────────────────────
+      const post = await auth(request(app).post("/scim/v2/Users").send(userPayload));
+      assert.equal(post.status, 409, JSON.stringify(post.body));
+      assert.equal(post.body.schemas?.[0], "urn:ietf:params:scim:api:messages:2.0:Error");
+      const { rows: sameExternal } = await pool.query(`select count(*)::int as n from users where external_id = $1`, [
+        externalId,
+      ]);
+      assert.equal(sameExternal[0].n, 1, "no second row is created for the erased externalId");
+
+      assert.deepEqual(await snapshot(), erased, "no refused request wrote anything to the erased row");
+
+      // ── list and filter reads exclude the erased row, totalResults included ──────────────
+      const byExternalId = await auth(
+        request(app).get(`/scim/v2/Users?filter=${encodeURIComponent(`externalId eq "${externalId}"`)}`),
+      );
+      assert.equal(byExternalId.status, 200);
+      assert.equal(byExternalId.body.totalResults, 0);
+
+      const byUserName = await auth(
+        request(app).get(`/scim/v2/Users?filter=${encodeURIComponent(`userName eq "deleted-${userId}"`)}`),
+      );
+      assert.equal(byUserName.body.totalResults, 0, "the scrubbed userName token is not findable either");
+
+      const list = await auth(request(app).get(`/scim/v2/Users?count=200`));
+      assert.equal(list.status, 200);
+      const { rows: counts } = await pool.query<{ live: number; total: number }>(
+        `select count(*) filter (where scrubbed_at is null)::int as live, count(*)::int as total from users`,
+      );
+      assert.equal(list.body.totalResults, counts[0]!.live, "totalResults counts only non-erased users");
+      assert.ok(counts[0]!.total > counts[0]!.live, "the erased row exists but is not counted");
+      assert.equal(
+        (list.body.Resources as Array<{ id: string }>).some((r) => r.id === userId),
+        false,
+        "the erased row is not on the page",
+      );
+
+      // ── a group membership add naming the erased user writes nothing ─────────────────────
+      const group = await auth(
+        request(app)
+          .post("/scim/v2/Groups")
+          .send({ externalId: `${PREFIX}${runId}-group`, displayName: `${PREFIX}${runId}`, members: [{ value: userId }] }),
+      );
+      assert.equal(group.status, 201, JSON.stringify(group.body));
+      const groupId: string = group.body.id;
+      const patchAdd = await auth(
+        request(app)
+          .patch(`/scim/v2/Groups/${groupId}`)
+          .send({ Operations: [{ op: "Add", path: "members", value: [{ value: userId }] }] }),
+      );
+      assert.equal(patchAdd.status, 200);
+      const putGroup = await auth(
+        request(app)
+          .put(`/scim/v2/Groups/${groupId}`)
+          .send({ displayName: `${PREFIX}${runId}`, members: [{ value: userId }] }),
+      );
+      assert.equal(putGroup.status, 200);
+      const { rows: members } = await pool.query(`select 1 from group_members where user_id = $1`, [userId]);
+      assert.equal(members.length, 0, "POST, PATCH and PUT on /Groups never add an erased user");
+      const { rows: memberAnomalies } = await pool.query<{ n: number }>(
+        `select count(*)::int as n from audit_log
+          where action = 'scim.anomaly' and target_type = 'group' and target_id = $1
+            and after->>'reason' = 'unknown_member_id_on_add'`,
+        [groupId],
+      );
+      assert.equal(memberAnomalies[0]!.n, 3, "each refused membership add is audited as an unknown member");
+
+      // ── every refusal on the erased row is audited as scim.anomaly ───────────────────────
+      const { rows: refusals } = await pool.query<{ request: string }>(
+        `select after->>'request' as request from audit_log
+          where action = 'scim.anomaly' and target_type = 'user' and target_id = $1
+            and after->>'reason' = 'scrubbed_user'
+          order by request`,
+        [userId],
+      );
+      assert.deepEqual(
+        refusals.map((r) => r.request),
+        ["DELETE /Users/:id", "GET /Users/:id", "PATCH /Users/:id", "POST /Users", "PUT /Users/:id"],
+      );
+    } finally {
+      await cleanup();
+      await pool.end();
+    }
+  },
+);

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.1",
+    date: "2026-10-12",
+    summary:
+      "Deleting a user's information is now final: directory sync can no longer show, update, reactivate or re-add an erased account to groups, and their e-mail notifications are switched off. A blank e-mail address from the directory is now stored as no address instead of an empty one.",
+  },
+  {
     version: "0.51.0",
     date: "2026-10-12",
     summary:
