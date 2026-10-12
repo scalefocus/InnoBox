@@ -429,12 +429,15 @@ The delivery pipeline, pinned:
 - **CI (Jenkins declarative pipeline) — retained for deploy, and as the internal
   pre-deploy gate:** stages —
   **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
-  pnpm) → **Install** (`pnpm install --frozen-lockfile`) → **Build** (recursive;
-  `shared` builds first) → **Typecheck** (recursive) → **Lint** (recursive) → **Unit tests** (recursive;
-  hermetic — live-DB suites self-skip) → **DB integration tests** (parameter-gated:
-  ephemeral `postgres:16-alpine` container, least-privilege app role created,
-  all `db/migrations/*.sql` applied in order, integration suites run against it,
-  container always cleaned up).
+  pnpm) → **Install** (`pnpm install --frozen-lockfile`) → **Build libs** (`shared`, then
+  `worker`) → **Typecheck** (recursive; runs alone because `next dev` and `next build` both
+  rewrite `next-env.d.ts`) → **Checks & tests**, branches run **in parallel** on the agent (a
+  failing branch does not abort the others): **Build web** (`next build`) ‖ **Lint**
+  (recursive) ‖ **Unit tests** (recursive; hermetic — live-DB suites self-skip) ‖ **DB integration tests**
+  (parameter-gated: ephemeral `postgres:16-alpine` container, least-privilege app role
+  created, all `db/migrations/*.sql` applied in order, integration suites run against it,
+  container always cleaned up) ‖ **E2E** (parameter-gated: its own ephemeral Postgres on a
+  separate host port, dev server on the agent, Playwright in the official Playwright image).
 - **Deploy (gated to `main`, or manual trigger; never a pull-request build):**
   Docker-over-SSH remote model, no image registry — Jenkins SSHes to the deploy host,
   fast-forwards the checkout to the exact built commit (anonymous fetch from the public
