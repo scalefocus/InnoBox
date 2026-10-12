@@ -156,6 +156,13 @@ function looksPrivateLiteral(hostname: string, isPublic: (address: string) => bo
   return literal && !isPublic(hostname);
 }
 
+/** Linear-time trailing-slash strip (a `/\/+$/` replace backtracks quadratically on many slashes). */
+function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 0x2f) end--;
+  return path.slice(0, end);
+}
+
 /**
  * Validates and normalizes a provider base URL. Runs on every form action, so the stored value
  * and the stored-token match always use the same form:
@@ -196,10 +203,10 @@ export function normalizeAiBaseUrl(
   if (text.includes("?") || text.includes("#")) return fail("query");
   if (!local && looksPrivateLiteral(hostname, opts.isPublicAddress)) return fail("blocked_address");
 
-  let path = url.pathname.replace(/\/+$/, "");
+  let path = stripTrailingSlashes(url.pathname);
   if (provider === "openwebui") path = path.replace(/\/api$/i, "");
   else path = path.replace(/\/chat\/completions$/i, "");
-  path = path.replace(/\/+$/, "");
+  path = stripTrailingSlashes(path);
   const normalized = `${url.protocol}//${url.host}${path}`;
   if (normalized.length > AI_BASE_URL_MAX) return fail("too_long");
   return { ok: true, url: normalized, hostname, local };
@@ -580,11 +587,20 @@ export function classifyAiHttpFailure(status: number, bodyText: string, retryAft
   });
 }
 
-/** JSON mode: strip a surrounding code fence, parse; failure is `ai_invalid_json`. */
+/**
+ * JSON mode: strip a surrounding code fence (with an optional language tag), parse; failure is
+ * `ai_invalid_json`. Plain string slicing, never a backtracking regex: the text is the provider's
+ * answer (up to 1 MB) and may be adversarial — e.g. a fence followed by a long whitespace run.
+ */
 export function parseAiJson(text: string): unknown {
   let s = text.trim();
-  const fence = /^```[a-zA-Z0-9_-]*\s*\n?([\s\S]*?)\n?```$/.exec(s);
-  if (fence) s = fence[1]!.trim();
+  if (s.length >= 6 && s.startsWith("```") && s.endsWith("```")) {
+    const inner = s.slice(3, -3);
+    // A language tag is a run of [A-Za-z0-9_-] right after the opening fence, ended by
+    // whitespace. Anchored, over a class disjoint from its terminator — linear.
+    const tag = /^[A-Za-z0-9_-]*(?=\s)/.exec(inner);
+    s = (tag ? inner.slice(tag[0].length) : inner).trim();
+  }
   try {
     return JSON.parse(s);
   } catch {

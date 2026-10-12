@@ -198,6 +198,23 @@ test("JSON mode: fences stripped, invalid JSON is ai_invalid_json", () => {
   assert.deepEqual(parseAiJson('```json\n{"a":[1,2]}\n```'), { a: [1, 2] });
   assert.deepEqual(parseAiJson("```\n[1]\n```"), [1]);
   assert.throws(() => parseAiJson("Sure! {\"a\":1}"), (e: unknown) => e instanceof AiError && e.code === "ai_invalid_json");
+  assert.deepEqual(parseAiJson('```JSON  {"b":2}```'), { b: 2 }, "single-line fence with a tag");
+  assert.equal(parseAiJson("```42```"), 42, "a fence without a tag");
+  assert.throws(() => parseAiJson("``````"), AiError, "an empty fence");
+});
+
+test("JSON mode and base URLs stay linear on adversarial input", () => {
+  // An unclosed or empty-bodied fence followed by a long whitespace run — quadratic under the
+  // old fence regex (the code-scanning polynomial-ReDoS finding).
+  for (const evil of ["```" + " ".repeat(200_000), "```json" + "\n ".repeat(100_000) + "x", "```" + " ".repeat(200_000) + "``", "```" + " ".repeat(200_000) + "```"]) {
+    const started = Date.now();
+    assert.throws(() => parseAiJson(evil), (e: unknown) => e instanceof AiError && e.code === "ai_invalid_json");
+    assert.ok(Date.now() - started < 250, `took ${Date.now() - started} ms`);
+  }
+  const started = Date.now();
+  normalizeAiBaseUrl("openai", `https://ai.example.com/${"/".repeat(470)}a`, prod);
+  assert.ok(Date.now() - started < 50);
+  assert.equal(url(normalizeAiBaseUrl("openwebui", "https://ai.example.com/api////", prod)), "https://ai.example.com");
 });
 
 const base: AiStatusInput = {
