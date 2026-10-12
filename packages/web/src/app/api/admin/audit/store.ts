@@ -85,14 +85,16 @@ const TARGET_PARENT_NUMBER_SQL = `case
 const SEARCH_SQL = `(a.action || ' ' || a.target_type || ' ' || coalesce(a.target_id, '') || ' ' || coalesce(${TARGET_NUMBER_SQL}, '')
    || ' ' || coalesce(u.display_name, '') || ' ' || coalesce(u.email, ''))`;
 
-const SELECT_COLUMNS = `a.id::text, a.actor_user_id, u.display_name as actor_display_name, u.email as actor_email, a.action,
+/** `payload` picks how before/after come back: parsed jsonb for the browser, or PostgreSQL's own
+ *  `::text` rendering for the export — the bytes the hash chain covers (§15). */
+const selectColumns = (payload: string): string => `a.id::text, a.actor_user_id, u.display_name as actor_display_name, u.email as actor_email, a.action,
             a.target_type, a.target_id, ${TARGET_NUMBER_SQL} as target_number, ${TARGET_PARENT_NUMBER_SQL} as target_parent_number,
-            a.before, a.after, a.created_at, a.chain_seq::text as chain_seq, a.prev_hash, a.row_hash`;
+            ${payload}, a.created_at, a.chain_seq::text as chain_seq, a.prev_hash, a.row_hash`;
 const FROM_SQL = `from audit_log a left join users u on u.id = a.actor_user_id`;
-const SELECT_SQL = `select ${SELECT_COLUMNS} ${FROM_SQL}`;
-/** The export's variant: the window count is evaluated before ORDER BY/LIMIT, so it is the full
- *  matching total even when the cap truncates the rows. */
-const SELECT_SQL_WITH_TOTAL = `select ${SELECT_COLUMNS}, count(*) over()::text as total_count ${FROM_SQL}`;
+const SELECT_SQL = `select ${selectColumns("a.before, a.after")} ${FROM_SQL}`;
+/** The export's variant: before/after as raw text, plus the window count — evaluated before
+ *  ORDER BY/LIMIT, so it is the full matching total even when the cap truncates the rows. */
+const SELECT_SQL_EXPORT = `select ${selectColumns("a.before::text as before, a.after::text as after")}, count(*) over()::text as total_count ${FROM_SQL}`;
 
 /** §15: newest first on the created_at index; the id breaks ties between rows of one transaction
  *  (which share `now()`), so paging by offset is stable. */
@@ -160,8 +162,15 @@ export async function listAudit(pool: Pool, filters: AuditFilters, page: { limit
   return { rows: rows.slice(0, limit).map(mapRow), hasMore: rows.length > limit };
 }
 
+/** An exported row: before/after are the stored jsonb's `::text`, written to the CSV verbatim —
+ *  the exact bytes the hash chain covers, not a JS re-serialization (§15). */
+export interface AuditExportEntry extends Omit<AuditEntry, "before" | "after"> {
+  before: string | null;
+  after: string | null;
+}
+
 export interface AuditExport {
-  rows: AuditEntry[];
+  rows: AuditExportEntry[];
   totalMatching: number;
 }
 
@@ -171,9 +180,9 @@ export async function exportAudit(pool: Pool, filters: AuditFilters, cap: number
   const { where, params } = buildWhere(filters);
   // The export, unlike the browser, does report the matching total (X-Total-Matching drives the
   // "exported N of M" notice), so it carries the window count.
-  const { rows } = await pool.query<AuditQueryRow & { total_count: string }>(
-    `${SELECT_SQL_WITH_TOTAL} ${where} ${ORDER_SQL} limit ${Math.max(1, Math.floor(cap))}`,
+  const { rows } = await pool.query<AuditQueryRow & { before: string | null; after: string | null; total_count: string }>(
+    `${SELECT_SQL_EXPORT} ${where} ${ORDER_SQL} limit ${Math.max(1, Math.floor(cap))}`,
     params,
   );
-  return { rows: rows.map(mapRow), totalMatching: rows.length > 0 ? Number(rows[0]!.total_count) : 0 };
+  return { rows: rows.map((r) => ({ ...mapRow(r), before: r.before, after: r.after })), totalMatching: rows.length > 0 ? Number(rows[0]!.total_count) : 0 };
 }

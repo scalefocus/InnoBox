@@ -1,7 +1,7 @@
-// Live-DB integration test (gated) for the §15 audit browser store: category chips, the
-// cross-table search (action, target id, target number, actor name/e-mail — never the payload),
-// the date range, paging in pages of 100, and the capped export. Self-skips when DATABASE_URL is
-// unset.
+// Live-DB integration test (gated) for the §15 audit browser store: category chips (Anonymity
+// included), the cross-table search (action, target id, target number, actor name/e-mail — never
+// the payload), the date range, paging in pages of 100, and the capped export with before/after as
+// the stored ::text. Self-skips when DATABASE_URL is unset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -84,12 +84,16 @@ test(
       assert.equal(p3.hasMore, false, "an empty page past the end has nothing more");
       assert.equal("total" in p3, false, "the browser page carries no window count — the query is bounded by its LIMIT");
 
-      // Export: capped, newest-first, total still reported; before/after come through raw.
+      // Export: capped, newest-first, total still reported; before/after come through as the
+      // stored jsonb's own ::text — PostgreSQL's spacing, not JSON.stringify's.
       const capped = await exportAudit(pool, mine, 2);
       assert.equal(capped.rows.length, 2);
       assert.equal(capped.totalMatching, 4);
       assert.equal(capped.rows[0]!.action, "system_log.exported");
-      assert.deepEqual(capped.rows[0]!.after, { marker });
+      assert.equal(capped.rows[0]!.after, `{"marker": "${marker}"}`);
+      assert.equal(capped.rows[0]!.before, null);
+      const { rows: stored } = await pool.query<{ after: string }>(`select after::text as after from audit_log where id = $1`, [capped.rows[0]!.id]);
+      assert.equal(capped.rows[0]!.after, stored[0]!.after, "byte-identical to the stored text");
 
       // ── Target links (§15): a still-resolving challenge / solution links; a deleted one and
       //    every other target type stay plain text (targetHref null). ──────────────────────
@@ -136,6 +140,15 @@ test(
       const adminActions = (await listAudit(pool, { ...tie, category: "admin" })).rows.map((r) => r.action);
       assert.ok(adminActions.includes("triage.exported"));
       assert.ok(adminActions.includes("admin.triage_exported"), "historical rows under the legacy name stay under Admin");
+
+      // ── Admin reveals and self-reveals have their own Anonymity chip. ─────────────────────
+      await appendAudit(pool, { actorUserId: tieActor, action: "anonymity.revealed", targetType: "challenge" });
+      await appendAudit(pool, { actorUserId: tieActor, action: "anonymity.self_revealed", targetType: "solution" });
+      assert.deepEqual(
+        (await listAudit(pool, { ...tie, category: "anonymity" })).rows.map((r) => r.action),
+        ["anonymity.self_revealed", "anonymity.revealed"],
+      );
+      assert.ok(!(await listAudit(pool, { ...tie, category: "admin" })).rows.some((r) => r.action.startsWith("anonymity.")));
     } finally {
       await pool.end();
     }
