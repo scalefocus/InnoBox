@@ -24,10 +24,10 @@ test("resolveExternalId: prefers externalId, falls back to id, else null", () =>
 
 test("extractPrimaryEmail: primary:true wins, else first, else null", () => {
   assert.equal(
-    extractPrimaryEmail({ emails: [{ value: "a@x.com" }, { value: "b@x.com", primary: true }] }),
-    "b@x.com",
+    extractPrimaryEmail({ emails: [{ value: "a@example.com" }, { value: "b@example.com", primary: true }] }),
+    "b@example.com",
   );
-  assert.equal(extractPrimaryEmail({ emails: [{ value: "a@x.com" }] }), "a@x.com");
+  assert.equal(extractPrimaryEmail({ emails: [{ value: "a@example.com" }] }), "a@example.com");
   assert.equal(extractPrimaryEmail({ emails: [] }), null);
   assert.equal(extractPrimaryEmail({}), null);
 });
@@ -38,17 +38,17 @@ test("parseUserWrite: the literal Entra create payload", () => {
   const body = {
     schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
     externalId: "9f4a...-objectid",
-    userName: "ada@contoso.com",
+    userName: "ada@example.com",
     active: true,
     displayName: "Ada Lovelace",
     name: { givenName: "Ada", familyName: "Lovelace" },
-    emails: [{ value: "ada@contoso.com", type: "work", primary: true }],
+    emails: [{ value: "ada@example.com", type: "work", primary: true }],
   };
   const parsed = parseUserWrite(body);
   assert.deepEqual(parsed, {
     externalId: "9f4a...-objectid",
-    userName: "ada@contoso.com",
-    email: "ada@contoso.com",
+    userName: "ada@example.com",
+    email: "ada@example.com",
     displayName: "Ada Lovelace",
     department: null,
     jobTitle: null,
@@ -57,14 +57,14 @@ test("parseUserWrite: the literal Entra create payload", () => {
 });
 
 test("parseUserWrite: no emails -> falls back to userName", () => {
-  const parsed = parseUserWrite({ externalId: "ext-1", userName: "ada@contoso.com" });
-  assert.equal(parsed.email, "ada@contoso.com");
+  const parsed = parseUserWrite({ externalId: "ext-1", userName: "ada@example.com" });
+  assert.equal(parsed.email, "ada@example.com");
 });
 
 test("parseUserWrite: enterprise department + title", () => {
   const parsed = parseUserWrite({
     externalId: "ext-1",
-    userName: "ada@contoso.com",
+    userName: "ada@example.com",
     title: "Principal Engineer",
     [ENTERPRISE_USER_SCHEMA]: { department: "R&D" },
   });
@@ -73,7 +73,7 @@ test("parseUserWrite: enterprise department + title", () => {
 });
 
 test("parseUserWrite: externalId absent falls back to id", () => {
-  const parsed = parseUserWrite({ id: "id-only", userName: "ada@contoso.com" });
+  const parsed = parseUserWrite({ id: "id-only", userName: "ada@example.com" });
   assert.equal(parsed.externalId, "id-only");
 });
 
@@ -112,8 +112,8 @@ test("toScimUser: shape includes id, externalId, meta.resourceType, enterprise e
   const resource = toScimUser({
     id: "row-1",
     external_id: "ext-1",
-    user_name: "ada@contoso.com",
-    email: "ada@contoso.com",
+    user_name: "ada@example.com",
+    email: "ada@example.com",
     display_name: "Ada Lovelace",
     department: "R&D",
     job_title: "Principal Engineer",
@@ -129,7 +129,7 @@ test("toScimUser: shape includes id, externalId, meta.resourceType, enterprise e
   assert.equal(resource.meta.created, now.toISOString());
   assert.equal((resource as any)[ENTERPRISE_USER_SCHEMA].department, "R&D");
   assert.equal((resource as any).title, "Principal Engineer");
-  assert.deepEqual(resource.emails, [{ value: "ada@contoso.com", type: "work", primary: true }]);
+  assert.deepEqual(resource.emails, [{ value: "ada@example.com", type: "work", primary: true }]);
 });
 
 test("toScimUser: no email -> empty emails array; no title -> omitted", () => {

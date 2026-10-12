@@ -1,9 +1,10 @@
 // CSV shape of the §15 audit export (INNOBOX_SPEC.md): every column of the row, before/after as
-// raw JSON (lossless), with the hash-chain columns chain_seq, prev_hash and row_hash appended after
-// `after`. RFC 4180 quoting via the shared toCsvRow; the route adds the UTF-8 BOM.
+// the stored jsonb's own `::text` written verbatim (the bytes the hash chain covers), with the
+// hash-chain columns chain_seq, prev_hash and row_hash appended after `after`.
+// RFC 4180 quoting via the shared toCsvRow; the route adds the UTF-8 BOM.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import { toCsvRow } from "@innobox/shared";
-import type { AuditEntry } from "./store";
+import type { AuditExportEntry } from "./store";
 
 export const AUDIT_CSV_COLUMNS = [
   "id",
@@ -22,10 +23,8 @@ export const AUDIT_CSV_COLUMNS = [
   "row_hash",
 ] as const;
 
-const json = (v: unknown): string => (v === null || v === undefined ? "" : JSON.stringify(v));
-
 /** Header + one line per row, CRLF-joinable. */
-export function auditCsvLines(rows: readonly AuditEntry[]): string[] {
+export function auditCsvLines(rows: readonly AuditExportEntry[]): string[] {
   return [
     toCsvRow([...AUDIT_CSV_COLUMNS]),
     ...rows.map((r) =>
@@ -39,8 +38,8 @@ export function auditCsvLines(rows: readonly AuditEntry[]): string[] {
         r.actorUserId ?? "",
         r.actorDisplayName ?? "",
         r.actorEmail ?? "",
-        json(r.before),
-        json(r.after),
+        r.before ?? "",
+        r.after ?? "",
         r.chainSeq ?? "",
         r.prevHash ?? "",
         r.rowHash ?? "",

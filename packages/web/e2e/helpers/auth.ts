@@ -27,7 +27,7 @@ export async function signIn(
   try {
     await page.goto(`${base}/`);
     await page.locator("#dev-name").fill(opts.name);
-    await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.local`);
+    await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
     await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");
     await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
     await page.getByRole("button", { name: "Dev sign-in" }).click();

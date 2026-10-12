@@ -1,6 +1,8 @@
 // Live-DB integration test (gated) for the /api/users directory search (INNOBOX_SPEC.md
-// §7.3) — extracted into its own store.ts as part of the route/store split. Self-skips
-// when DATABASE_URL is unset.
+// §7.3) — extracted into its own store.ts as part of the route/store split. Also the §7.3
+// assignee gate: the per-challenge picker returns only users who can see the challenge (its SQL
+// pinned here to canSeeChallenge over the users' SCIM-resolved roles), and the assign paths
+// refuse anyone else. Self-skips when DATABASE_URL is unset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -270,6 +272,143 @@ test(
       assert.equal(card?.jobTitle, null);
       assert.equal(card?.department, null);
       assert.equal(card?.officeLocation, null);
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  "assignee gate: the picker offers, and assignment accepts, only users who can see the challenge",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool, randomUUID } = await importDeps();
+    const { buildRoleSet, canSeeChallenge } = await import("@innobox/shared");
+    type Role = "platform_admin" | "namespace_admin" | "committee" | "member";
+    const { searchActiveUsers } = await import("./store");
+    const { getAssignmentAudience, setChallengeAssignee } = await import("../challenges/store");
+    const { bulkAssign } = await import("../admin/triage/store");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().replace(/-/g, "").slice(0, 10);
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const globalId = g[0]!.id;
+      const { rows: nsRows } = await pool.query<{ id: string }>(
+        `insert into namespaces (slug, display_name) values ($1, 'Dbtest Assignable NS') returning id`,
+        [`dbtest-assignable-${stamp}`],
+      );
+      const nsId = nsRows[0]!.id;
+      const { rows: ia } = await pool.query<{ id: string }>(`select id from impact_areas where active and name <> 'Client' limit 1`);
+
+      // Roles come from SCIM-synced group membership through role_mappings (invariant 1): each
+      // user below gets one group mapped to their role, and the expected RoleSet mirrors it.
+      const grantsOf = new Map<string, { role: Role; namespaceId: string | null }[]>();
+      const mkUser = async (label: string, role: Role | null) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name) values ($1, $2, $3) returning id`,
+          [`dbtest-assignable-${label}-${stamp}`, `dbtest-assignable-${label}-${stamp}@example.test`, `Dbtest Assignable ${label} ${stamp}`],
+        );
+        const id = rows[0]!.id;
+        const grants = role ? [{ role, namespaceId: role === "platform_admin" ? null : nsId }] : [];
+        if (role) {
+          const groupExternalId = `dbtest-assignable-${label}-${stamp}`;
+          const { rows: gr } = await pool.query<{ id: string }>(
+            `insert into groups (external_id, display_name, scim_synced) values ($1, $2, true) returning id`,
+            [groupExternalId, `Dbtest Assignable ${label}`],
+          );
+          await pool.query(`insert into group_members (group_id, user_id) values ($1, $2)`, [gr[0]!.id, id]);
+          await pool.query(`insert into role_mappings (group_external_id, role, namespace_id) values ($1, $2, $3)`, [
+            groupExternalId,
+            role,
+            grants[0]!.namespaceId,
+          ]);
+        }
+        grantsOf.set(id, grants);
+        return id;
+      };
+      const rolesOf = async (userId: string) => buildRoleSet(grantsOf.get(userId) ?? [], { globalNamespaceId: globalId });
+
+      const authorId = await mkUser("author", null);
+      const adminId = await mkUser("nsadmin", "namespace_admin");
+      const committeeId = await mkUser("committee", "committee");
+      const memberId = await mkUser("member", "member");
+      const platformId = await mkUser("platform", "platform_admin");
+      const outsiderId = await mkUser("outsider", null);
+      const everyone = [authorId, adminId, committeeId, memberId, platformId, outsiderId];
+      const admin = { userId: adminId, roles: await rolesOf(adminId) };
+      // Audiences are read as the platform admin: an admin of every namespace, global included (the
+      // filtered picker answers only an admin of the challenge's namespace).
+      const platform = { userId: platformId, roles: await rolesOf(platformId) };
+      // Every fixture user's name carries the stamp, so this query matches exactly the six.
+      const q = stamp;
+      const offeredIds = async (audience: Parameters<typeof searchActiveUsers>[2]) =>
+        new Set((await searchActiveUsers(pool, q, audience)).map((u) => u.id).filter((id) => everyone.includes(id)));
+
+      const mk = async (namespaceId: string, visibility: "org" | "namespace", status: string) => {
+        const { rows } = await pool.query<{ number: string }>(
+          `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
+           values ($1, $2, $3, 'assignable fixture', $4, $5, $6) returning number::text`,
+          [namespaceId, visibility, `Assignable ${visibility} ${status} ${stamp}`, ia[0]!.id, authorId, status],
+        );
+        return rows[0]!.number;
+      };
+      const restrictedTriage = await mk(nsId, "namespace", "awaiting_triage");
+      const openTriage = await mk(nsId, "org", "awaiting_triage");
+      const restricted = await mk(nsId, "namespace", "in_review");
+      const openOrg = await mk(nsId, "org", "in_review");
+      const restrictedGlobal = await mk(globalId, "namespace", "valid"); // global: every user is a member
+
+      // The picker's SQL agrees with canSeeChallenge for every user and every case.
+      for (const number of [restrictedTriage, openTriage, restricted, openOrg, restrictedGlobal]) {
+        const audience = await getAssignmentAudience(pool, platform, number);
+        assert.ok(audience, `the platform admin gets the audience of CH-${number}`);
+        const expected = new Set<string>();
+        for (const id of everyone) if (canSeeChallenge({ userId: id, roles: await rolesOf(id) }, audience!)) expected.add(id);
+        assert.deepEqual(await offeredIds(audience!), expected, `picker for ${audience!.visibility}/${audience!.status} CH-${number}`);
+      }
+      // Spot checks on the reference itself, so the loop above cannot pass vacuously.
+      assert.deepEqual(
+        await offeredIds((await getAssignmentAudience(pool, admin, restrictedTriage))!),
+        new Set([authorId, adminId, platformId]),
+        "awaiting triage: the author and the namespace's admins only",
+      );
+      assert.deepEqual(
+        await offeredIds((await getAssignmentAudience(pool, admin, restricted))!),
+        new Set([adminId, committeeId, memberId, platformId]),
+        "namespace-visible: members of the namespace (any role) and platform admins",
+      );
+      assert.equal((await offeredIds((await getAssignmentAudience(pool, admin, openOrg))!)).size, everyone.length);
+      assert.equal((await offeredIds(undefined)).size, everyone.length, "without a challenge the directory is unfiltered");
+
+      // A challenge the caller cannot see yields no audience (existence-not-disclosed), and neither
+      // does one they can see but may not assign (the filtered list would expose roles).
+      const outsider = { userId: outsiderId, roles: await rolesOf(outsiderId) };
+      assert.equal(await getAssignmentAudience(pool, outsider, restricted), null);
+      assert.equal(await getAssignmentAudience(pool, { userId: memberId, roles: await rolesOf(memberId) }, restricted), null);
+      assert.equal(await getAssignmentAudience(pool, { userId: authorId, roles: await rolesOf(authorId) }, restrictedTriage), null);
+      assert.ok(await getAssignmentAudience(pool, admin, restricted), "the namespace's own admin gets it");
+      assert.equal(await getAssignmentAudience(pool, admin, restrictedGlobal), null, "not an admin of the global namespace");
+      assert.equal(await getAssignmentAudience(pool, admin, "999999999"), null);
+
+      // Single assignment: refused for a user who cannot see the challenge, accepted for one who can.
+      assert.equal((await setChallengeAssignee(pool, admin, restricted, outsiderId, rolesOf)).status, "assignee_cannot_see");
+      assert.equal((await setChallengeAssignee(pool, admin, restrictedTriage, memberId, rolesOf)).status, "assignee_cannot_see");
+      const assigneeOf = async (number: string) =>
+        (await pool.query<{ assignee_id: string | null }>(`select assignee_id from challenges where number = $1`, [number])).rows[0]!.assignee_id;
+      assert.equal(await assigneeOf(restricted), null, "a refused assignment changes nothing");
+      assert.equal((await setChallengeAssignee(pool, admin, restricted, memberId, rolesOf)).status, "ok");
+      // Unassigning needs no visibility check.
+      assert.equal((await setChallengeAssignee(pool, admin, openTriage, null, rolesOf)).status, "ok");
+
+      // Bulk: a per-item outcome, while the rest of the selection proceeds.
+      const outcomes = await bulkAssign(pool, admin, [restricted, openOrg], outsiderId, rolesOf);
+      assert.deepEqual(outcomes, [
+        { number: `CH-${restricted}`, status: "assignee_cannot_see" },
+        { number: `CH-${openOrg}`, status: "ok" },
+      ]);
+      assert.equal(await assigneeOf(restricted), memberId, "the refused item keeps its assignee");
+      assert.equal(await assigneeOf(openOrg), outsiderId);
     } finally {
       await pool.end();
     }

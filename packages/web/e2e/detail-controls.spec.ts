@@ -67,6 +67,9 @@ test("an admin can unassign a challenge from the detail page", async ({ browser 
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Unassign Admin ${stamp}`, admin: true });
   const challenge = await createChallengeViaApi(adminCtx.request, { title: `E2E unassign ${stamp}`, description: "d" });
+  // Triaged first: only admins (and the author) can see an awaiting_triage challenge, and the
+  // assignee must be able to see it (§7.3).
+  await setChallengeStatusViaApi(adminCtx.request, challenge.digits, "in_review");
   const assigned = await adminCtx.request.post(`/api/challenges/${challenge.digits}/assign`, {
     data: { userId: assigneeId },
     headers: { "content-type": "application/json" },

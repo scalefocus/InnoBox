@@ -6,7 +6,14 @@
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
 import { itemHref } from "./deep-link";
-import { dispatchEvent, dispatchToUser, getFollowerUserIds, type NotifyContext } from "./notify";
+import {
+  dispatchEvent,
+  dispatchToUser,
+  getFollowerUserIds,
+  getNamespaceAdminUserIds,
+  getNamespaceCommitteeUserIds,
+  type NotifyContext,
+} from "./notify";
 
 const digitsOf = (n: string | number): string => String(n).replace(/\D/g, "");
 const humanStatus = (s: string): string => s.replace(/_/g, " ");
@@ -147,25 +154,65 @@ async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { chall
  */
 export async function notifyAssignmentChanged(
   ctx: NotifyContext,
-  challenge: { number: string; title: string },
+  challenge: { id: string; number: string; title: string },
   previousAssigneeId: string | null,
   newAssigneeId: string | null,
 ): Promise<void> {
   if (previousAssigneeId === newAssigneeId) return;
   const number = digitsOf(challenge.number);
   const link = itemHref(number);
+  const target = { parentType: "challenge", parentId: challenge.id } as const;
   if (previousAssigneeId) {
     await dispatchToUser(ctx, previousAssigneeId, "challenge_assigned", {
       message: `You were unassigned from CH-${number} "${challenge.title}".`,
       link,
-    });
+    }, target);
   }
   if (newAssigneeId) {
     await dispatchToUser(ctx, newAssigneeId, "challenge_assigned", {
       message: `You were assigned to CH-${number} "${challenge.title}".`,
       link,
-    });
+    }, target);
   }
+}
+
+/**
+ * §12.1 event 2 (solution proposed): namespace admins + committee, the challenge author and the
+ * challenge's followers. Visible per the challenge (its followers hear about it), but ABOUT the
+ * new solution: the link scrolls to it (§12.1) and the row carries it as its target, so deleting
+ * the solution takes the row with it (§10.3). Mutable for the author and followers; for admins
+ * and the committee it is an attention event (triage is a duty), so they are exempt.
+ */
+export async function notifySolutionProposed(
+  ctx: NotifyContext,
+  challengeNumber: string,
+  solution: { id: string; number: string },
+): Promise<void> {
+  const number = digitsOf(challengeNumber);
+  const { rows } = await ctx.pool.query<{ id: string; title: string; namespace_id: string; author_id: string }>(
+    `select id, title, namespace_id, author_id from challenges where number = $1`,
+    [number],
+  );
+  const challenge = rows[0];
+  if (!challenge) return;
+  const [admins, committee, followers] = await Promise.all([
+    getNamespaceAdminUserIds(ctx.pool, challenge.namespace_id),
+    getNamespaceCommitteeUserIds(ctx.pool, challenge.namespace_id),
+    getFollowerUserIds(ctx.pool, "challenge", challenge.id),
+  ]);
+  await dispatchEvent(
+    ctx,
+    { parentType: "challenge", parentId: challenge.id },
+    [...admins, ...committee, challenge.author_id, ...followers],
+    "solution_proposed",
+    {
+      message: `A new solution was proposed on CH-${number} "${challenge.title}".`,
+      link: itemHref(number, solution.number),
+      parentType: "solution",
+      parentId: solution.id,
+    },
+    { preference: "followedSolutions", exempt: [...admins, ...committee] },
+  );
 }
 
 /** Notification failures are logged, never thrown — the state change already committed. */

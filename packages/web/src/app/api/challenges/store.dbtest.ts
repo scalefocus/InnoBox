@@ -249,6 +249,7 @@ test(
       const committee = { userId: await mkUser("sm-committee"), roles: roles([{ role: "committee", namespaceId: nsId }]) };
       const assignee = { userId: await mkUser("sm-assignee"), roles: roles([{ role: "member", namespaceId: nsId }]) };
       const member = { userId: await mkUser("sm-member"), roles: roles([{ role: "member", namespaceId: nsId }]) };
+      const rolesOf = async (userId: string) => [author, admin, committee, assignee, member].find((v) => v.userId === userId)!.roles;
 
       const internal = (await listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
       const mkChallenge = async (title: string) => {
@@ -295,8 +296,10 @@ test(
 
       // ── Part B: assignee on their assigned challenge (but not others) ─────────────────
       const ch2 = await mkChallenge("SM assignee challenge");
-      assert.equal((await setChallengeAssignee(pool, admin, ch2.number, assignee.userId)).status, "ok");
+      // Triaged first: a mere member cannot see an awaiting_triage challenge, so cannot be its
+      // assignee (§7.3).
       assert.equal((await setChallengeStatus(pool, admin, ch2.number, "in_review")).status, "ok");
+      assert.equal((await setChallengeAssignee(pool, admin, ch2.number, assignee.userId, rolesOf)).status, "ok");
       // The assignee may traverse the enforced graph on ch2 (their challenge)…
       assert.equal((await setChallengeStatus(pool, assignee, ch2.number, "meeting_scheduled")).status, "ok");
       await assertAuditOverride(pool, "challenge.status_changed", ch2.id, false);
@@ -555,6 +558,7 @@ test(
       const outsider = { userId: await mkUser("outsider"), roles: roles([]) };
       // An admin of a DIFFERENT namespace: admin powers, but none over (or visibility into) namespace A.
       const foreignAdmin = { userId: await mkUser("foreign-admin"), roles: roles([{ role: "namespace_admin", namespaceId: otherNsId }]) };
+      const rolesOf = async (userId: string) => [author, admin, member, outsider, foreignAdmin].find((v) => v.userId === userId)!.roles;
       const internal = (await store.listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
 
       const mk = async (title: string, visibility: "org" | "namespace", isAnonymous: boolean) => {
@@ -579,7 +583,7 @@ test(
         selfRevealChallenge: () => store.selfRevealChallenge(pool, v, chNum),
         withdrawChallenge: () => store.withdrawChallenge(pool, v, chNum),
         resubmitChallenge: () => store.resubmitChallenge(pool, v, chNum),
-        assign: () => store.setChallengeAssignee(pool, v, chNum, v.userId),
+        assign: () => store.setChallengeAssignee(pool, v, chNum, v.userId, rolesOf),
         visibility: () => store.setChallengeVisibility(pool, v, chNum, "org"),
         transition: () => store.setChallengeStatus(pool, v, chNum, "rejected"),
         edit: () => store.editChallenge(pool, v, chNum, { title: "x", description: "x", clientName: null, impactAreaId: internal.id }),
@@ -627,7 +631,7 @@ test(
       // can see it but lacks the role. (Org-visible now, so the foreign admin sees it too.)
       assert.equal((await store.setChallengeVisibility(pool, admin, hidden.num, "org")).status, "ok");
       assert.equal((await store.revealChallengeAuthor(pool, foreignAdmin, hidden.num)).status, "forbidden");
-      assert.equal((await store.setChallengeAssignee(pool, foreignAdmin, hidden.num, member.userId)).status, "forbidden");
+      assert.equal((await store.setChallengeAssignee(pool, foreignAdmin, hidden.num, member.userId, rolesOf)).status, "forbidden");
       assert.equal((await store.revealSolutionAuthor(pool, member, solNum)).status, "forbidden");
       assert.equal((await store.withdrawChallenge(pool, member, hidden.num)).status, "forbidden");
       assert.equal((await store.selfRevealSolution(pool, member, solNum)).status, "forbidden");

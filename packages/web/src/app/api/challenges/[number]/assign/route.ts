@@ -1,5 +1,5 @@
 // POST /api/challenges/:number/assign (INNOBOX_SPEC.md §7.3): namespace/platform admin
-// assigns or unassigns a user. Notifies the assignee — and, on a reassignment or unassignment,
+// assigns or unassigns a user — only one who can see the challenge (422 otherwise). Notifies the assignee — and, on a reassignment or unassignment,
 // the previous assignee (§12.1 event 7).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
@@ -24,7 +24,7 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
   const assigneeUserId = body.userId === null ? null : typeof body.userId === "string" && isUuid(body.userId) ? body.userId : undefined;
   if (assigneeUserId === undefined) return Response.json({ error: "userId must be a uuid or null" }, { status: 400 });
 
-  const result = await setChallengeAssignee(pool, { userId: gate.user.id, roles: gate.user.roles }, number, assigneeUserId);
+  const result = await setChallengeAssignee(pool, { userId: gate.user.id, roles: gate.user.roles }, number, assigneeUserId, resolveRolesForUser);
   switch (result.status) {
     case "ok": {
       // §12.1 event 7 ("assigned / unassigned"): on a reassignment the previous assignee is told
@@ -43,6 +43,8 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
       return Response.json({ error: "you must be a namespace or platform admin to assign" }, { status: 403 });
     case "unknown_user":
       return Response.json({ error: "assignee not found or inactive" }, { status: 400 });
+    case "assignee_cannot_see":
+      return Response.json({ error: "that user cannot see this challenge, so they cannot be its assignee" }, { status: 422 });
     case "terminal_status":
       return Response.json({ error: "cannot assign a challenge in a terminal status" }, { status: 409 });
   }

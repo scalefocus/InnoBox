@@ -3,6 +3,8 @@
 // challenge — so a solution whose challenge is withdrawn or back in awaiting_triage drops off
 // the public profile, and reappears when the challenge is visible again. Self-skips when
 // DATABASE_URL is unset; like the other suites it leaves its rows behind (never hard-deleted).
+// The owner's own "items I follow" lists apply the full §4.3 predicate too: a follow outlives the
+// owner's access, and the list must not keep showing titles and statuses they can no longer see.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -81,6 +83,85 @@ test(
       // Parent visible again → the solution reappears.
       await pool.query(`update challenges set status = 'valid' where id = $1`, [chId]);
       assert.deepEqual(await listed(), [solNumber], "the solution reappears once the challenge is visible");
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
+  "getOwnProfile: the followed-items lists show only what the owner can currently see",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool, randomUUID } = await importDeps();
+    const { buildRoleSet } = await import("@innobox/shared");
+    const { getOwnProfile } = await import("./store");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const globalId = g[0]!.id;
+      const { rows: nsRows } = await pool.query<{ id: string }>(
+        `insert into namespaces (slug, display_name) values ($1, 'Dbtest Follow NS') returning id`,
+        [`dbtest-follow-${stamp}`],
+      );
+      const nsId = nsRows[0]!.id;
+      const { rows: ia } = await pool.query<{ id: string }>(`select id from impact_areas where active and name <> 'Client' limit 1`);
+      const mkUser = async (label: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name) values ($1, $2, $3) returning id`,
+          [`dbtest-follow-${label}-${stamp}`, `dbtest-follow-${label}-${stamp}@example.test`, `Dbtest Follow ${label}`],
+        );
+        return rows[0]!.id;
+      };
+      const ownerId = await mkUser("owner");
+      const otherId = await mkUser("other");
+      // The owner holds no grant in the namespace (e.g. lost membership after following).
+      const owner = { userId: ownerId, roles: buildRoleSet([], { globalNamespaceId: globalId }) };
+
+      const mkChallenge = async (label: string, namespaceId: string, visibility: "org" | "namespace", status: string) => {
+        const { rows } = await pool.query<{ id: string; number: string }>(
+          `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
+           values ($1, $2, $3, 'follow fixture', $4, $5, $6) returning id, number::text`,
+          [namespaceId, visibility, `Follow ${label} ${stamp}`, ia[0]!.id, otherId, status],
+        );
+        return { id: rows[0]!.id, number: `CH-${rows[0]!.number}` };
+      };
+      const mkSolution = async (challengeId: string, status: string) => {
+        const { rows } = await pool.query<{ id: string; number: string }>(
+          `insert into solutions (challenge_id, description, author_id, status) values ($1, $2, $3, $4) returning id, number::text`,
+          [challengeId, `Follow solution ${status} ${stamp}`, otherId, status],
+        );
+        return { id: rows[0]!.id, number: `SOL-${rows[0]!.number}` };
+      };
+      const follow = (parentType: "challenge" | "solution", parentId: string) =>
+        pool.query(`insert into follows (user_id, parent_type, parent_id) values ($1, $2, $3)`, [ownerId, parentType, parentId]);
+
+      const openCh = await mkChallenge("open", globalId, "org", "valid");
+      const restrictedCh = await mkChallenge("restricted", nsId, "namespace", "valid");
+      const withdrawnCh = await mkChallenge("withdrawn", globalId, "org", "withdrawn");
+      for (const c of [openCh, restrictedCh, withdrawnCh]) await follow("challenge", c.id);
+
+      const visibleSol = await mkSolution(openCh.id, "in_review");
+      const proposedSol = await mkSolution(openCh.id, "proposed"); // someone else's, not yet reviewed
+      const underRestricted = await mkSolution(restrictedCh.id, "in_review");
+      const underWithdrawn = await mkSolution(withdrawnCh.id, "in_review");
+      for (const s of [visibleSol, proposedSol, underRestricted, underWithdrawn]) await follow("solution", s.id);
+
+      const profile = await getOwnProfile(pool, owner);
+      assert.ok(profile);
+      // The owner follows nothing else, so the lists are exactly the visible fixtures.
+      assert.deepEqual(
+        profile!.following.challenges.map((c) => c.number),
+        [openCh.number],
+        "only the visible followed challenge is listed",
+      );
+      assert.deepEqual(
+        profile!.following.solutions.map((s) => s.number),
+        [visibleSol.number],
+        "only the visible followed solution is listed",
+      );
     } finally {
       await pool.end();
     }

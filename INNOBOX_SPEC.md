@@ -399,21 +399,6 @@ The delivery pipeline, pinned:
     worker apply the one rule: SMTP counts as configured only with `SMTP_HOST` **and** a
     sender (`SMTP_FROM` or `SMTP_USER`), blank values counting as unset; compose passes
     `SMTP_USER` and `SMTP_FROM` to both services.
-
-    > **⚠ GAP-04 · code fix:** (a) there is no shared helper. `app/layout.tsx` uses
-    > `PUBLIC_BASE_URL ?? "http://localhost:3000"` regardless of `NODE_ENV`;
-    > `lib/security-headers.ts` `canonicalBaseUrl()` (behind `lib/email.ts`
-    > `webBaseUrl()`), `lib/csrf.ts` `allowedOrigins()`, `lib/auth-cookie-sweep.ts` and
-    > `api/admin/webhooks/responses.ts` fall back to `NEXTAUTH_URL`; the worker passes
-    > `PUBLIC_BASE_URL ?? ""` to the notification sweep (`worker/src/index.ts`) and the
-    > webhook sweep (`webhooks/deliver.ts` `startWebhookSweeps`), and
-    > `scim/resources.ts` reads the variable directly. Add `publicBaseUrl()` to
-    > `@innobox/shared`, route every consumer through it, drop the `NEXTAUTH_URL`
-    > fallbacks, and add the production refusal to `web/src/instrumentation.ts` and the
-    > worker's start-up. (b) Web: `lib/email.ts` sets `smtpConfigured` from `SMTP_HOST`
-    > alone — reuse the worker's `buildSmtpEnv` rule (`worker/src/notifications/smtp-env.ts`,
-    > moved to `@innobox/shared`), and pass `SMTP_USER` / `SMTP_FROM` to the `web`
-    > service in `deploy/docker-compose.yml`.
   - **Committed files carry placeholders, never real values** — `deploy/.env.example`,
     `docker-compose.yml`, the `Caddyfile`, the `Jenkinsfile`, `README.md`, and the
     specs use `https://innobox.example.com`, `innobox@example.com`, and
@@ -422,15 +407,6 @@ The delivery pipeline, pinned:
     (`@example.test`) — plus the dev sign-in default `dev@innobox.innovate`, which
     names the product, not a deployment. The same rule binds product code: the
     synthetic user name of a dev sign-in persona is `<slug>@dev.test`.
-
-    > **⚠ GAP-05 · code fix:** non-reserved domains remain. Product code:
-    > `web/src/lib/users.ts` builds the dev persona's `userName` as `<slug>@dev.local` —
-    > make it `@dev.test`, with `lib/users.test.ts` and `e2e/helpers/auth.ts` (which
-    > fills `@dev.local`). Fixtures → `@example.com`: `@contoso.com`
-    > (`worker/src/scim/filter.test.ts`, `resources.test.ts`, `scim.dbtest.ts`),
-    > `a@x.com` / `b@x.com` (`resources.test.ts`), `a@b.com`
-    > (`worker/src/notifications/dispatch.test.ts`) and `svc@corp.com`
-    > (`shared/src/email-graph.test.ts`).
   - **Real values reach production only through the Jenkins credentials vault** —
     the `innobox-deploy-env` secret file (the production `deploy/.env`, carrying
     `PUBLIC_BASE_URL`, `SMTP_FROM`, and every secret) plus the `innobox-deploy-host`,
@@ -450,10 +426,6 @@ The delivery pipeline, pinned:
   `db/migrations/*.sql` applied in order. `.gitlab-ci.yml` is removed — it mirrors
   stages nobody outside the organization can run and duplicates the Actions
   workflow.
-
-  > **⚠ GAP-06 · code fix:** the `build` job in `.github/workflows/ci.yml` builds only
-  > `@innobox/shared` and `@innobox/web`; it must run the recursive `pnpm -r build`, so
-  > the worker is built too.
 - **CI (Jenkins declarative pipeline) — retained for deploy, and as the internal
   pre-deploy gate:** stages —
   **Toolchain** (asdf-provisioned Node 24 from `.tool-versions`, corepack-pinned
@@ -526,11 +498,6 @@ The delivery pipeline, pinned:
   `S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}`, so setting the
   overrides points both services at a separate key without touching how MinIO itself
   starts. `deploy/.env.example` documents both as optional.
-
-  > **⚠ GAP-08 · code fix:** `deploy/docker-compose.yml` wires `S3_ACCESS_KEY` /
-  > `S3_SECRET_KEY` for `web` and `worker` straight from `MINIO_ROOT_*`, so the
-  > documented `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` overrides do nothing. Use the
-  > nested defaults above for both services.
 
 ### §2.4 Web security baseline
 
@@ -975,15 +942,6 @@ A user may hold different roles in different namespaces. Roles are additive.
     `namespace`-visible item keeps seeing it even after losing membership of its
     namespace. The same predicate holds in every list, count and search (the SQL form)
     as on the detail page.
-
-    > **⚠ GAP-58 · code fix:** the SQL twin of `canSeeChallenge`
-    > (`pushChallengeVisibilityConditions`, `api/challenges/store.ts`) ANDs the namespace
-    > condition with the state condition, so an author who has lost membership of a
-    > restricted namespace no longer finds their own `awaiting_triage`/`withdrawn` item
-    > in the gallery, the new-count or search, while `canSeeChallenge`
-    > (`shared/src/challenges.ts`) still shows it on the detail page. Make the SQL match:
-    > for those two statuses, author or namespace admin of the item's namespace (or
-    > platform admin) regardless of membership.
   - Solutions in `proposed` status: visible only to their author, the challenge's
     assignee, and the namespace's committee/admins (mirrors the legacy behavior of
     hiding un-reviewed solutions).
@@ -1353,16 +1311,6 @@ blocked on terminal statuses. The assignee gains the per-challenge powers in §4
 detail-page control both **assigns** and **unassigns** (an "Unassign" action beside
 the current assignee); the §14.1 triage queue offers the same through its inline field.
 
-> **⚠ GAP-19 · code fix:** nothing checks that the assignee can see the challenge.
-> `GET /api/users` (`api/users/route.ts` → `searchActiveUsers`) ignores any
-> `challenge` parameter, and `loadChallengeForAssignment` (`api/challenges/store.ts`,
-> shared by `setChallengeAssignee` and `setChallengeAssigneeLean`/`bulkAssign`) checks
-> only that the user is active. Add the `challenge=` filter (evaluated with the
-> candidate's roles resolved from SCIM-synced membership, as the §3 hand-over does),
-> pass it from the detail-page and per-row triage pickers, answer 422 from
-> `api/challenges/[number]/assign/route.ts`, and return `assignee_cannot_see` per item
-> from `bulkAssign`.
-
 **Search-result presentation.** The assignee search input opens a popover listing
 matching active users. Each result row is a single control laid out as: the user's
 **avatar bubble** (§13.6, small) on the left, then a stacked text column — display
@@ -1613,16 +1561,6 @@ item exactly as it was. "Unsent" means every outbox row not yet `sent` — `pend
 afterwards. Notification rows are matched by the **target they carry** (entity type +
 id in the payload), not by their link text; every notification payload about a
 challenge or solution carries that target.
-
-> **⚠ GAP-23 · code fix:** only comment notifications carry target fields
-> (`parentType`/`parentId`/`challengeId`, written by `dispatchCoalescedComment` in
-> `web/src/lib/notify.ts`); `dispatchEvent`/`dispatchToUser` (same file) and the
-> scan-failure writer in `shared/src/attachments.ts` write `{ message, link }` only, so
-> `deleteNotifications` (`api/challenges/delete.ts`) still falls back to the link for
-> them. On a solution delete the "solution proposed" row — linked to its challenge,
-> without `#SOL-n` (GAP-33) — therefore survives. Add the target type and id to every
-> notification payload through those writers and match on them, keeping the link match
-> for rows written before.
 
 **Object-store purge.** Once the transaction commits, the MinIO objects of every deleted
 attachment are purged — `clean`, `pending`, and author-removed rows alike (an `infected`
@@ -2007,10 +1945,6 @@ stays `failed`; the next attempt time is recorded per row in the outbox's
 the current batch and schedules that row's retry no earlier than its `Retry-After`:
 the next attempt is the later of the backoff and the `Retry-After`.
 
-> **⚠ GAP-31 · code fix:** `worker/src/notifications/dispatch.ts` applies only
-> `emailRetryDelayMinutes` on a 429; `GraphSendError.retryAfterSeconds`
-> (`shared/src/email-graph.ts`) is never read. Set `next_attempt_at` to
-> max(backoff, Retry-After) for a 429.
 E-mail is sent via **Microsoft Graph `sendMail`** from a dedicated service mailbox
 (e.g. `innobox@example.com`) that a platform admin connects on the Administration page
 through a delegated consent flow (`Mail.Send` + `offline_access`, admin-consented).
@@ -2058,10 +1992,6 @@ rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL
 its status, a comment on it, its proposal (there is no standalone solution page,
 §13.1).
 
-> **⚠ GAP-33 · code fix:** the "solution proposed" notification
-> (`api/challenges/[number]/solutions/route.ts`) links to `/challenges/N` without the
-> `#SOL-<n>` anchor; build it with `itemHref` (`lib/deep-link.ts`) as comment
-> notifications already do.
 Delivery is immediate — there is no scheduled digest (§19); the one batching
 mechanism is the per-item coalescing of comment notifications below.
 
@@ -2564,14 +2494,6 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
   spotlight, only if its parent challenge is visible to the viewer — namespace rule
   **and** state rule (not `awaiting_triage`/`withdrawn` unless the viewer is its author
   or an admin of its namespace).
-
-  > **⚠ GAP-35 · code fix:** `api/dashboard/store.ts` uses its own namespace-only
-  > `visibilityClause` (its header comment claiming no carve-out is needed is wrong), so
-  > a solution under a `withdrawn` or re-triaged challenge is counted and can be a
-  > spotlight — showing that challenge's title — to viewers who cannot see it
-  > (invariant 2). Replace it with `pushChallengeVisibilityConditions` for the parent
-  > plus the SQL form of `canSeeSolution` (see GAP-38) for the solution KPIs and both
-  > spotlights.
 - Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
   rankings; neither is duplicated here.
 
@@ -2689,15 +2611,6 @@ accepts them as query parameters beside `q`. Autocomplete stays query-only. Visi
 is applied **inside** the ranked query, before any result limit, so the viewer's top
 results are never displaced by items they cannot see.
 
-> **⚠ GAP-38 · code fix:** `solutionCandidates` (`api/search/store.ts`) applies the
-> parent's predicate in SQL (`pushChallengeVisibilityConditions`), but the solution's
-> own `proposed` rule runs only in JS (`canSeeSolution` in `toSolutionResults`), after
-> the `limit ${CANDIDATE_LIMIT}`, so hidden `proposed` matches can still fill the cut
-> and displace visible ones. Add a SQL form of `canSeeSolution` (status not `proposed`,
-> or the viewer is its author, the challenge's assignee, or committee/admin of its
-> namespace) beside `pushChallengeVisibilityConditions` and apply it before the limit;
-> GAP-35 and GAP-39 reuse it.
-
 **Keyboard shortcut:** `Ctrl+K` (`Cmd+K` on macOS) focuses the topbar search
 input from anywhere in the app while authenticated — it's a global `keydown`
 listener in `AppShell`, not scoped to a single page. The browser/OS default for
@@ -2793,13 +2706,6 @@ for one.
 
 A scrubbed user's `/profile/<id>` renders the same generic not-found state as an
 unknown id — *"That profile doesn't exist."* — never a "Deleted User" page.
-
-> **⚠ GAP-39 · code fix:** the two "items I follow" queries in `getOwnProfile`
-> (`api/profile/store.ts`) join `follows` to challenges/solutions with no visibility
-> predicate, so they list titles and statuses of items the owner can no longer see.
-> Pass the owner's `Viewer` (the function takes only `userId` today) and apply
-> `pushChallengeVisibilityConditions` and the SQL `canSeeSolution` (GAP-38) in the
-> SQL, before the `limit 50`.
 
 > **⚠ GAP-40 · code fix:** `getPublicProfile` (`api/profile/store.ts`) returns null
 > for `!active`, so `/profile/<id>` is a 404 for every deactivated user while the
@@ -4509,12 +4415,6 @@ optional and composable (each an additional `AND`):
   JSON payload is deliberately **not** searched and there is no trigram index — the
   query is bounded by `ORDER BY id DESC LIMIT 100` on the primary key (newest first;
   `id` is unique, so paging never skips or repeats a row with a shared timestamp).
-
-> **⚠ GAP-48 · code fix:** there is no Anonymity chip: `AUDIT_CATEGORIES` and
-> `AUDIT_CATEGORY_PATTERNS` (`shared/src/audit-browser.ts`) stop at Admin, so
-> `anonymity.*` rows show only under All. Add the chip (pattern `anonymity.%`) to the
-> shared lists and the `/admin/audit` page, and correct the comment on
-> `AUDIT_CATEGORY_PATTERNS` that says anonymity reveals appear under All.
 - **Date range** — two native date inputs; the picked **local** day resolves to UTC
   instants, From = start of day, To = **inclusive** end of day.
 - **`✕ clear filters`** — shown only while any filter is active; resets to the default
@@ -4536,11 +4436,6 @@ same admins hold the §9 reveal power — a masked export would be lossy while l
 browser as the unmasked path. The compensating control is that **every export is
 itself audited** — `audit.exported` with actor, active filters and row count — so a
 bulk download of identities is never silent.
-
-> **⚠ GAP-49 · code fix:** `api/admin/audit/csv.ts` re-serializes the parsed objects
-> with `JSON.stringify`, which differs from the stored jsonb text in spacing; the
-> export query in `api/admin/audit/store.ts` selects `a.before, a.after` as jsonb.
-> Select `before::text` / `after::text` for the export and write them verbatim.
 
 ---
 
@@ -4901,10 +4796,6 @@ exist), `CLAUDE.md` and this spec (§21.3 reference rewrites, §2.2 authority
 inversion), `.gitignore` (`.claude/skills/`).
 
 Deleted: `START_PROMPT.md`, `.gitlab-ci.yml`.
-
-> **⚠ GAP-50 · code fix:** `packages/web/src/app/globals.css` still opens with the
-> "STARTER-KIT NOTE: carried over from a proven sibling app …" paragraph in its header
-> comment, a starter-kit artefact; replace it with a plain description of the file.
 
 ### §21.7 The attribution test
 

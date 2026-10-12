@@ -10,7 +10,7 @@
 import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
-import { parseEmailTokenKey, type GraphMailEnv } from "@innobox/shared";
+import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, type GraphMailEnv } from "@innobox/shared";
 import { aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
@@ -18,7 +18,6 @@ import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
-import { buildSmtpEnv } from "./notifications/smtp-env.js";
 import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps, type WorkerS3Client } from "./attachments/scan.js";
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
@@ -47,6 +46,14 @@ if (!scimTokenCheck.ok) {
   process.exit(1);
 }
 const scimToken = scimTokenCheck.token;
+
+// INNOBOX_SPEC.md §2.3: every deep link derives from PUBLIC_BASE_URL, so a production worker
+// without it refuses to start rather than send e-mails and webhook cards with empty links.
+const baseUrlFatal = publicBaseUrlStartupViolation(process.env);
+if (baseUrlFatal) {
+  console.error(baseUrlFatal);
+  process.exit(1);
+}
 
 const port = Number(process.env.WORKER_PORT ?? 4000);
 const app = express();
@@ -99,7 +106,7 @@ function buildGraphMailEnv(): GraphMailEnv | null {
   return { tenantId, clientId, clientSecret, key };
 }
 
-/** The optional plain-text fallback transport (§12.1) — see notifications/smtp-env.ts. An empty
+/** The optional plain-text fallback transport (§12.1) — see @innobox/shared smtp-env.ts. An empty
  *  SMTP_FROM (compose passes `${SMTP_FROM:-}`) falls back to SMTP_USER like an unset one. */
 function currentSmtpEnv() {
   return buildSmtpEnv(process.env, (msg) => console.log(JSON.stringify({ level: "warn", msg })));
@@ -238,7 +245,7 @@ const leaderElection = startLeaderElection(dbUrl, {
         const summary = await runNotificationSweep(pool, {
           graphEnv: buildGraphMailEnv(),
           smtpEnv: currentSmtpEnv(),
-          baseUrl: process.env.PUBLIC_BASE_URL ?? "",
+          baseUrl: publicBaseUrl(),
         });
         recordNotificationSweep(summary);
         if (summary.sent || summary.failed) {

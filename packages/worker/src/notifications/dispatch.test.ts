@@ -7,7 +7,7 @@
 // email/email_notifications_enabled directly (a "missing user" row just has both null).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emailRetryDelayMinutes, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
+import { emailRetryDelayMinutes, emailRetryDelaySeconds, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
 
 interface FakeRow {
   [key: string]: unknown;
@@ -46,7 +46,7 @@ test("runNotificationSweep: opted-out user marks the row sent without attempting
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 0,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: false,
     },
   ]);
@@ -80,7 +80,7 @@ test("runNotificationSweep: no transport configured marks the row failed with at
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 2,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: true,
     },
   ]);
@@ -120,14 +120,23 @@ test("runNotificationSweep: a failure backs off next_attempt_at by the row's att
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 3,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: true,
     },
   ]);
   await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
   assert.equal(updates.length, 1);
-  assert.match(updates[0]!.sql, /next_attempt_at = now\(\) \+ make_interval\(mins => \$3::int\)/);
-  assert.equal(updates[0]!.params[2], 8, "the 4th failure waits 8 minutes");
+  assert.match(updates[0]!.sql, /next_attempt_at = now\(\) \+ make_interval\(secs => \$3::int\)/);
+  assert.equal(updates[0]!.params[2], 8 * 60, "the 4th failure waits 8 minutes");
+});
+
+test("emailRetryDelaySeconds: the backoff, or a 429's Retry-After when that is later", () => {
+  assert.equal(emailRetryDelaySeconds(0), 60, "no Retry-After: the plain backoff");
+  assert.equal(emailRetryDelaySeconds(0, 300), 300, "a Retry-After past the backoff wins");
+  assert.equal(emailRetryDelaySeconds(3, 30), 8 * 60, "a Retry-After shorter than the backoff never pulls the retry forward");
+  assert.equal(emailRetryDelaySeconds(6, 7200), 7200, "Retry-After is honored even past the 60-minute backoff cap");
+  assert.equal(emailRetryDelaySeconds(0, 90.2), 91, "a fractional Retry-After rounds up, never early");
+  assert.equal(emailRetryDelaySeconds(1, Number.NaN), 120, "a nonsensical Retry-After leaves the backoff alone");
 });
 
 test("runNotificationSweep: only due failed rows below the attempt cap are selected", async () => {
