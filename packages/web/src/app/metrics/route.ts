@@ -1,10 +1,12 @@
 // GET /metrics (INNOBOX_SPEC.md §2, observability): Prometheus text exposition for the web
 // service. Bearer-token-guarded (constant time) when METRICS_TOKEN is set; when it is unset the
 // route is open in local dev but disabled (404) in a production build. Emits
-// build/up/process gauges and innobox_csp_violations_total{directive} (§2.4, the CSP report sink);
+// build/up/process gauges, innobox_csp_violations_total{directive} (§2.4, the CSP report sink) and
+// innobox_ai_calls_total{feature,outcome} (§22.6, this process's AI calls);
 // the worker exposes the queue/sweep counters (its /metrics handler).
 import { APP_VERSION } from "@innobox/shared/version";
 import { renderMetrics, metricsAccess, type MetricSample } from "@innobox/shared";
+import { aiMetricSamples } from "@innobox/shared/ai";
 import { cspViolationCounts } from "@/lib/csp-report";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +32,7 @@ export function GET(req: Request): Response {
   for (const { directive, count } of cspViolationCounts()) {
     samples.push({ name: "innobox_csp_violations_total", help: "CSP violations reported to /api/csp-report, by effective directive", type: "counter", value: count, labels: { directive } });
   }
+  samples.push(...aiMetricSamples());
 
   return new Response(renderMetrics(samples), {
     status: 200,

@@ -127,6 +127,7 @@ repository**, so there is nothing of ours to un-configure.
 | `EMAIL_TOKEN_ENC_KEY` · `ENTRA_EMAIL_CLIENT_ID` · `ENTRA_EMAIL_CLIENT_SECRET` | Graph e-mail through a service mailbox, using a **separate** Entra app registration. |
 | `SMTP_HOST` · `SMTP_PORT` · `SMTP_SECURE` · `SMTP_USER` · `SMTP_PASSWORD` · `SMTP_FROM` | The plain-text SMTP fallback for e-mail. |
 | `WEBHOOK_ENC_KEY` | Turns on per-namespace channel webhooks (Teams Workflows or any JSON receiver). |
+| `AI_TOKEN_ENC_KEY` | Lets platform admins connect one AI provider (Open WebUI or OpenAI) on the settings page. |
 | `CSP_MODE` | `enforce` (default) or `report-only` while you roll out a policy change. |
 | `METRICS_TOKEN` | Protects `/metrics` with a bearer token. Without it, production disables `/metrics`. |
 | `TRUST_PROXY` | How many proxy hops to trust for the real client IP (`1` for the bundled proxy). |

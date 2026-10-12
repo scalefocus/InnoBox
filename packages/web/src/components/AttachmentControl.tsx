@@ -7,9 +7,9 @@
 // Each file moves through two visually distinct phases: Uploading — a progress bar for a chunked
 // file (> one chunk) or a spinner for a single-shot one — then Scanning… until the verdict, then
 // Ready / Failed scan / Couldn't be scanned. The control polls while anything is scanning, so a
-// row flips on its own. A file may be removed at ANY phase: while it is still uploading, Remove
-// cancels the in-flight request and (for a chunked file) discards the session through the abort
-// endpoint; afterwards it tombstones the stored row. On the submission forms `onBusyChange`
+// row flips on its own. A file may be removed at ANY phase: while it is still uploading, Cancel
+// stops the in-flight request and (for a chunked file) discards the session through the abort
+// endpoint; once it has landed, Remove tombstones the stored row. On the submission forms `onBusyChange`
 // drives the Submit gate (blocksSubmit). Bytes are only ever downloadable through the gateway,
 // and only for a bound, clean file — a staged row is never served, so its name is plain text.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -293,7 +293,7 @@ export function AttachmentControl({
                 </span>
               )}
               <button type="button" className="btn btn-sm btn-danger" disabled={disabled} onClick={cancelUpload}>
-                Remove
+                Cancel
               </button>
             </li>
           )}

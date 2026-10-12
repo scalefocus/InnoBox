@@ -1884,11 +1884,6 @@ never deleted, by anyone, for any reason (invariant 5).
     `not_editable` (the parent has left its author-edit window); and `too_many` (the
     §14.3 cap was reached in the meantime — whether found before reassembly or by the
     locked re-count after it, in which case the reassembled object is deleted).
-
-    > **⚠ GAP-26 · code fix:** in `completeChunkedUpload` (`api/attachments/store.ts`),
-    > the `abortAnd` paths for `not_found` / `forbidden` / `not_editable` / `too_many`,
-    > and the post-assembly `too_many` refusal (`dropAssembled`), drop the session
-    > without an audit row. Audit each with the reason above.
   - **Failure** — a failed part is **retried by the browser** when the failure is a
     network error, a 5xx or a 429: up to **3** attempts in all for that part, waiting
     **1 s** before the second and **2 s** before the third (re-sending a part number
@@ -1898,11 +1893,6 @@ never deleted, by anyone, for any reason (invariant 5).
     (`POST …/abort`, or the GC) runs `AbortMultipartUpload`, frees the orphaned MinIO parts,
     drops the session row, and audits `attachment.upload_aborted`. No partial object is ever
     exposed (no `attachments` row exists until complete).
-
-    > **⚠ GAP-27 · code fix:** `uploadFileInChunks` in `web/src/lib/chunked-upload.ts` aborts
-    > the whole session on the first failed part (its header comment calls this the
-    > approved design; this spec supersedes it). Retry each part as above before
-    > aborting, with unit tests for the retry classification.
 - **Binding at submit** — `POST /api/challenges` and the solution-create endpoint accept
   an optional `draftKey`. Inside the create transaction the server takes the caller's
   staged rows for that key (`uploaded_by = caller`, `parent_id is null`, `removed_at is
@@ -1922,14 +1912,6 @@ never deleted, by anyone, for any reason (invariant 5).
   its message: an unclean staged row → `code: "attachments_not_clean"`; more staged rows
   than the cap allows → `code: "attachments_over_limit"` (rather than binding some and
   silently dropping the rest).
-
-  > **⚠ GAP-28 · code fix:** `hasUncleanStagedAttachments` (`api/attachments/store.ts`)
-  > runs on the pool before `inTransaction` in `createChallenge`/`createSolution`
-  > (`api/challenges/store.ts`), so a row staged in between can bind while `pending`;
-  > `bindStagedAttachments` skips rows over the cap (`limit $5` = `maxPerItem`) instead
-  > of refusing; and the 409s in `api/challenges/route.ts` and
-  > `api/challenges/[number]/solutions/route.ts` carry no `code`. Lock the staged rows
-  > `FOR UPDATE` inside the transaction, run both checks there, and return the two codes.
 - **Author removal** — `DELETE /api/attachments/:id`: allowed **only** to the
   uploader (who is the parent's author) and **only while the parent is in an
   author-edit window** (§10.1); **unbound staged rows are removable by their uploader at
@@ -2032,9 +2014,6 @@ never deleted, by anyone, for any reason (invariant 5).
   scanned) the control is labelled **Remove**. While a file is **Scanning…** the
   control polls its status so the phase advances without a page reload, and the
   progress bar carries `role="progressbar"` with its value.
-
-  > **⚠ GAP-30 · code fix:** `components/AttachmentControl.tsx` labels the in-flight
-  > row's cancel button "Remove"; label it "Cancel".
 
 ---
 
@@ -5043,17 +5022,6 @@ the plumbing; §22.10–§22.13 are the four tasks. **Every AI task is advisory 
 writing aid:** none ever changes a status, an assignment or a visibility, and none ever
 sees who wrote anything.
 
-> **⚠ GAP-68 · new feature:** the **AI plumbing** (§22.1–§22.9) does not exist. Build:
-> migration `0038_ai_integration.sql` (`ai_integration`, `ai_usage`, grants); the
-> server-only `@innobox/shared/ai` subpath (provider adapters, base-URL normalization,
-> the outbound guard reuse, `aiComplete`, `aiAvailable`, the `AI_FEATURES` registry,
-> usage recording, the system-log throttle); `AI_TOKEN_ENC_KEY` in `deploy/.env.example`
-> and compose (web + worker), encrypted with the e-mail token code through a thin
-> wrapper like the webhook key; the `admin/ai*` routes; the **AI provider** card on
-> `/admin/settings`; the `ai_usage` prune in the worker's hourly housekeeping; the
-> `innobox_ai_calls_total` metric; the `ai.*` Admin audit-chip pattern. Tests per
-> §22.9. Ships as its own minor release, with an empty registry.
-
 ### §22.1 Decisions
 
 | # | Decision | Why |
@@ -5108,7 +5076,9 @@ sees who wrote anything.
   (`openwebui` | `openai`), `base_url` (the normalized URL actually used), `model`
   (≤ 200), `token_enc` (the `v1:` AES-256-GCM blob), `token_last4`, `last_test_at` /
   `_ok` / `_error` / `_latency_ms`, `last_call_at` / `_ok` / `_error`,
-  `last_failure_logged_at` (the §22.6 throttle watermark), `updated_by` (FK → `users`,
+  `last_failure_logged_at` (the §22.6 throttle watermark), `last_test_model` (the model the
+  provider echoed on the last saved-config test — the *Last test* panel's "model that
+  answered"), `updated_by` (FK → `users`,
   `ON DELETE SET NULL`), `updated_at`. **No row = not configured.** *Remove* hard-deletes
   the row, token included.
 - **`ai_usage`** — one row per provider call: `id` (bigserial), `created_at`, `feature`
@@ -5312,7 +5282,7 @@ encrypted-token pattern. Platform admins only.
 > the solution form does not exist. Build: the `submit_draft` registry entry, `GET` and
 > `POST /api/ai/draft` (availability; the draft call with its per-minute and 24-hour
 > limits), the button, confirm-before-replace, Undo, and the tests below. Its own minor
-> release, after GAP-68.
+> release, on top of the shipped plumbing (§22.1–§22.9).
 
 A writing aid for the author's **own** text. Nothing it produces is stored, marked or
 treated differently from text the author typed.
@@ -5355,7 +5325,7 @@ treated differently from text the author typed.
 > `ai_results` table — `kind`, `parent_type`, `parent_id`, `input_hash`, `model`,
 > `status` `pending|ready|failed`, `payload` jsonb, timestamps — joining the §10.3
 > cascade), the worker pass, the detail-page and triage-queue panel, **Re-run**, and the
-> tests below. Its own minor release, after GAP-68.
+> tests below. Its own minor release, on top of the shipped plumbing (§22.1–§22.9).
 
 An **advisory** note that helps triagers and the committee act faster. It never
 transitions, assigns, rejects or notifies (invariant 6).
@@ -5393,7 +5363,7 @@ transitions, assigns, rejects or notifies (invariant 6).
 > **⚠ GAP-71 · new feature:** the AI re-ranking of the §6.1 duplicate warning does not
 > exist. Build: the `duplicate_explain` registry entry and switch, the step inside
 > `POST /api/challenges/similar`, the reasons in the banner, and the tests below. Its own
-> minor release, after GAP-68.
+> minor release, on top of the shipped plumbing (§22.1–§22.9).
 
 - **Enablement.** Platform switch **"Explain similar challenges"**
   (`ai_duplicate_explain_enabled`, **off by default** — it sends other people's text).

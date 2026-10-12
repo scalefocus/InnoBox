@@ -41,7 +41,7 @@ import { inTransaction } from "../../../lib/db";
 import { isScanAvailable } from "../../../lib/clamav";
 import { onChallengeStatusChanged, onSolutionImplemented } from "../../../lib/webhooks";
 import { getAttachmentLimits } from "../admin/settings/store";
-import { bindStagedAttachments, hasUncleanStagedAttachments, listAttachmentsForParent } from "../attachments/store";
+import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
 import { featuredDetailFields, type FeaturedDetailFields } from "./featured-rules";
 import { unpinOnStatusChange } from "./featured-unpin";
@@ -634,6 +634,7 @@ export type CreateChallengeResult =
   | { status: "unknown_impact_area" }
   | { status: "inactive_impact_area" }
   | { status: "attachments_not_clean" }
+  | { status: "attachments_over_limit" }
   | { status: "invalid"; error: string };
 
 export async function createChallenge(
@@ -683,13 +684,15 @@ export async function createChallenge(
   const draftKey = typeof input.draftKey === "string" && isUuid(input.draftKey) ? input.draftKey : null;
   // §11 scan gate: when a scanner is available, refuse to submit while any staged file is still
   // scanning, infected, or unscannable — so a challenge is only ever born with clean attachments. When ClamAV
-  // is unavailable the platform fails open and pending files bind as before (scanned later).
-  if (draftKey && (await isScanAvailable()) && (await hasUncleanStagedAttachments(pool, author, "challenge", draftKey))) {
-    return { status: "attachments_not_clean" };
-  }
+  // is unavailable the platform fails open and pending files bind as before (scanned later). The
+  // probe runs here (a network call, never inside the transaction); the checks run in it.
+  const requireClean = draftKey ? await isScanAvailable() : false;
   const maxPerItem = draftKey ? (await getAttachmentLimits(pool)).maxPerItem : 0;
 
-  return inTransaction(pool, async (client) => {
+  return inTransaction(pool, async (client): Promise<CreateChallengeResult> => {
+    // Claim (lock + check) the staged rows before anything is written, so a refusal leaves no trace.
+    const staged = draftKey ? await claimStagedAttachments(client, author, "challenge", draftKey, { maxPerItem, requireClean }) : null;
+    if (staged && staged.status !== "ok") return staged;
     const { rows } = await client.query<{ id: string }>(
       `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id)
        values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -720,7 +723,7 @@ export async function createChallenge(
         ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
       },
     });
-    if (draftKey) await bindStagedAttachments(client, author, "challenge", id, draftKey, maxPerItem);
+    if (draftKey && staged) await bindStagedAttachments(client, author, "challenge", id, draftKey, staged.ids);
     const { rows: full } = await client.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [
       id,
       author.userId,
@@ -735,6 +738,7 @@ export type CreateSolutionResult =
   | { status: "not_found" }
   | { status: "not_valid_status" }
   | { status: "attachments_not_clean" }
+  | { status: "attachments_over_limit" }
   | { status: "invalid"; error: string };
 
 export async function createSolution(
@@ -765,13 +769,14 @@ export async function createSolution(
 
   // §11 staging: bind any files staged during the propose form to this solution (in-transaction).
   const draftKey = typeof input.draftKey === "string" && isUuid(input.draftKey) ? input.draftKey : null;
-  // §11 scan gate (see createChallenge): block submit on unclean staged files when a scanner is up.
-  if (draftKey && (await isScanAvailable()) && (await hasUncleanStagedAttachments(pool, author, "solution", draftKey))) {
-    return { status: "attachments_not_clean" };
-  }
+  // §11 scan gate + cap re-check (see createChallenge): block submit on unclean staged files when
+  // a scanner is up, and on more staged files than the cap allows.
+  const requireClean = draftKey ? await isScanAvailable() : false;
   const maxPerItem = draftKey ? (await getAttachmentLimits(pool)).maxPerItem : 0;
 
-  return inTransaction(pool, async (client) => {
+  return inTransaction(pool, async (client): Promise<CreateSolutionResult> => {
+    const staged = draftKey ? await claimStagedAttachments(client, author, "solution", draftKey, { maxPerItem, requireClean }) : null;
+    if (staged && staged.status !== "ok") return staged;
     const { rows: inserted } = await client.query<{ id: string }>(
       `insert into solutions (challenge_id, description, cost_vs_benefits, is_anonymous, author_id)
        values ($1, $2, $3, $4, $5)
@@ -786,7 +791,7 @@ export async function createSolution(
       targetId: id,
       after: { challengeId: challenge.id, isAnonymous: validated.value.isAnonymous },
     });
-    if (draftKey) await bindStagedAttachments(client, author, "solution", id, draftKey, maxPerItem);
+    if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
     const solutionRows = await fetchSolutionRows(client, challenge.id, author.userId);
     const row = solutionRows.find((s) => s.id === id)!;
     return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: challenge.namespace_id, assigneeId: challenge.assignee_id }) };

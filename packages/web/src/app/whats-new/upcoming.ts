@@ -75,13 +75,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "admins",
   },
   {
-    ids: ["GAP-68"],
-    title: "AI provider connection",
-    teaser:
-      "Connect InnoBox to an AI provider from the settings page and choose which AI features are switched on.",
-    audience: "platform_admin",
-  },
-  {
     ids: ["GAP-65", "GAP-66"],
     title: "Survey results",
     teaser: "Scores and comments from the feedback survey, by feature and by role, with trends over time.",
