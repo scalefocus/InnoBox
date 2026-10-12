@@ -2,7 +2,7 @@
 // as Graph returns it, served with the matching type).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ifNoneMatchHits, photoContentType, photoEtag } from "./photo-type";
+import { NO_PHOTO_CACHE_CONTROL, ifNoneMatchHits, noPhotoResponse, photoContentType, photoEtag } from "./photo-type";
 
 const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
@@ -55,4 +55,12 @@ test("ifNoneMatchHits: compares against the same form photoEtag sends", () => {
   assert.equal(ifNoneMatchHits("*", '"abc"'), true);
   assert.equal(ifNoneMatchHits('"other"', '"abc"'), false);
   assert.equal(ifNoneMatchHits(null, '"abc"'), false);
+});
+
+test("noPhotoResponse: an empty 404 the browser may cache for 5 minutes", async () => {
+  const res = noPhotoResponse();
+  assert.equal(res.status, 404);
+  assert.equal(res.headers.get("cache-control"), NO_PHOTO_CACHE_CONTROL);
+  assert.equal(NO_PHOTO_CACHE_CONTROL, "private, max-age=300");
+  assert.equal(await res.text(), "");
 });

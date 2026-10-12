@@ -6,7 +6,7 @@
 // stays functional, not fancy: reuses the .admin-card-*/.create-ns-form/.mapping-row/
 // .rows/.row/.chip/.pill/.btn class contract from globals.css, no new CSS.
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { deleteReq, patchJson, postJson } from "@/lib/api-client";
 import { CurrentlyOnline } from "./CurrentlyOnline";
@@ -181,10 +181,12 @@ function AdminConsole() {
   const [webhooksSummary, setWebhooksSummary] = useState("…");
   const [toast, setToast] = useState<string | null>(null);
 
-  const notify = (message: string) => {
+  // Stable identity: the cards list `onNotify` in their effect deps (SurveyResultsCard's feed
+  // loader among them), so a fresh function per render would refetch on every console re-render.
+  const notify = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast((current) => (current === message ? null : current)), 3200);
-  };
+  }, []);
 
   const refreshNamespaces = () => {
     invalidateApi(NAMESPACES_URL);

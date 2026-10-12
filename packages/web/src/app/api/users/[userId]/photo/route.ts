@@ -10,7 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
-import { ifNoneMatchHits, photoContentType, photoEtag } from "@/lib/photo-type";
+import { ifNoneMatchHits, noPhotoResponse, photoContentType, photoEtag } from "@/lib/photo-type";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,8 @@ async function handleGET(req: Request, context: { params: Promise<{ userId: stri
     [userId],
   );
   const row = rows[0];
-  if (!row || !row.photo) return new Response(null, { status: 404 });
+  // Cacheable for a few minutes (§3.1), so the browser stops re-asking for every photo-less bubble.
+  if (!row || !row.photo) return noPhotoResponse();
 
   // Conditional revalidation: if the client already holds this exact etag, skip the bytes. The
   // Graph etag may arrive quoted or weak already — photoEtag sends one well-formed entity tag.

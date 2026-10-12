@@ -27,6 +27,16 @@ export function photoEtag(stored: string | null | undefined): string | undefined
   return `"${value.replace(/"/g, "")}"`;
 }
 
+/** §3.1: the no-photo `404` is cacheable for 5 minutes, so a screen of photo-less users does not
+ *  re-ask the gateway on every render; a newly synced photo shows up at most that much later. */
+export const NO_PHOTO_CACHE_CONTROL = "private, max-age=300";
+
+/** The gateway's answer for a user with no cached photo (or a deactivated one): an empty `404`
+ *  the browser may keep for `NO_PHOTO_CACHE_CONTROL`. */
+export function noPhotoResponse(): Response {
+  return new Response(null, { status: 404, headers: { "cache-control": NO_PHOTO_CACHE_CONTROL } });
+}
+
 /** Whether an `If-None-Match` header names `etag` — compared against the same form
  *  `photoEtag` sends. Accepts a comma-separated list and the `*` wildcard. */
 export function ifNoneMatchHits(header: string | null, etag: string): boolean {

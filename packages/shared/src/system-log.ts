@@ -14,6 +14,16 @@ export function shouldRecordSystemEvent(status: number): boolean {
   return SYSTEM_LOG_CLIENT_STATUSES.has(status);
 }
 
+/** A request its client abandoned before the response (navigated, reloaded, closed the tab) —
+ *  never recorded (§14.7). Node fails the incoming request's body read with a plain `Error`
+ *  whose message is `aborted` and code `ECONNRESET`, and the Request's own `signal` is aborted
+ *  for the same reason. A server-side timeout on an OUTBOUND call surfaces differently
+ *  (`TimeoutError`, `AbortError`, `fetch failed`), so it is never mistaken for one. */
+export function isClientDisconnect(err: unknown, signal?: AbortSignal | null): boolean {
+  if (signal?.aborted) return true;
+  return err instanceof Error && err.message === "aborted" && (err as { code?: unknown }).code === "ECONNRESET";
+}
+
 export const SYSTEM_LOG_RETENTION_DAYS = 90;
 export const SYSTEM_LOG_EXPORT_CAP = 50_000;
 export const SYSTEM_LOG_PAGE_SIZE = 100;

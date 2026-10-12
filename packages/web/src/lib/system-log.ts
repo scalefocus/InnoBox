@@ -2,7 +2,7 @@
 // wraps every API route handler; `recordUncaughtRequestError` is the instrumentation net. The
 // wrapper's logic lives in lib/system-log-core.ts (pure, unit-tested with fakes).
 import { getServerSession } from "next-auth";
-import { pathWithoutQuery, sanitizeSystemMessage, type PathEntity } from "@innobox/shared";
+import { isClientDisconnect, pathWithoutQuery, sanitizeSystemMessage, type PathEntity } from "@innobox/shared";
 import { authOptions } from "./authOptions";
 import { pool } from "./db";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
@@ -58,6 +58,8 @@ export async function recordUncaughtRequestError(
   request: { path: string; method: string; headers?: Record<string, string | string[] | undefined> },
   context: { routePath?: string; routeType?: string },
 ): Promise<void> {
+  // A render the client abandoned mid-request is not an error anyone hit (§14.7).
+  if (isClientDisconnect(err)) return;
   const error = err instanceof Error ? err : new Error(String(err));
   const requestIdHeader = request.headers?.["x-request-id"];
   await recordSystemEvent(pool, {

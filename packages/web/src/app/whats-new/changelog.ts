@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.2",
+    date: "2026-10-12",
+    summary:
+      "Pages with many people on them load more lightly: the browser now remembers for a few minutes who has no profile photo, and the Administration console no longer reloads the survey comments every time something on the page changes. For platform admins, the System log no longer lists requests that people abandoned by leaving or reloading a page.",
+  },
+  {
     version: "1.0.1",
     date: "2026-10-12",
     summary:

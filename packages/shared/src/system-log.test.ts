@@ -6,6 +6,7 @@ import {
   SYSTEM_LOG_MESSAGE_MAX,
   entityInPath,
   errorCodeForStatus,
+  isClientDisconnect,
   parseSystemLogStatusFilter,
   pathWithoutQuery,
   sanitizeSystemMessage,
@@ -68,4 +69,26 @@ test("entityInPath finds the challenge/solution a numbered route targets", () =>
   assert.deepEqual(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/solution/5"), { kind: "solution", number: 5 });
   assert.deepEqual(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/challenge/9"), { kind: "challenge", number: 9 });
   assert.equal(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/comment/9"), null);
+});
+
+/** What Node raises on the incoming request when its client hangs up mid-request. */
+function nodeAbort(): Error {
+  return Object.assign(new Error("aborted"), { code: "ECONNRESET" });
+}
+
+test("isClientDisconnect: Node's incoming-request abort, or an aborted request signal", () => {
+  assert.equal(isClientDisconnect(nodeAbort()), true);
+  assert.equal(isClientDisconnect(new Error("db down"), AbortSignal.abort()), true, "the client left: nobody hit the error");
+  assert.equal(isClientDisconnect(nodeAbort(), new AbortController().signal), true);
+});
+
+test("isClientDisconnect: the server's own failures and timeouts are not disconnects", () => {
+  assert.equal(isClientDisconnect(new Error("aborted")), false, "no ECONNRESET code");
+  assert.equal(isClientDisconnect(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })), false, "an outbound reset");
+  assert.equal(isClientDisconnect(new DOMException("This operation was aborted", "AbortError")), false);
+  assert.equal(isClientDisconnect(new DOMException("The operation timed out.", "TimeoutError")), false);
+  assert.equal(isClientDisconnect(new TypeError("fetch failed")), false);
+  assert.equal(isClientDisconnect("aborted"), false);
+  assert.equal(isClientDisconnect(null, null), false);
+  assert.equal(isClientDisconnect(new Error("db down"), new AbortController().signal), false);
 });
