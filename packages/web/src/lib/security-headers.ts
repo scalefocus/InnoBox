@@ -76,14 +76,9 @@ export function isAttachmentDownload(method: string, pathname: string): boolean 
   return (method === "GET" || method === "HEAD") && /^\/api\/attachments\/[^/]+$/.test(pathname) && pathname !== "/api/attachments/config";
 }
 
-/** The deployment's one canonical URL (§2.3): PUBLIC_BASE_URL, falling back to NEXTAUTH_URL. */
-export function canonicalBaseUrl(env: { PUBLIC_BASE_URL?: string; NEXTAUTH_URL?: string }): string | undefined {
-  const value = env.PUBLIC_BASE_URL?.trim() || env.NEXTAUTH_URL?.trim();
-  return value || undefined;
-}
-
-/** §2.4: the origin the `Reporting-Endpoints` URL is built on — the canonical URL's origin or,
- *  in local dev with neither PUBLIC_BASE_URL nor NEXTAUTH_URL set, the request's own origin.
+/** §2.4: the origin the `Reporting-Endpoints` URL is built on — the canonical URL's origin
+ *  (`configuredPublicBaseUrl`, §2.3) or, in local dev with PUBLIC_BASE_URL unset, the request's
+ *  own origin.
  *  Null when none can be determined (a production build with nothing configured). */
 export function reportingOrigin(baseUrl: string | undefined, requestOrigin: string, dev: boolean): string | null {
   const candidate = baseUrl ?? (dev ? requestOrigin : undefined);

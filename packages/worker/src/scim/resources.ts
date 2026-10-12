@@ -2,6 +2,7 @@
 // ENTRA_AUTH_SPEC.md §5): DB row <-> wire representation, plus the error/list envelopes every
 // endpoint returns. Keeps router.ts free of schema/URN string literals.
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { publicBaseUrl } from "@innobox/shared/public-url";
 
 export const USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User";
 export const ENTERPRISE_USER_SCHEMA = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User";
@@ -155,11 +156,11 @@ export function parseGroupWrite(body: any): ParsedGroupWrite {
 
 // ── Static discovery documents ──────────────────────────────────────────────────────────
 
-// `documentationUri` derives from the deployment's canonical URL — no host is pinned in the
-// repository (INNOBOX_SPEC.md §2.3). It is OPTIONAL in SCIM 2.0 (RFC 7643 §5), so the field is
-// omitted entirely when PUBLIC_BASE_URL is unset rather than carrying a placeholder.
+// `documentationUri` derives from the deployment's canonical URL (publicBaseUrl) — no host is
+// pinned in the repository (INNOBOX_SPEC.md §2.3). It is OPTIONAL in SCIM 2.0 (RFC 7643 §5), so
+// the field is omitted entirely when there is no base URL rather than carrying a placeholder.
 export function serviceProviderConfig() {
-  const documentationUri = process.env.PUBLIC_BASE_URL;
+  const documentationUri = publicBaseUrl();
   return {
     schemas: ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],
     ...(documentationUri ? { documentationUri } : {}),

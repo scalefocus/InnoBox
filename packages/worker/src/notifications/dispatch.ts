@@ -17,14 +17,8 @@ import {
   type GraphMailEnv,
 } from "@innobox/shared";
 
-export interface SmtpEnv {
-  host: string;
-  port: number;
-  secure: boolean;
-  user?: string;
-  password?: string;
-  from: string;
-}
+import type { SmtpEnv } from "@innobox/shared";
+export type { SmtpEnv };
 
 export interface DispatchSummary {
   sent: number;

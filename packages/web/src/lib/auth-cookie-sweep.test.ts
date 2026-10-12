@@ -71,10 +71,10 @@ test("expiry header: Max-Age=0, Path=/, no Domain; Secure for prefixed names or 
   assert.match(expiredCookieHeader("__Host-next-auth.csrf-token", false), /; Secure$/);
 });
 
-test("https base detection: PUBLIC_BASE_URL, NEXTAUTH_URL fallback, garbage → false", () => {
+test("https base detection: PUBLIC_BASE_URL only (no NEXTAUTH_URL fallback), garbage → false", () => {
   assert.equal(isHttpsBase({ PUBLIC_BASE_URL: "https://innobox.example.com" }), true);
   assert.equal(isHttpsBase({ PUBLIC_BASE_URL: "http://localhost:3000" }), false);
-  assert.equal(isHttpsBase({ NEXTAUTH_URL: "https://innobox.example.com" }), true);
+  assert.equal(isHttpsBase({ NEXTAUTH_URL: "https://innobox.example.com" }), false);
   assert.equal(isHttpsBase({ PUBLIC_BASE_URL: "not a url" }), false);
   assert.equal(isHttpsBase({}), false);
 });

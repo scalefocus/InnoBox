@@ -1,10 +1,10 @@
 // Data layer for /api/search (INNOBOX_SPEC.md §13.4): Postgres tsvector full-text search
 // over challenge title/description/client_name and solution description/cost_vs_benefits
 // (migration 0008), plus exact CH-<n>/SOL-<n> number lookup. Strictly visibility-filtered
-// (invariant 2) and anonymity-masked (invariant 3) — candidates are pre-narrowed in SQL by the
-// same §4.3 predicate the gallery uses, then the exact same canSeeChallenge/canSeeSolution
-// gates used everywhere else decide what the viewer is actually allowed to see, so there is no
-// second, divergent visibility implementation to drift out of sync.
+// (invariant 2) and anonymity-masked (invariant 3) — candidates are narrowed in SQL by the same
+// §4.3 predicates the gallery uses (the challenge gate, plus the solution's own `proposed` rule),
+// BEFORE the candidate limit, so items the viewer cannot see never displace ones they can. The
+// JS canSeeChallenge/canSeeSolution gates then re-check every row as defence in depth.
 //
 // §13.1's gallery filters (status / impact area / namespace / author) narrow the results
 // alongside the query. They are the CHALLENGE gallery's filters, so for a solution hit the
@@ -25,7 +25,7 @@ import {
   type MaskedAuthor,
   type SolutionStatus,
 } from "@innobox/shared";
-import { pushChallengeVisibilityConditions, type Viewer } from "../challenges/store";
+import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, type Viewer } from "../challenges/store";
 import { isEntityNumber, type GalleryFilters } from "../challenges/validation";
 
 export interface ChallengeSearchResult {
@@ -155,9 +155,10 @@ async function solutionCandidates(pool: Pool, viewer: Viewer, match: Match, filt
     conditions.push(`s.search_vector @@ plainto_tsquery('english', ${q})`);
     orderBy = `ts_rank(s.search_vector, plainto_tsquery('english', ${q})) desc`;
   }
-  // The parent challenge's §4.3 gate in SQL; the solution-level `proposed` narrowing runs in
-  // canSeeSolution below.
+  // The parent challenge's §4.3 gate and the solution's own `proposed` narrowing, both in SQL so
+  // they apply before the candidate limit.
   pushChallengeVisibilityConditions(viewer, push, conditions);
+  pushSolutionVisibilityConditions(viewer, push, conditions);
   pushChallengeFilterConditions(filters, push, conditions);
   pushAuthorCondition(filters, "s", push, conditions);
 

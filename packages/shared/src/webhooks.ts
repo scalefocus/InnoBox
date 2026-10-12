@@ -6,6 +6,7 @@
 //
 // Anonymity is structural (invariant 3): no type here has a person field, so no payload can
 // carry an author, co-author, assignee or any other identity.
+import { stripTrailingSlashes } from "./public-url.js";
 import { ipLiteralFamily, isPublicAddress } from "./webhook-address.js";
 
 export const WEBHOOK_EVENTS = ["challenge.validated", "solution.implemented", "challenge.solved"] as const;
@@ -209,7 +210,7 @@ export function webhookTimestamp(at: string | Date): string {
 /** The §12.1 deep-link convention under PUBLIC_BASE_URL: `/challenges/<n>`, a solution as
  *  `/challenges/<n>#SOL-<m>`. */
 export function webhookItemUrl(baseUrl: string, challengeNumber: string | number, solutionNumber?: string | number | null): string {
-  const base = baseUrl.replace(/\/+$/, "");
+  const base = stripTrailingSlashes(baseUrl);
   return `${base}/challenges/${challengeNumber}${solutionNumber != null ? `#SOL-${solutionNumber}` : ""}`;
 }
 
@@ -219,7 +220,7 @@ export function buildTestWebhookMessage(baseUrl: string, namespaceSlug: string, 
     event: "test",
     occurredAt: webhookTimestamp(now),
     namespace: namespaceSlug,
-    item: { type: "challenge", number: "CH-0", title: "Test message from InnoBox", status: "valid", url: baseUrl.replace(/\/+$/, "") || baseUrl },
+    item: { type: "challenge", number: "CH-0", title: "Test message from InnoBox", status: "valid", url: stripTrailingSlashes(baseUrl) || baseUrl },
   };
 }
 

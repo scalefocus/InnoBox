@@ -184,7 +184,7 @@ export async function listTriageQueue(
 
 export interface BulkActionOutcome {
   number: string;
-  status: "ok" | "forbidden" | "not_found" | "invalid" | "terminal_status" | "unknown_user";
+  status: "ok" | "forbidden" | "not_found" | "invalid" | "terminal_status" | "unknown_user" | "assignee_cannot_see";
 }
 
 /** Bulk actions are independent per-item transactions (each individually audited) — running
@@ -254,7 +254,7 @@ export async function bulkAssign(
     const prior = isEntityNumber(number)
       ? (await pool.query<{ id: string; assignee_id: string | null; title: string }>(`select id, assignee_id, title from challenges where number = $1`, [number])).rows
       : [];
-    const result = await setChallengeAssigneeLean(pool, admin, number, assigneeUserId);
+    const result = await setChallengeAssigneeLean(pool, admin, number, assigneeUserId, resolveRoles);
     // The new assignee's auto-follow (§12.3) happens inside the store's shared assignment write,
     // exactly as on the detail page.
     if (result.status === "ok" && prior[0]) {

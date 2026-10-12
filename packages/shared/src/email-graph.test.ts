@@ -203,9 +203,9 @@ test("sendGraphMail: 202 accepted; 429 throws GraphSendError with retryAfter", a
 // ── connect flow ───────────────────────────────────────────────────────────────────────────
 
 test("parseIdTokenClaims: reads oid/preferred_username/name from the payload", () => {
-  const payload = Buffer.from(JSON.stringify({ oid: "o1", preferred_username: "svc@corp.com", name: "Svc Mailbox" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ oid: "o1", preferred_username: "svc@example.com", name: "Svc Mailbox" })).toString("base64url");
   const claims = parseIdTokenClaims(`h.${payload}.sig`);
-  assert.deepEqual(claims, { oid: "o1", upn: "svc@corp.com", name: "Svc Mailbox" });
+  assert.deepEqual(claims, { oid: "o1", upn: "svc@example.com", name: "Svc Mailbox" });
 });
 
 test("buildAuthorizeUrl: Mail.Send + offline_access + PKCE + select_account", () => {

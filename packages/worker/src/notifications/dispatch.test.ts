@@ -46,7 +46,7 @@ test("runNotificationSweep: opted-out user marks the row sent without attempting
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 0,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: false,
     },
   ]);
@@ -80,7 +80,7 @@ test("runNotificationSweep: no transport configured marks the row failed with at
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 2,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: true,
     },
   ]);
@@ -120,7 +120,7 @@ test("runNotificationSweep: a failure backs off next_attempt_at by the row's att
       type: "comment_posted",
       payload: { message: "hi", link: "/challenges/1" },
       attempts: 3,
-      email: "a@b.com",
+      email: "a@example.com",
       email_notifications_enabled: true,
     },
   ]);

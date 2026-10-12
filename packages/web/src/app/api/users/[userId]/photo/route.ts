@@ -10,7 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
-import { photoContentType } from "@/lib/photo-type";
+import { ifNoneMatchHits, photoContentType, photoEtag } from "@/lib/photo-type";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +27,10 @@ async function handleGET(req: Request, context: { params: Promise<{ userId: stri
   const row = rows[0];
   if (!row || !row.photo) return new Response(null, { status: 404 });
 
-  // Conditional revalidation: if the client already holds this exact etag, skip the bytes.
-  const etag = row.photo_etag ? `"${row.photo_etag}"` : undefined;
-  if (etag && req.headers.get("if-none-match") === etag) {
+  // Conditional revalidation: if the client already holds this exact etag, skip the bytes. The
+  // Graph etag may arrive quoted or weak already — photoEtag sends one well-formed entity tag.
+  const etag = photoEtag(row.photo_etag);
+  if (etag && ifNoneMatchHits(req.headers.get("if-none-match"), etag)) {
     return new Response(null, { status: 304, headers: { etag, "cache-control": "private, max-age=3600, must-revalidate" } });
   }
 

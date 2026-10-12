@@ -7,10 +7,9 @@
    (metadata/code — a deliberate technical extension; the brand book has no mono).
    InnoBox gets its OWN wordmark/mark in the brand palette, not the corporate eye.
 
-   STARTER-KIT NOTE: carried over from a proven sibling app. The token blocks and
-   generic controls (buttons, chips, cards, tables, app shell, topbar, theme toggle)
-   are the foundation to keep; sections for features InnoBox doesn't have (ratings,
-   install rows, SKILL.md markdown, maintainer cards, …) are pruned in Phase 4.
+   This sheet holds the light/dark token blocks, the generic controls (buttons, chips,
+   cards, tables, forms) and the app shell (sidebar, topbar, theme toggle), followed by
+   the per-feature sections.
    ─────────────────────────────────────────────────────────────────────────── */
 
 :root {
