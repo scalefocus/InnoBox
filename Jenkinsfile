@@ -1,4 +1,5 @@
-// InnoBox — Jenkins declarative pipeline: CI (typecheck/lint/test/db-test/build) + gated deploy.
+// InnoBox — Jenkins declarative pipeline: CI (build libs → typecheck, then web build | lint |
+// unit | db-test | e2e in parallel) + gated deploy.
 // (INNOBOX_SPEC.md §2.3) Mirrors the GitHub Actions CI workflow and deploys via Docker remote context (no registry).
 //
 // AGENT PREREQUISITES (label: linux):
@@ -54,6 +55,10 @@ pipeline {
     CI_PG_PORT      = '55433'
     // DATABASE_URL used by the gated db-tests (points at the ephemeral CI Postgres).
     CI_DATABASE_URL = "postgres://innobox:test@127.0.0.1:55433/innobox"
+    // The e2e gets its own Postgres on its own port: it runs in parallel with the db-tests.
+    CI_E2E_PG_CONTAINER = "innobox-e2e-pg-${env.BUILD_TAG}"
+    CI_E2E_PG_PORT      = '55434'
+    CI_E2E_DATABASE_URL = "postgres://innobox:test@127.0.0.1:55434/innobox"
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
     PATH     = "${env.HOME}/.asdf/shims:${env.HOME}/.asdf/bin:${env.PATH}"
@@ -83,139 +88,164 @@ pipeline {
       }
     }
 
-    stage('Build packages') {
-      // shared must build before web/worker can resolve @innobox/shared types.
+    stage('Build libs') {
+      // Only the tsc packages: every later stage resolves @innobox/shared through its dist/, and
+      // the worker build must not race the worker unit tests (both write worker/dist). pnpm runs
+      // the filtered builds in topological order, so shared builds before worker. The slow Next
+      // build of web runs later, in parallel with the tests.
       steps {
-        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r build'
+        sh '. "${HOME}/.asdf/asdf.sh" && pnpm --filter @innobox/shared --filter @innobox/worker build'
       }
     }
 
     stage('Typecheck') {
+      // Deliberately NOT in the parallel block: web's tsc reads next-env.d.ts, a committed file
+      // that `next dev` (E2E) and `next build` (Build web) both rewrite as they start — dev points
+      // it at .next/dev/types, build at .next/types. Running it here, before either starts, keeps
+      // it deterministic. Needs only shared's dist/, which Build libs produced.
       steps {
         sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r typecheck'
       }
     }
 
-    stage('Lint') {
-      steps {
-        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r lint'
-      }
-    }
-
-    stage('Unit tests') {
-      // Live-DB suites self-skip when INNOBOX_DB_E2E is unset, so this stays hermetic.
-      steps {
-        sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r test'
-      }
-    }
-
-    stage('DB integration tests') {
-      when { expression { return params.RUN_DB_TESTS } }
-      steps {
-        sh '''
-          set -eu
-          . "${HOME}/.asdf/asdf.sh"
-
-          # Ephemeral Postgres for the gated suites.
-          docker run -d --rm --name "${CI_PG_CONTAINER}" \
-            -e POSTGRES_USER=innobox -e POSTGRES_PASSWORD=test -e POSTGRES_DB=innobox \
-            -p ${CI_PG_PORT}:5432 postgres:16-alpine
-
-          # Wait for readiness.
-          for i in $(seq 1 30); do
-            if docker exec "${CI_PG_CONTAINER}" pg_isready -U innobox >/dev/null 2>&1; then break; fi
-            sleep 2
-          done
-
-          # The test:db harness creates a fresh throwaway DB per run, applies ALL migrations to
-          # it (which creates the innobox_app role), runs the web + worker *.dbtest.ts suites as
-          # innobox_app, then drops it — so runs never pollute each other. No psql needed.
-          pnpm --filter @innobox/shared build
-          TEST_ADMIN_DATABASE_URL="${CI_DATABASE_URL}" \
-          TEST_APP_DATABASE_URL="postgres://innobox_app:apptest@127.0.0.1:${CI_PG_PORT}/innobox" \
-          TEST_SET_APP_PASSWORD=1 INNOBOX_DB_E2E=1 \
-            pnpm test:db
-        '''
-      }
-      post {
-        always {
-          sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+    // Everything below is independent, so it runs side by side on the same agent:
+    //   - Build web is `next build`; Next 16 keeps `next dev` output in .next/dev, so it can run
+    //     while the E2E dev server is up.
+    //   - Lint needs no build output (every ESLint config ignores dist/ and .next/).
+    //   - Unit tests are hermetic (live-DB suites self-skip without INNOBOX_DB_E2E). Shared's
+    //     `test` tsc is incremental (no re-emit after Build libs); worker's re-emits worker/dist,
+    //     which no other branch reads (the DB suites run the worker from src via tsx).
+    //   - DB integration and E2E each get their OWN ephemeral Postgres on a distinct host port
+    //     (CI_PG_PORT / CI_E2E_PG_PORT), so they never share a database or collide on a bind.
+    // failFast false: a red branch never aborts the others, so one build reports every check.
+    stage('Checks & tests') {
+      failFast false
+      parallel {
+        stage('Build web') {
+          steps {
+            sh '. "${HOME}/.asdf/asdf.sh" && pnpm --filter @innobox/web build'
+          }
         }
-      }
-    }
 
-    stage('E2E (Playwright)') {
-      when { expression { return params.RUN_E2E } }
-      steps {
-        sh '''
-          set -eu
-          . "${HOME}/.asdf/asdf.sh"
-          E2E_PG="innobox-e2e-pg-${BUILD_TAG}"
+        stage('Lint') {
+          steps {
+            sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r lint'
+          }
+        }
 
-          # Ephemeral Postgres for the browser e2e; the dev server connects to it.
-          docker run -d --rm --name "${E2E_PG}" \
-            -e POSTGRES_USER=innobox -e POSTGRES_PASSWORD=test -e POSTGRES_DB=innobox \
-            -p ${CI_PG_PORT}:5432 postgres:16-alpine
-          for i in $(seq 1 30); do
-            if docker exec "${E2E_PG}" pg_isready -U innobox >/dev/null 2>&1; then break; fi
-            sleep 2
-          done
+        stage('Unit tests') {
+          // Live-DB suites self-skip when INNOBOX_DB_E2E is unset, so this stays hermetic.
+          steps {
+            sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r test'
+          }
+        }
 
-          pnpm --filter @innobox/shared build
-          DATABASE_URL="${CI_DATABASE_URL}" node packages/web/scripts/apply-migrations.mjs
+        stage('DB integration tests') {
+          when { expression { return params.RUN_DB_TESTS } }
+          steps {
+            sh '''
+              set -eu
+              . "${HOME}/.asdf/asdf.sh"
 
-          export DATABASE_URL="${CI_DATABASE_URL}"
-          export INNOBOX_DEV_AUTH=1
-          export NEXTAUTH_SECRET="e2e-ci-secret-not-used-in-production-0123456789"
-          export NEXTAUTH_URL="http://127.0.0.1:3000"
-          # The CSRF Origin check accepts only PUBLIC_BASE_URL's origin (NEXTAUTH_URL is never a
-          # fallback). Unset, dev falls back to Next's own request origin — which it reports as
-          # localhost — so every mutation from the 127.0.0.1 browser would be refused with a 403.
-          export PUBLIC_BASE_URL="http://127.0.0.1:3000"
-          export E2E_BASE_URL="http://127.0.0.1:3000"
-          # The suites submit far more than the per-user rate budgets allow; the dev server reads
-          # this to scale them (ignored under NODE_ENV=production).
-          export RATE_LIMIT_MULTIPLIER=50
-          # A throwaway AI key so the AI provider e2e drives the full configure → test → save →
-          # enable flow against its local provider stub (never a real provider).
-          export AI_TOKEN_ENC_KEY="$(openssl rand -base64 32)"
+              # Ephemeral Postgres for the gated suites.
+              docker run -d --rm --name "${CI_PG_CONTAINER}" \
+                -e POSTGRES_USER=innobox -e POSTGRES_PASSWORD=test -e POSTGRES_DB=innobox \
+                -p ${CI_PG_PORT}:5432 postgres:16-alpine
 
-          # Start the dev server on the agent and health-check it before Playwright runs (the
-          # config reuses the already-listening server). Kill it on the way out.
-          pnpm --filter @innobox/web dev > e2e-web.log 2>&1 &
-          WEB_PID=$!
-          trap "kill ${WEB_PID} >/dev/null 2>&1 || true" EXIT
-          for i in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
-          curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
+              # Wait for readiness.
+              for i in $(seq 1 30); do
+                if docker exec "${CI_PG_CONTAINER}" pg_isready -U innobox >/dev/null 2>&1; then break; fi
+                sleep 2
+              done
 
-          # Run the suite inside the official Playwright image so the agent needs NO Playwright
-          # browsers or system libraries — Docker is already an agent prerequisite. The tag is
-          # derived from the installed @playwright/test so image browsers always match the driver.
-          #   --network host    : the container reaches the dev server on 127.0.0.1:3000
-          #   --ipc=host        : Playwright's Chromium recommendation (avoids /dev/shm crashes)
-          #   --user            : agent uid/gid, so report/trace files stay owned by the Jenkins user
-          #                       (Chromium's user-namespace sandbox can't start for that uid in the
-          #                       container, so the config disables it via E2E_NO_SANDBOX — CI-only)
-          #   -v PWD:PWD        : same absolute path inside, so pnpm's node_modules symlinks resolve
-          #   E2E_NO_WEBSERVER  : the host owns the dev server (started above); the container has no
-          #                       pnpm to start one, so the config omits its webServer block and
-          #                       fails fast with a clear connection error if the host server died.
-          # The test runner itself never touches the DB, so only the base-URL env goes in.
-          PW_VERSION="$(node -p "require('./packages/web/node_modules/@playwright/test/package.json').version")"
-          docker run --rm --network host --ipc=host \
-            --user "$(id -u):$(id -g)" \
-            -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
-            -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
-            "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
-            ./node_modules/.bin/playwright test -c e2e/playwright.config.ts \
-            || { echo "=== dev server log (e2e-web.log) ==="; cat e2e-web.log; exit 1; }
-        '''
-      }
-      post {
-        always {
-          sh 'docker rm -f "innobox-e2e-pg-${BUILD_TAG}" >/dev/null 2>&1 || true'
-          // Kept even when the build is aborted (where the in-step `cat` never runs).
-          archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
+              # The test:db harness creates a fresh throwaway DB per run, applies ALL migrations to
+              # it (which creates the innobox_app role), runs the web + worker *.dbtest.ts suites as
+              # innobox_app, then drops it — so runs never pollute each other. No psql needed.
+              TEST_ADMIN_DATABASE_URL="${CI_DATABASE_URL}" \
+              TEST_APP_DATABASE_URL="postgres://innobox_app:apptest@127.0.0.1:${CI_PG_PORT}/innobox" \
+              TEST_SET_APP_PASSWORD=1 INNOBOX_DB_E2E=1 \
+                pnpm test:db
+            '''
+          }
+          post {
+            always {
+              sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+            }
+          }
+        }
+
+        stage('E2E (Playwright)') {
+          when { expression { return params.RUN_E2E } }
+          steps {
+            sh '''
+              set -eu
+              . "${HOME}/.asdf/asdf.sh"
+
+              # Ephemeral Postgres for the browser e2e; the dev server connects to it.
+              docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
+                -e POSTGRES_USER=innobox -e POSTGRES_PASSWORD=test -e POSTGRES_DB=innobox \
+                -p ${CI_E2E_PG_PORT}:5432 postgres:16-alpine
+              for i in $(seq 1 30); do
+                if docker exec "${CI_E2E_PG_CONTAINER}" pg_isready -U innobox >/dev/null 2>&1; then break; fi
+                sleep 2
+              done
+
+              DATABASE_URL="${CI_E2E_DATABASE_URL}" node packages/web/scripts/apply-migrations.mjs
+
+              export DATABASE_URL="${CI_E2E_DATABASE_URL}"
+              export INNOBOX_DEV_AUTH=1
+              export NEXTAUTH_SECRET="e2e-ci-secret-not-used-in-production-0123456789"
+              export NEXTAUTH_URL="http://127.0.0.1:3000"
+              # The CSRF Origin check accepts only PUBLIC_BASE_URL's origin (NEXTAUTH_URL is never a
+              # fallback). Unset, dev falls back to Next's own request origin — which it reports as
+              # localhost — so every mutation from the 127.0.0.1 browser would be refused with a 403.
+              export PUBLIC_BASE_URL="http://127.0.0.1:3000"
+              export E2E_BASE_URL="http://127.0.0.1:3000"
+              # The suites submit far more than the per-user rate budgets allow; the dev server reads
+              # this to scale them (ignored under NODE_ENV=production).
+              export RATE_LIMIT_MULTIPLIER=50
+              # A throwaway AI key so the AI provider e2e drives the full configure → test → save →
+              # enable flow against its local provider stub (never a real provider).
+              export AI_TOKEN_ENC_KEY="$(openssl rand -base64 32)"
+
+              # Start the dev server on the agent and health-check it before Playwright runs (the
+              # config reuses the already-listening server). Kill it on the way out.
+              pnpm --filter @innobox/web dev > e2e-web.log 2>&1 &
+              WEB_PID=$!
+              trap "kill ${WEB_PID} >/dev/null 2>&1 || true" EXIT
+              for i in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
+              curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
+
+              # Run the suite inside the official Playwright image so the agent needs NO Playwright
+              # browsers or system libraries — Docker is already an agent prerequisite. The tag is
+              # derived from the installed @playwright/test so image browsers always match the driver.
+              #   --network host    : the container reaches the dev server on 127.0.0.1:3000
+              #   --ipc=host        : Playwright's Chromium recommendation (avoids /dev/shm crashes)
+              #   --user            : agent uid/gid, so report/trace files stay owned by the Jenkins user
+              #                       (Chromium's user-namespace sandbox can't start for that uid in the
+              #                       container, so the config disables it via E2E_NO_SANDBOX — CI-only)
+              #   -v PWD:PWD        : same absolute path inside, so pnpm's node_modules symlinks resolve
+              #   E2E_NO_WEBSERVER  : the host owns the dev server (started above); the container has no
+              #                       pnpm to start one, so the config omits its webServer block and
+              #                       fails fast with a clear connection error if the host server died.
+              # The test runner itself never touches the DB, so only the base-URL env goes in.
+              PW_VERSION="$(node -p "require('./packages/web/node_modules/@playwright/test/package.json').version")"
+              docker run --rm --network host --ipc=host \
+                --user "$(id -u):$(id -g)" \
+                -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
+                -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
+                "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
+                ./node_modules/.bin/playwright test -c e2e/playwright.config.ts \
+                || { echo "=== dev server log (e2e-web.log) ==="; cat e2e-web.log; exit 1; }
+            '''
+          }
+          post {
+            always {
+              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true'
+              // Kept even when the build is aborted (where the in-step `cat` never runs).
+              archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
+            }
+          }
         }
       }
     }
@@ -319,7 +349,7 @@ MINIO_SCRIPT
 
   post {
     always {
-      sh 'docker rm -f "${CI_PG_CONTAINER}" >/dev/null 2>&1 || true'
+      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true'
     }
     success { echo "innobox pipeline OK — ${env.GIT_COMMIT}" }
     failure { echo "innobox pipeline FAILED — ${env.GIT_COMMIT}" }
