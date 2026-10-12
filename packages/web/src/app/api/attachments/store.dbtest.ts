@@ -438,7 +438,7 @@ test(
       const total = part1.length + part2.length;
       // The configured chunk size has a 5 MB floor; shrink a session's negotiated size to 64 bytes
       // so the size-binding rules can be exercised with tiny parts.
-      const useTinyChunks = async (uploadId: string) =>
+      const shrinkToTinyChunks = async (uploadId: string) =>
         pool.query(`update attachment_uploads set chunk_size_bytes = $2 where id = $1`, [uploadId, part1.length]);
 
       // ── Initiate validation (fail-fast) ────────────────────────────────────────────────
@@ -465,7 +465,7 @@ test(
       const init = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "big.txt", mime: "text/plain", size: total });
       assert.equal(init.status, "ok");
       if (init.status !== "ok") return;
-      await useTinyChunks(init.uploadId);
+      await shrinkToTinyChunks(init.uploadId);
       // A session row exists while the upload is in flight.
       const { rows: sess } = await pool.query<{ n: string }>(`select count(*)::text as n from attachment_uploads where id = $1`, [init.uploadId]);
       assert.equal(sess[0]!.n, "1");
@@ -515,7 +515,7 @@ test(
       const init2 = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "abandon.txt", mime: "text/plain", size: total });
       assert.equal(init2.status, "ok");
       if (init2.status !== "ok") return;
-      await useTinyChunks(init2.uploadId);
+      await shrinkToTinyChunks(init2.uploadId);
       assert.equal((await uploadChunkPart(deps, author, init2.uploadId, 1, part1)).status, "ok");
       assert.equal((await abortChunkedUpload(deps, author, init2.uploadId)).status, "ok");
       const { rows: sess2 } = await pool.query<{ n: string }>(`select count(*)::text as n from attachment_uploads where id = $1`, [init2.uploadId]);
@@ -529,7 +529,7 @@ test(
       const init3 = await initiateChunkedUpload(deps, author, { parentType: "challenge", parentId, filename: "partial.txt", mime: "text/plain", size: total });
       assert.equal(init3.status, "ok");
       if (init3.status !== "ok") return;
-      await useTinyChunks(init3.uploadId);
+      await shrinkToTinyChunks(init3.uploadId);
       assert.equal((await uploadChunkPart(deps, author, init3.uploadId, 1, part1)).status, "ok");
       const rowsBefore = (await listAttachmentsForParent(pool, author, "challenge", parentId)).length;
       const incomplete = await completeChunkedUpload(deps, author, init3.uploadId);
@@ -560,7 +560,7 @@ test(
         const opened = await initiateChunkedUpload(deps, author, { parentType: "challenge", ...target, filename: "late.txt", mime: "text/plain", size: total });
         assert.equal(opened.status, "ok");
         if (opened.status !== "ok") throw new Error("setup failed");
-        await useTinyChunks(opened.uploadId);
+        await shrinkToTinyChunks(opened.uploadId);
         assert.equal((await uploadChunkPart(deps, author, opened.uploadId, 1, part1)).status, "ok");
         assert.equal((await uploadChunkPart(deps, author, opened.uploadId, 2, part2)).status, "ok");
         const { rows } = await pool.query<{ attachment_id: string; object_key: string }>(
