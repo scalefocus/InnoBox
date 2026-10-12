@@ -1,6 +1,8 @@
 // Data layer for /api/profile (INNOBOX_SPEC.md §13.5). Own profile shows everything about
 // the viewer's own contributions (no visibility gate needed — a user can always see their
-// own items regardless of status/anonymity). Another user's public profile shows only their
+// own items regardless of status/anonymity). The items they FOLLOW are a different matter: a
+// follow outlives the owner's access (a membership loss, a withdrawal, a re-triage), so those
+// lists apply the full §4.3 predicate for the owner. Another user's public profile shows only their
 // non-anonymous, org-visible contributions — the same invariant-2/3 rules applied elsewhere,
 // just scoped to "authored by this other user" instead of "matches this filter".
 import type { Pool } from "pg";
@@ -13,6 +15,7 @@ import {
   type NotificationPreferences,
   type SolutionStatus,
 } from "@innobox/shared";
+import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, type Viewer } from "../challenges/store";
 
 export interface OwnProfile {
   user: { id: string; displayName: string; email: string | null; department: string | null; jobTitle: string | null; officeLocation: string | null };
@@ -29,7 +32,45 @@ export interface OwnProfile {
   recentActivity: { type: "challenge" | "solution"; number: string; challengeNumber: string; label: string; status: string; at: string }[];
 }
 
-export async function getOwnProfile(pool: Pool, userId: string): Promise<OwnProfile | null> {
+/** The owner's "items I follow" reads, visibility-filtered in SQL before the limit (invariant 2). */
+function followedQueries(pool: Pool, viewer: Viewer) {
+  const challengeParams: unknown[] = [viewer.userId];
+  const challengePush = (v: unknown) => {
+    challengeParams.push(v);
+    return `$${challengeParams.length}`;
+  };
+  const challengeConditions = [`f.user_id = $1`, `f.parent_type = 'challenge'`];
+  pushChallengeVisibilityConditions(viewer, challengePush, challengeConditions);
+
+  const solutionParams: unknown[] = [viewer.userId];
+  const solutionPush = (v: unknown) => {
+    solutionParams.push(v);
+    return `$${solutionParams.length}`;
+  };
+  const solutionConditions = [`f.user_id = $1`, `f.parent_type = 'solution'`];
+  pushChallengeVisibilityConditions(viewer, solutionPush, solutionConditions);
+  pushSolutionVisibilityConditions(viewer, solutionPush, solutionConditions);
+
+  return [
+    pool.query<{ number: string; title: string; status: string }>(
+      `select c.number::text, c.title, c.status
+         from follows f join challenges c on c.id = f.parent_id
+        where ${challengeConditions.join(" and ")}
+        order by f.created_at desc limit 50`,
+      challengeParams,
+    ),
+    pool.query<{ number: string; description: string; status: string; challenge_number: string }>(
+      `select s.number::text, s.description, s.status, c.number::text as challenge_number
+         from follows f join solutions s on s.id = f.parent_id join challenges c on c.id = s.challenge_id
+        where ${solutionConditions.join(" and ")}
+        order by f.created_at desc limit 50`,
+      solutionParams,
+    ),
+  ] as const;
+}
+
+export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProfile | null> {
+  const userId = viewer.userId;
   const { rows: userRows } = await pool.query<{
     id: string;
     display_name: string;
@@ -67,20 +108,7 @@ export async function getOwnProfile(pool: Pool, userId: string): Promise<OwnProf
              or (l.parent_type = 'solution' and exists(select 1 from solutions s where s.id = l.parent_id and s.author_id = $1))`,
         [userId],
       ),
-      pool.query<{ number: string; title: string; status: string }>(
-        `select c.number::text, c.title, c.status
-           from follows f join challenges c on c.id = f.parent_id
-          where f.user_id = $1 and f.parent_type = 'challenge'
-          order by f.created_at desc limit 50`,
-        [userId],
-      ),
-      pool.query<{ number: string; description: string; status: string; challenge_number: string }>(
-        `select s.number::text, s.description, s.status, c.number::text as challenge_number
-           from follows f join solutions s on s.id = f.parent_id join challenges c on c.id = s.challenge_id
-          where f.user_id = $1 and f.parent_type = 'solution'
-          order by f.created_at desc limit 50`,
-        [userId],
-      ),
+      ...followedQueries(pool, viewer),
       pool.query<{ number: string; title: string; status: string; at: Date }>(
         `select number::text, title, status, greatest(created_at, updated_at) as at
            from challenges where author_id = $1

@@ -31,6 +31,7 @@ import {
   validateSolutionFields,
   type AttachmentView,
   type ChallengeStatus,
+  type ChallengeVisibilityInput,
   type MaskedAuthor,
   type RoleSet,
   type SolutionStatus,
@@ -420,26 +421,42 @@ export async function listActiveImpactAreas(pool: Pool): Promise<ImpactAreaRecor
 
 // ── List / detail ────────────────────────────────────────────────────────────────────────
 
-/** The §4.3 row-level visibility predicate over `challenges c`, shared by the gallery list and
- *  the §13.1 new-count so the two can never disagree about what the viewer may see: namespace
- *  membership (or org visibility), and awaiting_triage/withdrawn only for the author and the
- *  namespace's admins. Platform admins see everything. */
+/** The namespaces where the viewer holds an explicit grant of one of `roles`. */
+function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] {
+  return viewer.roles.grants.filter((g) => roles.includes(g.role) && g.namespaceId !== null).map((g) => g.namespaceId as string);
+}
+
+/** The §4.3 row-level visibility predicate over `challenges c` — the SQL twin of
+ *  `canSeeChallenge`, shared by the gallery list, the §13.1 new-count, search, the dashboard and
+ *  the profile's follow lists so none of them can disagree with the detail page about what the
+ *  viewer may see. awaiting_triage/withdrawn are visible to the author and the namespace's admins
+ *  — the state rule REPLACES the namespace rule, so an author who has lost membership of a
+ *  restricted namespace still finds their own item; every other status is org-visible or
+ *  member-only. Platform admins see everything. */
 export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
   if (viewer.roles.isPlatformAdmin) return;
   const memberNamespaceIds = viewer.roles.memberNamespaces();
-  conditions.push(`(c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]))`);
+  const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
+  conditions.push(
+    `(CASE WHEN c.status IN ('awaiting_triage','withdrawn')
+           THEN c.author_id = ${push(viewer.userId)} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
+           ELSE c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
+  );
+}
 
-  const namespaceAdminIds = viewer.roles.grants
-    .filter((g) => g.role === "namespace_admin" && g.namespaceId !== null)
-    .map((g) => g.namespaceId as string);
-  const authorParam = push(viewer.userId);
-  if (namespaceAdminIds.length > 0) {
-    conditions.push(
-      `(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[]))`,
-    );
-  } else {
-    conditions.push(`(c.status NOT IN ('awaiting_triage','withdrawn') OR c.author_id = ${authorParam})`);
-  }
+/** The SQL twin of `canSeeSolution` over `solutions s join challenges c` (§4.3): a `proposed`
+ *  solution is visible only to its author, the challenge's assignee, and the namespace's
+ *  committee/admins. It narrows only — pair it with pushChallengeVisibilityConditions for the
+ *  parent, exactly as the JS gate is paired with canSeeChallenge. Running it inside the query
+ *  keeps hidden rows from filling a `limit` ahead of visible ones. Platform admins see all. */
+export function pushSolutionVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
+  if (viewer.roles.isPlatformAdmin) return;
+  const viewerParam = push(viewer.userId);
+  const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
+  conditions.push(
+    `(s.status <> 'proposed' OR s.author_id = ${viewerParam} OR c.assignee_id = ${viewerParam}
+      OR c.namespace_id = ANY(${push(reviewerNamespaceIds)}::uuid[]))`,
+  );
 }
 
 // ── §6.1 duplicate warning ───────────────────────────────────────────────────────────────
@@ -1228,7 +1245,27 @@ export type AssignResult =
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "unknown_user" }
+  | { status: "assignee_cannot_see" }
   | { status: "terminal_status" };
+
+/** Resolves an arbitrary user's RoleSet from SCIM-synced membership (invariant 1) — injected (the
+ *  routes pass `resolveRolesForUser`) so this module does not pull in the session layer. */
+export type ResolveAssigneeRoles = (userId: string) => Promise<RoleSet>;
+
+/** §7.3: the challenge whose assignee picker is searching, as the §4.3 visibility input the
+ *  candidate filter needs — or null when it does not exist, the CALLER cannot see it (§2.4), or the
+ *  caller is not an admin of its namespace. The filtered result reveals who holds membership and
+ *  admin roles there, so only those who may assign (the assign endpoint's own gate) get it. */
+export async function getAssignmentAudience(pool: Pool, viewer: Viewer, number: string): Promise<ChallengeVisibilityInput | null> {
+  if (!isEntityNumber(number)) return null;
+  const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
+    `select namespace_id, visibility, status, author_id from challenges where number = $1`,
+    [number],
+  );
+  const row = rows[0];
+  if (!row || !isChallengeRowVisible(viewer, row) || !viewer.roles.isNamespaceAdmin(row.namespace_id)) return null;
+  return { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id };
+}
 
 /** Exported for the GDPR erasure hand-over (§3), whose every move is an ordinary §7.3 change. */
 export async function applyChallengeAssigneeChange(
@@ -1257,9 +1294,10 @@ async function loadChallengeForAssignment(
   admin: Viewer,
   number: string,
   assigneeUserId: string | null,
+  resolveRoles: ResolveAssigneeRoles,
 ): Promise<
   | { status: "ok"; current: { id: string; namespace_id: string; status: string; assignee_id: string | null } }
-  | { status: "not_found" | "forbidden" | "terminal_status" | "unknown_user" }
+  | { status: "not_found" | "forbidden" | "terminal_status" | "unknown_user" | "assignee_cannot_see" }
 > {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<{
@@ -1280,6 +1318,11 @@ async function loadChallengeForAssignment(
       assigneeUserId,
     ]);
     if (!userRows[0]) return { status: "unknown_user" };
+    // §7.3: the assignee must be able to see the challenge — checked at assignment time only,
+    // with their roles resolved from SCIM-synced membership exactly as the §3 hand-over does.
+    if (!isChallengeRowVisible({ userId: assigneeUserId, roles: await resolveRoles(assigneeUserId) }, current)) {
+      return { status: "assignee_cannot_see" };
+    }
   }
   return { status: "ok", current };
 }
@@ -1291,8 +1334,9 @@ export async function setChallengeAssignee(
   admin: Viewer,
   number: string,
   assigneeUserId: string | null,
+  resolveRoles: ResolveAssigneeRoles,
 ): Promise<AssignResult> {
-  const loaded = await loadChallengeForAssignment(pool, admin, number, assigneeUserId);
+  const loaded = await loadChallengeForAssignment(pool, admin, number, assigneeUserId, resolveRoles);
   if (loaded.status !== "ok") return loaded;
   const { current } = loaded;
 
@@ -1318,12 +1362,19 @@ export type AssignLeanResult =
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "unknown_user" }
+  | { status: "assignee_cannot_see" }
   | { status: "terminal_status" };
 
 /** Same auth/audit semantics as `setChallengeAssignee`, without the full challenge+solutions
  *  re-fetch — for bulk admin actions (§14.1). */
-export async function setChallengeAssigneeLean(pool: Pool, admin: Viewer, number: string, assigneeUserId: string | null): Promise<AssignLeanResult> {
-  const loaded = await loadChallengeForAssignment(pool, admin, number, assigneeUserId);
+export async function setChallengeAssigneeLean(
+  pool: Pool,
+  admin: Viewer,
+  number: string,
+  assigneeUserId: string | null,
+  resolveRoles: ResolveAssigneeRoles,
+): Promise<AssignLeanResult> {
+  const loaded = await loadChallengeForAssignment(pool, admin, number, assigneeUserId, resolveRoles);
   if (loaded.status !== "ok") return loaded;
   const { current } = loaded;
 

@@ -158,7 +158,7 @@ test(
 
       // ── Profile (§13.5): own profile sees full status breakdown; a public profile of
       // the anonymous author shows none of their anonymous work. ─────────────────────
-      const ownProfile = await getOwnProfile(pool, winnerId);
+      const ownProfile = await getOwnProfile(pool, winner);
       assert.ok(ownProfile);
       assert.ok((ownProfile!.challengesByStatus.solved ?? 0) >= 1);
       assert.ok((ownProfile!.solutionsByStatus.implemented ?? 0) >= 1);
@@ -323,6 +323,9 @@ test(
       const bobId = await mkUser("bob");
       const admin = { userId: adminId, roles: buildRoleSet([{ role: "namespace_admin", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const author = { userId: aliceId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) };
+      // The §7.3 assignee gate's role resolver: the challenges below await triage, which only the
+      // author and the namespace's admins can see — so the assignees are namespace admins here.
+      const adminRoles = async () => buildRoleSet([{ role: "namespace_admin", namespaceId: nsId }], { globalNamespaceId: globalId });
       const { rows: ia } = await pool.query<{ id: string }>(`select id from impact_areas where name = 'Internal'`);
       const areaId = ia[0]!.id;
 
@@ -335,8 +338,8 @@ test(
       const chAlice = await mk(`TA alice ${stamp}`);
       const chBob = await mk(`TA bob ${stamp}`);
       const chNone = await mk(`TA none ${stamp}`);
-      assert.equal((await setChallengeAssignee(pool, admin, chAlice, aliceId)).status, "ok");
-      assert.equal((await setChallengeAssignee(pool, admin, chBob, bobId)).status, "ok");
+      assert.equal((await setChallengeAssignee(pool, admin, chAlice, aliceId, adminRoles)).status, "ok");
+      assert.equal((await setChallengeAssignee(pool, admin, chBob, bobId, adminRoles)).status, "ok");
 
       // Filter by a specific person → only their challenge, with the assignee name populated.
       const byAlice = await listTriageQueue(pool, admin, { namespaceId: nsId, assigneeId: aliceId });

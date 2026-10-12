@@ -321,7 +321,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       setAssigneeResults([]);
       return;
     }
-    const res = await fetch(`/api/users?q=${encodeURIComponent(q)}`);
+    // §7.3: only users who can see this challenge are offered.
+    const res = await fetch(`/api/users?q=${encodeURIComponent(q)}&challenge=${challenge.number.replace("CH-", "")}`);
     const json = await readJson(res);
     setAssigneeResults((json.users as { id: string; displayName: string; email: string | null }[]) ?? []);
   };

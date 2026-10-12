@@ -41,15 +41,16 @@ test(
       );
       const challengeId = ch[0]!.id;
       const resolveRoles = async () => buildRoleSet([], { globalNamespaceId: globalId });
+      const asViewer = (userId: string) => ({ userId, roles: buildRoleSet([], { globalNamespaceId: globalId }) });
 
       // Defaults are all on.
-      const fresh = await getOwnProfile(pool, quiet);
+      const fresh = await getOwnProfile(pool, asViewer(quiet));
       assert.deepEqual(fresh!.notificationPreferences, { followedComments: true, followedStatus: true, followedSolutions: true });
 
       await setNotificationPreferences(pool, quiet, { followedComments: false });
       await setNotificationPreferences(pool, duty, { followedComments: false, followedSolutions: false });
-      assert.deepEqual((await getOwnProfile(pool, quiet))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: true });
-      assert.deepEqual((await getOwnProfile(pool, duty))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: false });
+      assert.deepEqual((await getOwnProfile(pool, asViewer(quiet)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: true });
+      assert.deepEqual((await getOwnProfile(pool, asViewer(duty)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: false });
 
       const rowsFor = async (table: "notifications" | "notification_outbox", message: string) =>
         (await pool.query<{ user_id: string }>(`select user_id from ${table} where payload->>'message' = $1`, [message])).rows.map((r) => r.user_id).sort();

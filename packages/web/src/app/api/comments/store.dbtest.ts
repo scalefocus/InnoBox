@@ -49,6 +49,8 @@ test(
       const author = { userId: authorId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const admin = { userId: adminId, roles: buildRoleSet([{ role: "namespace_admin", namespaceId: nsId }], { globalNamespaceId: globalId }) };
       const commenter = { userId: commenterId, roles: buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId }) };
+      // The §7.3 assignee gate's role resolver: everyone here is a member of the namespace.
+      const memberRoles = async () => buildRoleSet([{ role: "member", namespaceId: nsId }], { globalNamespaceId: globalId });
 
       const { rows: areaRows } = await pool.query<{ id: string }>(`select id from impact_areas where name = 'Internal'`);
       const areaId = areaRows[0]!.id;
@@ -108,20 +110,20 @@ test(
       assert.deepEqual(unfollowed, { status: "ok", following: false });
 
       // 6. Assignment: non-admin forbidden; admin ok, audited, notified (outbox row).
-      const forbiddenAssign = await setChallengeAssignee(pool, commenter, number, assigneeId);
+      const forbiddenAssign = await setChallengeAssignee(pool, commenter, number, assigneeId, memberRoles);
       assert.equal(forbiddenAssign.status, "forbidden");
 
-      const assigned = await setChallengeAssignee(pool, admin, number, assigneeId);
+      const assigned = await setChallengeAssignee(pool, admin, number, assigneeId, memberRoles);
       assert.equal(assigned.status, "ok");
       await assertAudited(pool, "challenge.assigned", created.challenge.id);
 
-      const unassigned = await setChallengeAssignee(pool, admin, number, null);
+      const unassigned = await setChallengeAssignee(pool, admin, number, null, memberRoles);
       assert.equal(unassigned.status, "ok");
       await assertAudited(pool, "challenge.unassigned", created.challenge.id);
 
       // Assignment is blocked on terminal statuses (§7.3).
       await setChallengeStatus(pool, admin, number, "solved");
-      const terminalAssign = await setChallengeAssignee(pool, admin, number, assigneeId);
+      const terminalAssign = await setChallengeAssignee(pool, admin, number, assigneeId, memberRoles);
       assert.equal(terminalAssign.status, "terminal_status");
 
       // 7. Anonymity reveal: transient admin reveal (never un-masks the stored flag).
