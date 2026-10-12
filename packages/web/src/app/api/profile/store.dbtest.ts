@@ -90,6 +90,44 @@ test(
 );
 
 test(
+  "getPublicProfile: a deactivated user's profile renders (active=false); a scrubbed or unknown id is null",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool, randomUUID } = await importDeps();
+    const { getPublicProfile } = await import("./store");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const mkUser = async (label: string, active: boolean, scrubbed: boolean) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name, job_title, active, scrubbed_at)
+           values ($1, $2, $3, 'Engineer', $4, case when $5::boolean then now() end) returning id`,
+          [`dbtest-profile-${label}-${stamp}`, `dbtest-profile-${label}-${stamp}@example.test`, `Dbtest Profile ${label}`, active, scrubbed],
+        );
+        return rows[0]!.id;
+      };
+
+      // §13.5: a deactivated user still has a profile — the "View profile" link always lands.
+      const deactivated = await getPublicProfile(pool, await mkUser("deactivated", false, false));
+      assert.ok(deactivated, "a deactivated user's profile renders");
+      assert.equal(deactivated.user.active, false);
+      assert.equal(deactivated.user.scrubbed, false);
+      assert.equal(deactivated.user.jobTitle, "Engineer", "directory fields are retained");
+
+      const live = await getPublicProfile(pool, await mkUser("live", true, false));
+      assert.equal(live?.user.active, true);
+
+      // A scrubbed user has no profile — the same not-found as an unknown id.
+      assert.equal(await getPublicProfile(pool, await mkUser("scrubbed", false, true)), null);
+      assert.equal(await getPublicProfile(pool, randomUUID()), null);
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
+test(
   "getOwnProfile: the followed-items lists show only what the owner can currently see",
   { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
   async () => {

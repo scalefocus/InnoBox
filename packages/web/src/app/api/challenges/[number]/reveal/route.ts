@@ -18,7 +18,13 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
   const result = await revealChallengeAuthor(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {
     case "ok":
-      return Response.json({ displayName: result.realDisplayName, email: result.realEmail, userId: result.realUserId });
+      return Response.json({
+        displayName: result.realDisplayName,
+        email: result.realEmail,
+        userId: result.realUserId,
+        active: result.realActive,
+        scrubbed: result.realScrubbed,
+      });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
     case "forbidden":

@@ -2,6 +2,10 @@
 // card with the person's directory profile and a link to their full profile; keyboard focus opens
 // it and Escape closes it; and — the invariant-3 case — an ANONYMOUS author's bubble opens no card
 // and issues no request at all, so nothing distinguishes two anonymous authors.
+// Keyboard users reach "View profile" through explicit Tab routing around the portalled card;
+// your own bubble links to /profile; a scrubbed author renders the "Deleted User" bubble from the
+// payload's flag with no profile behind it; and the read-only assignee on a terminal triage row
+// opens the card without opening the row.
 //
 // Dev-auth personas carry no department/job title/office (those are Entra attributes written by
 // reconciliation, §3), so the card's directory block legitimately renders its degraded
@@ -9,7 +13,7 @@
 // spec requires, and is asserted as such.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { createChallengeViaApi } from "./helpers/api";
+import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
 
 test("directory card: hover opens it, keyboard reaches it, and an anonymous author never gets one", async ({ browser }) => {
   test.slow(); // Next dev-mode first-hit route compilation
@@ -101,4 +105,158 @@ test("directory card: hover opens it, keyboard reaches it, and an anonymous auth
   expect(cardRequests.length, "an anonymous author's bubble issues NO card request").toBe(before);
 
   await ctx.close();
+});
+
+test("directory card: Tab routes into and out of the portalled card; your own bubble links to /profile", async ({ browser }) => {
+  test.slow();
+
+  const stamp = Date.now().toString(36);
+  const authorName = `E2E Card Keys ${stamp}`;
+  const ctx = await browser.newContext();
+  const { userId: authorId } = await signIn(ctx, { name: authorName });
+  const named = await createChallengeViaApi(ctx.request, {
+    title: `E2E card keyboard challenge ${stamp}`,
+    description: "Raised by the directory-card keyboard e2e.",
+  });
+
+  const page = await ctx.newPage();
+  await page.goto(`/challenges/${named.digits}`);
+  await expect(page.getByRole("heading", { name: named.title })).toBeVisible();
+
+  const bubble = page.locator(".avatar.avatar-md[role='button']").first();
+  const card = page.getByRole("dialog", { name: authorName });
+  const link = card.getByRole("link", { name: "View profile" });
+
+  // Where focus sits relative to the bubble in page order (the card is portalled to the end of
+  // <body>, so "after the bubble" is exactly what the browser's own Tab order gets wrong).
+  const focusRelativeToBubble = () =>
+    page.evaluate(() => {
+      const b = document.querySelector(".avatar.avatar-md[role='button']");
+      const a = document.activeElement;
+      if (!b || !a || a === document.body || a.closest(".dir-card")) return "none";
+      const pos = b.compareDocumentPosition(a);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return "after";
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return "before";
+      return "same";
+    });
+
+  // Your own bubble links to /profile — decided by id, no caller marks it "self".
+  await bubble.focus();
+  await expect(card).toBeVisible();
+  await expect(link).toHaveAttribute("href", "/profile");
+
+  // Tab on the bubble moves into the card…
+  await page.keyboard.press("Tab");
+  await expect(link).toBeFocused();
+  await expect(card).toBeVisible();
+  // …and Tab out continues after the bubble, closing the card.
+  await page.keyboard.press("Tab");
+  await expect(card).toBeHidden();
+  expect(await focusRelativeToBubble()).toBe("after");
+
+  // Shift+Tab out of the card goes to the element before the bubble.
+  await bubble.focus();
+  await expect(card).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(link).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(card).toBeHidden();
+  expect(await focusRelativeToBubble()).toBe("before");
+
+  // Someone else's view of the same bubble links to the public profile. (An admin: a fresh
+  // challenge is awaiting triage, visible only to its author and the namespace's admins.)
+  const otherCtx = await browser.newContext();
+  await signIn(otherCtx, { name: `E2E Card Viewer ${stamp}`, admin: true });
+  const other = await otherCtx.newPage();
+  await other.goto(`/challenges/${named.digits}`);
+  await expect(other.getByRole("heading", { name: named.title })).toBeVisible();
+  await other.locator(".avatar.avatar-md[role='button']").first().hover();
+  await expect(other.getByRole("dialog", { name: authorName }).getByRole("link", { name: "View profile" })).toHaveAttribute(
+    "href",
+    `/profile/${authorId}`,
+  );
+
+  await ctx.close();
+  await otherCtx.close();
+});
+
+test("directory card: a scrubbed author renders the Deleted User bubble from the flag, with no profile and no link", async ({ browser }) => {
+  test.slow();
+
+  const stamp = Date.now().toString(36);
+  const json = { "content-type": "application/json", accept: "application/json" };
+  const authorCtx = await browser.newContext();
+  const { userId: authorId } = await signIn(authorCtx, { name: `E2E Card Leaver ${stamp}` });
+  const ch = await createChallengeViaApi(authorCtx.request, {
+    title: `E2E card scrubbed author ${stamp}`,
+    description: "Raised by a user who is then erased.",
+  });
+
+  const adminCtx = await browser.newContext();
+  await signIn(adminCtx, { name: `E2E Card Eraser ${stamp}`, admin: true });
+  const scrub = await adminCtx.request.post(`/api/admin/users/${authorId}/scrub`, { data: {}, headers: json });
+  expect(scrub.status()).toBe(200);
+
+  // The payload names the state explicitly — the bubble never infers it from the display name.
+  const detail = await (await adminCtx.request.get(`/api/challenges/${ch.digits}`, { headers: json })).json();
+  expect(detail.challenge.author).toMatchObject({ userId: authorId, anonymous: false, active: false, scrubbed: true });
+
+  const page = await adminCtx.newPage();
+  await page.goto(`/challenges/${ch.digits}`);
+  await expect(page.getByRole("heading", { name: ch.title })).toBeVisible();
+  const bubble = page.locator(".avatar.avatar-md.avatar-deleted[role='button']").first();
+  await expect(bubble).toBeVisible();
+  await bubble.hover();
+  const card = page.getByRole("dialog", { name: "Deleted User" });
+  await expect(card.getByText("No directory information.")).toBeVisible();
+  await expect(card.getByRole("link", { name: "View profile" })).toHaveCount(0);
+
+  // A scrubbed user has no profile: the generic not-found, never a "Deleted User" page.
+  await page.goto(`/profile/${authorId}`);
+  await expect(page.getByText("That profile doesn't exist.")).toBeVisible();
+
+  await authorCtx.close();
+  await adminCtx.close();
+});
+
+test("directory card: the read-only assignee on a terminal triage row opens the card without opening the row", async ({ browser }) => {
+  test.slow();
+
+  const stamp = Date.now().toString(36);
+  const json = { "content-type": "application/json", accept: "application/json" };
+  const assigneeName = `E2E Card Assignee ${stamp}`;
+  const assigneeCtx = await browser.newContext();
+  const { userId: assigneeId } = await signIn(assigneeCtx, { name: assigneeName });
+
+  const adminCtx = await browser.newContext();
+  await signIn(adminCtx, { name: `E2E Card Triage Admin ${stamp}`, admin: true });
+  const ch = await createChallengeViaApi(adminCtx.request, {
+    title: `E2E card terminal row ${stamp}`,
+    description: "Assigned, then rejected.",
+  });
+  await setChallengeStatusViaApi(adminCtx.request, ch.digits, "in_review");
+  const assigned = await adminCtx.request.post(`/api/challenges/${ch.digits}/assign`, { data: { userId: assigneeId }, headers: json });
+  expect(assigned.status()).toBe(200);
+  await setChallengeStatusViaApi(adminCtx.request, ch.digits, "rejected");
+
+  const page = await adminCtx.newPage();
+  await page.goto("/admin/triage");
+  await page.getByPlaceholder("CH-123").fill(ch.number);
+  const row = page.locator(".triage-rows .row-link").filter({ hasText: ch.title });
+  await expect(row).toHaveCount(1);
+
+  // Terminal row → the read-only assignee text, whose bubble is a card trigger (no popover here).
+  await expect(row.locator(".assignee-input")).toHaveCount(0);
+  const bubble = row.locator(`.avatar[role='button'][aria-label="${assigneeName}"]`);
+  await expect(bubble).toBeVisible();
+  await bubble.hover();
+  await expect(page.getByRole("dialog", { name: assigneeName })).toBeVisible();
+
+  // Clicking it stays on the queue — the read-only cell stops propagation like the editable one.
+  await bubble.click();
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\/admin\/triage$/);
+
+  await assigneeCtx.close();
+  await adminCtx.close();
 });

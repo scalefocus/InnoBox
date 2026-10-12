@@ -57,19 +57,25 @@ test("maskAuthor: anonymous item shows Anonymous and NULL userId (anonymity-safe
 
 test("maskAuthor: non-anonymous item shows the real name and userId", () => {
   const masked = maskAuthor({ isAnonymous: false, authorId: "user-1", authorDisplayName: "Jane Doe" });
-  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: true });
+  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: true, scrubbed: false });
 });
 
 test("maskAuthor: a deactivated non-anonymous author carries active=false (§13.6 greyed bubble)", () => {
   const masked = maskAuthor({ isAnonymous: false, authorId: "user-1", authorDisplayName: "Jane Doe", authorActive: false });
-  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: false });
+  assert.deepEqual(masked, { userId: "user-1", displayName: "Jane Doe", anonymous: false, active: false, scrubbed: false });
 });
 
 test("maskAuthor: an anonymous author's account state never leaks (no active field, identical shapes)", () => {
   const live = maskAuthor({ isAnonymous: true, authorId: "user-1", authorDisplayName: "Jane Doe", authorActive: true });
-  const gone = maskAuthor({ isAnonymous: true, authorId: "user-2", authorDisplayName: "Deleted User", authorActive: false });
+  const gone = maskAuthor({ isAnonymous: true, authorId: "user-2", authorDisplayName: "Deleted User", authorActive: false, authorScrubbed: true });
   assert.deepEqual(live, gone);
   assert.equal("active" in live, false);
+  assert.equal("scrubbed" in live, false);
+});
+
+test("maskAuthor: a scrubbed non-anonymous author carries scrubbed=true (§13.6 'Deleted User' bubble)", () => {
+  const masked = maskAuthor({ isAnonymous: false, authorId: "user-1", authorDisplayName: "Deleted User", authorActive: false, authorScrubbed: true });
+  assert.deepEqual(masked, { userId: "user-1", displayName: "Deleted User", anonymous: false, active: false, scrubbed: true });
 });
 
 // ── challenge visibility (§4.3) ──────────────────────────────────────────────────────────

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.52.1",
+    date: "2026-10-12",
+    summary:
+      "A deactivated colleague's profile now opens, marked as deactivated, instead of showing as missing. Erased accounts show the Deleted User picture everywhere, including the reveal dialog. The profile card now works on finished triage rows, links your own picture to your profile, and can be reached with the Tab key.",
+  },
+  {
     version: "0.52.0",
     date: "2026-10-12",
     summary:

@@ -3,7 +3,9 @@
 // title, office location, and their non-anonymous org-visible contributions only — the API
 // already applies that filter, so this page has nothing extra to hide. This page is the
 // CANONICAL view of the directory profile; the hover card (§13.8) shows the same three fields
-// and never more.
+// and never more. A deactivated user's profile still renders — greyed bubble and a muted
+// "Deactivated" notice — so the card's "View profile" link always lands somewhere; only a
+// scrubbed user (or an unknown id) is the not-found state.
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -11,7 +13,15 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../../challenges/
 import { AvatarBubble } from "@/components/AvatarBubble";
 
 interface PublicProfile {
-  user: { id: string; displayName: string; department: string | null; jobTitle: string | null; officeLocation: string | null };
+  user: {
+    id: string;
+    displayName: string;
+    department: string | null;
+    jobTitle: string | null;
+    officeLocation: string | null;
+    active: boolean;
+    scrubbed: boolean;
+  };
   contributions: {
     challenges: { number: string; title: string; status: string }[];
     solutions: { number: string; description: string; status: string; challengeNumber: string }[];
@@ -52,13 +62,20 @@ export default function PublicProfilePage() {
   return (
     <>
       <div className="page-head reveal" style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <AvatarBubble size="lg" userId={profile.user.id} displayName={profile.user.displayName} />
+        <AvatarBubble
+          size="lg"
+          userId={profile.user.id}
+          displayName={profile.user.displayName}
+          deactivated={!profile.user.active}
+          scrubbed={profile.user.scrubbed}
+        />
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow">Profile</div>
           <h1 className="page-title">{profile.user.displayName}</h1>
           <p className="page-sub">
             {[profile.user.jobTitle, profile.user.department, profile.user.officeLocation].filter(Boolean).join(" · ") || "—"}
           </p>
+          {!profile.user.active && <span className="profile-deactivated">Deactivated</span>}
         </div>
       </div>
 

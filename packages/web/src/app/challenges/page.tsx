@@ -17,7 +17,7 @@ interface ChallengeListItem {
   id: string;
   number: string;
   title: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
   namespaceSlug: string;
   impactAreaName: string;
   status: string;
@@ -171,7 +171,7 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       </div>
       <h3>{challenge.title}</h3>
       <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} deactivated={challenge.author.active === false} />
+        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} deactivated={challenge.author.active === false} scrubbed={challenge.author.scrubbed === true} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
           <span>
             <ChallengeAuthorName challenge={challenge} />

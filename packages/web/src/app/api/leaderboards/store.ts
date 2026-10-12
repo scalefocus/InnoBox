@@ -23,6 +23,8 @@ export interface LeaderboardEntry {
   displayName: string;
   /** §13.6: false for a deactivated user — the row renders the greyed bubble. */
   active: boolean;
+  /** §13.6: true for a GDPR-scrubbed user — the row renders the neutral "Deleted User" bubble. */
+  scrubbed: boolean;
   count: number;
 }
 
@@ -102,13 +104,13 @@ export async function getLeaderboard(
       break;
   }
 
-  const { rows } = await pool.query<{ user_id: string; display_name: string; active: boolean; cnt: number }>(
-    `select t.user_id, u.display_name, u.active, t.cnt
+  const { rows } = await pool.query<{ user_id: string; display_name: string; active: boolean; scrubbed: boolean; cnt: number }>(
+    `select t.user_id, u.display_name, u.active, u.scrubbed_at is not null as scrubbed, t.cnt
        from (${sql}) t
        join users u on u.id = t.user_id
       order by t.cnt desc, t.first_at asc, t.user_id asc
       limit $2`,
     [since, limit],
   );
-  return rows.map((r) => ({ userId: r.user_id, displayName: r.display_name, active: r.active, count: r.cnt }));
+  return rows.map((r) => ({ userId: r.user_id, displayName: r.display_name, active: r.active, scrubbed: r.scrubbed, count: r.cnt }));
 }
