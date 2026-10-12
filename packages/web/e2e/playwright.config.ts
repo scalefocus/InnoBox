@@ -14,14 +14,16 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 
 // ── Sharding (Jenkins) ────────────────────────────────────────────────────────────────────────
-// E2E_SHARD=1|2 runs one of two halves of the suite; Jenkins runs both at once against the SAME
-// dev server and database (one `next dev` per checkout is all Next allows, and the agent can't
-// afford two). Playwright's own --shard can't be used: it splits blindly, and these specs below
-// change PLATFORM-WIDE state (the AI provider + its switches, the system banner, platform
-// settings, channel webhooks, the featured list) that another spec running concurrently would
-// observe. They are pinned to shard 1, where they keep running serially as before; every other
-// spec only touches its own uniquely-named fixtures. The rest are dealt out greedily by test
-// count so the halves come out roughly equal. Unset → the whole suite, as before.
+// E2E_SHARD=i with E2E_SHARD_TOTAL=n (1 ≤ i ≤ n ≤ 9) runs the i-th of n slices of the suite;
+// Jenkins (its E2E_SHARDS parameter) runs all n at once against the SAME dev server and database
+// (one `next dev` per checkout is all Next allows, and the agent can't afford more). Playwright's
+// own --shard can't be used: it splits blindly, and these specs below change PLATFORM-WIDE state
+// (the AI provider + its switches, the system banner, platform settings, channel webhooks, the
+// featured list) that another spec running concurrently would observe. They are pinned to shard
+// 1, where they keep running serially as before; every other spec only touches its own
+// uniquely-named fixtures. The rest are dealt out greedily by test count so the slices come out
+// roughly equal (shard 1 gets no more once its pinned specs exceed a fair share). Every spec
+// lands in exactly one shard. E2E_SHARD unset → the whole suite, as before.
 // A NEW spec that changes platform-wide state must be added here.
 const PLATFORM_STATE_SPECS = [
   "admin-ai.spec.ts",
@@ -39,36 +41,40 @@ const PLATFORM_STATE_SPECS = [
 
 const e2eDir = path.dirname(fileURLToPath(import.meta.url));
 
-/** The spec files of shard 1 or 2 — every spec lands in exactly one. */
-function shardSpecs(shard: 1 | 2): string[] {
+/** The spec files of shard `shard` of `total`. */
+function shardSpecs(shard: number, total: number): string[] {
   const testCount = (file: string) =>
     (readFileSync(path.join(e2eDir, file), "utf8").match(/^\s*test(?:\.(?:only|skip|fixme))?\(\s*["'`]/gm) ?? []).length;
   const specs = readdirSync(e2eDir).filter((f) => f.endsWith(".spec.ts")).sort();
-  const halves: { files: string[]; tests: number }[] = [
-    { files: [], tests: 0 },
-    { files: [], tests: 0 },
-  ];
+  const slices = Array.from({ length: total }, () => ({ files: [] as string[], tests: 0 }));
   for (const f of specs.filter((s) => PLATFORM_STATE_SPECS.includes(s))) {
-    halves[0].files.push(f);
-    halves[0].tests += testCount(f);
+    slices[0].files.push(f);
+    slices[0].tests += testCount(f);
   }
   const rest = specs
     .filter((s) => !PLATFORM_STATE_SPECS.includes(s))
     .map((f) => ({ f, n: testCount(f) }))
     .sort((a, b) => b.n - a.n || a.f.localeCompare(b.f));
   for (const { f, n } of rest) {
-    const target = halves[0].tests <= halves[1].tests ? halves[0] : halves[1];
+    // The lightest slice so far; ties go to the lowest index, so the split is deterministic.
+    const target = slices.reduce((min, s) => (s.tests < min.tests ? s : min));
     target.files.push(f);
     target.tests += n;
   }
-  return halves[shard - 1].files;
+  return slices[shard - 1].files;
 }
 
 const shardEnv = process.env.E2E_SHARD;
-if (shardEnv !== undefined && shardEnv !== "1" && shardEnv !== "2") {
-  throw new Error(`E2E_SHARD must be 1 or 2, got "${shardEnv}"`);
+const shardTotalEnv = process.env.E2E_SHARD_TOTAL ?? "2";
+let shard: { index: number; total: number } | null = null;
+if (shardEnv !== undefined) {
+  const index = Number(shardEnv);
+  const total = Number(shardTotalEnv);
+  if (!Number.isInteger(total) || total < 1 || total > 9 || !Number.isInteger(index) || index < 1 || index > total) {
+    throw new Error(`E2E_SHARD must be 1..E2E_SHARD_TOTAL and E2E_SHARD_TOTAL 1..9, got "${shardEnv}" of "${shardTotalEnv}"`);
+  }
+  shard = { index, total };
 }
-const shard = shardEnv ? (Number(shardEnv) as 1 | 2) : null;
 
 // Whether Playwright manages the dev server itself. Omitted when E2E_NO_WEBSERVER=1 — set on the
 // Jenkins path, where the suite runs INSIDE the official Playwright Docker image (no pnpm/asdf) and
@@ -101,9 +107,9 @@ export default defineConfig({
   testDir: ".",
   ...(shard
     ? {
-        testMatch: shardSpecs(shard).map((f) => `**/${f}`),
-        // Both shards run at once from the same checkout, so each writes its own results.
-        outputDir: `../test-results/shard-${shard}`,
+        testMatch: shardSpecs(shard.index, shard.total).map((f) => `**/${f}`),
+        // All shards run at once from the same checkout, so each writes its own results.
+        outputDir: `../test-results/shard-${shard.index}`,
       }
     : {}),
   // Journey specs share database state and drive multi-actor flows, so run serially for
@@ -123,7 +129,7 @@ export default defineConfig({
   // Jenkins pipeline timeout aborts the build (which also swallows the error summary).
   maxFailures: process.env.CI ? 10 : 0,
   reporter: process.env.CI
-    ? [["list"], ["html", { open: "never", ...(shard ? { outputFolder: `../playwright-report/shard-${shard}` } : {}) }]]
+    ? [["list"], ["html", { open: "never", ...(shard ? { outputFolder: `../playwright-report/shard-${shard.index}` } : {}) }]]
     : "list",
   use: {
     baseURL,

@@ -47,6 +47,7 @@ pipeline {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: false, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     booleanParam(name: 'RUN_E2E', defaultValue: false, description: 'Run Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed)')
+    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'Split the e2e suite into this many shards (1-9), run in parallel on this agent as separate Playwright containers against ONE shared Postgres + web dev server; 1 = the whole suite in one container. Specs that change platform-wide settings always stay together in shard 1. More shards = more concurrent browsers sharing the agent\'s CPU and RAM and the one dev server.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy from a non-main branch (main deploys automatically; never on pull-request builds)')
     // Deploy target (host + checkout path) comes from Jenkins credentials, not build parameters —
     // see innobox-deploy-host / innobox-deploy-path in the credentials list above.
@@ -190,6 +191,14 @@ pipeline {
               set -eu
               . "${HOME}/.asdf/asdf.sh"
 
+              # The E2E_SHARDS build parameter (validated up front, before anything is started). The
+              # fallback covers the first build after the parameter is added, when it isn't defined yet.
+              SHARDS="${E2E_SHARDS:-2}"
+              case "${SHARDS}" in
+                [1-9]) ;;
+                *) echo "E2E_SHARDS must be a whole number from 1 to 9, got '${SHARDS}'"; exit 1 ;;
+              esac
+
               # Ephemeral Postgres for the browser e2e; the dev server connects to it.
               docker run -d --rm --name "${CI_E2E_PG_CONTAINER}" \
                 -e POSTGRES_USER=innobox -e POSTGRES_PASSWORD=test -e POSTGRES_DB=innobox \
@@ -232,7 +241,11 @@ pipeline {
               NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" \
                 setsid sh -c 'pnpm --filter @innobox/web dev > e2e-web.log 2>&1; echo $? > "$0"' "${WEB_EXIT}" &
               WEB_PID=$!
-              trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; docker rm -f "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true' EXIT
+              # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
+              stop_shards() {
+                docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+              }
+              trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; stop_shards' EXIT
               for i in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
               curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
 
@@ -244,12 +257,13 @@ pipeline {
               # browsers or system libraries — Docker is already an agent prerequisite. The tag is
               # derived from the installed @playwright/test so image browsers always match the driver.
               #
-              # TWO SHARDS AT ONCE, both against the one dev server + database above (Next allows one
-              # `next dev` per checkout, and a second server would double the memory). E2E_SHARD=1|2
-              # makes the config pick its half: specs that change platform-wide state all stay in
-              # shard 1, the rest are balanced by test count (see e2e/playwright.config.ts). Each shard
-              # writes its own test-results/ and playwright-report/ subfolder; their output lines are
-              # prefixed [shard N]. They run in the background so the watchdog below can stop them.
+              # E2E_SHARDS SHARDS AT ONCE, all against the one dev server + database above (Next allows
+              # one `next dev` per checkout, and more servers would multiply the memory). E2E_SHARD=i +
+              # E2E_SHARD_TOTAL=n make the config pick its slice: specs that change platform-wide
+              # state all stay in shard 1, the rest are balanced by test count (see
+              # e2e/playwright.config.ts). Each shard writes its own test-results/ and
+              # playwright-report/ subfolder; its output lines are prefixed [shard i]. They run in the
+              # background so the watchdog below can stop them.
               #   --name            : so the watchdog and cleanup can stop the container
               #   --network host    : the container reaches the dev server on 127.0.0.1:3000
               #   --ipc=host        : Playwright's Chromium recommendation (avoids /dev/shm crashes)
@@ -268,33 +282,46 @@ pipeline {
                   docker run --rm --name "${CI_E2E_PW_CONTAINER}-$1" --network host --ipc=host \
                     --user "$(id -u):$(id -g)" \
                     -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
-                    -e E2E_SHARD="$1" \
+                    -e E2E_SHARD="$1" -e E2E_SHARD_TOTAL="${SHARDS}" \
                     -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
                     "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
                     ./node_modules/.bin/playwright test -c e2e/playwright.config.ts || rc=$?
                   echo "${rc}" > "${PWD}/e2e-shard-$1.exit"
                 } 2>&1 | sed -u "s/^/[shard $1] /"
               }
-              run_shard 1 &
-              SHARD1_PID=$!
-              run_shard 2 &
-              SHARD2_PID=$!
+              echo "=== running the e2e in ${SHARDS} shard(s) ==="
+              SHARD_PIDS=""
+              for n in $(seq 1 "${SHARDS}"); do
+                run_shard "${n}" &
+                SHARD_PIDS="${SHARD_PIDS} $!"
+              done
 
-              # Watchdog: if the dev server dies mid-suite, stop both shards at once and say so,
+              # How many shards have written their exit status so far.
+              shards_done() { ls e2e-shard-*.exit 2>/dev/null | wc -l; }
+
+              # Watchdog: if the dev server dies mid-suite, stop every shard at once and say so,
               # rather than letting every remaining spec fail on "connection refused".
               SERVER_DIED=0
-              while [ ! -f e2e-shard-1.exit ] || [ ! -f e2e-shard-2.exit ]; do
+              while [ "$(shards_done)" -lt "${SHARDS}" ]; do
                 if [ "${SERVER_DIED}" = 0 ] && [ -f "${WEB_EXIT}" ]; then
                   SERVER_DIED=1
                   echo "=== the dev server exited mid-suite (status $(cat "${WEB_EXIT}")) — stopping Playwright ==="
-                  docker rm -f "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true
+                  stop_shards
                 fi
                 sleep 5
               done
-              wait "${SHARD1_PID}" "${SHARD2_PID}" || true
-              echo "=== shard 1 exit: $(cat e2e-shard-1.exit), shard 2 exit: $(cat e2e-shard-2.exit) ==="
+              # shellcheck disable=SC2086 # word-splitting the PID list is intended
+              wait ${SHARD_PIDS} || true
 
-              if [ "${SERVER_DIED}" = 1 ] || [ "$(cat e2e-shard-1.exit)" != 0 ] || [ "$(cat e2e-shard-2.exit)" != 0 ]; then
+              FAILED_SHARDS=""
+              for n in $(seq 1 "${SHARDS}"); do
+                rc="$(cat "e2e-shard-${n}.exit")"
+                echo "=== shard ${n} exit: ${rc} ==="
+                [ "${rc}" = 0 ] || FAILED_SHARDS="${FAILED_SHARDS} ${n}"
+              done
+
+              if [ "${SERVER_DIED}" = 1 ] || [ -n "${FAILED_SHARDS}" ]; then
+                [ -z "${FAILED_SHARDS}" ] || echo "=== failed shard(s):${FAILED_SHARDS} ==="
                 echo "=== dev server log (e2e-web.log) ==="
                 cat e2e-web.log
                 if [ "${SERVER_DIED}" = 1 ]; then
@@ -309,7 +336,10 @@ pipeline {
           }
           post {
             always {
-              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true'
+              sh '''
+                docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
+                docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+              '''
               // Kept even when the build is aborted (where the in-step `cat` never runs).
               archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
             }
@@ -417,7 +447,10 @@ MINIO_SCRIPT
 
   post {
     always {
-      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true'
+      sh '''
+        docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
+        docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+      '''
     }
     success { echo "innobox pipeline OK — ${env.GIT_COMMIT}" }
     failure { echo "innobox pipeline FAILED — ${env.GIT_COMMIT}" }
