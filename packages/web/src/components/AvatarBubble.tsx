@@ -25,12 +25,12 @@ export function AvatarBubble({
   size = "sm",
   anonymous = false,
   deactivated = false,
+  scrubbed = false,
   title,
   noCard = false,
-  self = false,
 }: {
   /** The user's id — the key for the photo + fallback color. Null = no linkable identity
-   *  (anonymous author, deleted/"Deleted User", or an unknown actor): renders a neutral bubble
+   *  (anonymous author, or an unknown actor): renders a neutral bubble
    *  with no photo. */
   userId: string | null;
   /** Drives the initials and the accessible label. "" is fine (yields "?"). */
@@ -40,14 +40,15 @@ export function AvatarBubble({
   anonymous?: boolean;
   /** Greyed initials bubble, no photo — a SCIM-deactivated user (§3.1). */
   deactivated?: boolean;
+  /** The neutral "Deleted User" bubble — a GDPR-scrubbed user (§3 erasure). Every person payload
+   *  carries this flag explicitly; the bubble never infers it from the display name (§13.6). */
+  scrubbed?: boolean;
   /** Overrides the hover/aria label (defaults to the display name, or "Anonymous"). */
   title?: string;
   /** Opt out of the directory hover card (§13.8) — the account-menu trigger, which opens a menu
    *  on the same element, and bubbles inside an already-open popover (§7.3 assignee search,
    *  §14.1 inline assignee editor), where a card would nest a popover in a popover. */
   noCard?: boolean;
-  /** This bubble is the signed-in user's own — the card links to /profile. */
-  self?: boolean;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
 
@@ -58,12 +59,11 @@ export function AvatarBubble({
     userId,
     displayName,
     enabled: cardEligible,
-    self,
     // Rendered inside the card at medium size, with the card itself disabled (no recursion).
-    avatar: <AvatarBubble size="md" userId={userId} displayName={displayName} deactivated={deactivated} noCard />,
+    avatar: <AvatarBubble size="md" userId={userId} displayName={displayName} deactivated={deactivated} scrubbed={scrubbed} noCard />,
   });
 
-  const variant = avatarVariant({ userId, displayName, anonymous, deactivated });
+  const variant = avatarVariant({ userId, displayName, anonymous, deactivated, scrubbed });
 
   // Generic anonymous bubble: no photo, no initials, no per-user color (§9/§13.6).
   if (variant === "anon") {
@@ -77,7 +77,7 @@ export function AvatarBubble({
   const label = title ?? displayName ?? "";
   const initials = avatarInitials(displayName);
 
-  // A scrubbed "Deleted User" (§3 erasure): the neutral bubble — no photo, no initials, no
+  // A scrubbed user (§3 erasure, the explicit `scrubbed` flag): the neutral bubble — no photo, no initials, no
   // per-user color. A scrubbed row that still carries its id keeps the card ("No directory
   // information", §13.8); an id-less one never has one.
   if (variant === "deleted") {

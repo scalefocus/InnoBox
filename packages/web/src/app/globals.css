@@ -662,6 +662,13 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* Display headings anchor in brand Navy (light) / a legible navy tint (dark) — Montserrat Bold. */
 .page-title { font-family: var(--font-display); font-size: clamp(34px, 5vw, 52px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; color: var(--anchor); font-optical-sizing: auto; }
 .page-sub { color: var(--muted); margin-top: 12px; max-width: 60ch; font-size: 15.5px; }
+/* §13.5: the muted "Deactivated" notice on a deactivated user's public profile — the same dashed
+   pill as the hover card's flag (§13.8), one size up. */
+.profile-deactivated {
+  display: inline-block; margin-top: 10px; padding: 2px 9px; border-radius: 999px;
+  border: 1px dashed var(--line); background: var(--surface-2);
+  font-size: 12px; letter-spacing: 0.02em; color: var(--faint);
+}
 
 /* ── Code / install command ────────────────────────────────────────────── */
 .code {

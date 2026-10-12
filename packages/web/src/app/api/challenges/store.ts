@@ -110,6 +110,8 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   assigneeDisplayName: string | null;
   /** §13.6: the assignee's `users.active` (greyed bubble when false); null when unassigned. */
   assigneeActive: boolean | null;
+  /** §13.6: the assignee is GDPR-scrubbed ("Deleted User" bubble); null when unassigned. */
+  assigneeScrubbed: boolean | null;
   updatedAt: string;
   editedAt: string | null;
   resolvedAt: string | null;
@@ -157,10 +159,12 @@ export interface ChallengeRow {
   author_id: string;
   author_display_name: string;
   author_active: boolean;
+  author_scrubbed: boolean;
   is_anonymous: boolean;
   assignee_id: string | null;
   assignee_display_name: string | null;
   assignee_active: boolean | null;
+  assignee_scrubbed: boolean | null;
   created_at: Date;
   updated_at: Date;
   edited_at: Date | null;
@@ -185,6 +189,7 @@ interface SolutionRow {
   author_id: string;
   author_display_name: string;
   author_active: boolean;
+  author_scrubbed: boolean;
   is_anonymous: boolean;
   created_at: Date;
   updated_at: Date;
@@ -198,8 +203,8 @@ export const CHALLENGE_SELECT = `
   select c.id, c.number::text, c.title, c.description, c.status, c.visibility,
          c.namespace_id, ns.slug as namespace_slug, ns.archived_at is not null as namespace_archived,
          c.impact_area_id, ia.name as impact_area_name,
-         c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, c.is_anonymous,
-         c.assignee_id, au.display_name as assignee_display_name, au.active as assignee_active,
+         c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.is_anonymous,
+         c.assignee_id, au.display_name as assignee_display_name, au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
          c.created_at, c.updated_at, c.edited_at, c.resolved_at,
          (select count(*) from likes l where l.parent_type = 'challenge' and l.parent_id = c.id) as like_count,
          exists(select 1 from likes lv where lv.parent_type = 'challenge' and lv.parent_id = c.id and lv.user_id = $viewer) as liked_by_viewer,
@@ -225,6 +230,7 @@ export function toListItem(row: ChallengeRow): ChallengeListItem {
       authorId: row.author_id,
       authorDisplayName: row.author_display_name,
       authorActive: row.author_active,
+      authorScrubbed: row.author_scrubbed,
     }),
     namespaceSlug: row.namespace_slug,
     impactAreaName: row.impact_area_name,
@@ -304,6 +310,7 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     assigneeId: row.assignee_id,
     assigneeDisplayName: row.assignee_display_name,
     assigneeActive: row.assignee_id === null ? null : row.assignee_active,
+    assigneeScrubbed: row.assignee_id === null ? null : row.assignee_scrubbed,
     updatedAt: row.updated_at.toISOString(),
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
     resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
@@ -353,6 +360,7 @@ function toSolutionItem(
       authorId: row.author_id,
       authorDisplayName: row.author_display_name,
       authorActive: row.author_active,
+      authorScrubbed: row.author_scrubbed,
     }),
     isMine,
     status,
@@ -395,7 +403,7 @@ async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer,
 async function fetchSolutionRows(db: Pool | PoolClient, challengeId: string, viewerId: string): Promise<SolutionRow[]> {
   const { rows } = await db.query<SolutionRow>(
     `select s.id, s.number::text, s.challenge_id, s.description, s.cost_vs_benefits, s.status,
-            s.author_id, u.display_name as author_display_name, u.active as author_active, s.is_anonymous,
+            s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
             s.created_at, s.updated_at, s.edited_at,
             (select count(*) from likes l where l.parent_type = 'solution' and l.parent_id = s.id) as like_count,
             exists(select 1 from likes lv where lv.parent_type = 'solution' and lv.parent_id = s.id and lv.user_id = $2) as liked_by_viewer,
@@ -544,13 +552,14 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
     author_id: string;
     author_display_name: string;
     author_active: boolean;
+    author_scrubbed: boolean;
     visibility: "org" | "namespace";
     excerpt: string;
     shared: number;
   }>(
     `select * from (
        select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
-              u.active as author_active, c.visibility, left(c.description, 500) as excerpt,
+              u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.visibility, left(c.description, 500) as excerpt,
               ts_rank(c.search_vector, ${tsquery}) as rank,
               (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
          from challenges c
@@ -573,6 +582,7 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
       authorId: r.author_id,
       authorDisplayName: r.author_display_name,
       authorActive: r.author_active,
+      authorScrubbed: r.author_scrubbed,
     }),
     visibility: r.visibility,
     excerpt: r.excerpt,
@@ -1747,10 +1757,38 @@ export async function resubmitSolution(pool: Pool, author: Viewer, number: strin
 // ── Anonymity reveal (§9) ────────────────────────────────────────────────────────────────
 
 export type RevealResult =
-  | { status: "ok"; realDisplayName: string; realEmail: string | null; realUserId: string }
+  | {
+      status: "ok";
+      realDisplayName: string;
+      realEmail: string | null;
+      realUserId: string;
+      /** §13.6: the revealed author's account state, so the dialog's bubble is greyed or neutral. */
+      realActive: boolean;
+      realScrubbed: boolean;
+    }
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "not_anonymous" };
+
+interface RevealUserRow {
+  display_name: string;
+  email: string | null;
+  active: boolean;
+  scrubbed: boolean;
+}
+
+const REVEAL_USER_SELECT = `select display_name, email, active, scrubbed_at is not null as scrubbed from users where id = $1`;
+
+function toRevealResult(user: RevealUserRow | undefined, authorId: string): RevealResult {
+  return {
+    status: "ok",
+    realDisplayName: user?.display_name ?? "",
+    realEmail: user?.email ?? null,
+    realUserId: authorId,
+    realActive: user?.active ?? true,
+    realScrubbed: user?.scrubbed ?? false,
+  };
+}
 
 /** Admin reveal: transient (never persisted, is_anonymous stays true) — every execution is
  *  audited (§9). Namespace admins (own namespace) and platform admins only; committee and
@@ -1767,10 +1805,7 @@ export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: s
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
-  const { rows: userRows } = await pool.query<{ display_name: string; email: string | null }>(
-    `select display_name, email from users where id = $1`,
-    [row.author_id],
-  );
+  const { rows: userRows } = await pool.query<RevealUserRow>(REVEAL_USER_SELECT, [row.author_id]);
   await appendAudit(pool, {
     actorUserId: admin.userId,
     action: "anonymity.revealed",
@@ -1778,7 +1813,7 @@ export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: s
     targetId: row.id,
     after: { revealedAuthorId: row.author_id },
   });
-  return { status: "ok", realDisplayName: userRows[0]?.display_name ?? "", realEmail: userRows[0]?.email ?? null, realUserId: row.author_id };
+  return toRevealResult(userRows[0], row.author_id);
 }
 
 export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
@@ -1793,10 +1828,7 @@ export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: st
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
-  const { rows: userRows } = await pool.query<{ display_name: string; email: string | null }>(
-    `select display_name, email from users where id = $1`,
-    [row.author_id],
-  );
+  const { rows: userRows } = await pool.query<RevealUserRow>(REVEAL_USER_SELECT, [row.author_id]);
   await appendAudit(pool, {
     actorUserId: admin.userId,
     action: "anonymity.revealed",
@@ -1804,7 +1836,7 @@ export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: st
     targetId: row.id,
     after: { revealedAuthorId: row.author_id },
   });
-  return { status: "ok", realDisplayName: userRows[0]?.display_name ?? "", realEmail: userRows[0]?.email ?? null, realUserId: row.author_id };
+  return toRevealResult(userRows[0], row.author_id);
 }
 
 export type SelfRevealResult = { status: "ok"; challenge?: ChallengeDetail } | { status: "not_found" } | { status: "forbidden" } | { status: "not_anonymous" };

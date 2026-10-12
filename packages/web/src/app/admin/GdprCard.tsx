@@ -172,7 +172,7 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
         <div className="rows" style={{ marginTop: 10 }}>
           {results.map((u) => (
             <div className="row" key={u.id}>
-              <AvatarBubble size="sm" userId={u.scrubbed ? null : u.id} displayName={u.displayName} deactivated={!u.active} />
+              <AvatarBubble size="sm" userId={u.scrubbed ? null : u.id} displayName={u.displayName} deactivated={!u.active} scrubbed={u.scrubbed} />
               <span className="grow">
                 <span className="ttl">{u.displayName}</span> {u.email && <span className="muted mono">{u.email}</span>}
               </span>

@@ -201,7 +201,19 @@ export async function setNotificationPreferences(pool: Pool, userId: string, pre
 }
 
 export interface PublicProfile {
-  user: { id: string; displayName: string; department: string | null; jobTitle: string | null; officeLocation: string | null };
+  user: {
+    id: string;
+    displayName: string;
+    department: string | null;
+    jobTitle: string | null;
+    officeLocation: string | null;
+    /** §13.5/§13.6: false for a deactivated user — the page still renders, with the greyed
+     *  bubble and a muted "Deactivated" notice. */
+    active: boolean;
+    /** Always false here: a scrubbed user has no public profile (null, a 404). Carried so the
+     *  profile is a person payload like every other (§13.6). */
+    scrubbed: false;
+  };
   contributions: {
     challenges: { number: string; title: string; status: string }[];
     solutions: { number: string; description: string; status: string; challengeNumber: string }[];
@@ -209,7 +221,9 @@ export interface PublicProfile {
 }
 
 /** Non-anonymous, org-visible contributions only (§13.5, invariants 2-3) — this is what any
- *  authenticated viewer may see about another user, regardless of their own roles. */
+ *  authenticated viewer may see about another user, regardless of their own roles. A
+ *  deactivated user's profile still renders (so the §13.8 card's "View profile" link always
+ *  lands somewhere); only an unknown id or a GDPR-scrubbed row is null — the same not-found. */
 export async function getPublicProfile(pool: Pool, userId: string): Promise<PublicProfile | null> {
   const { rows: userRows } = await pool.query<{
     id: string;
@@ -218,12 +232,14 @@ export async function getPublicProfile(pool: Pool, userId: string): Promise<Publ
     job_title: string | null;
     office_location: string | null;
     active: boolean;
+    scrubbed: boolean;
   }>(
-    `select id, display_name, department, job_title, office_location, active from users where id = $1`,
+    `select id, display_name, department, job_title, office_location, active, scrubbed_at is not null as scrubbed
+       from users where id = $1`,
     [userId],
   );
   const userRow = userRows[0];
-  if (!userRow || !userRow.active) return null;
+  if (!userRow || userRow.scrubbed) return null;
 
   const [challengeRows, solutionRows] = await Promise.all([
     pool.query<{ number: string; title: string; status: string }>(
@@ -253,6 +269,8 @@ export async function getPublicProfile(pool: Pool, userId: string): Promise<Publ
       department: userRow.department,
       jobTitle: userRow.job_title,
       officeLocation: userRow.office_location,
+      active: userRow.active,
+      scrubbed: false,
     },
     contributions: {
       challenges: challengeRows.rows.map((r) => ({ number: formatChallengeNumber(r.number), title: r.title, status: r.status })),

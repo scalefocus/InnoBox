@@ -29,12 +29,14 @@ interface TriageRow {
   authorAnonymous: boolean;
   authorId: string | null;
   authorActive?: boolean;
+  authorScrubbed?: boolean;
   status: string;
   impactAreaName: string;
   namespaceSlug: string;
   assigneeDisplayName: string | null;
   assigneeId: string | null;
   assigneeActive: boolean | null;
+  assigneeScrubbed: boolean | null;
   createdAt: string;
   /** §22.11 triage notes: ready / on the way / failed, or null when there are none. */
   aiNotes?: "ready" | "pending" | "failed" | null;
@@ -448,6 +450,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   displayName={r.authorDisplayName}
                   anonymous={r.authorAnonymous}
                   deactivated={r.authorActive === false}
+                  scrubbed={r.authorScrubbed === true}
                 />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
               </span>
@@ -495,6 +498,7 @@ interface TriageSolutionRow {
   authorAnonymous: boolean;
   authorId: string | null;
   authorActive?: boolean;
+  authorScrubbed?: boolean;
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
@@ -564,6 +568,7 @@ function SolutionsQueue() {
                   displayName={r.authorDisplayName}
                   anonymous={r.authorAnonymous}
                   deactivated={r.authorActive === false}
+                  scrubbed={r.authorScrubbed === true}
                 />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
               </span>
@@ -676,15 +681,17 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
   const [busy, setBusy] = useState(false);
 
   if (TERMINAL_STATUSES.has(row.status)) {
+    // Read-only, in no popover, so its bubble opens the directory card (§13.8); stopPropagation
+    // like the editable cell, so opening the card never also opens the row (§14.1).
     return (
-      <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }} onClick={(e) => e.stopPropagation()}>
         {row.assigneeDisplayName && (
           <AvatarBubble
             size="sm"
             userId={row.assigneeId}
             displayName={row.assigneeDisplayName}
             deactivated={row.assigneeActive === false}
-            noCard
+            scrubbed={row.assigneeScrubbed === true}
           />
         )}
         {row.assigneeDisplayName ?? "Unassigned"}
@@ -744,6 +751,7 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
           userId={row.assigneeId}
           displayName={row.assigneeDisplayName!}
           deactivated={row.assigneeActive === false}
+          scrubbed={row.assigneeScrubbed === true}
           noCard
         />
       )}

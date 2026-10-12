@@ -2683,12 +2683,6 @@ for one.
 A scrubbed user's `/profile/<id>` renders the same generic not-found state as an
 unknown id — *"That profile doesn't exist."* — never a "Deleted User" page.
 
-> **⚠ GAP-40 · code fix:** `getPublicProfile` (`api/profile/store.ts`) returns null
-> for `!active`, so `/profile/<id>` is a 404 for every deactivated user while the
-> hover card still links there. Return null only for scrubbed rows, return the
-> `active` state, and render the muted "Deactivated" notice and greyed bubble in
-> `app/profile/[userId]/page.tsx`.
-
 The **e-mail notifications** control is a §2.2 pill switch rather than a labelled
 button: an `On`/`Off` word, then the pill — 📧 in the knob and an `--accent` track when
 on, 🔇 in the knob and the plain `--surface-2` track when off. The knob rests **left
@@ -2739,15 +2733,6 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   commenter, leaderboard row, card, profile, triage row, the reveal — and the bubble
   decides "Deleted User" from it, never from the display name. Like `active`, it is
   absent for an anonymous author.
-
-  > **⚠ GAP-41 · code fix:** `active` now flows through the payloads, but no payload
-  > carries `scrubbed` (`MaskedAuthor` in `shared/src/challenges.ts` has `active` only),
-  > and `avatarVariant` (`shared/src/avatars.ts`) infers a scrubbed user from
-  > `displayName === "Deleted User"`. Add `scrubbed` beside `active` in `MaskedAuthor`
-  > and every person payload, pass it through `AvatarBubble`, and drop the name-based
-  > inference. Also pass `deactivated`/`scrubbed` to the bubbles in
-  > `app/profile/[userId]/page.tsx` and in the reveal dialog
-  > (`challenges/[number]/page.tsx` `RevealDialog`), which pass neither.
 - **Sizing:** one stored image (§3.1), scaled by context — small (~24–40 px) in
   lists, chips, comments and rows — the **directory hover card (§13.8)** reuses the
   existing **medium** bubble of that band; large (~96 px) on profile pages and in the
@@ -2828,11 +2813,6 @@ Of the three directory fields, department and job title already exist (§3, §5)
 
   Like the editable assignee cell, the read-only assignee on a terminal row stops click
   propagation, so opening its card never also opens the row (§14.1).
-
-  > **⚠ GAP-42 · code fix:** `admin/triage/page.tsx` passes `noCard` to the assignee
-  > bubble on terminal-status rows (the `TERMINAL_STATUSES` branch of the assignee
-  > cell). Remove it, and give that read-only span the same
-  > `onClick={(e) => e.stopPropagation()}` the editable cell has.
 - **No user id → no card.** An **anonymous** author's bubble (invariant 3: the client
   never learns the real id — the payload carries `null`, §13.6), a deleted/unknown
   actor, or a bubble whose caller marks it anonymous shows **no card, issues no
@@ -2855,11 +2835,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
 6. **"View profile"** — a link to `/profile/<id>` (to `/profile` for your own bubble,
    decided by comparing the bubble's user id to the signed-in user — no caller has to
    mark a bubble as "self").
-
-> **⚠ GAP-43 · code fix:** `DirectoryCard.tsx` links to `/profile` only when the caller
-> passes `self`, and only `app/profile/page.tsx` does, so your own bubble on cards,
-> comments and the leaderboard links to `/profile/<yourId>`. Compare the bubble's user
-> id with the session user inside `DirectoryCard`/`AvatarBubble` and drop the prop.
 
 - Lines 2–4 are **omitted individually** when the field is empty. When **all three**
   are empty the block collapses to a single muted line — **"No directory
@@ -2930,12 +2905,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
   - A card with **no link** (a scrubbed row) has nothing to focus: Tab on the bubble
     moves on to the next element as usual and the card closes.
   - Blur closes the card only when focus has left **both** the bubble and the card.
-
-  > **⚠ GAP-44 · code fix:** focus inside the card now keeps it open and Escape returns
-  > focus, but nothing routes Tab: `DirectoryCard.tsx` portals the card to the end of
-  > `document.body`, so Tab from the bubble skips it and keyboard users can never reach
-  > "View profile", and Tab out of the card lands at the end of the page. Add the
-  > routing above (a `keydown` handler on the trigger and the card).
 
 #### Data & delivery
 
