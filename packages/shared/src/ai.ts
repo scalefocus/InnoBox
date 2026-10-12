@@ -59,6 +59,7 @@ import {
 } from "./ai-rules.js";
 
 export * from "./ai-rules.js";
+export * from "./ai-tasks.js";
 
 // ── At-rest encryption: the `v1:iv:tag:ct` AES-256-GCM helper, under its OWN key ──────────
 
@@ -440,6 +441,26 @@ export async function recordAiUsage(db: DbClient, r: AiUsageRecord): Promise<voi
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [r.feature, r.userId, r.provider, r.model.slice(0, 200), r.inputTokens, r.outputTokens, Math.max(0, Math.round(r.latencyMs)), r.ok, r.errorCode],
   );
+}
+
+/** A person's recent calls of one feature, for the per-user limits of §22.10 and §22.13
+ *  (counted from ai_usage, so every process — and a restart — sees the same numbers). */
+export async function countAiUserCalls(db: DbClient, userId: string, feature: string): Promise<{ lastMinute: number; lastDay: number }> {
+  const { rows } = await db.query<{ last_minute: number; last_day: number }>(
+    `select (count(*) filter (where created_at > now() - interval '1 minute'))::int as last_minute,
+            count(*)::int as last_day
+       from ai_usage
+      where feature = $1 and user_id = $2 and created_at > now() - interval '24 hours'`,
+    [feature, userId],
+  );
+  return { lastMinute: rows[0]?.last_minute ?? 0, lastDay: rows[0]?.last_day ?? 0 };
+}
+
+/** Which per-user limit a new call would break, if any. */
+export function aiUserLimitHit(counts: { lastMinute: number; lastDay: number }, limits: { perMinute: number; perDay: number }): "minute" | "day" | null {
+  if (counts.lastMinute >= limits.perMinute) return "minute";
+  if (counts.lastDay >= limits.perDay) return "day";
+  return null;
 }
 
 /** The hourly prune (worker housekeeping): ai_usage keeps 365 days. */

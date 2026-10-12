@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.48.0",
+    date: "2026-10-12",
+    summary:
+      "When AI is switched on, the challenge and solution forms have an Improve with AI button that turns your rough notes into a clearer title and a structured description, and suggests an impact area you can apply. You review the result before anything is submitted, and Undo puts your own text back.",
+  },
+  {
     version: "0.47.1",
     date: "2026-10-12",
     summary:

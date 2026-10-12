@@ -1023,6 +1023,17 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Improve with AI (INNOBOX_SPEC.md §22.10): the button row under a form's text fields, and the
+   inline confirm-before-replace panel. Existing tokens only. */
+.ai-draft { margin-top: 8px; }
+.ai-draft .btn .spinner { margin-right: 6px; vertical-align: -2px; }
+.ai-draft-confirm {
+  margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line-strong);
+  border-radius: var(--radius); background: var(--surface-2);
+}
+/* A field a draft is filling reads as paused, not disabled. */
+.field[readonly] { cursor: progress; opacity: 0.75; }
+
 /* Submission lock (INNOBOX_SPEC.md §6.4) — while a submit is in flight a plain scrim covers the
    form (its contents are `inert`), and only the primary button, raised above it, stays visible
    as "Working…". Appears at once: no delay, no transition. No new token — `--surface` at ~60%. */

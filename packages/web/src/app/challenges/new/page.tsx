@@ -12,12 +12,17 @@
 // keep it held straight into the create. Success never releases — the form unmounts locked as
 // the router moves to the new challenge. Edits (which re-arm the check) are only possible while
 // unlocked, so the warning's signature logic is untouched.
+//
+// Improve with AI (§22.10): fills the title and description from the author's own text. A draft
+// fill changes the form signature, so it re-arms the duplicate check like any edit; the button
+// is unavailable while the form is locked, and Submit waits while a draft is in flight.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { AttachmentControl } from "@/components/AttachmentControl";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
+import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
 import { CHALLENGE_STATUS_LABEL } from "../status";
 
@@ -72,6 +77,12 @@ export default function NewChallengePage() {
   const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[] } | null>(null);
   const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const ai = useImproveWithAi({
+    kind: "challenge",
+    fields: { title: [title, setTitle], description: [description, setDescription] },
+    body: () => ({ kind: "challenge", title, description, visibility }),
+    restricted: visibility === "namespace",
+  });
 
   useEffect(() => {
     titleInputRef.current?.focus();
@@ -99,7 +110,8 @@ export default function NewChallengePage() {
     e.preventDefault();
     // A second submit (double click, Enter) while locked is a no-op — guarded here, not only by
     // the disabled button.
-    if (!lock.lock()) return;
+    if (ai.busy || !lock.lock()) return;
+    ai.noteSubmit();
     setError(null);
     try {
       // First click: check for similar challenges. Advisory — a failed check never blocks.
@@ -169,7 +181,11 @@ export default function NewChallengePage() {
               ref={titleInputRef}
               className="field" style={{ width: "100%" }}
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                ai.noteEdit("title");
+              }}
+              readOnly={ai.busy}
               maxLength={120}
               required
             />
@@ -184,10 +200,15 @@ export default function NewChallengePage() {
               className="field"
               style={{ width: "100%", minHeight: 140, resize: "vertical" }}
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                ai.noteEdit("description");
+              }}
+              readOnly={ai.busy}
               maxLength={10000}
               required
             />
+            <ImproveWithAiBar ai={ai} disabled={lock.locked} onApplyHint={setImpactAreaId} />
           </div>
 
           <div>
@@ -290,7 +311,7 @@ export default function NewChallengePage() {
         </div>
 
         <div>
-          <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled}>
+          <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled || ai.busy}>
             <PrimaryButtonLabel state={button} />
           </button>
         </div>

@@ -265,10 +265,18 @@ export interface AiFeature {
 export const AI_RESERVED_FEATURE = "test";
 
 /**
- * The tasks that may call the provider. Empty until a task ships: §22.10–§22.13 register
- * `submit_draft`, `triage_assist`, `duplicate_explain` and `discussion_summary`.
+ * The tasks that may call the provider (§22.10–§22.13). Each states its egress exactly — the
+ * card's "What leaves InnoBox" notice shows it verbatim.
  */
-export const AI_FEATURES: readonly AiFeature[] = [];
+export const AI_FEATURES: readonly AiFeature[] = [
+  {
+    key: "submit_draft",
+    label: "Improve with AI (challenge and solution forms)",
+    egress:
+      "The text the author is writing — a challenge's title and description, or a solution's description and cost vs benefits with its challenge's title and description — and the names of the active impact areas. Never the client name, the anonymity choice, attachments or anything about the author.",
+    maxTokens: 8192,
+  },
+];
 
 export function findAiFeature(key: string, features: readonly AiFeature[] = AI_FEATURES): AiFeature | null {
   if (key === AI_RESERVED_FEATURE) return null;

@@ -48,13 +48,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-69"],
-    title: "Improve with AI",
-    teaser:
-      "A button on the submit forms that rewrites your challenge or solution into a clearer, better-structured draft. One click undoes it.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-71"],
     title: "Similar challenges, explained",
     teaser:

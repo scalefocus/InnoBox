@@ -5278,12 +5278,6 @@ encrypted-token pattern. Platform admins only.
 
 ### §22.10 Improve with AI — drafting on the submit forms
 
-> **⚠ GAP-69 · new feature:** the **Improve with AI** button on `/challenges/new` and
-> the solution form does not exist. Build: the `submit_draft` registry entry, `GET` and
-> `POST /api/ai/draft` (availability; the draft call with its per-minute and 24-hour
-> limits), the button, confirm-before-replace, Undo, and the tests below. Its own minor
-> release, on top of the shipped plumbing (§22.1–§22.9).
-
 A writing aid for the author's **own** text. Nothing it produces is stored, marked or
 treated differently from text the author typed.
 
