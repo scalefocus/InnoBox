@@ -565,7 +565,9 @@ export function stagedScanFailedLink(parentType: AttachmentParentType): string {
  *  the sole recipient, so it is anonymity-safe. Writes the in-app row and the outbox row,
  *  exactly like the web notify helper. A bound row links to its parent; an unbound staged row
  *  links to its submission form (stagedScanFailedLink); a bound row whose parent has since
- *  vanished is skipped (nothing to link to, and the attachment went with it). */
+ *  vanished is skipped (nothing to link to, and the attachment went with it). A bound row carries
+ *  its parent as the target (§10.3), so deleting that item removes the row; a staged row is about
+ *  no item yet and carries none. */
 async function enqueueScanFailedNotification(db: DbClient, target: ScanTarget, reason: "infected" | "unscannable"): Promise<void> {
   const link = target.parentId === null ? stagedScanFailedLink(target.parentType) : await scanParentLink(db, target.parentType, target.parentId);
   if (!link) return;
@@ -573,7 +575,9 @@ async function enqueueScanFailedNotification(db: DbClient, target: ScanTarget, r
     reason === "infected"
       ? `Your attachment "${target.filename}" failed its virus scan and was removed.`
       : `Your attachment "${target.filename}" couldn't be scanned and was removed.`;
-  const payload = JSON.stringify({ message, link });
+  const payload = JSON.stringify(
+    target.parentId === null ? { message, link } : { message, link, parentType: target.parentType, parentId: target.parentId },
+  );
   await db.query(`insert into notifications (user_id, type, payload) values ($1, 'attachment_scan_failed', $2)`, [target.uploadedBy, payload]);
   await db.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'attachment_scan_failed', $2)`, [target.uploadedBy, payload]);
 }

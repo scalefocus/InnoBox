@@ -48,10 +48,20 @@ export function emailRetryDelayMinutes(attemptsBefore: number): number {
   return Math.min(2 ** Math.min(n, 6), 60);
 }
 
-/** Marks a row failed: one more attempt, the last error, and the backed-off next-attempt time. */
+/** §12.1: the delay, in seconds, before a failed row's next attempt — the backoff, or a Graph
+ *  429's `Retry-After` when that is later. A `Retry-After` shorter than the backoff never pulls
+ *  the retry forward, and a missing or nonsensical one leaves the backoff alone. */
+export function emailRetryDelaySeconds(attemptsBefore: number, retryAfterSeconds?: number): number {
+  const backoff = emailRetryDelayMinutes(attemptsBefore) * 60;
+  return retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > backoff
+    ? Math.ceil(retryAfterSeconds)
+    : backoff;
+}
+
+/** Marks a row failed: one more attempt, the last error, and the delayed next-attempt time. */
 const MARK_FAILED_SQL = `update notification_outbox
     set status = 'failed', attempts = attempts + 1, last_error = $2,
-        next_attempt_at = now() + make_interval(mins => $3::int)
+        next_attempt_at = now() + make_interval(secs => $3::int)
   where id = $1`;
 
 function log(level: "info" | "warn" | "error", msg: string, extra?: Record<string, unknown>): void {
@@ -96,9 +106,10 @@ export async function runNotificationSweep(
 
   for (const row of rows) {
     // Graph rate-limit (429): stop the rest of this batch so we don't keep hammering the API.
-    // The current row is recorded failed and backed off like any other failure (the rest of
-    // the batch is simply picked up next sweep). Set below.
+    // The current row is recorded failed and backed off like any other failure, but no earlier
+    // than Graph's Retry-After (the rest of the batch is simply picked up next sweep). Set below.
     let rateLimited = false;
+    let retryAfterSeconds: number | undefined;
     try {
       if (!row.email || !row.email_notifications_enabled) {
         await pool.query(`update notification_outbox set status = 'sent', sent_at = now() where id = $1`, [row.id]);
@@ -126,7 +137,10 @@ export async function runNotificationSweep(
             delivered = true;
           } catch (err) {
             lastError = `graph: ${String((err as Error).message ?? err)}`.slice(0, 500);
-            if (err instanceof GraphSendError && err.status === 429) rateLimited = true;
+            if (err instanceof GraphSendError && err.status === 429) {
+              rateLimited = true;
+              retryAfterSeconds = err.retryAfterSeconds;
+            }
           }
         } else {
           lastError = `graph: ${token.reason}${token.error ? ` (${token.error})` : ""}`;
@@ -146,17 +160,21 @@ export async function runNotificationSweep(
         await pool.query(`update notification_outbox set status = 'sent', sent_at = now() where id = $1`, [row.id]);
         summary.sent += 1;
       } else {
-        await pool.query(MARK_FAILED_SQL, [row.id, lastError ?? "no transport configured", emailRetryDelayMinutes(row.attempts)]);
+        await pool.query(MARK_FAILED_SQL, [
+          row.id,
+          lastError ?? "no transport configured",
+          emailRetryDelaySeconds(row.attempts, rateLimited ? retryAfterSeconds : undefined),
+        ]);
         summary.failed += 1;
         if (rateLimited) {
-          log("warn", "graph rate-limited (429) — stopping sweep, will resume next cycle", { outboxId: row.id });
+          log("warn", "graph rate-limited (429) — stopping sweep, will resume next cycle", { outboxId: row.id, retryAfterSeconds });
           break;
         }
       }
     } catch (err) {
       log("error", "notification dispatch row failed", { outboxId: row.id, error: String(err) });
       await pool
-        .query(MARK_FAILED_SQL, [row.id, String((err as Error).message ?? err).slice(0, 500), emailRetryDelayMinutes(row.attempts)])
+        .query(MARK_FAILED_SQL, [row.id, String((err as Error).message ?? err).slice(0, 500), emailRetryDelaySeconds(row.attempts)])
         .catch(() => {});
       summary.failed += 1;
     }

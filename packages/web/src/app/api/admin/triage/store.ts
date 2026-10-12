@@ -252,13 +252,13 @@ export async function bulkAssign(
     // (§12.1 event 7). The store's own load below re-checks visibility and RBAC, and nothing read
     // here reaches the caller unless that check passed.
     const prior = isEntityNumber(number)
-      ? (await pool.query<{ assignee_id: string | null; title: string }>(`select assignee_id, title from challenges where number = $1`, [number])).rows
+      ? (await pool.query<{ id: string; assignee_id: string | null; title: string }>(`select id, assignee_id, title from challenges where number = $1`, [number])).rows
       : [];
     const result = await setChallengeAssigneeLean(pool, admin, number, assigneeUserId, resolveRoles);
     // The new assignee's auto-follow (§12.3) happens inside the store's shared assignment write,
     // exactly as on the detail page.
     if (result.status === "ok" && prior[0]) {
-      await notifyAssignmentChanged(notify, { number, title: prior[0].title }, prior[0].assignee_id, assigneeUserId).catch(
+      await notifyAssignmentChanged(notify, { id: prior[0].id, number, title: prior[0].title }, prior[0].assignee_id, assigneeUserId).catch(
         logNotifyFailure("bulk assignment notification failed"),
       );
     }

@@ -4,7 +4,7 @@
 // (§12.1 event 2).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds, getNamespaceAdminUserIds, getNamespaceCommitteeUserIds } from "@/lib/notify";
+import { notifySolutionProposed } from "@/lib/notify-events";
 import { autoFollow } from "../../../follows/store";
 import { createSolution } from "../../store";
 import { readJsonObject } from "@/lib/http";
@@ -34,7 +34,7 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
   switch (result.status) {
     case "ok": {
       await autoFollow(pool, gate.user.id, "solution", result.solution.id);
-      await fireSolutionProposedNotification(number, gate.user.id).catch((err) =>
+      await notifySolutionProposed({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, number, result.solution).catch((err) =>
         console.error(JSON.stringify({ level: "error", msg: "solution.proposed notification failed", error: String(err) })),
       );
       return Response.json({ solution: result.solution }, { status: 201 });
@@ -58,33 +58,6 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
   }
-}
-
-async function fireSolutionProposedNotification(challengeNumber: string, proposerId: string): Promise<void> {
-  const { rows } = await pool.query<{ id: string; title: string; namespace_id: string; author_id: string }>(
-    `select id, title, namespace_id, author_id from challenges where number = $1`,
-    [challengeNumber],
-  );
-  const challenge = rows[0];
-  if (!challenge) return;
-  const [admins, committee, followers] = await Promise.all([
-    getNamespaceAdminUserIds(pool, challenge.namespace_id),
-    getNamespaceCommitteeUserIds(pool, challenge.namespace_id),
-    getFollowerUserIds(pool, "challenge", challenge.id),
-  ]);
-  await dispatchEvent(
-    { pool, actorId: proposerId, resolveRoles: resolveRolesForUser },
-    { parentType: "challenge", parentId: challenge.id },
-    [...admins, ...committee, challenge.author_id, ...followers],
-    "solution_proposed",
-    {
-      message: `A new solution was proposed on CH-${challengeNumber} "${challenge.title}".`,
-      link: `/challenges/${challengeNumber}`,
-    },
-    // §12.1: mutable for the challenge author and followers; for admins and the committee it is
-    // an attention event (triage is a duty), so they are exempt.
-    { preference: "followedSolutions", exempt: [...admins, ...committee] },
-  );
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

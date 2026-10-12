@@ -48,6 +48,12 @@ test("computeUserHeal: mail removed in Graph → patch nulls email", () => {
   assert.deepEqual(heal, { action: "refresh", patch: { email: null } });
 });
 
+test("computeUserHeal: blank mail in Graph → patch nulls email (never stores an empty string)", () => {
+  assert.deepEqual(computeUserHeal(local, { ...graphSame, mail: "" }), { action: "refresh", patch: { email: null } });
+  assert.deepEqual(computeUserHeal(local, { ...graphSame, mail: "   " }), { action: "refresh", patch: { email: null } });
+  assert.deepEqual(computeUserHeal({ ...local, email: null }, { ...graphSame, mail: "" }), { action: "none" });
+});
+
 test("computeUserHeal: UPN case-only change is not drift (compared case-insensitively)", () => {
   const heal = computeUserHeal(local, { ...graphSame, userPrincipalName: "Ada@example.com" });
   assert.deepEqual(heal, { action: "none" });

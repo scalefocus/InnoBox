@@ -65,11 +65,22 @@ export const NOTIFICATION_TYPES = [
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
-/** Every payload carries an already anonymity-safe message and a relative deep link (§12.1);
- *  callers may add extra fields for richer future rendering. */
+/** The challenge or solution a notification is about (§10.3, §12.1). Stored in the payload as
+ *  `parentType`/`parentId` — the same keys a comment row (event 6) names its item by — so the
+ *  §10.3 delete cascade finds every row about a deleted item by its target, not its link text. */
+export interface NotificationTarget {
+  parentType: "challenge" | "solution";
+  parentId: string;
+}
+
+/** Every payload carries an already anonymity-safe message and a relative deep link (§12.1),
+ *  plus its target when it is about a challenge or solution; callers may add extra fields for
+ *  richer future rendering. */
 export interface NotificationPayload {
   message: string;
   link: string;
+  parentType?: NotificationTarget["parentType"];
+  parentId?: string;
   [key: string]: unknown;
 }
 

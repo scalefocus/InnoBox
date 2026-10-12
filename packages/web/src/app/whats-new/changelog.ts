@@ -11,10 +11,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "0.51.4",
+    version: "0.51.6",
     date: "2026-10-12",
     summary:
       "Likes now close on rejected and withdrawn challenges as well as solved ones, and reopen if the challenge is reopened. Rejected, not-selected and withdrawn solutions move into a collapsed Closed solutions section, and the solutions count covers only open ones. An archived namespace now clearly refuses new challenges and solutions, and reopening a solved challenge clears its solved date.",
+  },
+  {
+    version: "0.51.5",
+    date: "2026-10-12",
+    summary:
+      "Deleting a user's information is now final: directory sync can no longer show, update, reactivate or re-add an erased account to groups, and their e-mail notifications are switched off. A blank e-mail address from the directory is now stored as no address instead of an empty one.",
+  },
+  {
+    version: "0.51.4",
+    date: "2026-10-12",
+    summary:
+      "The notification for a new solution now opens the challenge scrolled to that solution. When a platform admin deletes a challenge or solution, every notification about it is now removed with it, including the one announcing a new solution. And when Microsoft asks InnoBox to slow down its e-mails, InnoBox now waits as long as it was told before trying again.",
   },
   {
     version: "0.51.3",

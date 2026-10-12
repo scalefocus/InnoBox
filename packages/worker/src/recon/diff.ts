@@ -20,7 +20,8 @@ export type GraphUser =
     };
 
 /**
- * Normalizes a directory-profile attribute (department, job title, office location) from Graph:
+ * Normalizes an optional Graph user attribute (mail and the directory profile — department, job
+ * title, office location):
  * absent, empty, or whitespace-only → NULL; otherwise the trimmed value. Entra can hand back ""
  * for a cleared attribute, and §3 requires that clearing it upstream clears it here — a stored
  * empty string would render as a blank label instead of no label.
@@ -72,7 +73,9 @@ export function computeUserHeal(local: LocalUserAttrs, graph: GraphUser): UserHe
     patch.user_name = graph.userPrincipalName;
   }
   if (graph.displayName !== local.displayName) patch.display_name = graph.displayName;
-  if (graph.mail !== local.email) patch.email = graph.mail;
+  // Normalized like the directory profile below, so a blank Graph `mail` is a NULL, never "".
+  const mail = directoryAttr(graph.mail);
+  if (mail !== local.email) patch.email = mail;
   // Directory profile (§13.8): refreshed unconditionally like every other attribute here — a
   // Graph value that is absent or empty writes NULL, so clearing it upstream clears it locally.
   // Normalized here too (graph.ts already does), so an empty string can never be written.

@@ -754,15 +754,6 @@ Entra runbook); on conflict this document wins.
   written. Nothing on the row changes, so erased personal data cannot flow back from
   Entra, and each refusal on an erased row is audited as `scim.anomaly`.
   Reconciliation already skips scrubbed rows.
-
-  > **⚠ GAP-12 · code fix:** `worker/src/scim/router.ts` never checks `scrubbed_at`:
-  > `findUserById`, `findUserByExternalId` and `findUserByUserNameCI` return erased
-  > rows, so `GET`/`PUT`/`PATCH`/`DELETE /Users/:id` act on them (a `PUT`/`PATCH`
-  > refills name, e-mail and UPN, sets `scim_synced`, and can reactivate the row), a
-  > `POST /Users` with a matching `externalId` runs `updateUserFull` on one, the
-  > `GET /Users` page, filter and count include them, and `addMembersTolerantly`
-  > (via `userExists`) adds them to groups. Add the refusals above, each audited
-  > `scim.anomaly`, with `scim.dbtest.ts` cases.
 - **User attributes:** display name, e-mail, department, job title, **office
   location**, photo (Entra); cached locally, refreshed by reconciliation. Department,
   job title and office location are the **directory profile** — display-only data
@@ -779,11 +770,6 @@ Entra runbook); on conflict this document wins.
   user resource, covered by the granted application `User.Read.All`). Sign-in still
   fetches nothing from Graph (§3.1); a JIT stub therefore shows no office location for
   at most one reconciliation interval, exactly as it shows no photo.
-
-  > **⚠ GAP-13 · code fix:** `worker/src/recon/graph.ts` `getUser` normalizes the three
-  > directory fields through `directoryAttr`, but still maps `mail: j.mail ?? null`, so
-  > an empty or blank `mail` from Graph is stored as `""`. Route `mail` through
-  > `directoryAttr` too.
 - **SCIM stays unmapped for office location.** The SCIM payload carries `title` and the
   enterprise `department` as today, but **no** office attribute — SCIM writes must never
   touch `office_location` (leaving it to reconciliation), so **no Entra provisioning
@@ -858,10 +844,6 @@ Entra runbook); on conflict this document wins.
 
   **The `user.scrubbed` audit row** records `reassignedTo` (user id or null),
   `reassignedCount` and `skippedCount` — numbers and ids only, never content.
-
-  > **⚠ GAP-14 · code fix:** the `scrubUser` UPDATE in `api/users/store.ts` sets
-  > `email_notifications_enabled = default` (true); it must be `false`. Flip the
-  > assertion in `api/users/store.dbtest.ts`, which currently expects `true`.
 
   **The "Delete user info (GDPR)" card** (Administration console, platform admins).
   Choosing **Delete info** on a search result opens an inline confirmation, replacing
@@ -1548,16 +1530,6 @@ afterwards. Notification rows are matched by the **target they carry** (entity t
 id in the payload), not by their link text; every notification payload about a
 challenge or solution carries that target.
 
-> **⚠ GAP-23 · code fix:** only comment notifications carry target fields
-> (`parentType`/`parentId`/`challengeId`, written by `dispatchCoalescedComment` in
-> `web/src/lib/notify.ts`); `dispatchEvent`/`dispatchToUser` (same file) and the
-> scan-failure writer in `shared/src/attachments.ts` write `{ message, link }` only, so
-> `deleteNotifications` (`api/challenges/delete.ts`) still falls back to the link for
-> them. On a solution delete the "solution proposed" row — linked to its challenge,
-> without `#SOL-n` (GAP-33) — therefore survives. Add the target type and id to every
-> notification payload through those writers and match on them, keeping the link match
-> for rows written before.
-
 **Object-store purge.** Once the transaction commits, the MinIO objects of every deleted
 attachment are purged — `clean`, `pending`, and author-removed rows alike (an `infected`
 row's object was already purged at scan time) — and the parts of any aborted multipart
@@ -1941,10 +1913,6 @@ stays `failed`; the next attempt time is recorded per row in the outbox's
 the current batch and schedules that row's retry no earlier than its `Retry-After`:
 the next attempt is the later of the backoff and the `Retry-After`.
 
-> **⚠ GAP-31 · code fix:** `worker/src/notifications/dispatch.ts` applies only
-> `emailRetryDelayMinutes` on a 429; `GraphSendError.retryAfterSeconds`
-> (`shared/src/email-graph.ts`) is never read. Set `next_attempt_at` to
-> max(backoff, Retry-After) for a 429.
 E-mail is sent via **Microsoft Graph `sendMail`** from a dedicated service mailbox
 (e.g. `innobox@example.com`) that a platform admin connects on the Administration page
 through a delegated consent flow (`Mail.Send` + `offline_access`, admin-consented).
@@ -1992,10 +1960,6 @@ rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL
 its status, a comment on it, its proposal (there is no standalone solution page,
 §13.1).
 
-> **⚠ GAP-33 · code fix:** the "solution proposed" notification
-> (`api/challenges/[number]/solutions/route.ts`) links to `/challenges/N` without the
-> `#SOL-<n>` anchor; build it with `itemHref` (`lib/deep-link.ts`) as comment
-> notifications already do.
 Delivery is immediate — there is no scheduled digest (§19); the one batching
 mechanism is the per-item coalescing of comment notifications below.
 

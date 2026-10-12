@@ -99,7 +99,8 @@ test(
                             triage_seen_at, challenges_seen_at, system_log_seen_at, quick_start_seen_at,
                             email_notifications_enabled, notify_followed_comments, notify_followed_status, notify_followed_solutions)
            values ($1, $2, $3, $4, 'Engineering', 'Staff Engineer', 'Sofia', true, true,
-                   now(), now(), now(), now(), false, false, false, false) returning id`,
+                   -- e-mail on, the notify_followed_* flags off: the scrub must flip every one
+                   now(), now(), now(), now(), true, false, false, false) returning id`,
         [`dbtest-scrub-victim-${stamp}`, `dbtest-scrub-victim-${stamp}@example.test`, `Dbtest ScrubVictim ${stamp}`, `scrubvictim-${stamp}@example.test`],
       );
       const victimId = victimRows[0]!.id;
@@ -141,8 +142,9 @@ test(
       );
       assert.equal(auditRows[0]!.n, "1", "the erasure is itself audited");
 
-      // §3: the per-user seen markers are nulled and the notification preferences reset to
-      // their column defaults — none of the user's own choices survive on the row.
+      // §3: the per-user seen markers are nulled, e-mail notifications are switched off (no
+      // address is left) and the notify_followed_* flags reset to their column defaults — none
+      // of the user's own choices survive on the row.
       const { rows: prefs } = await pool.query<{
         triage_seen_at: Date | null;
         challenges_seen_at: Date | null;
@@ -163,7 +165,7 @@ test(
       assert.equal(p.challenges_seen_at, null, "challenges seen marker nulled");
       assert.equal(p.system_log_seen_at, null, "system-log seen marker nulled");
       assert.equal(p.quick_start_seen_at, null, "quick-start seen marker nulled");
-      assert.equal(p.email_notifications_enabled, true, "e-mail opt-out reset to the column default");
+      assert.equal(p.email_notifications_enabled, false, "e-mail notifications off — no address is left");
       assert.equal(p.notify_followed_comments, true, "comment preference reset to the column default");
       assert.equal(p.notify_followed_status, true, "status preference reset to the column default");
       assert.equal(p.notify_followed_solutions, true, "solution preference reset to the column default");
