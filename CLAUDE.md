@@ -194,6 +194,13 @@ an existing entry, only prepend.
      the worktree (`git worktree remove`), and delete the now-merged branch locally
      and on the remote.
   On `main` already (not a worktree), `mm` behaves like `cp` (steps 1–2 + push).
+- **Pull requests: turn on Auto-fix as soon as one is opened.** After creating a PR,
+  enable Auto-fix on it without asking, so CI failures, merge conflicts, and review
+  comments are picked up and fixed as they arrive — verify, commit, and push each
+  fix. Never poll CI by hand. Before opening the PR, bring the branch up to date with
+  `origin/main` (re-bump `APP_VERSION` above `main`'s if it moved on) and title the PR
+  `type(scope): summary (vX.Y.Z)` with the final version, since it lands as a squash
+  merge under that title.
 - Language: TypeScript everywhere, ESM. Package manager: **pnpm** (workspaces).
 - DB access: parameterized SQL / a thin query layer; migrations are plain SQL files
   in `db/migrations` (see the README there for idempotency + audit-trigger rules).
