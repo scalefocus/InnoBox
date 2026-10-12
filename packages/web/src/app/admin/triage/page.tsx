@@ -12,6 +12,7 @@ import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
+import { useDateFmt } from "@/components/DateFormat";
 
 interface MeResponse {
   user: { id: string };
@@ -108,6 +109,7 @@ const PAGE_SIZE = 50;
 
 function TriageQueue({ myUserId }: { myUserId: string | null }) {
   const navigateRow = useRowNavigate();
+  const fmt = useDateFmt();
   const filterInputRef = useRef<HTMLInputElement>(null);
   const bulkInputRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<TriageRow[] | null>(null);
@@ -457,7 +459,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   refresh(true);
                 }}
               />
-              <span className="sub mono">{new Date(r.createdAt).toLocaleDateString()}</span>
+              <span className="sub mono">{fmt.date(r.createdAt)}</span>
             </div>
             );
           })}
@@ -503,6 +505,7 @@ interface TriageSolutionRow {
 // committee/assignee status controls live (§8.2). No filters/bulk/CSV in v1.
 function SolutionsQueue() {
   const navigateRow = useRowNavigate();
+  const fmt = useDateFmt();
   const [rows, setRows] = useState<TriageSolutionRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -565,7 +568,7 @@ function SolutionsQueue() {
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
               </span>
               <span className="sub">{r.impactAreaName}</span>
-              <span className="sub mono">{new Date(r.createdAt).toLocaleDateString()}</span>
+              <span className="sub mono">{fmt.date(r.createdAt)}</span>
             </div>
             );
           })}

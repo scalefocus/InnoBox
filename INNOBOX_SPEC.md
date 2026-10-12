@@ -3688,10 +3688,6 @@ their namespace(s), platform admins everywhere; invariants 2–3). Bulk actions 
 export remain challenge-only in v1. Dates on both tabs render through the shared
 formatter (EU/US, §14.3).
 
-> **⚠ GAP-46 · code fix:** both tabs of `admin/triage/page.tsx` — the Challenges
-> queue's created date and the Solutions tab's proposed date — render with
-> `new Date(r.createdAt).toLocaleDateString()` instead of `useDateFmt()`.
-
 ### §14.2 Moderation
 
 Comment soft-delete (§10.2), anonymity reveal (§9), admin status override (§7.2/§8.2),
