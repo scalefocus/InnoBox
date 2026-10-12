@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.9",
+    date: "2026-10-12",
+    summary:
+      "When a challenge's namespace has been archived, the Propose a solution button is now disabled and explains why, instead of letting you fill in a solution that could not be submitted. Everything already in the namespace stays readable as before.",
+  },
+  {
     version: "0.51.8",
     date: "2026-10-12",
     summary:

@@ -3,7 +3,14 @@
 // assertions are on the rendered page.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
+import {
+  createChallengeViaApi,
+  createNamespaceViaApi,
+  proposeSolutionViaApi,
+  setChallengeStatusViaApi,
+  setNamespaceArchivedViaApi,
+  setSolutionStatusViaApi,
+} from "./helpers/api";
 
 test("Propose a solution is visible but disabled off `valid`; likes freeze while the challenge is closed", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -63,6 +70,30 @@ test("Propose a solution is visible but disabled off `valid`; likes freeze while
   await setChallengeStatusViaApi(adminCtx.request, challenge.digits, "valid");
   await member.reload();
   await expect(frozen.first()).toBeEnabled();
+
+  await adminCtx.close();
+  await memberCtx.close();
+});
+
+test("Propose a solution is disabled with its own hint while the challenge's namespace is archived", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const adminCtx = await browser.newContext();
+  await signIn(adminCtx, { name: `E2E Archive Admin ${stamp}`, admin: true });
+  const ns = await createNamespaceViaApi(adminCtx.request, { slug: `e2e-arch-${stamp}`, displayName: `E2E Archive ${stamp}` });
+  const challenge = await createChallengeViaApi(adminCtx.request, { title: `E2E archived propose ${stamp}`, description: "d", namespaceId: ns.id });
+  await setChallengeStatusViaApi(adminCtx.request, challenge.digits, "valid");
+
+  // An org-visible challenge: any member sees it, and its namespace is archived under it.
+  const memberCtx = await browser.newContext();
+  await signIn(memberCtx, { name: `E2E Archive Member ${stamp}` });
+  const member = await memberCtx.newPage();
+  await member.goto(`/challenges/${challenge.digits}`);
+  await expect(member.getByRole("button", { name: "Propose a solution" })).toBeEnabled();
+
+  await setNamespaceArchivedViaApi(adminCtx.request, ns.id, true);
+  await member.reload();
+  await expect(member.getByRole("button", { name: "Propose a solution" })).toBeDisabled();
+  await expect(member.locator("#propose-disabled-reason")).toHaveText("This challenge's namespace is archived, so it no longer accepts solutions.");
 
   await adminCtx.close();
   await memberCtx.close();

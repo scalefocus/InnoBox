@@ -114,8 +114,11 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   editedAt: string | null;
   resolvedAt: string | null;
   isMine: boolean;
-  /** §6.2/§13.1: the Propose button is shown to every viewer but enabled only while `valid`. */
+  /** §6.2/§13.1: the Propose button is shown to every viewer but enabled only while `valid`
+   *  and the namespace is not archived (§4.1). */
   canPropose: boolean;
+  /** §4.1: the challenge's namespace is archived — picks the Propose button's hint (§13.1). */
+  namespaceArchived: boolean;
   /** §8.3: a `solved` challenge freezes likes on itself and on its solutions (counts stay shown). */
   likesFrozen: boolean;
   /** §9 audited admin reveal — namespace admin of this namespace / platform admin, anonymous item. */
@@ -147,6 +150,7 @@ export interface ChallengeRow {
   visibility: "org" | "namespace";
   namespace_id: string;
   namespace_slug: string;
+  namespace_archived: boolean;
   impact_area_id: string;
   impact_area_name: string;
   client_name: string | null;
@@ -192,7 +196,7 @@ interface SolutionRow {
 
 export const CHALLENGE_SELECT = `
   select c.id, c.number::text, c.title, c.description, c.status, c.visibility,
-         c.namespace_id, ns.slug as namespace_slug,
+         c.namespace_id, ns.slug as namespace_slug, ns.archived_at is not null as namespace_archived,
          c.impact_area_id, ia.name as impact_area_name,
          c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, c.is_anonymous,
          c.assignee_id, au.display_name as assignee_display_name, au.active as assignee_active,
@@ -304,7 +308,8 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
     resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
     isMine,
-    canPropose: row.status === "valid",
+    canPropose: row.status === "valid" && !row.namespace_archived,
+    namespaceArchived: row.namespace_archived,
     likesFrozen: areLikesFrozen(status),
     canReveal: isAdmin && row.is_anonymous,
     canSelfReveal: isMine && row.is_anonymous,

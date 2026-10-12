@@ -85,6 +85,7 @@ interface ChallengeDetail {
   solutionCount: number;
   isMine: boolean;
   canPropose: boolean;
+  namespaceArchived: boolean;
   likesFrozen: boolean;
   canReveal: boolean;
   canSelfReveal: boolean;
@@ -790,7 +791,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
       <ProposeSolutionForm
         challengeNumber={challenge.number}
-        disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status)}
+        disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
         restricted={challenge.visibility === "namespace"}
         onProposed={onChanged}
       />
