@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.2",
+    date: "2026-10-12",
+    summary:
+      "The notification for a new solution now opens the challenge scrolled to that solution. When a platform admin deletes a challenge or solution, every notification about it is now removed with it, including the one announcing a new solution. And when Microsoft asks InnoBox to slow down its e-mails, InnoBox now waits as long as it was told before trying again.",
+  },
+  {
     version: "0.51.0",
     date: "2026-10-12",
     summary:

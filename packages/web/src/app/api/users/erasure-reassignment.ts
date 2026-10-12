@@ -106,7 +106,9 @@ export async function handOverOpenAssignments(
  * §12.1 event 12, AFTER commit: one summary item to the successor listing the moved challenges
  * (not one event-7 item per move). Nothing when nothing moved; nothing when the acting admin
  * named themselves (actors never notify themselves — dispatchToUser drops it). The erased user
- * is never notified and never named. Link: the lowest-numbered moved challenge.
+ * is never notified and never named. Link: the lowest-numbered moved challenge. It is about
+ * several challenges, not one, so it carries no single target (§10.3) — a delete of the linked
+ * challenge still finds it by that link.
  */
 export async function notifyAssignmentsTransferred(ctx: NotifyContext, reassignment: ReassignmentResult): Promise<void> {
   if (reassignment.moved.length === 0) return;
@@ -117,5 +119,5 @@ export async function notifyAssignmentsTransferred(ctx: NotifyContext, reassignm
     link: `/challenges/${lowest}`,
     count: numbers.length,
     numbers,
-  });
+  }, null);
 }

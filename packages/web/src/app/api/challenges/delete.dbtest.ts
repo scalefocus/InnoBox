@@ -166,6 +166,12 @@ test(
       await mkCommentRow("solution", winnerId);
       await mkCommentRow("solution", loserId);
       await mkCommentRow("challenge", challengeId);
+      // A "solution proposed" row (event 2) is visible per its challenge but carries the winner as
+      // its target. Its link is the anchorless challenge page, so only that target ties it to the
+      // winner — the case that used to survive a solution delete.
+      const proposed = JSON.stringify({ message: "p", link: `/challenges/${chNum}`, parentType: "solution", parentId: winnerId });
+      await pool.query(`insert into notifications (user_id, type, payload) values ($1, 'solution_proposed', $2)`, [rivalId, proposed]);
+      await pool.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'solution_proposed', $2)`, [rivalId, proposed]);
 
       // Drive the §8.3 auto-close: winner → implemented solves the challenge, sibling closes.
       for (const st of ["in_review", "valid", "accepted_internally", "waiting_for_resources", "in_implementation", "implemented"]) {
@@ -214,13 +220,17 @@ test(
       assert.equal(delSol.counts.follows, 1);
       assert.equal(delSol.counts.attachments, 1);
       assert.equal(delSol.counts.uploadSessions, 1);
-      assert.equal(delSol.counts.notifications, 4, "the three inbox rows on this solution's link go, plus its comment row on the old link");
-      assert.equal(delSol.counts.outbox, 3, "every UNSENT outbox row goes — pending and failed alike; sent mail is history");
+      assert.equal(
+        delSol.counts.notifications,
+        5,
+        "the three inbox rows on this solution's link go, plus its comment row and its proposal row on the challenge's link",
+      );
+      assert.equal(delSol.counts.outbox, 4, "every UNSENT outbox row goes — pending and failed alike; sent mail is history");
       const { rows: winnerComments } = await pool.query(
         `select 1 from notifications where payload->>'parentType' = 'solution' and payload->>'parentId' = $1`,
         [winnerId],
       );
-      assert.equal(winnerComments.length, 0, "no comment notification on the deleted solution survives, whatever its link");
+      assert.equal(winnerComments.length, 0, "no notification targeting the deleted solution survives, whatever its link");
       const { rows: failedLeft } = await pool.query(`select 1 from notification_outbox where status = 'failed' and payload->>'link' = $1`, [
         `/challenges/${chNum}#SOL-${winnerNum}`,
       ]);

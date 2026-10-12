@@ -474,7 +474,11 @@ test("applyScanResult: the 8th per-file error makes the row unscannable — purg
   assert.deepEqual(JSON.parse(audit[5] as string), { errorClass: "clamd_size_limit", attempts: 8, objectKey: "challenge/chal-1/att-1" });
   assert.equal(notifications().length, 1);
   assert.equal(notifications()[0]![0], "user-1", "the uploader is the sole recipient");
-  assert.match((JSON.parse(notifications()[0]![1] as string) as { message: string }).message, /couldn't be scanned/);
+  const payload = JSON.parse(notifications()[0]![1] as string) as { message: string; link: string; parentType?: string; parentId?: string };
+  assert.match(payload.message, /couldn't be scanned/);
+  assert.equal(payload.link, "/challenges/5");
+  assert.equal(payload.parentType, "challenge", "a bound row carries its parent as the target, for the delete cascade");
+  assert.equal(payload.parentId, "chal-1");
 });
 
 test("applyScanResult: a row resolved elsewhere is a no-op for every outcome", async () => {
@@ -497,6 +501,7 @@ test("applyScanResult: a staged (unbound) unscannable row is audited AND its upl
   const payload = JSON.parse(notifications()[0]![1] as string) as { message: string; link: string };
   assert.match(payload.message, /"odd\.pdf" couldn't be scanned and was removed/);
   assert.equal(payload.link, "/challenges/new", "a challenge draft links to the submission form");
+  assert.equal("parentType" in payload || "parentId" in payload, false, "a staged row is about no item yet, so carries no target");
   assert.equal(queries.filter((q) => q.sql.includes("insert into notification_outbox")).length, 1, "and is e-mailed (outbox row)");
   assert.equal(queries.some((q) => q.sql.includes("from challenges")), false, "no parent lookup for an unbound row");
 });

@@ -14,11 +14,19 @@ import {
   finalizeRecipients,
   type NotificationPayload,
   type NotificationPreference,
+  type NotificationTarget,
   type NotificationType,
 } from "@innobox/shared";
 import { isParentVisible, type Viewer } from "../app/api/challenges/store";
 
 type Db = Pool | PoolClient;
+
+/** Stamp the row's target (§10.3, §12.1) onto the payload. A payload that already names its own
+ *  target keeps it — the one case is the "solution proposed" event, visible per its challenge
+ *  but about the new solution. */
+function withTarget(payload: NotificationPayload, target: NotificationTarget): NotificationPayload {
+  return payload.parentType && payload.parentId ? payload : { ...payload, parentType: target.parentType, parentId: target.parentId };
+}
 
 async function writeNotifications(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload): Promise<void> {
   for (const userId of userIds) {
@@ -94,7 +102,8 @@ async function optedOutOf(db: Db, preference: NotificationPreference, userIds: s
  * Compute the final recipient list for an event (§12.1: actors never notify themselves,
  * recipients deduplicated, recipients outside the item's visibility dropped) and write both
  * the in-app notification and the outbox row for each. `candidates` is whatever raw
- * author/admin/committee/assignee/follower ids the caller gathered for this event.
+ * author/admin/committee/assignee/follower ids the caller gathered for this event. The row's
+ * target is the visibility scope unless the payload names its own (`withTarget`).
  */
 export async function dispatchEvent(
   ctx: NotifyContext,
@@ -106,7 +115,7 @@ export async function dispatchEvent(
 ): Promise<void> {
   const recipients = await finalRecipients(ctx, visibilityScope, candidates, mute);
   if (recipients.length === 0) return;
-  await writeNotifications(ctx.pool, recipients, type, payload);
+  await writeNotifications(ctx.pool, recipients, type, withTarget(payload, visibilityScope));
 }
 
 /** Dedup + actor exclusion, then the visibility drop (invariant 2), then the §12.1 preference
@@ -212,8 +221,15 @@ export async function markCommentNotificationsReadForChallenge(db: Db, userId: s
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by
- *  definition, someone the admin just granted per-item powers to (§4.2). */
-export async function dispatchToUser(ctx: NotifyContext, userId: string, type: NotificationType, payload: NotificationPayload): Promise<void> {
+ *  definition, someone the admin just granted per-item powers to (§4.2). `target` is the item
+ *  the row is about (§10.3), or null for an event about no single item (the event-12 summary). */
+export async function dispatchToUser(
+  ctx: NotifyContext,
+  userId: string,
+  type: NotificationType,
+  payload: NotificationPayload,
+  target: NotificationTarget | null,
+): Promise<void> {
   if (userId === ctx.actorId) return;
-  await writeNotifications(ctx.pool, [userId], type, payload);
+  await writeNotifications(ctx.pool, [userId], type, target ? withTarget(payload, target) : payload);
 }

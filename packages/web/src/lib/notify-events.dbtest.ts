@@ -7,7 +7,8 @@
 //  - a solution's event 3 reaches the PARENT challenge's assignee, deep-linked to `#SOL-<m>`;
 //  - event 8 (auto-close) reaches the CHALLENGE author, the not_selected authors and the
 //    followers of the challenge and its solutions — and never names an anonymous author;
-//  - the auto-close cascade's audit rows carry `before` and the `override` flag.
+//  - the auto-close cascade's audit rows carry `before` and the `override` flag;
+//  - every row carries the item it is about as its `parentType`/`parentId` target (§10.3).
 // Self-skips when DATABASE_URL is unset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,7 +24,7 @@ test(
     const { buildRoleSet } = await import("@innobox/shared");
     const { createChallenge, createSolution, listActiveImpactAreas, setSolutionStatus } = await import("../app/api/challenges/store");
     const { bulkAssign, bulkSetStatus } = await import("../app/api/admin/triage/store");
-    const { notifySolutionStatusChanged } = await import("./notify-events");
+    const { notifySolutionProposed, notifySolutionStatusChanged } = await import("./notify-events");
 
     const pool = new Pool({ connectionString: url });
     try {
@@ -67,8 +68,9 @@ test(
 
       /** Inbox rows of one type for this challenge's subtree, per recipient (each paired with an outbox row). */
       const inbox = async (type: string, messageLike = "%") => {
-        const { rows } = await pool.query<{ user_id: string; message: string; link: string }>(
-          `select user_id, payload->>'message' as message, payload->>'link' as link from notifications
+        const { rows } = await pool.query<{ user_id: string; message: string; link: string; target: string }>(
+          `select user_id, payload->>'message' as message, payload->>'link' as link,
+                  concat(payload->>'parentType', ':', payload->>'parentId') as target from notifications
             where type = $1 and (payload->>'link' = $2 or payload->>'link' like $2 || '#%') and payload->>'message' like $3
             order by created_at, id`,
           [type, `/challenges/${chNum}`, messageLike],
@@ -98,6 +100,10 @@ test(
 
       await bulkAssign(pool, admin, [chNum], assigneeB!, resolveRoles);
       assert.equal((await inbox("challenge_assigned")).length, 3, "re-assigning the same person is no change and notifies nobody");
+      assert.ok(
+        (await inbox("challenge_assigned")).every((r) => r.target === `challenge:${challengeId}`),
+        "assignment rows carry their challenge as the target",
+      );
 
       await bulkAssign(pool, admin, [chNum], null, resolveRoles);
       assert.deepEqual(usersOf(await inbox("challenge_assigned", "You were unassigned%")), [assigneeA, assigneeB].sort(), "unassigning tells the assignee");
@@ -109,6 +115,7 @@ test(
       // assigneeB still follows from their auto-follow (unassignment does not unfollow, §12.3).
       assert.deepEqual(usersOf(moved), [authorId, followerId, assigneeA, assigneeB].sort(), "event 3: author + assignee + followers, never the acting admin");
       assert.ok(moved.every((r) => r.link === `/challenges/${chNum}`));
+      assert.ok(moved.every((r) => r.target === `challenge:${challengeId}`), "a challenge status row carries its challenge as the target");
 
       await bulkSetStatus(pool, admin, [chNum], "in_review", resolveRoles);
       assert.equal((await inbox("status_changed", "%moved to in review%")).length, moved.length, "a no-op bulk status fires nothing");
@@ -126,12 +133,22 @@ test(
       const winnerNum = winner.solution.number.replace("SOL-", "");
       await pool.query(`insert into follows (user_id, parent_type, parent_id) values ($1, 'solution', $2)`, [solFollowerId, other.solution.id]);
 
+      // ── Event 2: anchored to the new solution, and targeting it (not its challenge) ────────
+      await notifySolutionProposed({ ...ctx, actorId: solAuthorId! }, `CH-${chNum}`, winner.solution);
+      const proposed = await inbox("solution_proposed");
+      assert.ok(usersOf(proposed).includes(authorId!), "the challenge author hears about a new solution");
+      assert.ok(usersOf(proposed).includes(followerId!), "and so do the challenge's followers");
+      assert.ok(!usersOf(proposed).includes(solAuthorId!), "never the proposer");
+      assert.ok(proposed.every((r) => r.link === `/challenges/${chNum}#SOL-${winnerNum}`), "the link scrolls to the new solution");
+      assert.ok(proposed.every((r) => r.target === `solution:${winner.solution.id}`), "the row targets the solution, so its delete takes it");
+
       const toReview = await setSolutionStatus(pool, admin, winnerNum, "in_review");
       assert.equal(toReview.status, "ok");
       await notifySolutionStatusChanged(ctx, winner.solution.id, "in_review");
       const solMoved = (await inbox("status_changed", `Solution SOL-${winnerNum}%`)).filter((r) => r.link === `/challenges/${chNum}#SOL-${winnerNum}`);
       assert.ok(usersOf(solMoved).includes(assigneeA!), "the parent challenge's assignee hears about a solution status change");
       assert.ok(usersOf(solMoved).includes(solAuthorId!), "and the solution author");
+      assert.ok(solMoved.every((r) => r.target === `solution:${winner.solution.id}`), "a solution status row carries the solution as the target");
 
       // ── Event 8: drive the winner to implemented (admin override) and dispatch ────────────
       let last: Awaited<ReturnType<typeof setSolutionStatus>> | undefined;
