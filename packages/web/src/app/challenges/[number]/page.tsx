@@ -792,14 +792,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                 parentType="solution"
                 target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
               />
-              <CommentThread parentType="solution" parentId={s.id} authoredAnonymously={s.isMine && s.author.anonymous} />
+              <CommentThread parentType="solution" parentId={s.id} parentNumber={s.number} authoredAnonymously={s.isMine && s.author.anonymous} />
             </div>
           ))}
         </div>
       )}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>Discussion</h2>
-      <CommentThread parentType="challenge" parentId={challenge.id} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
+      <CommentThread parentType="challenge" parentId={challenge.id} parentNumber={challenge.number} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
 
       {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}
       {toast && <div className="toast">{toast}</div>}

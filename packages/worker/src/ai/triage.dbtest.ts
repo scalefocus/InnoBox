@@ -134,7 +134,7 @@ test(
       await setSwitch("ai_restricted_content_enabled", true);
       assert.equal((await sweep()).ready, 1);
       assert.equal((await result(hiddenSubject.id))?.status, "ready");
-      assert.ok(calls.at(-1)!.user.includes("restricted candidate"));
+      assert.ok(calls.at(-1)!.user.includes(`#${candRestricted.number} Invoice matching restricted candidate`));
       await setSwitch("ai_restricted_content_enabled", false);
 
       // A failure is recorded and not retried at once (same input waits an hour). The system-log

@@ -294,6 +294,14 @@ export const AI_FEATURES: readonly AiFeature[] = [
     timeoutMs: 10_000,
     needsSwitch: true,
   },
+  {
+    key: "discussion_summary",
+    label: "Discussion summaries",
+    egress:
+      "When someone asks for a summary of a challenge's or solution's comments: the item's title and the comments' text, oldest first, with every commenter replaced by \"Participant A\", \"Participant B\" and so on. Never a name, and never which participant wrote the item.",
+    maxTokens: 4096,
+    needsSwitch: true,
+  },
 ];
 
 export function findAiFeature(key: string, features: readonly AiFeature[] = AI_FEATURES): AiFeature | null {

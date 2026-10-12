@@ -361,3 +361,69 @@ export function mergeSimilarRanking<T extends { number: string }>(
   for (const c of original) if (!used.has(c)) out.push({ ...c });
   return out;
 }
+
+// ── §22.13 Discussion summary ────────────────────────────────────────────────────────────
+
+/** The control appears once a thread holds at least this many visible comments. */
+export const DISCUSSION_MIN_COMMENTS = 10;
+export const DISCUSSION_SUMMARY_MAX = 600;
+export const DISCUSSION_QUESTIONS_MAX = 5;
+export const DISCUSSION_LIMITS = { perMinute: 10, perDay: 50 } as const;
+export const DISCUSSION_ERROR = "Couldn't summarize the discussion right now — try again later.";
+
+/** "A", "B", … "Z", "AA", "AB", … — spreadsheet-style, so any number of participants fits. */
+export function participantLetter(index: number): string {
+  let n = index;
+  let out = "";
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return out;
+}
+
+/**
+ * Comments → pseudonymized lines, oldest first: each distinct commenter becomes "Participant A",
+ * "Participant B" … in order of first appearance. Only the text survives — never a name or an
+ * id — and nothing marks which participant wrote the item itself. Deleted comments must already
+ * be excluded by the caller (it reads only visible ones).
+ */
+export function pseudonymizeComments(comments: readonly { authorId: string; body: string }[]): { participant: string; body: string }[] {
+  const letters = new Map<string, string>();
+  return comments.map((c) => {
+    let letter = letters.get(c.authorId);
+    if (!letter) {
+      letter = participantLetter(letters.size);
+      letters.set(c.authorId, letter);
+    }
+    return { participant: `Participant ${letter}`, body: c.body };
+  });
+}
+
+/** Exactly the §22.13 egress: the item's title and the pseudonymized comment texts. */
+export function buildDiscussionPrompt(input: { title: string; comments: readonly { participant: string; body: string }[] }): AiPrompt {
+  const system = [
+    "You summarize a DISCUSSION thread on an internal innovation platform for someone who has not read it.",
+    "Answer as JSON with exactly these keys:",
+    `"summary": what the participants discussed and where they stand, in at most ${DISCUSSION_SUMMARY_MAX} characters, plain text;`,
+    `"openQuestions": up to ${DISCUSSION_QUESTIONS_MAX} questions the thread leaves unanswered.`,
+    'Refer to people only by their labels ("Participant A"); never guess who they are.',
+    AI_DATA_RULES,
+  ].join("\n");
+  const thread = input.comments.map((c) => `${c.participant}: ${c.body}`).join("\n\n");
+  const user = [dataBlock("TITLE", input.title), dataBlock("COMMENTS", thread)].join("\n\n");
+  return { system, messages: [{ role: "user", content: user }] };
+}
+
+export interface DiscussionSummary {
+  summary: string;
+  openQuestions: string[];
+}
+
+export function processDiscussionSummary(json: unknown): DiscussionSummary | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const o = json as Record<string, unknown>;
+  const summary = aiPlainText(o.summary, DISCUSSION_SUMMARY_MAX);
+  if (!summary) return null;
+  return { summary, openQuestions: aiStringList(o.openQuestions, DISCUSSION_QUESTIONS_MAX, 200) };
+}

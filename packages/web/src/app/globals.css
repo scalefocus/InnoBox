@@ -1037,8 +1037,9 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .ai-panel > summary::-webkit-details-marker { display: none; }
 .ai-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ai-panel-title { font-family: var(--font-display); font-size: 16px; font-weight: 600; }
-.ai-panel-head::after { content: "▾"; margin-left: auto; color: var(--muted); transition: transform 0.2s; }
-.ai-panel:not([open]) .ai-panel-head::after { transform: rotate(-90deg); }
+/* Only the collapsible (details) panels get the chevron. */
+.ai-panel > summary.ai-panel-head::after { content: "▾"; margin-left: auto; color: var(--muted); transition: transform 0.2s; }
+.ai-panel:not([open]) > summary.ai-panel-head::after { transform: rotate(-90deg); }
 .ai-notes h4 { font-size: 13px; margin: 12px 0 4px; }
 .ai-notes ul { margin: 0; padding-left: 18px; font-size: 13.5px; display: flex; flex-direction: column; gap: 3px; }
 

@@ -10,6 +10,7 @@ import {
   aiPlainText,
   aiStringList,
   buildChallengeDraftPrompt,
+  buildDiscussionPrompt,
   buildSimilarPrompt,
   buildSolutionDraftPrompt,
   buildTriagePrompt,
@@ -17,11 +18,14 @@ import {
   isTriageSubject,
   mapImpactAreaHint,
   mergeSimilarRanking,
+  participantLetter,
   processChallengeDraft,
+  processDiscussionSummary,
   processSimilarRanking,
   processSolutionDraft,
   processTriageNotes,
   promptImpactAreaNames,
+  pseudonymizeComments,
   similarExplainInput,
   type ImpactAreaOption,
 } from "./ai-tasks.js";
@@ -198,4 +202,40 @@ test("similar explained: the prompt carries the draft and title + first 500 char
   assert.ok(text.includes("Draft title") && text.includes("Draft text") && text.includes("#7 Candidate"));
   assert.ok(text.includes("e".repeat(500)) && !text.includes("e".repeat(501)), "first 500 characters only");
   assert.ok(text.includes("SIMILAR"));
+});
+
+test("discussion: pseudonyms by first appearance, stable, no names, letters beyond Z", () => {
+  const out = pseudonymizeComments([
+    { authorId: "u-anna", body: "first" },
+    { authorId: "u-ben", body: "second" },
+    { authorId: "u-anna", body: "third" },
+    { authorId: "u-cara", body: "fourth" },
+  ]);
+  assert.deepEqual(out, [
+    { participant: "Participant A", body: "first" },
+    { participant: "Participant B", body: "second" },
+    { participant: "Participant A", body: "third" },
+    { participant: "Participant C", body: "fourth" },
+  ]);
+  assert.ok(!JSON.stringify(out).includes("u-"), "never an id");
+  assert.deepEqual([0, 25, 26, 27, 51, 52, 701, 702].map(participantLetter), ["A", "Z", "AA", "AB", "AZ", "BA", "ZZ", "AAA"]);
+});
+
+test("discussion prompt: title and pseudonymized text only; nothing marks the item's author", () => {
+  const comments = pseudonymizeComments([
+    { authorId: "author-of-item", body: "I raised this because…" },
+    { authorId: "other", body: "Agreed." },
+  ]);
+  const text = promptText(buildDiscussionPrompt({ title: "Invoice matching", comments }));
+  assert.ok(text.includes("Participant A: I raised this because…") && text.includes("Participant B: Agreed."));
+  for (const leaked of ["author-of-item", "other:", "author of the item", "(author)", "OP"]) assert.ok(!text.includes(leaked), leaked);
+  assert.ok(text.includes("DISCUSSION"));
+});
+
+test("discussion output: capped summary, at most 5 questions", () => {
+  const out = processDiscussionSummary({ summary: "s".repeat(900), openQuestions: ["a", "b", "c", "d", "e", "f"] });
+  assert.equal(out?.summary.length, 600);
+  assert.equal(out?.openQuestions.length, 5);
+  assert.equal(processDiscussionSummary({ summary: "  " }), null);
+  assert.deepEqual(processDiscussionSummary({ summary: "ok" }), { summary: "ok", openQuestions: [] });
 });

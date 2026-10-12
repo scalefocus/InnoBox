@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.0",
+    date: "2026-10-12",
+    summary:
+      "Long discussions can now be summarized: once a challenge or solution has ten or more comments, a Summarize discussion button gives a short summary and the open questions, without anyone's names. When new comments arrive the summary says so and can be refreshed. A platform admin switches this on.",
+  },
+  {
     version: "0.50.0",
     date: "2026-10-12",
     summary:

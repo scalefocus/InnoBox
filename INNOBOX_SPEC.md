@@ -5377,11 +5377,6 @@ transitions, assigns, rejects or notifies (invariant 6).
 
 ### §22.13 Discussion summary
 
-> **⚠ GAP-72 · new feature:** the **discussion summary** does not exist. Build: the
-> `discussion_summary` registry entry and switch, the summary rows in `ai_results`
-> (GAP-70's table), `POST` / `GET /api/ai/summary/:parentType/:number`, the comment-thread
-> control, and the tests below. Its own minor release, after GAP-70.
-
 - **Enablement.** Platform switch **"Discussion summaries"**
   (`ai_discussion_summary_enabled`, **off by default**).
 - **Where.** A **"Summarize discussion"** control above a challenge's or solution's
@@ -5397,6 +5392,13 @@ transitions, assigns, rejects or notifies (invariant 6).
   edited comment marks it stale (*"New comments since this summary"* with **Refresh**).
   Results inherit the item's visibility and lifecycle (§22.7).
 - **Limits:** 10 per minute and 50 per 24 hours per user; `retry: false`.
+- **Details.** A solution has no title of its own, so its summary is given its challenge's
+  title (*"A solution to: …"*). A summary of the current thread state is served from the cache
+  without a call and without counting against the limits. A summary already made stays
+  readable when summaries are later switched off (Refresh then disappears). Results live in
+  `ai_results` (`kind = discussion_summary`, one row per thread). The §14.7 system log masks
+  the concrete path of the summary and triage routes for an anonymous item, as it does for
+  the item's own routes.
 - **Tests.** Unit: pseudonymization (stable letters, author not marked, no names),
   deleted comments excluded. Integration: visibility of the cached result, staleness,
   cascade. e2e (stub): summarize a long thread.
