@@ -15,6 +15,7 @@
 import {
   entityInPath,
   errorCodeForStatus,
+  isClientDisconnect,
   pathWithoutQuery,
   sanitizeSystemMessage,
   shouldRecordSystemEvent,
@@ -130,6 +131,12 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
       try {
         res = await handler(...args);
       } catch (err) {
+        // The client left before we answered: not an error anyone hit, so no row and no stack
+        // (§14.7). The 500 below is written to a closed socket — nobody reads it.
+        if (isClientDisconnect(err, req?.signal)) {
+          log({ level: "info", msg: "client disconnected", route: template });
+          return Response.json({ error: INTERNAL_ERROR_MESSAGE }, { status: 500 });
+        }
         const error = err instanceof Error ? err : new Error(String(err));
         log({ level: "error", msg: "unhandled route error", route: template, error: error.message, stack: error.stack });
         void capture(template, req, 500, error.message, error.name && error.name !== "Error" ? error.name : null, startedAt, opts).catch(() => {});

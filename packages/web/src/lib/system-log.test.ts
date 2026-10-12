@@ -93,6 +93,32 @@ test("a thrown error becomes a generic JSON 500, is logged with its stack, and i
   assert.equal(recorded[0]!.errorCode, "TypeError");
 });
 
+test("a client that hung up mid-request is logged at info and never recorded", async () => {
+  const { recorded, logged, withSystemLog } = fakeDeps();
+  const H = withSystemLog("/api/me/survey/check", async (_req: Request) => {
+    throw Object.assign(new Error("aborted"), { code: "ECONNRESET" }); // what Node raises on the body read
+  });
+  await H(req("POST", "/api/me/survey/check"));
+  await settle();
+  assert.equal(recorded.length, 0, "no row, so no nav badge and no system.error alert");
+  assert.deepEqual(logged, [{ level: "info", msg: "client disconnected", route: "/api/me/survey/check" }]);
+});
+
+test("a throw after the request's signal aborted is a disconnect too; the same throw otherwise is a 500 row", async () => {
+  const { recorded, logged, withSystemLog } = fakeDeps();
+  const H = withSystemLog("/api/admin/ai/test", async (_req: Request) => {
+    throw new Error("stream closed");
+  });
+  await H(new Request("http://innobox.test/api/admin/ai/test", { method: "POST", signal: AbortSignal.abort() }));
+  await settle();
+  assert.equal(recorded.length, 0);
+  assert.equal(logged[0]!.level, "info");
+  await H(req("POST", "/api/admin/ai/test"));
+  await settle();
+  assert.equal(recorded.length, 1, "with the client still there it is a real failure");
+  assert.equal(recorded[0]!.status, 500);
+});
+
 test("a numbered route targeting an anonymous item stores the template, not the number", async () => {
   const { recorded, withSystemLog } = fakeDeps({ isAnonymousTarget: async (e) => e.number === 412 });
   const H = withSystemLog("/api/challenges/[number]", async (_req: Request) => Response.json({ error: "nope" }, { status: 403 }));

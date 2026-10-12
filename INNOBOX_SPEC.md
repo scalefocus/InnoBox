@@ -897,7 +897,11 @@ shown (§13.6).
 - **Serving:** **only** through the authenticated `GET /api/users/:id/photo`
   gateway — session-required; responses carry an `ETag` and `Cache-Control` with
   revalidation; `404` when the user has no photo or is deactivated (client renders
-  the initials bubble). The endpoint exposes **no other profile data** and never
+  the initials bubble). That `404` is itself cacheable for **5 minutes**
+  (`Cache-Control: private, max-age=300`), so a screen full of photo-less users does not
+  re-ask the gateway on every render and navigation; a photo synced inside that window
+  appears up to 5 minutes later, well within the one-reconciliation-interval bound
+  above. The endpoint exposes **no other profile data** and never
   serves a photo for content whose author is masked (§9 — the client never learns
   an anonymous author's id in the first place, invariant 3). The response's
   `Content-Type` is the stored image's real type (JPEG or PNG, sniffed from the leading
@@ -3036,7 +3040,8 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   gamification when someone else is looking.
 - **Loading/perf:** list rows lazy-load bubble images; the browser cache +
   `ETag` revalidation (§3.1) means each distinct user's photo is fetched at most
-  once per session in practice. No base64 inlining in list payloads.
+  once per session in practice, and the short-lived cacheable `404` (§3.1) does the same
+  for users with no photo. No base64 inlining in list payloads.
 
 ### §13.7 Quick start (onboarding)
 
@@ -4198,6 +4203,13 @@ console directly under Audit, never shown to namespace admins, and the API answe
   (`me/features/used`, `me/survey/*`) are recorded **without `user_id` and without the
   actor snapshot**, so no named, exact-time row can sit beside a date-only survey
   response.
+- **Client disconnects are never recorded.** A request whose client went away before
+  the response (the browser navigated, reloaded or closed the tab, and Node raises
+  `aborted` on the incoming request) is not an error anyone hit: neither the route
+  wrapper nor the `onRequestError` net writes a row for it (so it never moves the nav
+  badge or the `system.error` alert), and stdout gets one `info`-level `client
+  disconnected` line instead of an `error` line with a stack. A failure the server raises
+  on its own, including an outbound call it aborts on its own timeout, is still a 500 row.
 - **Capture.** A `withSystemLog(routeTemplate, handler)` wrapper records, in the
   route's own context, both the error responses a handler returns and the errors it
   throws (stack to stdout, a JSON 500 to the client, a 500 row here). Next's
