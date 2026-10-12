@@ -30,11 +30,16 @@ test(
       const { rows: g } = await pool.query<{ id: string }>(`insert into groups (external_id, display_name) values ($1, $2) returning id`, [bootstrapGroup, "Dbtest bootstrap"]);
       await pool.query(`insert into group_members (group_id, user_id) values ($1, $2)`, [g[0]!.id, adminId]);
 
-      // Start from a clean watermark at "now" so earlier suites' events are not counted here.
+      // Start from a clean watermark so earlier suites' events are not counted here. Taken from the
+      // database itself — the newest existing event or the DB's now(), whichever is later — never
+      // from the JS clock, which can disagree with the DB server's (host vs container) and let a
+      // straggler row land on the wrong side of the watermark. The worker test:db script runs the
+      // dbtest files with --test-concurrency=1, so no other file writes system_events meanwhile.
       await pool.query(
-        `insert into platform_settings (key, value, updated_at) values ($1, to_jsonb($2::text), now())
+        `insert into platform_settings (key, value, updated_at)
+         values ($1, to_jsonb(greatest(now(), (select max(created_at) from system_events))::text), now())
          on conflict (key) do update set value = excluded.value, updated_at = now()`,
-        [SYSTEM_LOG_NOTIFY_WATERMARK_KEY, new Date().toISOString()],
+        [SYSTEM_LOG_NOTIFY_WATERMARK_KEY],
       );
       const unread = () =>
         pool.query<{ id: string; payload: { count: number; message: string; link: string } }>(
