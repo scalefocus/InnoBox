@@ -917,16 +917,6 @@ shown (§13.6).
   challenge into the namespace and no new solution on any of its challenges, each
   refused with **409** and `code: "namespace_archived"`; an id that matches no
   namespace at all stays a 400; existing content remains readable per its visibility).
-
-  > **⚠ GAP-16 · code fix:** `createSolution` (`api/challenges/store.ts`) has no
-  > archived-namespace check. Refuse with 409 `code: "namespace_archived"` in
-  > `api/challenges/[number]/solutions/route.ts`.
-
-  > **⚠ GAP-57 · code fix:** `createChallenge` (`api/challenges/store.ts`) folds an
-  > archived namespace into `unknown_namespace` (`archived_at is null` in the lookup),
-  > which `api/challenges/route.ts` answers with **400** "namespace not found or
-  > archived". Return a distinct result for an archived namespace and answer 409
-  > `code: "namespace_archived"`.
 - A built-in **`global`** namespace always exists; **every authenticated user is an
   implicit member** of `global`.
 - Namespace membership and roles come from Entra groups mapped in `role_mappings`
@@ -968,11 +958,6 @@ A user may hold different roles in different namespaces. Roles are additive.
     see the challenge; excluded from solution counts and galleries. The detail page's
     `Solutions (n)` heading counts only the open list above that section, consistent
     with the gallery's solution count, which likewise leaves closed solutions out.
-
-    > **⚠ GAP-17 · code fix:** the detail page (`challenges/[number]/page.tsx`) renders
-    > every visible solution in one list, and its heading `Solutions (n)` counts
-    > `challenge.solutions.length`. Move `rejected`/`not_selected`/`withdrawn` into a
-    > collapsed `<details>` "Closed solutions" section and count only the open list.
 - Search, autocomplete, KPIs, counts, and leaderboards are computed strictly within
   the viewer's visibility (invariant 2). Leaderboards additionally count **org-visible
   content only**, so a public leaderboard never hints at restricted work.
@@ -1271,12 +1256,6 @@ those two) clears any Home pin (§13.2), and the first transition into `valid` s
 `first_valid_at` (§5, §12.4). Entering `solved` sets `resolved_at`; **any** transition
 out of `solved` — the §10.3 revert or an admin override — clears it.
 
-> **⚠ GAP-18 · code fix:** `applyChallengeStatusChange` (`api/challenges/store.ts`)
-> only sets `resolved_at` on entry to `solved`; an admin override (single or bulk) out
-> of `solved` leaves it set — only the §10.3 delete-revert in `challenges/delete.ts`
-> clears it. Clear it there whenever the previous status is `solved` and the new one
-> is not.
-
 Triage (leaving `awaiting_triage`) and assignment are namespace-admin actions;
 committee members operate from `in_review` onward.
 
@@ -1421,13 +1400,6 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
   detail payload carries a **`likesFrozen`** flag, which drives both the challenge's
   and its solutions' buttons. If an admin moves the challenge back to an open status,
   likes reopen.
-
-  > **⚠ GAP-21 · code fix:** the freeze covers `solved` only: `areLikesFrozen`
-  > (`shared/src/social.ts`) returns `challengeStatus === "solved"` — add `rejected`
-  > and `withdrawn`. `LIKES_FROZEN_HINT` (`web/src/lib/challenge-detail.ts`) reads
-  > "Likes are closed because this challenge is solved." and both 409s in
-  > `api/likes/route.ts` say "likes are closed on a solved challenge" — use the wording
-  > above. Extend `likes-frozen.dbtest.ts` to `rejected`/`withdrawn` and the reopen.
 - **If the `implemented` solution is later deleted** by a platform admin (§10.3), the
   auto-close is *not* replayed in reverse: the challenge reverts `solved → valid` with
   `resolved_at` cleared, while siblings closed as `not_selected` stay closed. The
@@ -1480,10 +1452,6 @@ pill and a note that everyone else still sees the item as anonymous and that the
 reveal was recorded in the audit log. Closing it (Close, Escape, or a backdrop click)
 drops the identity from the page state; nothing else on the page changes. A
 self-reveal and its audit row commit in **one transaction**.
-
-> **⚠ GAP-22 · code fix:** `selfRevealSolution` (`api/challenges/store.ts`) runs the
-> update and the audit insert on the pool without a transaction; wrap both in
-> `inTransaction` like the challenge version.
 
 **Survey responses are a different kind of anonymous.** Everything above is
 *masking*: the true author is stored and the API hides it until an audited reveal. A

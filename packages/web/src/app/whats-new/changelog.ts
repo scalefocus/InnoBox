@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.4",
+    date: "2026-10-12",
+    summary:
+      "Likes now close on rejected and withdrawn challenges as well as solved ones, and reopen if the challenge is reopened. Rejected, not-selected and withdrawn solutions move into a collapsed Closed solutions section, and the solutions count covers only open ones. An archived namespace now clearly refuses new challenges and solutions, and reopening a solved challenge clears its solved date.",
+  },
+  {
     version: "0.51.3",
     date: "2026-10-12",
     summary:

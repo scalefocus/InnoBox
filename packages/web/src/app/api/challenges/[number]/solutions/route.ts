@@ -41,6 +41,11 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     }
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "namespace_archived":
+      return Response.json(
+        { error: "this challenge's namespace is archived and accepts no new solutions", code: "namespace_archived" },
+        { status: 409 },
+      );
     case "not_valid_status":
       return Response.json({ error: "solutions can only be proposed while the challenge is valid" }, { status: 409 });
     case "attachments_not_clean":

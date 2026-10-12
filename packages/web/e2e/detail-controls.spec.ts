@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
 
-test("Propose a solution is visible but disabled off `valid`; likes freeze once the challenge is solved", async ({ browser }) => {
+test("Propose a solution is visible but disabled off `valid`; likes freeze while the challenge is closed", async ({ browser }) => {
   const stamp = Date.now().toString(36);
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Freeze Admin ${stamp}`, admin: true });
@@ -53,6 +53,16 @@ test("Propose a solution is visible but disabled off `valid`; likes freeze once 
     headers: { "content-type": "application/json" },
   });
   expect(res.status()).toBe(409);
+
+  // A rejected challenge is closed too: likes stay frozen. Reopening it unfreezes them.
+  await setChallengeStatusViaApi(adminCtx.request, challenge.digits, "rejected");
+  await member.reload();
+  await expect(member.locator(".pill", { hasText: "Rejected" }).first()).toBeVisible();
+  await expect(frozen.first()).toBeDisabled();
+  await expect(frozen.first()).toHaveAttribute("title", "Likes are closed for this challenge");
+  await setChallengeStatusViaApi(adminCtx.request, challenge.digits, "valid");
+  await member.reload();
+  await expect(frozen.first()).toBeEnabled();
 
   await adminCtx.close();
   await memberCtx.close();

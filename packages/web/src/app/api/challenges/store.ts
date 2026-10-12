@@ -664,6 +664,7 @@ export async function getChallengeByNumber(pool: Pool, viewer: Viewer, number: s
 export type CreateChallengeResult =
   | { status: "ok"; challenge: ChallengeDetail }
   | { status: "unknown_namespace" }
+  | { status: "namespace_archived" }
   | { status: "forbidden_namespace" }
   | { status: "unknown_impact_area" }
   | { status: "inactive_impact_area" }
@@ -687,11 +688,13 @@ export async function createChallenge(
     similarAcknowledged?: string[];
   },
 ): Promise<CreateChallengeResult> {
-  const { rows: nsRows } = await pool.query<{ id: string }>(
-    `select id from namespaces where id = $1 and archived_at is null`,
+  const { rows: nsRows } = await pool.query<{ id: string; archived: boolean }>(
+    `select id, archived_at is not null as archived from namespaces where id = $1`,
     [input.namespaceId],
   );
   if (!nsRows[0]) return { status: "unknown_namespace" };
+  // §4.1: archiving blocks new submissions — a distinct 409, not the unknown-id 400.
+  if (nsRows[0].archived) return { status: "namespace_archived" };
   // Submission targeting (§4.3): a user may submit into any namespace they are a member
   // of (everyone can use global).
   if (!author.roles.isMemberOf(input.namespaceId)) return { status: "forbidden_namespace" };
@@ -770,6 +773,7 @@ export async function createChallenge(
 export type CreateSolutionResult =
   | { status: "ok"; solution: SolutionListItem }
   | { status: "not_found" }
+  | { status: "namespace_archived" }
   | { status: "not_valid_status" }
   | { status: "attachments_not_clean" }
   | { status: "attachments_over_limit" }
@@ -782,8 +786,18 @@ export async function createSolution(
   input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown },
 ): Promise<CreateSolutionResult> {
   if (!isEntityNumber(challengeNumber)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string; assignee_id: string | null }>(
-    `select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`,
+  const { rows } = await pool.query<{
+    id: string;
+    namespace_id: string;
+    visibility: "org" | "namespace";
+    status: string;
+    author_id: string;
+    assignee_id: string | null;
+    namespace_archived: boolean;
+  }>(
+    `select c.id, c.namespace_id, c.visibility, c.status, c.author_id, c.assignee_id, n.archived_at is not null as namespace_archived
+       from challenges c join namespaces n on n.id = c.namespace_id
+      where c.number = $1`,
     [challengeNumber],
   );
   const challenge = rows[0];
@@ -795,6 +809,8 @@ export async function createSolution(
     authorId: challenge.author_id,
   });
   if (!visible) return { status: "not_found" };
+  // §4.1: an archived namespace takes no new solution on any of its challenges.
+  if (challenge.namespace_archived) return { status: "namespace_archived" };
   // §6.2: proposing is allowed ONLY while the challenge is `valid`.
   if (challenge.status !== "valid") return { status: "not_valid_status" };
 
@@ -855,7 +871,9 @@ async function applyChallengeStatusChange(
   if (current.status === newStatus) return;
   // §13.2: a move out of valid/solved clears any Home pin first (same transaction, audited).
   await unpinOnStatusChange(client, actor.userId, current.id, newStatus);
-  const resolvedAtClause = newStatus === "solved" ? `, resolved_at = coalesce(resolved_at, now())` : "";
+  // §7.2: entering `solved` sets resolved_at; any transition out of `solved` clears it.
+  const resolvedAtClause =
+    newStatus === "solved" ? `, resolved_at = coalesce(resolved_at, now())` : current.status === "solved" ? `, resolved_at = null` : "";
   await client.query(`update challenges set status = $2, updated_at = now(), status_changed_at = now()${resolvedAtClause} where id = $1`, [
     current.id,
     newStatus,
@@ -1832,12 +1850,15 @@ export async function selfRevealSolution(pool: Pool, viewer: Viewer, number: str
   if (row.author_id !== viewer.userId) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
-  await pool.query(`update solutions set is_anonymous = false, updated_at = now() where id = $1`, [row.id]);
-  await appendAudit(pool, {
-    actorUserId: viewer.userId,
-    action: "anonymity.self_revealed",
-    targetType: "solution",
-    targetId: row.id,
+  // §9: the self-reveal and its audit row commit in one transaction.
+  return inTransaction(pool, async (client) => {
+    await client.query(`update solutions set is_anonymous = false, updated_at = now() where id = $1`, [row.id]);
+    await appendAudit(client, {
+      actorUserId: viewer.userId,
+      action: "anonymity.self_revealed",
+      targetType: "solution",
+      targetId: row.id,
+    });
+    return { status: "ok" as const };
   });
-  return { status: "ok" };
 }

@@ -57,6 +57,16 @@ test("single-winner: implementing a solution solves the challenge and closes its
   await expect(admin.locator(".pill", { hasText: "Solved" })).toBeVisible();
   // Winner row → "Implemented"; runner-up row → "Not selected" (scoped to each solution's row anchor).
   await expect(admin.locator(`#SOL-${winner.digits}`).locator(".pill", { hasText: "Implemented" })).toBeVisible();
+  // The runner-up is closed, so it sits in the collapsed "Closed solutions" section and the
+  // heading counts only the open list (the winner).
+  await expect(admin.getByRole("heading", { name: "Solutions (1)" })).toBeVisible();
+  const closedSection = admin.getByTestId("closed-solutions");
+  await expect(closedSection.locator(`#SOL-${runnerUp.digits}`)).toBeHidden();
+  await closedSection.getByText("Closed solutions (1)").click();
+  await expect(admin.locator(`#SOL-${runnerUp.digits}`).locator(".pill", { hasText: "Not selected" })).toBeVisible();
+
+  // A deep link to a closed solution opens the section for it.
+  await admin.goto(`/challenges/${challenge.digits}#SOL-${runnerUp.digits}`);
   await expect(admin.locator(`#SOL-${runnerUp.digits}`).locator(".pill", { hasText: "Not selected" })).toBeVisible();
 
   await adminCtx.close();

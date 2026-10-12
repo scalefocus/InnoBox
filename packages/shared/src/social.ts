@@ -36,11 +36,12 @@ export function canAssignAtStatus(status: ChallengeStatus): boolean {
 
 // ── Likes (§8.3) ─────────────────────────────────────────────────────────────────────────
 
-/** §8.3: once a challenge is `solved`, likes are frozen — on the challenge itself and on its
- *  solutions (all terminal by then). Existing counts stay displayed; no like or unlike lands.
- *  A solved challenge that reverts to `valid` (§10.3 winner delete) unfreezes them. */
+/** §8.3: while a challenge is closed — `solved`, `rejected` or `withdrawn` — likes are frozen,
+ *  on the challenge itself and on its solutions. Existing counts stay displayed; no like or
+ *  unlike lands. A move back to an open status (an admin override, or the §10.3 winner-delete
+ *  revert to `valid`) unfreezes them. */
 export function areLikesFrozen(challengeStatus: ChallengeStatus): boolean {
-  return challengeStatus === "solved";
+  return challengeStatus === "solved" || challengeStatus === "rejected" || challengeStatus === "withdrawn";
 }
 
 // ── Notifications (§12.1) ────────────────────────────────────────────────────────────────
