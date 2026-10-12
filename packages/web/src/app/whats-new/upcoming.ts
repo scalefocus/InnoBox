@@ -48,13 +48,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-71"],
-    title: "Similar challenges, explained",
-    teaser:
-      "When you submit a challenge that looks like an existing one, InnoBox will explain in a sentence why each suggestion seems similar.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-72"],
     title: "Discussion summaries",
     teaser: "A short summary of long comment threads, with the open questions still being discussed.",

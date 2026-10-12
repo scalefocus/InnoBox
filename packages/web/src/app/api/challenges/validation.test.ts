@@ -141,6 +141,13 @@ test("parseSimilarRequest trims, caps, and needs at least one of title/descripti
   assert.equal(parseSimilarRequest({ title: "", description: "  " }).ok, false);
   assert.equal(parseSimilarRequest(null).ok, false);
   assert.equal(parseSimilarRequest({ title: 42, description: "only this" }).ok, true, "a wrong-typed field is just empty");
+  const vis = (v: unknown) => {
+    const r = parseSimilarRequest({ title: "t", visibility: v });
+    return r.ok ? r.value.visibility : null;
+  };
+  assert.equal(vis("namespace"), "namespace", "§22.12: a namespace-only draft is restricted content");
+  assert.equal(vis(undefined), "org");
+  assert.equal(vis("anything"), "org");
 });
 
 test("parseSimilarAcknowledged keeps well-formed numbers only, deduped, at most five", async () => {

@@ -287,3 +287,77 @@ export function processTriageNotes(json: unknown, candidateNumbers: readonly num
     duplicates,
   };
 }
+
+// ── §22.12 Similar challenges, explained ─────────────────────────────────────────────────
+
+/** Any AI error, or no answer within this long, falls back to the plain §6.1 banner. */
+export const SIMILAR_EXPLAIN_TIMEOUT_MS = 5_000;
+export const SIMILAR_EXCERPT_MAX = 500;
+export const SIMILAR_REASON_MAX = 160;
+
+export interface SimilarExplainCandidate {
+  number: number;
+  title: string;
+  /** The first 500 characters of the description. */
+  excerpt: string;
+  visibility: "org" | "namespace";
+}
+
+/** The candidates the AI may see: all of them, minus namespace-only ones while restricted content
+ *  may not be sent. Never adds anything — the §6.1 set is closed. */
+export function similarExplainInput<T extends { visibility: "org" | "namespace" }>(candidates: readonly T[], restrictedOk: boolean): T[] {
+  return candidates.filter((c) => c.visibility === "org" || restrictedOk);
+}
+
+/** Exactly the §22.12 egress: the draft's title and description, and each candidate's title and
+ *  the first 500 characters of its description. */
+export function buildSimilarPrompt(input: { title: string; description: string; candidates: readonly SimilarExplainCandidate[] }): AiPrompt {
+  const system = [
+    "You compare a draft challenge with SIMILAR existing challenges on an internal innovation platform.",
+    "Rank the candidates from most to least likely to describe the same problem as the draft, and give each a one-line reason (at most 120 characters) naming what they share, e.g. \"Same problem: manual invoice matching in finance\".",
+    'Answer as JSON: {"ranking": [{"number": <a candidate number>, "reason": "<one line>"}]}. Use only candidate numbers; include each at most once.',
+    AI_DATA_RULES,
+  ].join("\n");
+  const candidates = input.candidates.map((c) => `#${c.number} ${c.title}\n${c.excerpt.slice(0, SIMILAR_EXCERPT_MAX)}`).join("\n\n");
+  const user = [dataBlock("DRAFT_TITLE", input.title), dataBlock("DRAFT_DESCRIPTION", input.description), dataBlock("CANDIDATES", candidates)].join("\n\n");
+  return { system, messages: [{ role: "user", content: user }] };
+}
+
+/** The model's ranking, closed over the candidates it was given: unknown numbers dropped,
+ *  duplicates dropped, reasons one capped line. */
+export function processSimilarRanking(json: unknown, candidateNumbers: readonly number[]): { number: number; reason: string }[] {
+  const ranking = json && typeof json === "object" && !Array.isArray(json) ? (json as { ranking?: unknown }).ranking : null;
+  if (!Array.isArray(ranking)) return [];
+  const allowed = new Set(candidateNumbers);
+  const out: { number: number; reason: string }[] = [];
+  for (const item of ranking) {
+    if (!item || typeof item !== "object") continue;
+    const raw = (item as { number?: unknown }).number;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/^#|^CH-/i, "")) : NaN;
+    if (!Number.isInteger(n) || !allowed.has(n) || out.some((x) => x.number === n)) continue;
+    out.push({ number: n, reason: aiOneLine((item as { reason?: unknown }).reason, SIMILAR_REASON_MAX) });
+  }
+  return out;
+}
+
+/**
+ * The banner's order: the AI-ranked candidates first, in its order, with their reasons; then every
+ * other §6.1 match (restricted ones the AI never saw, ones it left out) in the original order,
+ * without a reason. The result is always exactly the original set.
+ */
+export function mergeSimilarRanking<T extends { number: string }>(
+  original: readonly T[],
+  ranking: readonly { number: number; reason: string }[],
+): (T & { reason?: string })[] {
+  const byNumber = new Map(original.map((c) => [Number(c.number.replace(/^CH-/i, "")), c]));
+  const out: (T & { reason?: string })[] = [];
+  const used = new Set<T>();
+  for (const r of ranking) {
+    const c = byNumber.get(r.number);
+    if (!c || used.has(c)) continue;
+    used.add(c);
+    out.push(r.reason ? { ...c, reason: r.reason } : { ...c });
+  }
+  for (const c of original) if (!used.has(c)) out.push({ ...c });
+  return out;
+}

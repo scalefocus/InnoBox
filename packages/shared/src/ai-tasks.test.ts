@@ -10,15 +10,19 @@ import {
   aiPlainText,
   aiStringList,
   buildChallengeDraftPrompt,
+  buildSimilarPrompt,
   buildSolutionDraftPrompt,
   buildTriagePrompt,
   dataBlock,
   isTriageSubject,
   mapImpactAreaHint,
+  mergeSimilarRanking,
   processChallengeDraft,
+  processSimilarRanking,
   processSolutionDraft,
   processTriageNotes,
   promptImpactAreaNames,
+  similarExplainInput,
   type ImpactAreaOption,
 } from "./ai-tasks.js";
 
@@ -157,4 +161,41 @@ test("triage output: duplicates only from the candidate set; capped plain text; 
   assert.equal(processTriageNotes({ summary: "" }, [], AREAS), null);
   assert.equal(processTriageNotes({ summary: "ok", suggestedImpactArea: "Client" }, [], AREAS)?.suggestedImpactArea, null);
   assert.deepEqual(processTriageNotes({ summary: "ok", duplicates: [{ number: 5 }] }, [], AREAS)?.duplicates, [], "an empty candidate set allows none");
+});
+
+const SIM = [
+  { number: "CH-1", title: "A", visibility: "org" as const, excerpt: "a" },
+  { number: "CH-2", title: "B", visibility: "namespace" as const, excerpt: "b" },
+  { number: "CH-3", title: "C", visibility: "org" as const, excerpt: "c" },
+];
+
+test("similar explained: restricted candidates leave the AI input, never the banner", () => {
+  assert.deepEqual(similarExplainInput(SIM, false).map((c) => c.number), ["CH-1", "CH-3"]);
+  assert.deepEqual(similarExplainInput(SIM, true).map((c) => c.number), ["CH-1", "CH-2", "CH-3"]);
+});
+
+test("similar explained: the ranking is closed over the candidates and the merge keeps the exact set", () => {
+  const ranking = processSimilarRanking(
+    { ranking: [{ number: 3, reason: "Same problem:\nmanual matching" }, { number: 99, reason: "invented" }, { number: "CH-1", reason: "x" }, { number: 3, reason: "dup" }] },
+    [1, 3],
+  );
+  assert.deepEqual(ranking, [{ number: 3, reason: "Same problem: manual matching" }, { number: 1, reason: "x" }]);
+  assert.deepEqual(processSimilarRanking({ ranking: "no" }, [1]), []);
+  const merged = mergeSimilarRanking(SIM, ranking);
+  assert.deepEqual(merged.map((m) => [m.number, m.reason]), [["CH-3", "Same problem: manual matching"], ["CH-1", "x"], ["CH-2", undefined]]);
+  assert.equal(merged.length, SIM.length, "never adds, never drops");
+  assert.deepEqual(mergeSimilarRanking(SIM, [{ number: 42, reason: "ghost" }]).map((m) => m.number), ["CH-1", "CH-2", "CH-3"]);
+});
+
+test("similar explained: the prompt carries the draft and title + first 500 characters per candidate", () => {
+  const text = promptText(
+    buildSimilarPrompt({
+      title: "Draft title",
+      description: "Draft text",
+      candidates: [{ number: 7, title: "Candidate", excerpt: "e".repeat(800), visibility: "org" }],
+    }),
+  );
+  assert.ok(text.includes("Draft title") && text.includes("Draft text") && text.includes("#7 Candidate"));
+  assert.ok(text.includes("e".repeat(500)) && !text.includes("e".repeat(501)), "first 500 characters only");
+  assert.ok(text.includes("SIMILAR"));
 });

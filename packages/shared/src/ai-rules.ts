@@ -285,6 +285,15 @@ export const AI_FEATURES: readonly AiFeature[] = [
     timeoutMs: 120_000,
     needsSwitch: true,
   },
+  {
+    key: "duplicate_explain",
+    label: "Explain similar challenges",
+    egress:
+      "When someone is about to submit a challenge: their draft's title and description, and the title and the first 500 characters of the description of each similar challenge the duplicate check found for them. Never who wrote anything.",
+    maxTokens: 2048,
+    timeoutMs: 10_000,
+    needsSwitch: true,
+  },
 ];
 
 export function findAiFeature(key: string, features: readonly AiFeature[] = AI_FEATURES): AiFeature | null {

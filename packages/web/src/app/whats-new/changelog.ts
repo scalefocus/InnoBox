@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.50.0",
+    date: "2026-10-12",
+    summary:
+      "When you submit a challenge that looks like existing ones, the warning can now say why each match is similar, for example \"Same problem: manual invoice matching in finance\", most likely duplicates first. A platform admin switches this on; if AI is slow or unavailable you simply get the usual warning.",
+  },
+  {
     version: "0.49.0",
     date: "2026-10-12",
     summary:

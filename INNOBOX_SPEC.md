@@ -5354,11 +5354,6 @@ transitions, assigns, rejects or notifies (invariant 6).
 
 ### §22.12 Similar challenges, explained
 
-> **⚠ GAP-71 · new feature:** the AI re-ranking of the §6.1 duplicate warning does not
-> exist. Build: the `duplicate_explain` registry entry and switch, the step inside
-> `POST /api/challenges/similar`, the reasons in the banner, and the tests below. Its own
-> minor release, on top of the shipped plumbing (§22.1–§22.9).
-
 - **Enablement.** Platform switch **"Explain similar challenges"**
   (`ai_duplicate_explain_enabled`, **off by default** — it sends other people's text).
 - **What it does.** After the §6.1 full-text check finds candidates, the AI re-ranks
@@ -5371,6 +5366,11 @@ transitions, assigns, rejects or notifies (invariant 6).
   restricted-content switch is off.
 - **Failure is silent:** any AI error or a timeout above **5 s** falls back to the plain
   §6.1 banner. `retry: false`. Shares the §6.1 rate limit.
+- **Details.** The submit form sends its chosen visibility: a namespace-only draft is itself
+  restricted content and is not sent while the switch is off. Candidates dropped from the AI
+  input stay in the banner, after the ranked ones and without a reason — the banner always
+  lists exactly the §6.1 set. Reasons are headed *"Reasons suggested by {name} — they may be
+  inaccurate."* The 5 s cut-off cancels the call (recorded as `ai_cancelled`, never logged).
 - **Tests.** Unit: re-ranking keeps the candidate set closed; restricted candidates
   dropped. Integration: fallback on error and timeout. e2e (stub): the banner shows
   reasons.

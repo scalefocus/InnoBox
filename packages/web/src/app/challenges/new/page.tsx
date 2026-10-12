@@ -43,6 +43,8 @@ interface SimilarChallenge {
   title: string;
   status: string;
   author: { displayName: string; anonymous: boolean };
+  /** §22.12: a one-line AI reason, when "Explain similar challenges" is on. */
+  reason?: string;
 }
 
 const labelStyle: React.CSSProperties = {
@@ -74,7 +76,7 @@ export default function NewChallengePage() {
   // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
   // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
   const formSignature = JSON.stringify([title, description, impactAreaId, clientName, namespaceId, visibility, isAnonymous]);
-  const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[] } | null>(null);
+  const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[]; explainedBy: string | null } | null>(null);
   const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
   const ai = useImproveWithAi({
@@ -119,13 +121,13 @@ export default function NewChallengePage() {
         const found = await fetch("/api/challenges/similar", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title, description }),
+          body: JSON.stringify({ title, description, visibility }),
         })
           .then((res) => (res.ok ? res.json() : { similar: [] }))
-          .then((json) => (json.similar ?? []) as SimilarChallenge[])
-          .catch(() => [] as SimilarChallenge[]);
-        if (afterSimilarityCheck(found) === "warn") {
-          setWarning({ signature: formSignature, matches: found });
+          .then((json) => ({ matches: (json.similar ?? []) as SimilarChallenge[], explainedBy: typeof json.explainedBy === "string" ? json.explainedBy : null }))
+          .catch(() => ({ matches: [] as SimilarChallenge[], explainedBy: null }));
+        if (afterSimilarityCheck(found.matches) === "warn") {
+          setWarning({ signature: formSignature, matches: found.matches, explainedBy: found.explainedBy });
           lock.release();
           return;
         }
@@ -294,9 +296,19 @@ export default function NewChallengePage() {
                     <span className="sub">
                       · {CHALLENGE_STATUS_LABEL[m.status] ?? m.status} · {m.author.anonymous ? "Anonymous" : m.author.displayName}
                     </span>
+                    {m.reason && (
+                      <div className="sub" data-testid="similar-reason" style={{ marginTop: 2 }}>
+                        {m.reason}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
+              {warning?.explainedBy && similar.some((m) => m.reason) && (
+                <p className="sub" style={{ margin: "10px 0 0" }}>
+                  Reasons suggested by {warning.explainedBy} — they may be inaccurate.
+                </p>
+              )}
               <p className="sub" style={{ margin: "10px 0 0" }}>
                 If yours is different, submit it anyway — a namespace admin will triage it like any other.
               </p>
