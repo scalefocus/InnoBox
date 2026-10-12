@@ -4,7 +4,9 @@
 // a JIT stub (scim_synced=false) is refreshed from claims at each sign-in; once SCIM or
 // reconciliation set scim_synced=true, claims never overwrite.
 import type { Pool } from "pg";
+import { APP_VERSION } from "@innobox/shared/version";
 import { appendAudit } from "./audit";
+import { isCalendarDate, isVersion } from "./whats-new";
 import { setSurveyForcedWin } from "./survey-dev";
 
 export interface UserRow {
@@ -167,6 +169,25 @@ export interface DevUserInput {
    *  no survey history or first uses) and its rolls are forced to win (lib/survey-dev.ts). False
    *  (the default) → surveys off, so ordinary dev/e2e sessions never see the card. */
   survey?: boolean;
+  /** §13.9 seam. Blank (the default) stamps the What's new marker at APP_VERSION, so ordinary
+   *  dev/e2e sessions are never interrupted by the update notice. A strict x.y.z seeds that
+   *  marker; `none` leaves it null so the rollout boundary below applies. */
+  whatsNewSeen?: string;
+  /** With `whatsNewSeen: "none"`: the rollout boundary date (YYYY-MM-DD) to seed, else none. */
+  whatsNewSinceDate?: string;
+}
+
+/** The (marker, rollout date) pair a dev sign-in writes — pure, unit-tested. */
+export function devWhatsNewSeed(input: Pick<DevUserInput, "whatsNewSeen" | "whatsNewSinceDate">): {
+  seen: string | null;
+  sinceDate: string | null;
+} {
+  const raw = input.whatsNewSeen?.trim() ?? "";
+  if (raw.toLowerCase() === "none") {
+    const date = input.whatsNewSinceDate?.trim();
+    return { seen: null, sinceDate: isCalendarDate(date) ? date : null };
+  }
+  return { seen: isVersion(raw) ? raw : APP_VERSION, sinceDate: null };
 }
 
 const DEV_ADMIN_GROUP = { externalId: "dev-platform-admins", displayName: "Dev Platform Admins" };
@@ -202,6 +223,13 @@ export async function upsertDevUser(db: Pool, input: DevUserInput): Promise<User
     },
     { skipQuickStart: !input.freshOnboarding },
   );
+  // §13.9: every dev sign-in sets the What's new marker — APP_VERSION unless a spec seeds one.
+  const seed = devWhatsNewSeed(input);
+  await db.query(`update users set whats_new_seen_version = $2, whats_new_since_date = $3::date where id = $1`, [
+    user.id,
+    seed.seen,
+    seed.sinceDate,
+  ]);
   await prepareDevSurveyState(db, user.id, Boolean(input.survey));
   if (input.admin) {
     const { rows } = await db.query<{ id: string }>(

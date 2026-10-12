@@ -96,6 +96,20 @@ test("at mobile width the card is a bottom sheet with ✕ and Submit visible", a
   await ctx.close();
 });
 
+test("with the What's new notice due, a first use produces no survey — What's new always wins", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const ctx = await browser.newContext();
+  // An old marker makes the update notice due on this load.
+  await signIn(ctx, { name: `E2E Survey Notice ${stamp}`, survey: true, whatsNewSeen: "0.1.0" });
+  const page = await ctx.newPage();
+  await page.goto("/leaderboard");
+  await expect(page.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+  await expect(page.locator(".update-notice")).toBeVisible();
+  await page.waitForTimeout(1500);
+  await expect(page.getByTestId("survey-card")).toHaveCount(0);
+  await ctx.close();
+});
+
 test("a persona with surveys off never sees the card", async ({ browser }) => {
   const stamp = Date.now().toString(36);
   const ctx = await browser.newContext();

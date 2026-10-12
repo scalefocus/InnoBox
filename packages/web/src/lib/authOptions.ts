@@ -61,6 +61,11 @@ if (devAuthEnabled) {
         // used only by the dedicated onboarding e2e spec; every other dev/e2e sign-in defaults
         // to already-seen so it isn't interrupted by the onboarding redirect.
         freshOnboarding: { label: "Fresh onboarding (\"1\" = yes)", type: "text", value: "0" },
+        // §13.9: blank stamps the What's new marker at the running release; an x.y.z seeds a
+        // lower one, and "none" (plus an optional rollout date) leaves it unset — only the
+        // update-notice e2e spec sets these.
+        whatsNewSeen: { label: "What's new marker (blank = current)", type: "text", value: "" },
+        whatsNewSinceDate: { label: "What's new rollout date", type: "text", value: "" },
         // "1" makes the persona survey-eligible with every roll forced to win (INNOBOX_SPEC.md
         // §13.10) — the survey e2e only. Anything else switches surveys OFF for the persona, so
         // other specs and screenshots stay free of the card.
@@ -76,6 +81,8 @@ if (devAuthEnabled) {
           email: credentials?.email?.trim() || null,
           admin: credentials?.admin === "1",
           freshOnboarding: credentials?.freshOnboarding === "1",
+          whatsNewSeen: credentials?.whatsNewSeen,
+          whatsNewSinceDate: credentials?.whatsNewSinceDate,
           survey: credentials?.survey === "1",
         });
         if (!user.active) return null; // deactivated dev users are refused like real leavers

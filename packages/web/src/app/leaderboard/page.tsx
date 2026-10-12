@@ -11,6 +11,7 @@ interface LeaderboardEntry {
   userId: string;
   displayName: string;
   active?: boolean;
+  scrubbed?: boolean;
   count: number;
 }
 
@@ -96,7 +97,7 @@ export default function LeaderboardPage() {
               <span className="chip mono" style={{ minWidth: 32, textAlign: "center" }}>
                 {i + 1}
               </span>
-              <AvatarBubble size="sm" userId={entry.userId} displayName={entry.displayName} deactivated={entry.active === false} />
+              <AvatarBubble size="sm" userId={entry.userId} displayName={entry.displayName} deactivated={entry.active === false} scrubbed={entry.scrubbed === true} />
               <Link href={`/profile/${entry.userId}`} className="ttl grow">
                 {entry.displayName}
               </Link>

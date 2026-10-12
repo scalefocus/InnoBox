@@ -2683,12 +2683,6 @@ for one.
 A scrubbed user's `/profile/<id>` renders the same generic not-found state as an
 unknown id — *"That profile doesn't exist."* — never a "Deleted User" page.
 
-> **⚠ GAP-40 · code fix:** `getPublicProfile` (`api/profile/store.ts`) returns null
-> for `!active`, so `/profile/<id>` is a 404 for every deactivated user while the
-> hover card still links there. Return null only for scrubbed rows, return the
-> `active` state, and render the muted "Deactivated" notice and greyed bubble in
-> `app/profile/[userId]/page.tsx`.
-
 The **e-mail notifications** control is a §2.2 pill switch rather than a labelled
 button: an `On`/`Off` word, then the pill — 📧 in the knob and an `--accent` track when
 on, 🔇 in the knob and the plain `--surface-2` track when off. The knob rests **left
@@ -2739,15 +2733,6 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   commenter, leaderboard row, card, profile, triage row, the reveal — and the bubble
   decides "Deleted User" from it, never from the display name. Like `active`, it is
   absent for an anonymous author.
-
-  > **⚠ GAP-41 · code fix:** `active` now flows through the payloads, but no payload
-  > carries `scrubbed` (`MaskedAuthor` in `shared/src/challenges.ts` has `active` only),
-  > and `avatarVariant` (`shared/src/avatars.ts`) infers a scrubbed user from
-  > `displayName === "Deleted User"`. Add `scrubbed` beside `active` in `MaskedAuthor`
-  > and every person payload, pass it through `AvatarBubble`, and drop the name-based
-  > inference. Also pass `deactivated`/`scrubbed` to the bubbles in
-  > `app/profile/[userId]/page.tsx` and in the reveal dialog
-  > (`challenges/[number]/page.tsx` `RevealDialog`), which pass neither.
 - **Sizing:** one stored image (§3.1), scaled by context — small (~24–40 px) in
   lists, chips, comments and rows — the **directory hover card (§13.8)** reuses the
   existing **medium** bubble of that band; large (~96 px) on profile pages and in the
@@ -2828,11 +2813,6 @@ Of the three directory fields, department and job title already exist (§3, §5)
 
   Like the editable assignee cell, the read-only assignee on a terminal row stops click
   propagation, so opening its card never also opens the row (§14.1).
-
-  > **⚠ GAP-42 · code fix:** `admin/triage/page.tsx` passes `noCard` to the assignee
-  > bubble on terminal-status rows (the `TERMINAL_STATUSES` branch of the assignee
-  > cell). Remove it, and give that read-only span the same
-  > `onClick={(e) => e.stopPropagation()}` the editable cell has.
 - **No user id → no card.** An **anonymous** author's bubble (invariant 3: the client
   never learns the real id — the payload carries `null`, §13.6), a deleted/unknown
   actor, or a bubble whose caller marks it anonymous shows **no card, issues no
@@ -2855,11 +2835,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
 6. **"View profile"** — a link to `/profile/<id>` (to `/profile` for your own bubble,
    decided by comparing the bubble's user id to the signed-in user — no caller has to
    mark a bubble as "self").
-
-> **⚠ GAP-43 · code fix:** `DirectoryCard.tsx` links to `/profile` only when the caller
-> passes `self`, and only `app/profile/page.tsx` does, so your own bubble on cards,
-> comments and the leaderboard links to `/profile/<yourId>`. Compare the bubble's user
-> id with the session user inside `DirectoryCard`/`AvatarBubble` and drop the prop.
 
 - Lines 2–4 are **omitted individually** when the field is empty. When **all three**
   are empty the block collapses to a single muted line — **"No directory
@@ -2931,12 +2906,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
     moves on to the next element as usual and the card closes.
   - Blur closes the card only when focus has left **both** the bubble and the card.
 
-  > **⚠ GAP-44 · code fix:** focus inside the card now keeps it open and Escape returns
-  > focus, but nothing routes Tab: `DirectoryCard.tsx` portals the card to the end of
-  > `document.body`, so Tab from the bubble skips it and keyboard users can never reach
-  > "View profile", and Tab out of the card lands at the end of the page. Add the
-  > routing above (a `keydown` handler on the trigger and the card).
-
 #### Data & delivery
 
 - **`GET /api/users/:id/card`** → `{ userId, displayName, jobTitle, officeLocation,
@@ -2975,28 +2944,6 @@ Top to bottom, in a fixed max-width (~280 px) card:
   together.
 
 ### §13.9 What's new (release notes & the update notice)
-
-> **⚠ GAP-59 · new feature:** the **update notice** below does not exist yet. Build:
-> migration `0036_whats_new_seen.sql` (the two `users` columns and the one-time rollout
-> snapshot); a pure, dependency-free `lib/whats-new.ts` (strict `x.y.z` parse/compare,
-> the trigger rule, the missed-entries selector, the `since` resolver); the
-> `POST /api/me/whats-new-seen` route and `markWhatsNewSeen` store (guarded UPDATE);
-> `whatsNewSeenVersion` and `whatsNewSinceDate` on `GET /api/me`; the quick-start
-> `PATCH /api/me` also stamping the marker; `components/WhatsNewNotice.tsx` rendered by
-> AppShell with its CSS on the §2.2 tokens; the dev/e2e seam; and the notice's input to the
-> feedback survey's `canShow` (§13.10) — AppShell's `whatsNewDue` is a constant `false` until
-> the notice exists, and the survey e2e's *notice due → no survey* case lands with it. Tests
-> as listed at the end of this section. Ships as its own minor release.
-
-> **⚠ GAP-60 · new feature:** the `/whats-new` **page** changes below (the read receipt,
-> the "New since your last visit" highlighting, the **current** label) are not built; the
-> page is a static server component today. Keep the server `page.tsx` for its metadata
-> and add a client child for everything that reads `/api/me` or the query string.
-
-> **⚠ GAP-61 · new feature:** the changelog **integrity unit test** does not exist
-> (`CHANGELOG[0].version === APP_VERSION`; every version strict `x.y.z`, unique, and
-> strictly descending; every date a valid `YYYY-MM-DD`). The notice depends on these
-> properties, so the test lands with GAP-59.
 
 Every release reaches every user. The **What's new** page lists the full shipped
 history, and a small **update notice** tells a returning user that something changed
@@ -3045,7 +2992,7 @@ see where InnoBox is heading.
   `app/whats-new/upcoming.ts`, beside the changelog: `UPCOMING: { ids, title, teaser,
   audience }[]`, in the order to display. `ids` lists the open **new-feature** markers in
   this document that the entry covers — one teaser may cover a feature's several markers
-  (e.g. `["GAP-59", "GAP-60", "GAP-61"]` for this very section) — and is internal only,
+  (e.g. `["GAP-62", "GAP-63", "GAP-64"]` for the §13.10 survey) — and is internal only,
   **never rendered**. `title` is a short user-facing name (*"Have your say"*), `teaser` one or two
   plain sentences on what it will do for the user. `audience` is `everyone`, `admins`
   (platform or namespace admins) or `platform_admin`; an entry is shown only to viewers
@@ -3109,7 +3056,8 @@ see where InnoBox is heading.
     silent advance. Several releases skipped in a row still produce **one** notice.
 - **Missed entries** (shared with the page's rule above): with a valid marker, every entry
   with `version > seen`; with a null marker, every entry dated on or after
-  `whatsNewSinceDate`; with neither, the current version's entry alone. Newest first.
+  `whatsNewSinceDate`; with neither — or when that date is later than every entry — the
+  current version's entry alone, so a notice that is due never comes up empty. Newest first.
 - **The card.** A floating card — `.update-notice`, `role="status"` (a polite live
   region: it announces itself but **never takes focus**; no focus trap, no Escape
   handling), portaled to the end of `<body>`, `data-testid="whats-new-notice"`, owned by
@@ -3174,10 +3122,10 @@ see where InnoBox is heading.
   static changelog — no challenge, user or namespace data — and changelog summaries must
   never describe a restricted item (an authoring rule, §17).
 - **Dev / e2e seam.** Dev sign-in (§2.3) stamps the marker at `APP_VERSION` on **every**
-  dev sign-in, so ordinary e2e runs and screenshots are never interrupted; a dev-only
-  field on the dev sign-in panel seeds a lower marker (or none, plus a rollout boundary
-  date) for the specs that exercise the notice. It lives behind the same production guard
-  as the rest of dev auth.
+  dev sign-in, so ordinary e2e runs and screenshots are never interrupted; two dev-only
+  fields on the dev sign-in panel — the marker (blank for the running release, an `x.y.z`,
+  or `none`) and, with `none`, a rollout boundary date — seed the state for the specs that
+  exercise the notice. They live behind the same production guard as the rest of dev auth.
 
 #### Tests
 
@@ -3185,7 +3133,9 @@ see where InnoBox is heading.
   equal, rollback, invalid version, quick start not seen; the missed-entries selector —
   marker, rollout date (on-or-after), neither; the excerpt cap of 3 and the full count N;
   the link's `since` (newest unmissed version, `0.0.0` when all were missed); the page's
-  boundary resolution order. Plus the GAP-61 changelog integrity test. (The *Coming
+  boundary resolution order. Plus the changelog integrity test (`CHANGELOG[0].version ===
+  APP_VERSION`; every version strict `x.y.z`, unique and strictly descending; every date a
+  valid `YYYY-MM-DD`), which the notice depends on. (The *Coming
   soon* spec-sync test, both directions, and the `UPCOMING` audience filter per role
   live in `app/whats-new/upcoming.test.ts`.)
 - **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →

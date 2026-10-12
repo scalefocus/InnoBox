@@ -4,9 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Pool } from "pg";
+import { APP_VERSION } from "@innobox/shared/version";
 import {
   decideJitAction,
   devSlug,
+  devWhatsNewSeed,
   jitUpsertFromClaims,
   upsertDevUser,
   type JitClaims,
@@ -229,4 +231,27 @@ test("upsertDevUser(non-admin): drops any dev-admin membership so the toggle rou
   const drop = calls.find((c) => /delete from group_members/i.test(c.text));
   assert.ok(drop);
   assert.deepEqual(drop.params, [dbRow.id, "dev-platform-admins"]);
+});
+
+// §13.9 dev/e2e seam: every dev sign-in sets the What's new marker, so ordinary specs and
+// screenshots are never interrupted by the update notice; the notice's own spec seeds one.
+test("devWhatsNewSeed: blank (the default) stamps the running release and clears the rollout date", () => {
+  assert.deepEqual(devWhatsNewSeed({}), { seen: APP_VERSION, sinceDate: null });
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "  ", whatsNewSinceDate: "2026-01-01" }), { seen: APP_VERSION, sinceDate: null });
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "not-a-version" }), { seen: APP_VERSION, sinceDate: null });
+});
+
+test("devWhatsNewSeed: an x.y.z seeds that marker; \"none\" leaves it unset with an optional rollout date", () => {
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "0.1.0" }), { seen: "0.1.0", sinceDate: null });
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "none", whatsNewSinceDate: "2026-10-01" }), { seen: null, sinceDate: "2026-10-01" });
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "None", whatsNewSinceDate: "2026-02-30" }), { seen: null, sinceDate: null });
+  assert.deepEqual(devWhatsNewSeed({ whatsNewSeen: "none" }), { seen: null, sinceDate: null });
+});
+
+test("upsertDevUser: writes the What's new seed on every sign-in", async () => {
+  const { db, calls } = routedDb(() => [dbRow]);
+  await upsertDevUser(db, { name: "Ada Lovelace", email: claims.email, admin: false, whatsNewSeen: "0.2.0" });
+  const seed = calls.find((c) => /set whats_new_seen_version/i.test(c.text));
+  assert.ok(seed, "the marker is written even for an existing persona");
+  assert.deepEqual(seed.params, [dbRow.id, "0.2.0", null]);
 });

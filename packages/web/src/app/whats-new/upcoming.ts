@@ -34,13 +34,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-59", "GAP-60", "GAP-61"],
-    title: "Update notice",
-    teaser:
-      "A small card after each release tells you what changed since your last visit, with a link straight to the entries you missed.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-63"],
     title: "Give feedback any time",
     teaser:

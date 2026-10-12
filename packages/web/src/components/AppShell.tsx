@@ -24,13 +24,18 @@ import { AvatarBubble } from "./AvatarBubble";
 import { SurveyCard } from "./SurveyCard";
 import { isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
 import { SURVEY_OPEN_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
+import { WHATS_NEW_SEEN_EVENT, WhatsNewNotice } from "./WhatsNewNotice";
+import { whatsNewAction } from "../lib/whats-new";
 
 // Shape of the §16 `me` resource (packages/web/src/app/api/me/route.ts) — only the fields
-// this shell needs (identity for the account menu, the admin role hints for nav gating).
+// this shell needs (identity for the account menu, the admin role hints for nav gating, the
+// §13.9 What's new marker for the update notice).
 interface MeResponse {
   user: { id: string; displayName: string; email: string | null; userName: string };
   roles: { platformAdmin: boolean; namespaceAdmin: string[] };
   quickStartSeenAt: string | null;
+  whatsNewSeenVersion: string | null;
+  whatsNewSinceDate: string | null;
   /** §13.10 the open survey offer (null when none, or while the platform switch is off). */
   openSurvey?: SurveyOfferPayload | null;
 }
@@ -84,6 +89,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [bellOpen, setBellOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  // §13.9 → §13.10: the update notice was dismissed (or acknowledged on /whats-new) this load.
+  const [whatsNewClosed, setWhatsNewClosed] = useState(false);
 
   // Navigating closes the mobile drawer.
   useEffect(() => setDrawerOpen(false), [pathname]);
@@ -153,9 +160,19 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   const mobileOverlayOpen = isMobile && (drawerOpen || bellOpen);
-  // The §13.9 What's new decision: the update notice is not built yet, so nothing is ever due —
-  // but the decision is "made" only once `me` has loaded, which is what `shellReady` waits for.
-  const whatsNewDue = false;
+  // The §13.9 What's new decision, made once `me` has loaded (which `shellReady` waits for): while
+  // the update notice is due or on screen, no survey shows — What's new always wins. Due is the
+  // notice's own rule, so it errs towards "due" (a due notice with nothing to list still blocks).
+  useEffect(() => {
+    const onSeen = () => setWhatsNewClosed(true);
+    window.addEventListener(WHATS_NEW_SEEN_EVENT, onSeen);
+    return () => window.removeEventListener(WHATS_NEW_SEEN_EVENT, onSeen);
+  }, []);
+  const whatsNewDue =
+    !whatsNewClosed &&
+    pathname !== "/whats-new" &&
+    me !== null &&
+    whatsNewAction(me.whatsNewSeenVersion, APP_VERSION, me.quickStartSeenAt !== null) === "show";
   const shellReady = authed && me !== null;
   const quickStartGate = quickStartPending || pathname === QUICK_START_PATH;
   const canShow = surveyCanShow({ shellReady, whatsNewDue, quickStartGate, cardOpen: card !== null, mobileOverlayOpen });
@@ -464,6 +481,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           {toast}
         </div>
       )}
+      {/* §13.9 update notice — portaled to <body>; renders nothing unless a release is unacknowledged. */}
+      {authed && <WhatsNewNotice me={me} pathname={pathname} onClosed={() => setWhatsNewClosed(true)} />}
     </div>
   );
 }

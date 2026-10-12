@@ -662,6 +662,13 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* Display headings anchor in brand Navy (light) / a legible navy tint (dark) — Montserrat Bold. */
 .page-title { font-family: var(--font-display); font-size: clamp(34px, 5vw, 52px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; color: var(--anchor); font-optical-sizing: auto; }
 .page-sub { color: var(--muted); margin-top: 12px; max-width: 60ch; font-size: 15.5px; }
+/* §13.5: the muted "Deactivated" notice on a deactivated user's public profile — the same dashed
+   pill as the hover card's flag (§13.8), one size up. */
+.profile-deactivated {
+  display: inline-block; margin-top: 10px; padding: 2px 9px; border-radius: 999px;
+  border: 1px dashed var(--line); background: var(--surface-2);
+  font-size: 12px; letter-spacing: 0.02em; color: var(--faint);
+}
 
 /* ── Code / install command ────────────────────────────────────────────── */
 .code {
@@ -762,6 +769,84 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) {
   .soon-list, .soon-item { animation: none; }
   .soon-chevron { transition: none; }
+}
+
+/* What's new — the release list (§13.9). The entries the viewer missed get a left accent border,
+   the accent-soft fill and a "New" tag, grouped above a labelled divider; the running release
+   carries a small "current" label. */
+.release-row { position: relative; }
+.release-row .release-date { font-size: 12px; white-space: nowrap; }
+.release-tags { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.release-row.is-new { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.release-row.is-new:hover { background: color-mix(in oklab, var(--accent-soft) 80%, var(--surface-2)); }
+.release-tag-new, .release-tag-current {
+  padding: 2px 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.release-tag-new { background: var(--surface); color: var(--accent-2); border-color: var(--accent); }
+.release-tag-current { background: transparent; color: var(--accent-2); border-color: color-mix(in oklab, var(--accent) 45%, var(--line)); }
+.release-divider {
+  display: flex; align-items: center; gap: 12px; margin: 14px 2px;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-2);
+}
+.release-divider::before, .release-divider::after { content: ""; flex: 1; height: 1px; background: var(--line-strong); }
+@media (max-width: 640px) {
+  .release-row { flex-wrap: wrap; gap: 8px 12px; }
+  .release-row .grow { flex-basis: 100%; order: 3; }
+}
+
+/* The update notice (§13.9): a floating status card, owned by AppShell and portaled to <body>.
+   Not a popover (no .menu-pop, no anchor) — it slides up on its own. Layered above page content
+   and the sidebar but BELOW every popover (40–70), the mobile sheet (60) and the toast (80).
+   A column flexbox capped at 60vh: the heading and link are fixed, the list is the only flexible
+   child and the only scroll region, so dismissal never needs scrolling. */
+.update-notice {
+  position: fixed; right: 24px; bottom: 24px; z-index: 35;
+  width: 380px; max-width: calc(100vw - 48px); max-height: 60vh;
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 14px 18px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  animation: notice-slide-up 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+@keyframes notice-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+.update-notice-head { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.update-notice-title {
+  flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  font-family: var(--font-display); font-size: 15px; font-weight: 600; margin: 0;
+}
+.update-notice-chip { padding: 2px 8px; }
+.update-notice-close {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); cursor: pointer; font-size: 12px; transition: color 0.15s, border-color 0.15s;
+}
+.update-notice-close:hover { color: var(--ink); border-color: var(--accent); }
+.update-notice-list {
+  list-style: none; margin: 0; padding: 0 6px 0 0; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  font-size: 13px; line-height: 1.55; color: var(--muted);
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+}
+.update-notice-list::-webkit-scrollbar { width: 6px; }
+.update-notice-list::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+.update-notice-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.update-notice-list li + li { padding-top: 10px; border-top: 1px solid var(--line); }
+.update-notice-link { flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--accent-2); text-decoration: none; }
+.update-notice-link:hover { text-decoration: underline; }
+@media (max-width: 880px) {
+  /* Hidden — not unmounted — under the mobile nav drawer and the full-screen notification sheet. */
+  body:has(.sidebar.open) .update-notice,
+  body:has(.msg-panel) .update-notice { display: none; }
+}
+@media (max-width: 560px) {
+  /* A full-width bottom sheet. */
+  .update-notice {
+    left: 0; right: 0; bottom: 0; width: auto; max-width: none;
+    border-radius: var(--radius) var(--radius) 0 0; border-left-width: 1px; border-top: 3px solid var(--accent);
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-notice { animation: none; }
 }
 
 /* Inline assignee editor (§14.1): reads as plain text at rest, reveals a field border on

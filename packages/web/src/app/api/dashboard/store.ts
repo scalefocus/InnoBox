@@ -102,12 +102,13 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
       author_id: string;
       author_display_name: string;
       author_active: boolean;
+      author_scrubbed: boolean;
       challenge_number: string;
       challenge_title: string;
       updated_at: Date;
     }>(
       `select s.number::text, s.description, s.is_anonymous, s.author_id, u.display_name as author_display_name,
-              u.active as author_active,
+              u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
               c.number::text as challenge_number, c.title as challenge_title, s.updated_at
          from solutions s
          join challenges c on c.id = s.challenge_id
@@ -127,6 +128,7 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
         authorId: row.author_id,
         authorDisplayName: row.author_display_name,
         authorActive: row.author_active,
+        authorScrubbed: row.author_scrubbed,
       }),
       challengeNumber: formatChallengeNumber(row.challenge_number),
       challengeTitle: row.challenge_title,

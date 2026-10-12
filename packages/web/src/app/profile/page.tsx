@@ -147,7 +147,7 @@ export default function ProfilePage() {
   return (
     <>
       <div className="page-head reveal" style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <AvatarBubble size="lg" userId={profile.user.id} displayName={profile.user.displayName} self />
+        <AvatarBubble size="lg" userId={profile.user.id} displayName={profile.user.displayName} />
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow">Profile</div>
           <h1 className="page-title">{profile.user.displayName}</h1>

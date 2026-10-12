@@ -17,6 +17,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { focusNeighbor, profileHref, TABBABLE_SELECTOR } from "@/lib/directory-card";
+import { cachedGet } from "@/lib/ui";
 
 const OPEN_DELAY_MS = 300; // hover intent — a pointer crossing a dense table must not fire cards
 const CLOSE_DELAY_MS = 150; // grace period so the pointer can travel into the card ("View profile")
@@ -66,6 +68,14 @@ interface TriggerProps {
   onPointerLeave: () => void;
   onFocus: () => void;
   onBlur: () => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+}
+
+/** The page's tabbable elements in document order — visible, not `tabindex="-1"`. */
+function tabbables(root: ParentNode = document): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
+    (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
+  );
 }
 
 /**
@@ -79,14 +89,15 @@ export function useDirectoryCard(opts: {
   enabled: boolean;
   /** The caller's own bubble element, re-rendered inside the card at medium size. */
   avatar: ReactNode;
-  /** True when the trigger is the signed-in user's own bubble — links to /profile. */
-  self?: boolean;
 }): { triggerProps: TriggerProps | null; card: ReactNode } {
-  const { userId, displayName, enabled, avatar, self } = opts;
+  const { userId, displayName, enabled, avatar } = opts;
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<UserCardData | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  // The signed-in user's id, so your own bubble links to /profile (§13.8) — read from the shared
+  // `me` cache (AppShell has already loaded it) when a card opens, never on mount.
+  const [signedInUserId, setSignedInUserId] = useState<string | null>(null);
 
   const triggerRef = useRef<HTMLElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -119,6 +130,11 @@ export function useDirectoryCard(opts: {
     const r = triggerRef.current?.getBoundingClientRect();
     if (r) setPos({ left: r.left, top: r.bottom + GAP_PX }); // refined once the card is measured
     setOpen(true);
+    void cachedGet<{ user?: { id?: string } }>("/api/me")
+      .then((me) => setSignedInUserId(typeof me.user?.id === "string" ? me.user.id : null))
+      .catch(() => {
+        /* the public path still renders the same person */
+      });
     void loadCard(userId).then((card) => {
       setData(card);
       setLoaded(true);
@@ -199,6 +215,31 @@ export function useDirectoryCard(opts: {
 
   useEffect(() => clearTimers, []);
 
+  // Tab routing (§13.8). The card is portalled to the end of <body>, so the browser's own Tab
+  // order never reaches it from the bubble, and leaving it would land at the end of the page.
+  const onTriggerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab" || e.shiftKey || !open) return;
+    const first = cardRef.current ? tabbables(cardRef.current)[0] : undefined;
+    if (!first) return; // no link (a scrubbed row): Tab moves on as usual and blur closes the card
+    e.preventDefault();
+    first.focus();
+  };
+
+  const onCardKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab") return;
+    const card = cardRef.current;
+    const trigger = triggerRef.current;
+    if (!card || !trigger) return;
+    const inCard = tabbables(card);
+    const edge = e.shiftKey ? inCard[0] : inCard[inCard.length - 1];
+    if (document.activeElement !== edge) return; // moving within the card: leave it to the browser
+    const target = focusNeighbor(tabbables(), trigger, (el) => card.contains(el), e.shiftKey ? "prev" : "next");
+    close();
+    if (!target) return;
+    e.preventDefault();
+    target.focus();
+  };
+
   if (!enabled || !userId) return { triggerProps: null, card: null };
 
   const triggerProps: TriggerProps = {
@@ -225,6 +266,7 @@ export function useDirectoryCard(opts: {
       doOpen();
     },
     onBlur: scheduleClose, // Tab into the card cancels this via onFocusCapture below
+    onKeyDown: onTriggerKeyDown,
   };
 
   const card =
@@ -240,6 +282,7 @@ export function useDirectoryCard(opts: {
             onPointerLeave={scheduleClose}
             onFocusCapture={cancelClose}
             onBlurCapture={scheduleClose}
+            onKeyDown={onCardKeyDown}
           >
             <div className="dir-card-head">
               {avatar}
@@ -247,7 +290,7 @@ export function useDirectoryCard(opts: {
             </div>
             <DirectoryBlock data={data} loaded={loaded} />
             {(!loaded || !data?.scrubbed) && (
-              <Link className="dir-card-link" href={self ? "/profile" : `/profile/${userId}`}>
+              <Link className="dir-card-link" href={profileHref(userId, signedInUserId)}>
                 View profile
               </Link>
             )}
