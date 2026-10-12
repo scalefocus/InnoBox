@@ -118,11 +118,13 @@ async function deleteChildren(
  * Remove the in-app notifications and still-unsent outbox rows that target the deleted
  * subtree, so no inbox item survives pointing at an entity that no longer exists (§10.3,
  * §12.1). A row targets the subtree when EITHER
- *  - its §12.1 deep link is the item's (`/challenges/<n>`, or `…#SOL-<m>` for a solution); or
- *  - it is a comment row (event 6) whose payload names the item as its `parentType`/`parentId`
- *    — or, for a challenge delete, names the challenge as its `challengeId`. This is what
- *    catches a comment notification on a solution whose link carries no `#SOL-<m>` anchor
- *    (rows written before solution comments were deep-linked to the solution).
+ *  - its payload names the item as its target, `parentType`/`parentId` — every notification
+ *    about a challenge or solution carries one (lib/notify.ts `withTarget`, the scan-failure
+ *    writer) — or, for a comment row (event 6) under a challenge delete, names the challenge as
+ *    its `challengeId`; or
+ *  - its §12.1 deep link is the item's (`/challenges/<n>`, or `…#SOL-<m>` for a solution). This
+ *    is the fallback for rows written before payloads carried a target — e.g. an old "solution
+ *    proposed" row, which linked to the challenge with no `#SOL-<m>` anchor.
  * "Unsent" is every outbox row that is not `sent` — `pending` and `failed` alike (0006); only
  * already-sent rows are dispatch history and stay: that mail has already left the building.
  */

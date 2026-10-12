@@ -1580,16 +1580,6 @@ afterwards. Notification rows are matched by the **target they carry** (entity t
 id in the payload), not by their link text; every notification payload about a
 challenge or solution carries that target.
 
-> **⚠ GAP-23 · code fix:** only comment notifications carry target fields
-> (`parentType`/`parentId`/`challengeId`, written by `dispatchCoalescedComment` in
-> `web/src/lib/notify.ts`); `dispatchEvent`/`dispatchToUser` (same file) and the
-> scan-failure writer in `shared/src/attachments.ts` write `{ message, link }` only, so
-> `deleteNotifications` (`api/challenges/delete.ts`) still falls back to the link for
-> them. On a solution delete the "solution proposed" row — linked to its challenge,
-> without `#SOL-n` (GAP-33) — therefore survives. Add the target type and id to every
-> notification payload through those writers and match on them, keeping the link match
-> for rows written before.
-
 **Object-store purge.** Once the transaction commits, the MinIO objects of every deleted
 attachment are purged — `clean`, `pending`, and author-removed rows alike (an `infected`
 row's object was already purged at scan time) — and the parts of any aborted multipart
@@ -1973,10 +1963,6 @@ stays `failed`; the next attempt time is recorded per row in the outbox's
 the current batch and schedules that row's retry no earlier than its `Retry-After`:
 the next attempt is the later of the backoff and the `Retry-After`.
 
-> **⚠ GAP-31 · code fix:** `worker/src/notifications/dispatch.ts` applies only
-> `emailRetryDelayMinutes` on a 429; `GraphSendError.retryAfterSeconds`
-> (`shared/src/email-graph.ts`) is never read. Set `next_attempt_at` to
-> max(backoff, Retry-After) for a 429.
 E-mail is sent via **Microsoft Graph `sendMail`** from a dedicated service mailbox
 (e.g. `innobox@example.com`) that a platform admin connects on the Administration page
 through a delegated consent flow (`Mail.Send` + `offline_access`, admin-consented).
@@ -2024,10 +2010,6 @@ rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL
 its status, a comment on it, its proposal (there is no standalone solution page,
 §13.1).
 
-> **⚠ GAP-33 · code fix:** the "solution proposed" notification
-> (`api/challenges/[number]/solutions/route.ts`) links to `/challenges/N` without the
-> `#SOL-<n>` anchor; build it with `itemHref` (`lib/deep-link.ts`) as comment
-> notifications already do.
 Delivery is immediate — there is no scheduled digest (§19); the one batching
 mechanism is the per-item coalescing of comment notifications below.
 

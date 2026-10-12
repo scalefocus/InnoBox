@@ -38,7 +38,7 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
           dispatchToUser(ctx, userId, "status_changed", {
             message: `${label} "${result.title}" was withdrawn by its author.`,
             link: `/challenges/${number}`,
-          }),
+          }, { parentType: "challenge", parentId: result.challengeId }),
         ),
       ).catch((err) => console.error(JSON.stringify({ level: "error", msg: "challenge withdraw notification failed", error: String(err) })));
       return Response.json({ ok: true });
