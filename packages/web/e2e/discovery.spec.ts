@@ -68,6 +68,32 @@ test("what's new: the changelog lists released versions newest-first", async ({ 
   await ctx.close();
 });
 
+test("what's new: Coming soon starts collapsed, expands on click, and hides admin-only teasers from members", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const ctx = await browser.newContext();
+  await signIn(ctx, { name: `E2E Soon Member ${stamp}` });
+  const page = await ctx.newPage();
+  await page.goto("/whats-new");
+
+  const toggle = page.locator(".soon-head");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const list = page.getByRole("list", { name: "Coming soon" });
+  await expect(list).toBeVisible();
+  await expect(list.getByText("Points, levels and badges")).toBeVisible();
+  // Platform-admin tooling is teased only to platform admins.
+  await expect(list.getByText("Survey results")).toHaveCount(0);
+
+  await toggle.click();
+  await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
+
+  await ctx.close();
+});
+
 test("profile: the e-mail-notifications toggle round-trips, and the public profile loads", async ({ browser }) => {
   const stamp = Date.now().toString(36);
   const name = `E2E Profile Member ${stamp}`;

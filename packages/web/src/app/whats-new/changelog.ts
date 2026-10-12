@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.46.0",
+    date: "2026-10-12",
+    summary:
+      "The What's new page now has a Coming soon section, collapsed at the top: open it to see the features that are planned but not available yet, such as points and badges, the feedback survey and AI-assisted writing. Admins also see the admin tools on the way. Plans can change, so the list carries no dates.",
+  },
+  {
     version: "0.45.1",
     date: "2026-10-08",
     summary: "Pressing Escape on a person's hover card now closes it, instead of it popping straight back open.",
