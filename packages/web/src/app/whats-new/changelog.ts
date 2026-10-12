@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.1",
+    date: "2026-10-12",
+    summary:
+      "The Coming soon list at the top of this page has new plans: replies to comments, daily or weekly e-mail digests, and a public form for customers and partners to send challenges for review. Platform admins also see a 30-day trash for deleted items. Nothing changes yet, and plans can change.",
+  },
+  {
     version: "1.0.0",
     date: "2026-10-12",
     summary:
