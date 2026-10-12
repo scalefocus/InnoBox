@@ -6,7 +6,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { exchangeAuthCode, parseIdTokenClaims } from "@innobox/shared/email";
 import { requirePlatformAdmin } from "@/lib/auth";
-import { EMAIL_OAUTH_STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE, finishConnect, webBaseUrl, webGraphMailEnv } from "@/lib/email";
+import { EMAIL_OAUTH_STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE, finishConnect, webGraphMailEnv } from "@/lib/email";
+import { publicBaseUrl } from "@innobox/shared";
 import { validateCallbackParams } from "../validation";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -15,7 +16,7 @@ async function handleGET(req: Request): Promise<Response> {
   if (!gate.ok) return gate.response;
 
   const url = new URL(req.url);
-  const settingsUrl = (query: string) => `${webBaseUrl()}/admin/settings?${query}`;
+  const settingsUrl = (query: string) => `${publicBaseUrl()}/admin/settings?${query}`;
   const clearOauthCookies = (res: NextResponse): NextResponse => {
     res.cookies.set(EMAIL_OAUTH_STATE_COOKIE, "", { maxAge: 0, path: "/" });
     res.cookies.set(EMAIL_OAUTH_VERIFIER_COOKIE, "", { maxAge: 0, path: "/" });
@@ -38,7 +39,7 @@ async function handleGET(req: Request): Promise<Response> {
   try {
     const tokens = await exchangeAuthCode(env, {
       code: validated.code,
-      redirectUri: `${webBaseUrl()}/api/admin/email/callback`,
+      redirectUri: `${publicBaseUrl()}/api/admin/email/callback`,
       codeVerifier: validated.verifier,
     });
     const claims = parseIdTokenClaims(tokens.idToken);

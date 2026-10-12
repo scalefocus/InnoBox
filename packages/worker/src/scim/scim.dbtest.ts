@@ -54,7 +54,7 @@ test(
 
       // ── create — literal Entra POST /Users payload ──────────────────────────────────
       const userExternalId = `${PREFIX}${runId}-user`;
-      const userName = `${PREFIX}${runId}-ada@contoso.com`;
+      const userName = `${PREFIX}${runId}-ada@example.com`;
       const createPayload = {
         schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
         externalId: userExternalId,

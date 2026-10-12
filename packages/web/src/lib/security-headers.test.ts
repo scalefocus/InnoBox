@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
-  canonicalBaseUrl,
   CSP_REPORT_GROUP,
   CSP_REPORT_PATH,
   generateNonce,
@@ -95,12 +94,6 @@ test("HSTS only when the canonical URL is https", () => {
   assert.equal(strictTransportSecurity("http://localhost:3000"), null);
   assert.equal(strictTransportSecurity(undefined), null);
   assert.equal(strictTransportSecurity("not a url"), null);
-});
-
-test("canonicalBaseUrl: PUBLIC_BASE_URL, falling back to NEXTAUTH_URL", () => {
-  assert.equal(canonicalBaseUrl({ PUBLIC_BASE_URL: "https://a.example.com", NEXTAUTH_URL: "https://b.example.com" }), "https://a.example.com");
-  assert.equal(canonicalBaseUrl({ PUBLIC_BASE_URL: "", NEXTAUTH_URL: "https://b.example.com" }), "https://b.example.com");
-  assert.equal(canonicalBaseUrl({}), undefined);
 });
 
 test("static headers: nosniff, DENY, referrer policy, COOP, and the permissions denial", () => {

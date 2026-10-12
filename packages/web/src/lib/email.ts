@@ -16,22 +16,16 @@ import {
   type GraphMailEnv,
   type ServiceAccountClaims,
 } from "@innobox/shared/email";
-import { renderEmailText, renderWrappedEmailHtml, validateWrapperHtml } from "@innobox/shared";
-import { canonicalBaseUrl } from "./security-headers";
+import { buildSmtpEnv, publicBaseUrl, renderEmailText, renderWrappedEmailHtml, validateWrapperHtml } from "@innobox/shared";
 
 /** One-shot cookies binding the connect redirect to this browser (state + PKCE verifier). */
 export const EMAIL_OAUTH_STATE_COOKIE = "innobox.email.state";
 export const EMAIL_OAUTH_VERIFIER_COOKIE = "innobox.email.verifier";
 
-/** The base for the e-mail consent redirect URI and the settings-page bounce (§2.3: derived
- *  from PUBLIC_BASE_URL). Same resolution as every other canonical-URL consumer — PUBLIC_BASE_URL,
- *  then NEXTAUTH_URL (which compose sets to the same value) — and, outside production only, the
- *  documented development default `http://localhost:3000`. No other variable is consulted, and
- *  a production deployment with neither set yields "" rather than a baked-in host. */
-export function webBaseUrl(env: { PUBLIC_BASE_URL?: string; NEXTAUTH_URL?: string; NODE_ENV?: string } = process.env): string {
-  const base = canonicalBaseUrl(env);
-  if (base) return base.replace(/\/+$/, "");
-  return env.NODE_ENV === "production" ? "" : "http://localhost:3000";
+/** Whether the SMTP fallback transport is configured (§2.3) — the worker's rule, shared: SMTP_HOST
+ *  **and** a sender (SMTP_FROM or SMTP_USER), blank values counting as unset. */
+export function smtpConfigured(env: Record<string, string | undefined> = process.env): boolean {
+  return buildSmtpEnv(env) !== null;
 }
 
 /** Graph env for the web tier (connect flow + test send), or null when key/creds absent.
@@ -65,7 +59,7 @@ export interface EmailChannelStatus {
 
 export async function getEmailChannelStatus(): Promise<EmailChannelStatus> {
   const encKeyPresent = webGraphMailEnv() !== null;
-  const smtpConfigured = Boolean(process.env.SMTP_HOST);
+  const smtp = smtpConfigured();
   const [account, wrapperHtml] = await Promise.all([getEmailAccount(pool), getEmailWrapperHtml(pool)]);
 
   let connectedByName: string | null = null;
@@ -95,8 +89,8 @@ export async function getEmailChannelStatus(): Promise<EmailChannelStatus> {
     lastRefreshError: account?.lastRefreshError ?? null,
     wrapperHtml,
     encKeyPresent,
-    smtpConfigured,
-    pill: reason === null ? "operational" : smtpConfigured ? "smtp_fallback" : "down",
+    smtpConfigured: smtp,
+    pill: reason === null ? "operational" : smtp ? "smtp_fallback" : "down",
     reason,
   };
 }
@@ -172,7 +166,7 @@ export async function sendTestEmail(actorUserId: string): Promise<{ ok: true; to
   if (!token.ok) {
     return { error: token.reason === "not_connected" ? "no email service account is connected" : `token refresh failed — see the status pill (${token.error ?? "unknown error"})` };
   }
-  const baseUrl = webBaseUrl();
+  const baseUrl = publicBaseUrl();
   const text = `This is a test notification from innobox.\n\nIf you can read this, the email service account works.\n\nOpen innobox: ${baseUrl || "(PUBLIC_BASE_URL not set)"}`;
   try {
     await sendGraphMail(env, token.accessToken, {

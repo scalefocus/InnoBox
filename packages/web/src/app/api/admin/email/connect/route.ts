@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { buildAuthorizeUrl, createPkcePair } from "@innobox/shared/email";
 import { requirePlatformAdmin } from "@/lib/auth";
-import { EMAIL_OAUTH_STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE, webBaseUrl, webGraphMailEnv } from "@/lib/email";
+import { EMAIL_OAUTH_STATE_COOKIE, EMAIL_OAUTH_VERIFIER_COOKIE, webGraphMailEnv } from "@/lib/email";
+import { publicBaseUrl } from "@innobox/shared";
 import { withSystemLog } from "@/lib/system-log";
 
 async function handleGET(): Promise<Response> {
@@ -23,7 +24,7 @@ async function handleGET(): Promise<Response> {
 
   const state = randomBytes(16).toString("hex");
   const { verifier, challenge } = createPkcePair();
-  const redirectUri = `${webBaseUrl()}/api/admin/email/callback`;
+  const redirectUri = `${publicBaseUrl()}/api/admin/email/callback`;
   const authorizeUrl = buildAuthorizeUrl(env, { redirectUri, state, codeChallenge: challenge });
 
   const res = NextResponse.redirect(authorizeUrl);

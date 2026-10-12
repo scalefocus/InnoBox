@@ -13,19 +13,21 @@ import { DateFormatProvider } from "@/components/DateFormat";
 import { AppShell } from "@/components/AppShell";
 import { NONCE_HEADER } from "@/lib/security-headers";
 import { enforceQuickStart } from "@/lib/quick-start-gate";
+import { publicBaseUrl } from "@innobox/shared/public-url";
 
 const DESCRIPTION =
   "Challenge & solution management — raise challenges, propose solutions, drive them to implementation.";
 // Absolute base for resolving the Open Graph / Twitter image + URL (INNOBOX_SPEC.md §2.2). Derives
-// from the one canonical URL (§2.3 PUBLIC_BASE_URL). No deployment-specific default lives in the
-// repository (§2.3), so an unset value falls back to the local dev origin, never to a real host.
-const BASE_URL = process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
+// from the one canonical URL (§2.3 publicBaseUrl): PUBLIC_BASE_URL, or the local dev origin
+// outside production — never a real host. A production server without it refuses to start, so
+// the empty value is seen only by `next build`, where metadataBase is simply left out.
+const BASE_URL = publicBaseUrl();
 
 // Social-share (Open Graph) card, §2.2: a single static app-level card served from the already-public
 // /brand tree. There are deliberately no per-challenge/per-solution cards — every route but "/" 302s an
 // unauthenticated scraper to sign-in (invariant 2), and per-resource cards would leak titles/authors.
 export const metadata: Metadata = {
-  metadataBase: new URL(BASE_URL),
+  ...(BASE_URL ? { metadataBase: new URL(BASE_URL) } : {}),
   title: "InnoBox",
   description: DESCRIPTION,
   openGraph: {

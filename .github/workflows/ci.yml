@@ -5,7 +5,7 @@
 #   lint      : ESLint every package (warnings report, errors fail)
 #   test      : hermetic unit tests (the live-DB suites gated-skip here)
 #   db-test   : the gated live-DB suite against a real Postgres service
-#   build     : production build of the UI (proves the standalone server compiles)
+#   build     : recursive production build (shared → web standalone server + worker)
 #
 # Deployment is NOT here: Jenkins owns it (Docker-over-SSH to the deploy host), and no
 # deployment-specific value lives in this repository.
@@ -126,5 +126,5 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @innobox/shared build
-      - run: pnpm --filter @innobox/web build
+      # Recursive: pnpm builds in topological order (shared first), then web and worker.
+      - run: pnpm -r build

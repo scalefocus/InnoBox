@@ -2,8 +2,10 @@
 // cookies are SameSite=Lax, which stops other sites but not a sibling sub-domain of the same
 // registrable domain — so every state-changing API request must carry an `Origin` equal to the
 // deployment's canonical origin. Auth.js routes (/api/auth/*) are exempt: they carry their own
-// CSRF token, and so is the public CSP report sink (/api/csp-report, exact path). Pure (its one
-// import is the pure security-headers module) so the middleware (edge) and the unit tests share it.
+// CSRF token, and so is the public CSP report sink (/api/csp-report, exact path). Pure (its imports
+// are the pure security-headers and public-url modules) so the middleware (edge) and the unit
+// tests share it.
+import { configuredPublicBaseUrl } from "@innobox/shared/public-url";
 import { CSP_REPORT_PATH } from "./security-headers";
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -37,15 +39,15 @@ export interface OriginCheckInput {
   origin: string | null;
   /** The origin the server itself was addressed at (scheme + Host) — used only in dev. */
   requestOrigin: string;
-  env: { PUBLIC_BASE_URL?: string; NEXTAUTH_URL?: string };
+  env: { PUBLIC_BASE_URL?: string };
   dev: boolean;
 }
 
-/** The origins a state-changing request may come from: the origin of PUBLIC_BASE_URL (falling
- *  back to NEXTAUTH_URL). Only in local dev, and only when neither is configured, the server's own
- *  origin stands in. A production build with neither set accepts nothing (fails closed). */
+/** The origins a state-changing request may come from: the origin of PUBLIC_BASE_URL (§2.3 — no
+ *  other variable is consulted). Only in local dev, and only when it is not configured, the
+ *  server's own origin stands in. A production build without it accepts nothing (fails closed). */
 export function allowedOrigins(input: Pick<OriginCheckInput, "requestOrigin" | "env" | "dev">): string[] {
-  const configured = originOf(input.env.PUBLIC_BASE_URL?.trim() || input.env.NEXTAUTH_URL?.trim() || undefined);
+  const configured = originOf(configuredPublicBaseUrl(input.env));
   if (configured) return [configured];
   if (input.dev) {
     const own = originOf(input.requestOrigin);

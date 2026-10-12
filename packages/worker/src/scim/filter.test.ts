@@ -11,9 +11,9 @@ test("no filter -> null (list-all semantics)", () => {
 });
 
 test("userName eq \"value\" parses, attribute name case-insensitive", () => {
-  assert.deepEqual(parseFilter('userName eq "ada@contoso.com"'), { attr: "username", value: "ada@contoso.com" });
-  assert.deepEqual(parseFilter('USERNAME eq "ada@contoso.com"'), { attr: "username", value: "ada@contoso.com" });
-  assert.deepEqual(parseFilter('UserName EQ "ada@contoso.com"'), { attr: "username", value: "ada@contoso.com" });
+  assert.deepEqual(parseFilter('userName eq "ada@example.com"'), { attr: "username", value: "ada@example.com" });
+  assert.deepEqual(parseFilter('USERNAME eq "ada@example.com"'), { attr: "username", value: "ada@example.com" });
+  assert.deepEqual(parseFilter('UserName EQ "ada@example.com"'), { attr: "username", value: "ada@example.com" });
 });
 
 test("externalId eq \"value\" parses", () => {
