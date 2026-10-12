@@ -1536,6 +1536,13 @@ export async function withdrawChallenge(pool: Pool, author: Viewer, number: stri
   return inTransaction(pool, async (client) => {
     await unpinOnStatusChange(client, author.userId, cur.id, "withdrawn"); // §13.2 auto-unpin
     await client.query(`update challenges set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
+    // §22.7/§22.11: a withdrawn item keeps no AI output — its own, or its solutions'.
+    await client.query(
+      `delete from ai_results
+        where (parent_type = 'challenge' and parent_id = $1)
+           or (parent_type = 'solution' and parent_id in (select id from solutions where challenge_id = $1))`,
+      [cur.id],
+    );
     await appendAudit(client, {
       actorUserId: author.userId,
       action: "challenge.status_changed",
@@ -1568,6 +1575,7 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
 
   return inTransaction(pool, async (client) => {
     await client.query(`update solutions set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
+    await client.query(`delete from ai_results where parent_type = 'solution' and parent_id = $1`, [cur.id]); // §22.7
     await appendAudit(client, {
       actorUserId: author.userId,
       action: "solution.status_changed",

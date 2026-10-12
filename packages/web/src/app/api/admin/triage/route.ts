@@ -5,6 +5,8 @@ import { pool } from "@/lib/db";
 import { adminNamespaceIds, listTriageQueue } from "./store";
 import { parseTriageFilters, parseTriagePagination } from "./validation";
 import { withSystemLog } from "@/lib/system-log";
+import { webAi } from "@/lib/ai";
+import { triageQueueNotes } from "../../ai/triage/store";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +30,9 @@ async function handleGET(req: Request): Promise<Response> {
   if (!pagination.ok) return Response.json({ error: pagination.error }, { status: 400 });
 
   const page = await listTriageQueue(pool, admin, parsed.value, pagination.value);
-  return Response.json(page);
+  // §22.11: the triage-notes indicator per row (the queue is admins-only, who may always read them).
+  const notes = await triageQueueNotes(pool, webAi(), admin.userId, page.rows.map((r) => r.number));
+  return Response.json({ ...page, rows: page.rows.map((r) => ({ ...r, aiNotes: notes.get(r.number) ?? null })) });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

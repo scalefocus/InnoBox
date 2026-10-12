@@ -5314,13 +5314,6 @@ treated differently from text the author typed.
 
 ### §22.11 Triage assist
 
-> **⚠ GAP-70 · new feature:** **triage assist** does not exist. Build: the
-> `triage_assist` registry entry and switch, migration `0039_ai_results.sql` (an
-> `ai_results` table — `kind`, `parent_type`, `parent_id`, `input_hash`, `model`,
-> `status` `pending|ready|failed`, `payload` jsonb, timestamps — joining the §10.3
-> cascade), the worker pass, the detail-page and triage-queue panel, **Re-run**, and the
-> tests below. Its own minor release, on top of the shipped plumbing (§22.1–§22.9).
-
 An **advisory** note that helps triagers and the committee act faster. It never
 transitions, assigns, rejects or notifies (invariant 6).
 
@@ -5347,6 +5340,13 @@ transitions, assigns, rejects or notifies (invariant 6).
 - **Lifecycle.** Joins the §10.3 cascade; a `withdrawn` challenge's result is deleted;
   results for items that left the subject statuses are kept read-only for the record
   until the item is deleted.
+- **Run details.** The input hash covers the subject's **own** egress fields (title,
+  description, impact area) — not the candidate titles, so a new challenge elsewhere in the
+  namespace never re-sends every open subject. One result row per challenge (migration
+  `0039_ai_results.sql`); while a new run is pending the previous note stays readable,
+  labelled *"From an earlier version"*. A failed run is retried after an hour (or at once
+  by **Re-run**). With the switch off, existing notes stay readable and nothing is pending;
+  the queue indicator never shows on the reader's own challenges.
 - **Tests.** Unit: subject selection, hashing, the candidate set's visibility, output
   validation (duplicates limited to candidates). Integration: who sees the note per role
   and status (author never), cascade, the switch, restricted skipping. e2e (stub): a

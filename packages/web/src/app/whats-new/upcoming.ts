@@ -61,13 +61,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-70"],
-    title: "Triage assist",
-    teaser:
-      "An advisory note on challenges waiting for triage: a short summary, missing details to ask about and possible duplicates. It never changes anything by itself.",
-    audience: "admins",
-  },
-  {
     ids: ["GAP-65", "GAP-66"],
     title: "Survey results",
     teaser: "Scores and comments from the feedback survey, by feature and by role, with trends over time.",

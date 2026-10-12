@@ -463,6 +463,32 @@ export function aiUserLimitHit(counts: { lastMinute: number; lastDay: number }, 
   return null;
 }
 
+/** Removes the cached AI results of the given challenges and solutions (§22.7: a result shares its
+ *  item's lifecycle — the §10.3 cascade, a withdrawal). Returns the number of rows removed. */
+export async function deleteAiResults(db: DbClient, challengeIds: readonly string[], solutionIds: readonly string[] = []): Promise<number> {
+  if (challengeIds.length === 0 && solutionIds.length === 0) return 0;
+  const { rowCount } = await db.query(
+    `delete from ai_results
+      where (parent_type = 'challenge' and parent_id = any($1::uuid[]))
+         or (parent_type = 'solution' and parent_id = any($2::uuid[]))`,
+    [challengeIds, solutionIds],
+  );
+  return rowCount ?? 0;
+}
+
+/** The worker's backstop for withdrawals made by any path: results of withdrawn challenges (and
+ *  of their solutions) and of withdrawn solutions are deleted. */
+export async function deleteWithdrawnAiResults(db: DbClient): Promise<number> {
+  const { rowCount } = await db.query(
+    `delete from ai_results r
+      where (r.parent_type = 'challenge' and exists (select 1 from challenges c where c.id = r.parent_id and c.status = 'withdrawn'))
+         or (r.parent_type = 'solution' and exists (
+              select 1 from solutions s join challenges c on c.id = s.challenge_id
+               where s.id = r.parent_id and (s.status = 'withdrawn' or c.status = 'withdrawn')))`,
+  );
+  return rowCount ?? 0;
+}
+
 /** The hourly prune (worker housekeeping): ai_usage keeps 365 days. */
 export async function pruneAiUsage(db: DbClient, retentionDays: number = AI_USAGE_RETENTION_DAYS): Promise<number> {
   const { rowCount } = await db.query(`delete from ai_usage where created_at < now() - make_interval(days => $1::int)`, [retentionDays]);

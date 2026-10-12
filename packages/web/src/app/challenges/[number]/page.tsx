@@ -18,6 +18,7 @@ import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/F
 import { primaryButtonState } from "@/lib/form-lock";
 import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
+import { TriageNotesPanel } from "@/components/TriageNotesPanel";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -657,6 +658,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           />
         )}
       </div>
+
+      {/* §22.11: shown only to those the server allows (never the author); renders nothing otherwise. */}
+      <TriageNotesPanel challengeNumber={challenge.number} version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`} />
 
       <ProposeSolutionForm
         challengeNumber={challenge.number}

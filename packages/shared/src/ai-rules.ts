@@ -276,6 +276,15 @@ export const AI_FEATURES: readonly AiFeature[] = [
       "The text the author is writing — a challenge's title and description, or a solution's description and cost vs benefits with its challenge's title and description — and the names of the active impact areas. Never the client name, the anonymity choice, attachments or anything about the author.",
     maxTokens: 8192,
   },
+  {
+    key: "triage_assist",
+    label: "Triage assist",
+    egress:
+      "Each challenge awaiting triage or under review: its title, description and impact area, the names of the active impact areas, and the titles of up to 20 other challenges in the same namespace that every reader of the note can see. Never who wrote anything.",
+    maxTokens: 4096,
+    timeoutMs: 120_000,
+    needsSwitch: true,
+  },
 ];
 
 export function findAiFeature(key: string, features: readonly AiFeature[] = AI_FEATURES): AiFeature | null {

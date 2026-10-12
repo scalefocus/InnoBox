@@ -187,3 +187,103 @@ export function processSolutionDraft(json: unknown): SolutionDraftOutput | null 
   if (!description) return null;
   return { description, costVsBenefits: aiPlainText(o.costVsBenefits, AI_DRAFT_COST_MAX) };
 }
+
+// ── §22.11 Triage assist ─────────────────────────────────────────────────────────────────
+
+/** Challenges in these statuses get a triage note while the task is effective. */
+export const TRIAGE_SUBJECT_STATUSES = ["awaiting_triage", "in_review", "needs_improvement", "meeting_scheduled"] as const;
+
+export function isTriageSubject(status: string): boolean {
+  return (TRIAGE_SUBJECT_STATUSES as readonly string[]).includes(status);
+}
+
+/** Up to this many same-namespace titles go along as duplicate candidates. */
+export const TRIAGE_CANDIDATE_LIMIT = 20;
+export const TRIAGE_SUMMARY_MAX = 400;
+/** A re-run waits this long after a failure before the worker tries the same input again. */
+export const TRIAGE_FAILED_RETRY_MINUTES = 60;
+
+/**
+ * The input hash, as SQL over `challenges c join impact_areas ia`: exactly the subject's own
+ * egress fields (title, description, impact area) and a version tag. Shared by the worker (what
+ * it claims) and the web tier (whether a result is current), so both always agree. The candidate
+ * titles are deliberately NOT part of it — a new challenge elsewhere in the namespace must not
+ * re-send every open subject.
+ */
+export const TRIAGE_INPUT_HASH_SQL = `md5(concat_ws(chr(31), 'triage-v1', c.title, c.description, ia.name))`;
+
+export interface TriageCandidate {
+  /** The bare challenge number. */
+  number: number;
+  title: string;
+}
+
+/** Exactly the §22.11 egress: the subject's title, description and impact area, the active
+ *  impact-area names (for the suggestion) and the candidates' titles. */
+export interface TriageInput {
+  title: string;
+  description: string;
+  impactArea: string;
+  impactAreaNames: string[];
+  candidates: TriageCandidate[];
+}
+
+export function buildTriagePrompt(input: TriageInput): AiPrompt {
+  const system = [
+    "You write TRIAGE notes that help reviewers of an internal innovation platform assess a newly raised challenge. You advise; you never decide.",
+    "Answer as JSON with exactly these keys:",
+    `"summary": the challenge in at most ${TRIAGE_SUMMARY_MAX} characters;`,
+    '"missingInformation": a short list of what the text does not say — from: the problem, the impact, the current workaround, a measurable outcome; empty when nothing is missing;',
+    '"suggestedImpactArea": the best impact area from the list, copied exactly, or null;',
+    '"questions": up to 5 short questions a reviewer could ask the author;',
+    '"duplicates": up to 5 entries {"number": <a number from the candidate list>, "reason": "<one line>"} for candidates that describe the same problem; empty when none do.',
+    "Only use numbers from the candidate list. The candidate list may be empty.",
+    AI_DATA_RULES,
+  ].join("\n");
+  const candidates = input.candidates.map((c) => `#${c.number} ${c.title}`).join("\n");
+  const user = [
+    dataBlock("TITLE", input.title),
+    dataBlock("DESCRIPTION", input.description),
+    dataBlock("IMPACT_AREA", input.impactArea),
+    dataBlock("IMPACT_AREAS", input.impactAreaNames.join("\n")),
+    dataBlock("CANDIDATES", candidates),
+  ].join("\n\n");
+  return { system, messages: [{ role: "user", content: user }] };
+}
+
+/** The stored note — plain text only, duplicates by bare number. */
+export interface TriageNotes {
+  summary: string;
+  missingInformation: string[];
+  suggestedImpactArea: string | null;
+  questions: string[];
+  duplicates: { number: number; reason: string }[];
+}
+
+/** Validates the model's note: capped plain text; the impact area must be an active, non-Client
+ *  area; duplicates only from the candidate set (deduplicated, at most 5). Null when unusable. */
+export function processTriageNotes(json: unknown, candidateNumbers: readonly number[], areas: readonly ImpactAreaOption[]): TriageNotes | null {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  const o = json as Record<string, unknown>;
+  const summary = aiOneLine(o.summary, TRIAGE_SUMMARY_MAX);
+  if (!summary) return null;
+  const allowed = new Set(candidateNumbers);
+  const duplicates: { number: number; reason: string }[] = [];
+  if (Array.isArray(o.duplicates)) {
+    for (const d of o.duplicates) {
+      if (!d || typeof d !== "object") continue;
+      const raw = (d as { number?: unknown }).number;
+      const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/^#|^CH-/i, "")) : NaN;
+      if (!Number.isInteger(n) || !allowed.has(n) || duplicates.some((x) => x.number === n)) continue;
+      duplicates.push({ number: n, reason: aiOneLine((d as { reason?: unknown }).reason, 200) });
+      if (duplicates.length >= 5) break;
+    }
+  }
+  return {
+    summary,
+    missingInformation: aiStringList(o.missingInformation, 6, 120),
+    suggestedImpactArea: mapImpactAreaHint(o.suggestedImpactArea, areas)?.name ?? null,
+    questions: aiStringList(o.questions, 5, 200),
+    duplicates,
+  };
+}

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.49.0",
+    date: "2026-10-12",
+    summary:
+      "Triage assist: when a platform admin switches it on, challenges awaiting triage or under review get advisory AI notes — a short summary, missing information, questions to ask and possible duplicates. Namespace admins, the committee and the assignee see them on the challenge page and in the triage queue; authors never do.",
+  },
+  {
     version: "0.48.0",
     date: "2026-10-12",
     summary:

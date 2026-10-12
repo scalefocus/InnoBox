@@ -11,10 +11,13 @@ import {
   aiStringList,
   buildChallengeDraftPrompt,
   buildSolutionDraftPrompt,
+  buildTriagePrompt,
   dataBlock,
+  isTriageSubject,
   mapImpactAreaHint,
   processChallengeDraft,
   processSolutionDraft,
+  processTriageNotes,
   promptImpactAreaNames,
   type ImpactAreaOption,
 } from "./ai-tasks.js";
@@ -105,4 +108,53 @@ test("solution draft output: description required, cost optional and capped", ()
   assert.equal(processSolutionDraft({ description: "Do X", costVsBenefits: "c".repeat(6000) })?.costVsBenefits.length, 5000);
   assert.equal(processSolutionDraft({ costVsBenefits: "c" }), null);
   assert.equal(processSolutionDraft(null), null);
+});
+
+test("triage subjects: the four pre-decision statuses only", () => {
+  for (const s of ["awaiting_triage", "in_review", "needs_improvement", "meeting_scheduled"]) assert.ok(isTriageSubject(s), s);
+  for (const s of ["valid", "solved", "rejected", "withdrawn"]) assert.ok(!isTriageSubject(s), s);
+});
+
+test("triage prompt: the subject's own fields and candidate titles only", () => {
+  const input = {
+    title: "Slow invoice matching",
+    description: "Finance matches invoices by hand.",
+    impactArea: "Internal",
+    impactAreaNames: ["Internal", "Accelerator"],
+    candidates: [{ number: 12, title: "Invoice OCR" }, { number: 40, title: "Expense reports" }],
+  };
+  const leaky = { ...input, authorName: "Jane Roe", isAnonymous: true, clientName: "ACME" } as typeof input;
+  const text = promptText(buildTriagePrompt(leaky));
+  for (const leaked of ["Jane", "ACME", "anonym"]) assert.ok(!text.includes(leaked), leaked);
+  assert.ok(text.includes("<<<CANDIDATES\n#12 Invoice OCR\n#40 Expense reports\n>>>"));
+  assert.ok(text.includes("TRIAGE"));
+});
+
+test("triage output: duplicates only from the candidate set; capped plain text; area mapped", () => {
+  const notes = processTriageNotes(
+    {
+      summary: `${"S".repeat(500)}\nmore`,
+      missingInformation: ["Impact", "", "Impact", "Workaround"],
+      suggestedImpactArea: "people",
+      questions: ["How often?", 7, "Who owns it?"],
+      duplicates: [
+        { number: 12, reason: "same OCR idea" },
+        { number: 999, reason: "invented" },
+        { number: "CH-40", reason: "also expenses" },
+        { number: 12, reason: "again" },
+        { reason: "no number" },
+      ],
+    },
+    [12, 40],
+    AREAS,
+  );
+  assert.ok(notes);
+  assert.equal(notes.summary.length, 400);
+  assert.deepEqual(notes.missingInformation, ["Impact", "Workaround"]);
+  assert.equal(notes.suggestedImpactArea, "People");
+  assert.deepEqual(notes.questions, ["How often?", "Who owns it?"]);
+  assert.deepEqual(notes.duplicates, [{ number: 12, reason: "same OCR idea" }, { number: 40, reason: "also expenses" }]);
+  assert.equal(processTriageNotes({ summary: "" }, [], AREAS), null);
+  assert.equal(processTriageNotes({ summary: "ok", suggestedImpactArea: "Client" }, [], AREAS)?.suggestedImpactArea, null);
+  assert.deepEqual(processTriageNotes({ summary: "ok", duplicates: [{ number: 5 }] }, [], AREAS)?.duplicates, [], "an empty candidate set allows none");
 });
