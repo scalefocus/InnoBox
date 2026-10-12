@@ -35,7 +35,10 @@ pipeline {
 
   options {
     timestamps()
-    timeout(time: 60, unit: 'MINUTES')
+    // 120, not 60: the browser e2e (~93 specs against a dev server) ran well past an hour on the
+    // agent and was cut off mid-suite. Two shards + route warm-up should bring it far under that;
+    // the headroom stays so a slow agent fails on a real error, not the clock.
+    timeout(time: 120, unit: 'MINUTES')
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
@@ -59,6 +62,12 @@ pipeline {
     CI_E2E_PG_CONTAINER = "innobox-e2e-pg-${env.BUILD_TAG}"
     CI_E2E_PG_PORT      = '55434'
     CI_E2E_DATABASE_URL = "postgres://innobox:test@127.0.0.1:55434/innobox"
+    CI_E2E_PW_CONTAINER = "innobox-e2e-pw-${env.BUILD_TAG}"
+    // V8 heap cap (MB) for the e2e dev server. Uncapped, a long run grew it until the kernel OOM
+    // killer SIGKILLed it — no log line, and the starved agent dropped its Jenkins connection.
+    // Capped, V8 collects harder and, if it truly runs out, dies with a readable "heap limit"
+    // error. Tune to the agent's RAM.
+    CI_E2E_WEB_HEAP_MB  = '4096'
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
     PATH     = "${env.HOME}/.asdf/shims:${env.HOME}/.asdf/bin:${env.PATH}"
@@ -210,15 +219,38 @@ pipeline {
 
               # Start the dev server on the agent and health-check it before Playwright runs (the
               # config reuses the already-listening server). Kill it on the way out.
-              pnpm --filter @innobox/web dev > e2e-web.log 2>&1 &
+              #   NODE_OPTIONS  : the V8 heap cap (CI_E2E_WEB_HEAP_MB, see environment)
+              #   E2E_KEEP_ROUTES_COMPILED : next.config.ts keeps compiled routes resident instead
+              #                   of disposing them after 60 s idle (a dev-only setting)
+              #   setsid        : its own process group, so cleanup also kills next's child
+              #                   processes, not just the pnpm wrapper
+              #   WEB_EXIT      : gets the server's exit status when it dies — the watchdog polls it
+              #                   (a dead child can linger as a zombie, which `kill -0` still finds)
+              WEB_EXIT="${PWD}/e2e-web.exit"
+              rm -f "${WEB_EXIT}" "${PWD}"/e2e-shard-*.exit
+              export E2E_KEEP_ROUTES_COMPILED=1
+              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" \
+                setsid sh -c 'pnpm --filter @innobox/web dev > e2e-web.log 2>&1; echo $? > "$0"' "${WEB_EXIT}" &
               WEB_PID=$!
-              trap "kill ${WEB_PID} >/dev/null 2>&1 || true" EXIT
+              trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; docker rm -f "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true' EXIT
               for i in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
               curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
+
+              # Compile every page and API route now, so no spec waits on a cold compile — or has its
+              # page fully reloaded by Fast Refresh when a compile lands mid-test.
+              node packages/web/scripts/e2e-warmup.mjs || { echo "=== dev server log (e2e-web.log) ==="; cat e2e-web.log; exit 1; }
 
               # Run the suite inside the official Playwright image so the agent needs NO Playwright
               # browsers or system libraries — Docker is already an agent prerequisite. The tag is
               # derived from the installed @playwright/test so image browsers always match the driver.
+              #
+              # TWO SHARDS AT ONCE, both against the one dev server + database above (Next allows one
+              # `next dev` per checkout, and a second server would double the memory). E2E_SHARD=1|2
+              # makes the config pick its half: specs that change platform-wide state all stay in
+              # shard 1, the rest are balanced by test count (see e2e/playwright.config.ts). Each shard
+              # writes its own test-results/ and playwright-report/ subfolder; their output lines are
+              # prefixed [shard N]. They run in the background so the watchdog below can stop them.
+              #   --name            : so the watchdog and cleanup can stop the container
               #   --network host    : the container reaches the dev server on 127.0.0.1:3000
               #   --ipc=host        : Playwright's Chromium recommendation (avoids /dev/shm crashes)
               #   --user            : agent uid/gid, so report/trace files stay owned by the Jenkins user
@@ -230,18 +262,54 @@ pipeline {
               #                       fails fast with a clear connection error if the host server died.
               # The test runner itself never touches the DB, so only the base-URL env goes in.
               PW_VERSION="$(node -p "require('./packages/web/node_modules/@playwright/test/package.json').version")"
-              docker run --rm --network host --ipc=host \
-                --user "$(id -u):$(id -g)" \
-                -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
-                -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
-                "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
-                ./node_modules/.bin/playwright test -c e2e/playwright.config.ts \
-                || { echo "=== dev server log (e2e-web.log) ==="; cat e2e-web.log; exit 1; }
+              run_shard() {
+                {
+                  rc=0
+                  docker run --rm --name "${CI_E2E_PW_CONTAINER}-$1" --network host --ipc=host \
+                    --user "$(id -u):$(id -g)" \
+                    -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
+                    -e E2E_SHARD="$1" \
+                    -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
+                    "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
+                    ./node_modules/.bin/playwright test -c e2e/playwright.config.ts || rc=$?
+                  echo "${rc}" > "${PWD}/e2e-shard-$1.exit"
+                } 2>&1 | sed -u "s/^/[shard $1] /"
+              }
+              run_shard 1 &
+              SHARD1_PID=$!
+              run_shard 2 &
+              SHARD2_PID=$!
+
+              # Watchdog: if the dev server dies mid-suite, stop both shards at once and say so,
+              # rather than letting every remaining spec fail on "connection refused".
+              SERVER_DIED=0
+              while [ ! -f e2e-shard-1.exit ] || [ ! -f e2e-shard-2.exit ]; do
+                if [ "${SERVER_DIED}" = 0 ] && [ -f "${WEB_EXIT}" ]; then
+                  SERVER_DIED=1
+                  echo "=== the dev server exited mid-suite (status $(cat "${WEB_EXIT}")) — stopping Playwright ==="
+                  docker rm -f "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true
+                fi
+                sleep 5
+              done
+              wait "${SHARD1_PID}" "${SHARD2_PID}" || true
+              echo "=== shard 1 exit: $(cat e2e-shard-1.exit), shard 2 exit: $(cat e2e-shard-2.exit) ==="
+
+              if [ "${SERVER_DIED}" = 1 ] || [ "$(cat e2e-shard-1.exit)" != 0 ] || [ "$(cat e2e-shard-2.exit)" != 0 ]; then
+                echo "=== dev server log (e2e-web.log) ==="
+                cat e2e-web.log
+                if [ "${SERVER_DIED}" = 1 ]; then
+                  # No "heap limit" error in the log above + a SIGKILL status (137) = killed from
+                  # outside, most likely the kernel OOM killer (dmesg may be unreadable for this user).
+                  echo "=== kernel OOM-killer messages (if readable) ==="
+                  dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory' | tail -n 5 || true
+                fi
+                exit 1
+              fi
             '''
           }
           post {
             always {
-              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true'
+              sh 'docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true'
               // Kept even when the build is aborted (where the in-step `cat` never runs).
               archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log', allowEmptyArchive: true
             }
@@ -349,7 +417,7 @@ MINIO_SCRIPT
 
   post {
     always {
-      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true'
+      sh 'docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}-1" "${CI_E2E_PW_CONTAINER}-2" >/dev/null 2>&1 || true'
     }
     success { echo "innobox pipeline OK — ${env.GIT_COMMIT}" }
     failure { echo "innobox pipeline FAILED — ${env.GIT_COMMIT}" }

@@ -20,6 +20,14 @@ const nextConfig: NextConfig = {
   // the Jenkins e2e drives the dev server at http://127.0.0.1:3000 — so without this every JS chunk
   // is refused, nothing hydrates, and the whole suite times out. Ignored by production builds.
   allowedDevOrigins: ["127.0.0.1"],
+  // `next dev` only, and only when the Jenkins e2e job asks for it. By default dev disposes a
+  // route's compiled entry after 60 s idle, so a long e2e run recompiles the same routes over and
+  // over — each recompile a 5–35 s stall on the CI agent and a potential Fast Refresh full reload
+  // of the page under test. The job pre-compiles every route (scripts/e2e-warmup.mjs) and this
+  // keeps them resident for the whole run. Local dev keeps Next's default.
+  ...(process.env.E2E_KEEP_ROUTES_COMPILED === "1"
+    ? { onDemandEntries: { maxInactiveAge: 24 * 60 * 60 * 1000, pagesBufferLength: 1000 } }
+    : {}),
   async headers() {
     return [{ source: "/:path*", headers: [...STATIC_SECURITY_HEADERS] }];
   },

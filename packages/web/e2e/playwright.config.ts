@@ -6,9 +6,69 @@
 // The suites run against whatever database the dev server points at and create uniquely-named
 // (timestamped) fixtures, asserting on those specific rows — so they don't depend on a clean
 // database. (A fully isolated e2e database + server, like the dbtest harness, is a later CI step.)
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
+
+// ── Sharding (Jenkins) ────────────────────────────────────────────────────────────────────────
+// E2E_SHARD=1|2 runs one of two halves of the suite; Jenkins runs both at once against the SAME
+// dev server and database (one `next dev` per checkout is all Next allows, and the agent can't
+// afford two). Playwright's own --shard can't be used: it splits blindly, and these specs below
+// change PLATFORM-WIDE state (the AI provider + its switches, the system banner, platform
+// settings, channel webhooks, the featured list) that another spec running concurrently would
+// observe. They are pinned to shard 1, where they keep running serially as before; every other
+// spec only touches its own uniquely-named fixtures. The rest are dealt out greedily by test
+// count so the halves come out roughly equal. Unset → the whole suite, as before.
+// A NEW spec that changes platform-wide state must be added here.
+const PLATFORM_STATE_SPECS = [
+  "admin-ai.spec.ts",
+  "admin-banner.spec.ts",
+  "admin-settings.spec.ts",
+  "admin-webhooks.spec.ts",
+  "ai-draft.spec.ts",
+  "ai-similar.spec.ts",
+  "ai-summary.spec.ts",
+  "ai-triage.spec.ts",
+  "featured.spec.ts",
+  "gamification.spec.ts",
+  "survey.spec.ts",
+];
+
+const e2eDir = path.dirname(fileURLToPath(import.meta.url));
+
+/** The spec files of shard 1 or 2 — every spec lands in exactly one. */
+function shardSpecs(shard: 1 | 2): string[] {
+  const testCount = (file: string) =>
+    (readFileSync(path.join(e2eDir, file), "utf8").match(/^\s*test(?:\.(?:only|skip|fixme))?\(\s*["'`]/gm) ?? []).length;
+  const specs = readdirSync(e2eDir).filter((f) => f.endsWith(".spec.ts")).sort();
+  const halves: { files: string[]; tests: number }[] = [
+    { files: [], tests: 0 },
+    { files: [], tests: 0 },
+  ];
+  for (const f of specs.filter((s) => PLATFORM_STATE_SPECS.includes(s))) {
+    halves[0].files.push(f);
+    halves[0].tests += testCount(f);
+  }
+  const rest = specs
+    .filter((s) => !PLATFORM_STATE_SPECS.includes(s))
+    .map((f) => ({ f, n: testCount(f) }))
+    .sort((a, b) => b.n - a.n || a.f.localeCompare(b.f));
+  for (const { f, n } of rest) {
+    const target = halves[0].tests <= halves[1].tests ? halves[0] : halves[1];
+    target.files.push(f);
+    target.tests += n;
+  }
+  return halves[shard - 1].files;
+}
+
+const shardEnv = process.env.E2E_SHARD;
+if (shardEnv !== undefined && shardEnv !== "1" && shardEnv !== "2") {
+  throw new Error(`E2E_SHARD must be 1 or 2, got "${shardEnv}"`);
+}
+const shard = shardEnv ? (Number(shardEnv) as 1 | 2) : null;
 
 // Whether Playwright manages the dev server itself. Omitted when E2E_NO_WEBSERVER=1 — set on the
 // Jenkins path, where the suite runs INSIDE the official Playwright Docker image (no pnpm/asdf) and
@@ -39,6 +99,13 @@ const webServer =
 
 export default defineConfig({
   testDir: ".",
+  ...(shard
+    ? {
+        testMatch: shardSpecs(shard).map((f) => `**/${f}`),
+        // Both shards run at once from the same checkout, so each writes its own results.
+        outputDir: `../test-results/shard-${shard}`,
+      }
+    : {}),
   // Journey specs share database state and drive multi-actor flows, so run serially for
   // determinism rather than in parallel.
   fullyParallel: false,
@@ -55,7 +122,9 @@ export default defineConfig({
   // In CI, stop once the suite is clearly broken rather than retrying every spec until the
   // Jenkins pipeline timeout aborts the build (which also swallows the error summary).
   maxFailures: process.env.CI ? 10 : 0,
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
+  reporter: process.env.CI
+    ? [["list"], ["html", { open: "never", ...(shard ? { outputFolder: `../playwright-report/shard-${shard}` } : {}) }]]
+    : "list",
   use: {
     baseURL,
     // §2.4 CSRF: every state-changing /api/* request must carry an Origin equal to the app's own
