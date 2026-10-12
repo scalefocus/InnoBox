@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.54.0",
+    date: "2026-10-12",
+    summary:
+      "You can now give feedback whenever you like: use Give feedback now in your profile, Give feedback in the account menu, or Have your say in the sidebar, and pick the part of InnoBox you want to talk about. It stays anonymous and is available once a week. Platform admins can tell these answers apart from the prompted ones in Survey results.",
+  },
+  {
     version: "0.53.0",
     date: "2026-10-12",
     summary:

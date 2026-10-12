@@ -22,6 +22,8 @@ import {
   offerQuestions,
   parseStoredOffer,
   rollSurvey,
+  selfSurveyGate,
+  selfSurveyNextAt,
   surveyQuestionText,
   surveySegment,
   validateSurveySubmission,
@@ -251,4 +253,29 @@ test("submission: feature is required for a self offer and rejected for any othe
   const picked = validateSurveySubmission(selfOffer, { answers: { "feature.useful": 3 }, via: "popup", feature: "search" });
   assert.ok(picked.ok);
   if (picked.ok) assert.equal(picked.value.feature, "search");
+});
+
+// ── On-demand gate ────────────────────────────────────────────────────────────────────────
+
+test("on-demand gate: the switch, active and not erased, and the 7-day cooldown (6 vs 7 days)", () => {
+  const base = { active: true, scrubbed: false, selfShownAt: null as Date | null };
+  assert.deepEqual(selfSurveyGate(base, true, NOW), { ok: true });
+  assert.deepEqual(selfSurveyGate(base, false, NOW), { ok: false, reason: "surveys_off" });
+  assert.deepEqual(selfSurveyGate({ ...base, active: false }, true, NOW), { ok: false, reason: "unavailable" });
+  assert.deepEqual(selfSurveyGate({ ...base, scrubbed: true }, true, NOW), { ok: false, reason: "unavailable" });
+  const six = selfSurveyGate({ ...base, selfShownAt: ago(6) }, true, NOW);
+  assert.equal(six.ok, false);
+  if (!six.ok && six.reason === "cooldown") assert.equal(six.nextAt.getTime(), ago(6).getTime() + 7 * DAY);
+  else assert.fail("6 days in is still the cooldown");
+  assert.deepEqual(selfSurveyGate({ ...base, selfShownAt: ago(7) }, true, NOW), { ok: true });
+});
+
+test("on-demand gate: bypasses the opt-out, the 14-day grace and the 30-day floor", () => {
+  // None of the random-prompt conditions are even inputs — a user who opted out, finished Quick
+  // start yesterday and saw a random survey last week can still ask for one.
+  const optedOutFreshRecent = { ...eligible, surveysEnabled: false, quickStartSeenAt: ago(1), lastShownAt: ago(7) };
+  assert.equal(isRandomSurveyEligible(optedOutFreshRecent, on, NOW), false);
+  assert.deepEqual(selfSurveyGate({ active: true, scrubbed: false, selfShownAt: null }, true, NOW), { ok: true });
+  assert.equal(selfSurveyNextAt(null, NOW), null);
+  assert.equal(selfSurveyNextAt(ago(8), NOW), null);
 });

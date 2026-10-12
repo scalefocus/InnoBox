@@ -3158,14 +3158,6 @@ see where InnoBox is heading.
 
 ### §13.10 Feedback survey ("Have your say")
 
-> **⚠ GAP-63 · new feature:** the **on-demand survey** (*Give feedback*, the profile
-> button and the colophon's **Have your say**) does not exist. Its schema already shipped
-> in migration 0037 (`users.survey_self_shown_at`, the `survey_daily` `_self` counters, the
-> `self` trigger), and the store already honours an open `self` offer (no random roll, kept
-> by the opt-out, counted in the `_self` columns). Build: the `me/survey/start` route,
-> `selfSurvey` on the `me` resource, the card's feature picker, and the three entry points.
-> Ships as its own minor release.
-
 An occasional, **anonymous** in-app survey asks signed-in users how satisfied they are
 with InnoBox in general and with **one feature they have just started using**. It floats
 in the corner and can be closed at any time. It appears **at random, at most once every

@@ -358,3 +358,75 @@ test("migration 0037: the backfill finds first uses and a re-run is idempotent a
     await pool.end();
   }
 });
+
+test("start: opens a self offer once under concurrency, stamps the cooldown on open, then 409 cooldown", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    // Opted out, inside the grace, just shown a random survey: the on-demand path ignores all three.
+    const userId = await makeUser(pool, randomUUID().slice(0, 8), "start", { qsDaysAgo: 1, lastShownDaysAgo: 2 });
+    await pool.query(`update users set surveys_enabled = false where id = $1`, [userId]);
+    const before = await daily(pool);
+
+    const [a, b] = await Promise.all([store.startSelfSurvey(pool, userId, { rng: win }), store.startSelfSurvey(pool, userId, { rng: win })]);
+    assert.equal(a.status, "ok");
+    assert.equal(b.status, "ok");
+    if (a.status !== "ok" || b.status !== "ok") return;
+    assert.deepEqual([a.created, b.created].sort(), [false, true], "exactly one start creates the offer");
+    assert.equal(a.survey.trigger, "self");
+    assert.equal(a.survey.feature, null, "the user picks the feature in the card");
+    assert.equal(Date.parse(a.survey.expiresAt) - Date.parse(a.survey.shownAt), 7 * 24 * 60 * 60 * 1000);
+    assert.equal((await daily(pool)).shown_self, before.shown_self + 1, "counted once");
+    const { rows } = await pool.query<{ survey_self_shown_at: Date | null }>(`select survey_self_shown_at from users where id = $1`, [userId]);
+    assert.ok(rows[0]!.survey_self_shown_at, "the cooldown is stamped on open");
+    assert.ok((await store.readSelfSurvey(pool, userId))?.nextAt, "me.selfSurvey carries the cooldown's end");
+
+    // Answer it: the cooldown still holds (it was stamped on open, never on submit).
+    assert.deepEqual(
+      await store.submitSurvey(pool, { id: userId, roles: member }, { answers: { "feature.useful": 4 }, via: "popup", feature: "search" }),
+      { status: "ok" },
+    );
+    const again = await store.startSelfSurvey(pool, userId, { rng: win });
+    assert.equal(again.status, "cooldown");
+    if (again.status === "cooldown") assert.equal(Date.parse(again.nextAt), rows[0]!.survey_self_shown_at!.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    // Seven days on, it can start again.
+    await pool.query(`update users set survey_self_shown_at = now() - interval '7 days' where id = $1`, [userId]);
+    assert.equal(await store.readSelfSurvey(pool, userId).then((s) => s?.nextAt), null);
+    assert.equal((await store.startSelfSurvey(pool, userId, { rng: win })).status, "ok");
+  } finally {
+    await pool.end();
+  }
+});
+
+test("start: an open random offer is returned unchanged — no stamp, nothing counted; 409 while the switch is off", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const stamp = randomUUID().slice(0, 8);
+    const userId = await makeUser(pool, stamp, "startrandom");
+    await store.recordFeatureUse(pool, userId, "like", true, { rng: win });
+    const before = await daily(pool);
+    const res = await store.startSelfSurvey(pool, userId, { rng: win });
+    assert.equal(res.status, "ok");
+    if (res.status === "ok") {
+      assert.equal(res.created, false);
+      assert.equal(res.survey.trigger, "feature");
+    }
+    assert.equal((await daily(pool)).shown_self, before.shown_self);
+    const { rows } = await pool.query(`select survey_self_shown_at from users where id = $1`, [userId]);
+    assert.equal(rows[0]!.survey_self_shown_at, null, "no cooldown stamped");
+
+    const admin = await makeUser(pool, stamp, "startadmin");
+    const other = await makeUser(pool, stamp, "startoff");
+    await store.setSurveyEnabled(pool, false, admin);
+    try {
+      assert.deepEqual(await store.startSelfSurvey(pool, other, { rng: win }), { status: "surveys_off" });
+      assert.equal(await store.readSelfSurvey(pool, other), null, "selfSurvey is null while the switch is off");
+    } finally {
+      await store.setSurveyEnabled(pool, true, admin);
+    }
+  } finally {
+    await pool.end();
+  }
+});

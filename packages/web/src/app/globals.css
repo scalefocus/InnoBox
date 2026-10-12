@@ -1576,3 +1576,11 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .survey-hist-labels { display: flex; gap: 4px; font-size: 10.5px; color: var(--faint); font-family: var(--font-mono); }
 .survey-hist-labels span { flex: 1; text-align: center; }
 .survey-feed-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; }
+
+/* The colophon's "Have your say" (§13.10): a <button> styled as the colophon's brand link. */
+.colophon-link {
+  display: inline; padding: 0; margin: 0; background: none; border: 0; border-bottom: 1px solid transparent;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.colophon-link:hover, .colophon-link:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
+.survey-topic { width: 100%; }

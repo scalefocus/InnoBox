@@ -372,3 +372,33 @@ export function validateSurveySubmission(
 
   return { ok: true, value: { answers, freeText, via: rec.via as SurveyVia, feature } };
 }
+
+// ── On-demand ("Give feedback", "Have your say") ──────────────────────────────────────────
+
+/** When the user may start another on-demand survey: 7 days after the last one OPENED (the
+ *  cooldown is stamped on open, never on submit). Null = now. */
+export function selfSurveyNextAt(selfShownAt: Date | null, now: Date): Date | null {
+  if (!selfShownAt) return null;
+  const next = new Date(selfShownAt.getTime() + SURVEY_SELF_OFFER_DAYS * DAY_MS);
+  return next.getTime() > now.getTime() ? next : null;
+}
+
+export type SelfSurveyGate = { ok: true } | { ok: false; reason: "surveys_off" | "unavailable" } | { ok: false; reason: "cooldown"; nextAt: Date };
+
+/**
+ * The on-demand gate (§13.10). It BYPASSES the roll, the 30-day floor, the 14-day grace and the
+ * random opt-out, and RESPECTS only the platform switch, active and not erased, and its own 7-day
+ * cooldown — an independent clock from the random floor. (An already open offer is returned as is
+ * before this gate is consulted.)
+ */
+export function selfSurveyGate(
+  state: { active: boolean; scrubbed: boolean; selfShownAt: Date | null },
+  switchOn: boolean,
+  now: Date,
+): SelfSurveyGate {
+  if (!switchOn) return { ok: false, reason: "surveys_off" };
+  if (!state.active || state.scrubbed) return { ok: false, reason: "unavailable" };
+  const nextAt = selfSurveyNextAt(state.selfShownAt, now);
+  if (nextAt) return { ok: false, reason: "cooldown", nextAt };
+  return { ok: true };
+}

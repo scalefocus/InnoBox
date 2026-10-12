@@ -9,7 +9,17 @@
 // the server stores the response with no reference to its author.
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { SURVEY_FREE_TEXT_MAX, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
+import {
+  FEATURE_QUESTIONS,
+  SURVEY_FEATURES,
+  SURVEY_FREE_TEXT_MAX,
+  isSurveyFeature,
+  surveyFeatureLabel,
+  surveyQuestionText,
+  type SurveyFeature,
+  type SurveyOfferPayload,
+  type SurveyVia,
+} from "@innobox/shared/survey";
 import { StarInput } from "./StarInput";
 import { useFormLock } from "./FormLock";
 
@@ -40,6 +50,9 @@ export function SurveyCard({
   const [phase, setPhase] = useState<Phase>("answering");
   const [error, setError] = useState<string | null>(null);
   const [optingOut, setOptingOut] = useState(false);
+  // An on-demand offer has no feature: the user picks one here ("InnoBox in general" = none).
+  const isSelf = offer.trigger === "self";
+  const [picked, setPicked] = useState<SurveyFeature | null>(null);
   // §2.2 submission lock: a second Submit while one is in flight is a no-op.
   const lock = useFormLock();
 
@@ -75,7 +88,7 @@ export function SurveyCard({
       const text = freeText.trim();
       if (text) body.freeText = text;
       // An on-demand offer always names its feature (none picked here → "InnoBox in general").
-      if (offer.trigger === "self") body.feature = null;
+      if (isSelf) body.feature = picked;
       const res = await fetch("/api/me/survey/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -110,7 +123,18 @@ export function SurveyCard({
   };
 
   const general = offer.questions.filter((q) => q.section === "general");
-  const feature = offer.questions.filter((q) => q.section === "feature");
+  const aboutFeature = isSelf ? (picked ? { key: picked, label: surveyFeatureLabel(picked) } : null) : offer.feature;
+  const feature = isSelf
+    ? picked
+      ? FEATURE_QUESTIONS.map((q) => ({ key: q.key, text: surveyQuestionText(q.key, surveyFeatureLabel(picked)) ?? q.key }))
+      : []
+    : offer.questions.filter((q) => q.section === "feature");
+
+  // Changing or clearing the picked feature discards its questions' stars.
+  const pick = (value: string) => {
+    setPicked(isSurveyFeature(value) ? value : null);
+    setAnswers((cur) => Object.fromEntries(Object.entries(cur).filter(([key]) => !key.startsWith("feature."))));
+  };
 
   const card = (
     <div
@@ -142,13 +166,35 @@ export function SurveyCard({
       {(phase === "answering" || phase === "submitting") && (
         <>
           <div className="survey-body" aria-busy={phase === "submitting"} inert={phase === "submitting"}>
+            {isSelf && (
+              <div className="survey-question">
+                <label className="survey-q" htmlFor={`${headingId}-topic`}>
+                  What would you like to tell us about?
+                </label>
+                <select
+                  id={`${headingId}-topic`}
+                  className="field survey-topic"
+                  data-testid="survey-topic"
+                  value={picked ?? ""}
+                  disabled={busy}
+                  onChange={(e) => pick(e.target.value)}
+                >
+                  <option value="">InnoBox in general</option>
+                  {SURVEY_FEATURES.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.label.charAt(0).toUpperCase() + f.label.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="survey-section">InnoBox overall</div>
             {general.map((q) => (
               <Question key={q.key} id={`${headingId}-${q.key}`} text={q.text} value={answers[q.key] ?? null} disabled={busy} onChange={(v) => setAnswers((cur) => withAnswer(cur, q.key, v))} />
             ))}
-            {feature.length > 0 && offer.feature && (
+            {feature.length > 0 && aboutFeature && (
               <>
-                <div className="survey-section">About {offer.feature.label}</div>
+                <div className="survey-section">About {aboutFeature.label}</div>
                 {feature.map((q) => (
                   <Question key={q.key} id={`${headingId}-${q.key}`} text={q.text} value={answers[q.key] ?? null} disabled={busy} onChange={(v) => setAnswers((cur) => withAnswer(cur, q.key, v))} />
                 ))}

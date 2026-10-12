@@ -107,8 +107,11 @@ test("the colophon carries exactly one mention, above the community line", () =>
   assert.equal(mentions, 1, `the app shell must name the organization exactly once, found ${mentions}`);
 
   const createdBy = `<span className="colophon-sub">Created by ${ORG}</span>`;
-  const community = '<span className="colophon-sub">Powered by the community</span>';
+  // The community line may carry the §13.10 "· Have your say" link after its text, so match its
+  // opening: the span and the attribution text, whitespace-tolerant.
+  const community = /<span className="colophon-sub">\s*Powered by the community/;
   assert.ok(shell.includes(createdBy), "the colophon must render the created-by attribution line");
-  assert.ok(shell.includes(community), "the colophon must render the community attribution line");
-  assert.ok(shell.indexOf(createdBy) < shell.indexOf(community), "the community line goes below the created-by line");
+  const communityAt = shell.search(community);
+  assert.ok(communityAt >= 0, "the colophon must render the community attribution line");
+  assert.ok(shell.indexOf(createdBy) < communityAt, "the community line goes below the created-by line");
 });

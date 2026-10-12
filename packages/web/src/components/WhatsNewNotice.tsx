@@ -48,7 +48,19 @@ export interface WhatsNewMe {
 
 /** `onClosed` tells the shell the notice is gone for this load (dismissed, or acknowledged on the
  *  page), so the §13.10 feedback survey — which never shows while the notice is due — may. */
-export function WhatsNewNotice({ me, pathname, onClosed }: { me: WhatsNewMe | null; pathname: string; onClosed?: () => void }) {
+/** `suppressed` hides the notice WITHOUT stamping it — an on-demand survey opened by a click wins
+ *  the corner for this load, and the notice returns on the next full load (§13.10). */
+export function WhatsNewNotice({
+  me,
+  pathname,
+  onClosed,
+  suppressed = false,
+}: {
+  me: WhatsNewMe | null;
+  pathname: string;
+  onClosed?: () => void;
+  suppressed?: boolean;
+}) {
   const action = me ? whatsNewAction(me.whatsNewSeenVersion, APP_VERSION, me.quickStartSeenAt !== null) : "none";
   const [closed, setClosed] = useState(false);
   const [changelog, setChangelog] = useState<ChangelogEntry[] | null>(null);
@@ -86,7 +98,7 @@ export function WhatsNewNotice({ me, pathname, onClosed }: { me: WhatsNewMe | nu
     void stampWhatsNewSeen();
   }, [onClosed]);
 
-  if (action !== "show" || closed || onPage || !changelog || !me) return null;
+  if (action !== "show" || closed || onPage || suppressed || !changelog || !me) return null;
 
   const missed = missedEntries(changelog, {
     seen: me.whatsNewSeenVersion,

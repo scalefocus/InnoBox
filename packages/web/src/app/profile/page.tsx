@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
 import { cachedGet, invalidateApi } from "@/lib/ui";
-import { SURVEY_CHANGED_EVENT, announceSurveyChanged, requestSurveyOpen } from "@/lib/survey-client";
+import { SURVEY_CHANGED_EVENT, announceSurveyChanged, requestSurveyOpen, requestSurveyStart } from "@/lib/survey-client";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import {
@@ -48,6 +48,8 @@ export default function ProfilePage() {
   const [surveyPrefError, setSurveyPrefError] = useState<string | null>(null);
   // §13.10: whether a survey offer is open (from the `me` resource), kept in step with the shell.
   const [surveyOpen, setSurveyOpen] = useState(false);
+  // The on-demand survey: null while the platform switch is off, else the cooldown's end.
+  const [selfSurvey, setSelfSurvey] = useState<{ nextAt: string | null } | null>(null);
 
   const refresh = () => {
     fetch("/api/profile", { headers: { accept: "application/json" } })
@@ -62,8 +64,11 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const readOffer = () => {
-      cachedGet<{ openSurvey?: unknown }>("/api/me")
-        .then((me) => setSurveyOpen(Boolean(me.openSurvey)))
+      cachedGet<{ openSurvey?: unknown; selfSurvey?: { nextAt: string | null } | null }>("/api/me")
+        .then((me) => {
+          setSurveyOpen(Boolean(me.openSurvey));
+          setSelfSurvey(me.selfSurvey ?? null);
+        })
         .catch(() => {});
     };
     readOffer();
@@ -246,7 +251,9 @@ export default function ProfilePage() {
             </button>
           </div>
         </div>
-        {surveyOpen && (
+        {/* Row 2: Give feedback now — replaced by Take the survey while any offer is open, and
+            hidden while the platform switch is off (§13.10). Shown whatever the random switch says. */}
+        {surveyOpen ? (
           <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }}>
             <div className="grow">
               <div className="ttl">A short survey is waiting for you</div>
@@ -256,6 +263,28 @@ export default function ProfilePage() {
               Take the survey
             </button>
           </div>
+        ) : (
+          selfSurvey && (
+            <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }}>
+              <div className="grow">
+                <div className="ttl">Give feedback</div>
+                <div className="sub" data-testid="profile-give-feedback-help">
+                  {selfSurvey.nextAt
+                    ? `You can share feedback again on ${fmt.date(selfSurvey.nextAt)}.`
+                    : "Tell us what you think, any time. Once a week at most."}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm"
+                data-testid="profile-give-feedback"
+                disabled={selfSurvey.nextAt !== null}
+                onClick={requestSurveyStart}
+              >
+                Give feedback now
+              </button>
+            </div>
+          )
         )}
       </div>
 
