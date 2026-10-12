@@ -42,9 +42,9 @@ test("canAssignAtStatus: true for non-terminal statuses, false for terminal", ()
   assert.equal(canAssignAtStatus("withdrawn"), false);
 });
 
-test("areLikesFrozen: only a solved challenge freezes likes", () => {
-  assert.equal(areLikesFrozen("solved"), true);
-  for (const s of ["awaiting_triage", "in_review", "needs_improvement", "meeting_scheduled", "valid", "rejected", "withdrawn"] as const) {
+test("areLikesFrozen: a closed challenge (solved, rejected, withdrawn) freezes likes", () => {
+  for (const s of ["solved", "rejected", "withdrawn"] as const) assert.equal(areLikesFrozen(s), true, s);
+  for (const s of ["awaiting_triage", "in_review", "needs_improvement", "meeting_scheduled", "valid"] as const) {
     assert.equal(areLikesFrozen(s), false, s);
   }
 });

@@ -13,7 +13,7 @@ import { CommentThread } from "@/components/CommentThread";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
 import { AttachmentControl } from "@/components/AttachmentControl";
-import { LIKES_FROZEN_HINT, proposeDisabledReason } from "@/lib/challenge-detail";
+import { LIKES_FROZEN_HINT, proposeDisabledReason, splitSolutions } from "@/lib/challenge-detail";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
 import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
@@ -430,12 +430,137 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     const id = window.location.hash.slice(1);
     if (!id) return;
     const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!el) return;
+    // A closed solution sits in the collapsed "Closed solutions" section — open it first.
+    const section = el.closest("details");
+    if (section) section.open = true;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   const canReveal = challenge.canReveal && challenge.author.anonymous;
   const canSelfReveal = challenge.canSelfReveal && challenge.author.anonymous;
   const likeHint = challenge.likesFrozen ? LIKES_FROZEN_HINT : undefined;
+  // §4.3: closed solutions go to a collapsed section; the heading counts only the open list.
+  const { open: openSolutions, closed: closedSolutions } = splitSolutions(challenge.solutions);
+
+  const renderSolution = (s: SolutionItem) => (
+    <div className="row" key={s.id} id={s.number} style={{ flexDirection: "column", alignItems: "stretch", gap: 10, scrollMarginTop: 80 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span className="chip mono">{s.number}</span>
+        <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
+        <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
+        <span className="sub" style={{ flex: 1 }}>
+          {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
+        </span>
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
+          {s.followedByViewer ? "Following" : "Follow"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={busy || challenge.likesFrozen}
+          title={likeHint}
+          aria-label={likeHint ? `${s.likeCount} likes. ${likeHint}` : undefined}
+          onClick={() => toggleLike("solution", s.id)}
+        >
+          {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
+        </button>
+      </div>
+      {s.author.anonymous && (s.canReveal || s.canSelfReveal) && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
+          {s.canReveal && (
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => reveal(s.number)}>
+              Reveal author
+            </button>
+          )}
+          {s.canSelfReveal && (
+            <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => selfReveal(s.number)}>
+              Reveal myself (permanent)
+            </button>
+          )}
+        </div>
+      )}
+      <p style={{ whiteSpace: "pre-wrap", fontSize: 14, margin: 0 }}>{s.description}</p>
+      {s.costVsBenefits && (
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+          <strong>Cost vs. benefits:</strong> {s.costVsBenefits}
+        </p>
+      )}
+      {s.canOverrideStatus && (
+        <select
+          className="field"
+          style={{ alignSelf: "flex-start" }}
+          value={s.status}
+          disabled={busy}
+          onChange={(e) => changeSolutionStatus(s.number, e.target.value)}
+        >
+          {Object.keys(SOLUTION_STATUS_LABEL).map((st) => (
+            <option key={st} value={st}>
+              {SOLUTION_STATUS_LABEL[st]}
+            </option>
+          ))}
+        </select>
+      )}
+      {!s.canOverrideStatus && s.allowedTransitions.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
+          {s.allowedTransitions.map((st) => (
+            <button key={st} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeSolutionStatus(s.number, st)}>
+              → {SOLUTION_STATUS_LABEL[st] ?? st}
+            </button>
+          ))}
+        </div>
+      )}
+      {(s.canEdit || s.canResubmit || s.canWithdraw) && (
+        <div className="form-lock" aria-busy={resubmitLock.lockedFor(s.id)} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
+            {s.canEdit && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                inert={resubmitLock.lockedFor(s.id)}
+                disabled={busy}
+                onClick={() => setEditingSolution((cur) => (cur === s.id ? null : s.id))}
+              >
+                {editingSolution === s.id ? "Cancel edit" : "Edit"}
+              </button>
+            )}
+            {s.canResubmit && (
+              <ResubmitButton locked={resubmitLock.lockedFor(s.id)} busy={busy} label="Resubmit" onClick={() => resubmitSolution(s.id, s.number)} />
+            )}
+            {s.canWithdraw && (
+              <button type="button" className="btn btn-sm btn-danger" inert={resubmitLock.lockedFor(s.id)} disabled={busy} onClick={() => withdrawSolution(s.number)}>
+                Withdraw
+              </button>
+            )}
+          </div>
+          {editingSolution === s.id && s.canEdit && (
+            <div inert={resubmitLock.lockedFor(s.id)}>
+              <SolutionEditForm solution={s} onDone={() => setEditingSolution(null)} onSaved={onChanged} onError={notify} />
+            </div>
+          )}
+          <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
+        </div>
+      )}
+      {s.canDelete && (
+        <DangerZone
+          label={s.number}
+          what={`${s.number} and all comments, likes, follows, and files attached to it`}
+          note={
+            s.status === "implemented" && challenge.status === "solved"
+              ? "This challenge was solved by this solution, so it returns to “Valid — open for solutions”. Other solutions stay closed."
+              : undefined
+          }
+          busy={busy}
+          onDelete={(reason) => deletePermanently(`/api/solutions/${s.number.replace("SOL-", "")}`, reason, "refresh")}
+        />
+      )}
+      <AttachmentControl
+        parentType="solution"
+        target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
+      />
+      <CommentThread parentType="solution" parentId={s.id} parentNumber={s.number} authoredAnonymously={s.isMine && s.author.anonymous} />
+    </div>
+  );
 
   return (
     <>
@@ -671,132 +796,24 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       />
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>
-        Solutions {challenge.solutions.length > 0 && `(${challenge.solutions.length})`}
+        Solutions {openSolutions.length > 0 && `(${openSolutions.length})`}
       </h2>
 
-      {challenge.solutions.length === 0 && <p className="muted">No solutions yet.</p>}
+      {openSolutions.length === 0 && <p className="muted">{closedSolutions.length === 0 ? "No solutions yet." : "No open solutions."}</p>}
 
-      {challenge.solutions.length > 0 && (
+      {openSolutions.length > 0 && (
         <div className="rows" style={{ marginBottom: 26 }}>
-          {challenge.solutions.map((s) => (
-            <div className="row" key={s.id} id={s.number} style={{ flexDirection: "column", alignItems: "stretch", gap: 10, scrollMarginTop: 80 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span className="chip mono">{s.number}</span>
-                <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-                <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
-                <span className="sub" style={{ flex: 1 }}>
-                  {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
-                </span>
-                <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
-                  {s.followedByViewer ? "Following" : "Follow"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={busy || challenge.likesFrozen}
-                  title={likeHint}
-                  aria-label={likeHint ? `${s.likeCount} likes. ${likeHint}` : undefined}
-                  onClick={() => toggleLike("solution", s.id)}
-                >
-                  {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
-                </button>
-              </div>
-              {s.author.anonymous && (s.canReveal || s.canSelfReveal) && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
-                  {s.canReveal && (
-                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => reveal(s.number)}>
-                      Reveal author
-                    </button>
-                  )}
-                  {s.canSelfReveal && (
-                    <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => selfReveal(s.number)}>
-                      Reveal myself (permanent)
-                    </button>
-                  )}
-                </div>
-              )}
-              <p style={{ whiteSpace: "pre-wrap", fontSize: 14, margin: 0 }}>{s.description}</p>
-              {s.costVsBenefits && (
-                <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-                  <strong>Cost vs. benefits:</strong> {s.costVsBenefits}
-                </p>
-              )}
-              {s.canOverrideStatus && (
-                <select
-                  className="field"
-                  style={{ alignSelf: "flex-start" }}
-                  value={s.status}
-                  disabled={busy}
-                  onChange={(e) => changeSolutionStatus(s.number, e.target.value)}
-                >
-                  {Object.keys(SOLUTION_STATUS_LABEL).map((st) => (
-                    <option key={st} value={st}>
-                      {SOLUTION_STATUS_LABEL[st]}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {!s.canOverrideStatus && s.allowedTransitions.length > 0 && (
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
-                  {s.allowedTransitions.map((st) => (
-                    <button key={st} type="button" className="btn btn-sm" disabled={busy} onClick={() => changeSolutionStatus(s.number, st)}>
-                      → {SOLUTION_STATUS_LABEL[st] ?? st}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {(s.canEdit || s.canResubmit || s.canWithdraw) && (
-                <div className="form-lock" aria-busy={resubmitLock.lockedFor(s.id)} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
-                    {s.canEdit && (
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        inert={resubmitLock.lockedFor(s.id)}
-                        disabled={busy}
-                        onClick={() => setEditingSolution((cur) => (cur === s.id ? null : s.id))}
-                      >
-                        {editingSolution === s.id ? "Cancel edit" : "Edit"}
-                      </button>
-                    )}
-                    {s.canResubmit && (
-                      <ResubmitButton locked={resubmitLock.lockedFor(s.id)} busy={busy} label="Resubmit" onClick={() => resubmitSolution(s.id, s.number)} />
-                    )}
-                    {s.canWithdraw && (
-                      <button type="button" className="btn btn-sm btn-danger" inert={resubmitLock.lockedFor(s.id)} disabled={busy} onClick={() => withdrawSolution(s.number)}>
-                        Withdraw
-                      </button>
-                    )}
-                  </div>
-                  {editingSolution === s.id && s.canEdit && (
-                    <div inert={resubmitLock.lockedFor(s.id)}>
-                      <SolutionEditForm solution={s} onDone={() => setEditingSolution(null)} onSaved={onChanged} onError={notify} />
-                    </div>
-                  )}
-                  <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
-                </div>
-              )}
-              {s.canDelete && (
-                <DangerZone
-                  label={s.number}
-                  what={`${s.number} and all comments, likes, follows, and files attached to it`}
-                  note={
-                    s.status === "implemented" && challenge.status === "solved"
-                      ? "This challenge was solved by this solution, so it returns to “Valid — open for solutions”. Other solutions stay closed."
-                      : undefined
-                  }
-                  busy={busy}
-                  onDelete={(reason) => deletePermanently(`/api/solutions/${s.number.replace("SOL-", "")}`, reason, "refresh")}
-                />
-              )}
-              <AttachmentControl
-                parentType="solution"
-                target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
-              />
-              <CommentThread parentType="solution" parentId={s.id} parentNumber={s.number} authoredAnonymously={s.isMine && s.author.anonymous} />
-            </div>
-          ))}
+          {openSolutions.map(renderSolution)}
         </div>
+      )}
+
+      {closedSolutions.length > 0 && (
+        <details data-testid="closed-solutions" style={{ marginBottom: 26 }}>
+          <summary style={{ cursor: "pointer", fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, marginBottom: 14 }}>
+            Closed solutions ({closedSolutions.length})
+          </summary>
+          <div className="rows">{closedSolutions.map(renderSolution)}</div>
+        </details>
       )}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>Discussion</h2>

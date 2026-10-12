@@ -1,8 +1,9 @@
 // Live-DB integration test (gated) for the challenge-detail flags and the §8.3 like freeze:
 //   • likes toggle (on/off, audited) on an open challenge and on its solutions;
-//   • once the challenge is `solved`, neither a like nor an unlike (POST toggle or DELETE) lands — on the challenge or
+//   • once the challenge is closed (`solved`), neither a like nor an unlike (POST toggle or DELETE) lands — on the challenge or
 //     on any of its solutions — and the existing counts stay displayed (`likesFrozen`);
-//   • a solved → valid revert unfreezes them;
+//   • `rejected` and `withdrawn` freeze them the same way, and a move back to an open status
+//     (solved/rejected/withdrawn → valid) unfreezes them; leaving `solved` clears resolved_at;
 //   • the per-viewer RBAC flags the detail page renders from: `canReveal` (namespace admin,
 //     anonymous item — challenge AND solution), `canSelfReveal` (the anonymous author only),
 //     `canAssign` (admin, non-terminal), `canPropose` (valid only).
@@ -13,13 +14,13 @@ import assert from "node:assert/strict";
 const url = process.env.DATABASE_URL;
 
 test(
-  "challenge detail: §8.3 likes frozen on solved (challenge + solutions), reveal/self-reveal/assign/propose flags",
+  "challenge detail: §8.3 likes frozen while closed (challenge + solutions), reveal/self-reveal/assign/propose flags",
   { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
   async () => {
     const { Pool } = await import("pg");
     const { randomUUID } = await import("node:crypto");
     const { buildRoleSet } = await import("@innobox/shared");
-    const { createChallenge, createSolution, getChallengeByNumber, listActiveImpactAreas, setChallengeStatus, setSolutionStatus, toggleLike } =
+    const { createChallenge, createSolution, getChallengeByNumber, listActiveImpactAreas, setChallengeStatus, setSolutionStatus, toggleLike, withdrawChallenge } =
       await import("./store");
     const { removeLike } = await import("../likes/store");
 
@@ -139,9 +140,39 @@ test(
       // A hidden challenge still answers not_found before the freeze is consulted.
       assert.deepEqual(await toggleLike(pool, liker, "challenge", randomUUID()), { status: "not_found" });
 
-      // ── solved → valid (admin override) unfreezes. ────────────────────────────────────────
+      assert.ok(solved.resolvedAt, "entering solved sets resolved_at");
+
+      // ── solved → valid (admin override) unfreezes, and clears resolved_at (§7.2). ───────────
       assert.equal((await setChallengeStatus(pool, admin, chNum, "valid")).status, "ok");
-      assert.equal((await getChallengeByNumber(pool, liker, chNum))!.likesFrozen, false);
+      const reopened = (await getChallengeByNumber(pool, liker, chNum))!;
+      assert.equal(reopened.likesFrozen, false);
+      assert.equal(reopened.resolvedAt, null, "an override out of solved clears resolved_at");
+      assert.deepEqual(await toggleLike(pool, liker, "challenge", chId), { status: "ok", liked: false, count: 0 });
+      assert.deepEqual(await toggleLike(pool, liker, "challenge", chId), { status: "ok", liked: true, count: 1 });
+
+      // ── rejected and withdrawn freeze likes too; a move back to an open status reopens them. ─
+      // `viewer` must still see the challenge: a withdrawn one is visible only to its author and admins.
+      const assertFrozen = async (label: string, viewer: typeof admin) => {
+        const before = await countLikeAudit(pool, [chId, solId]);
+        assert.deepEqual(await toggleLike(pool, viewer, "challenge", chId), { status: "frozen" }, `${label}: toggle refused`);
+        assert.deepEqual(await toggleLike(pool, author, "challenge", chId), { status: "frozen" }, `${label}: like refused`);
+        assert.deepEqual(await toggleLike(pool, viewer, "solution", solId), { status: "frozen" }, `${label}: solution toggle refused`);
+        assert.deepEqual(await removeLike(pool, viewer, "challenge", chId), { status: "frozen" }, `${label}: DELETE unlike refused`);
+        assert.equal(await countLikeAudit(pool, [chId, solId]), before, `${label}: no audit row`);
+        const detail = (await getChallengeByNumber(pool, viewer, chNum))!;
+        assert.equal(detail.likesFrozen, true, `${label}: likesFrozen`);
+        assert.equal(detail.likeCount, 1, `${label}: the count stays displayed`);
+      };
+
+      assert.equal((await setChallengeStatus(pool, admin, chNum, "rejected")).status, "ok");
+      await assertFrozen("rejected", liker);
+      assert.equal((await setChallengeStatus(pool, admin, chNum, "valid")).status, "ok");
+      assert.equal((await getChallengeByNumber(pool, liker, chNum))!.likesFrozen, false, "rejected → valid reopens likes");
+
+      assert.equal((await withdrawChallenge(pool, author, chNum)).status, "ok");
+      await assertFrozen("withdrawn", admin);
+      assert.equal((await setChallengeStatus(pool, admin, chNum, "valid")).status, "ok");
+      assert.equal((await getChallengeByNumber(pool, liker, chNum))!.likesFrozen, false, "withdrawn → valid reopens likes");
       assert.deepEqual(await toggleLike(pool, liker, "challenge", chId), { status: "ok", liked: false, count: 0 });
     } finally {
       await pool.end();

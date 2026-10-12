@@ -71,7 +71,9 @@ async function handlePOST(req: Request): Promise<Response> {
       return Response.json({ challenge: result.challenge }, { status: 201 });
     }
     case "unknown_namespace":
-      return Response.json({ error: "namespace not found or archived" }, { status: 400 });
+      return Response.json({ error: "namespace not found" }, { status: 400 });
+    case "namespace_archived":
+      return Response.json({ error: "this namespace is archived and accepts no new challenges", code: "namespace_archived" }, { status: 409 });
     case "forbidden_namespace":
       return Response.json({ error: "you are not a member of that namespace" }, { status: 403 });
     case "unknown_impact_area":

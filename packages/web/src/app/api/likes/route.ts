@@ -3,8 +3,8 @@
 // that is not there is a no-op success. Both take `{ parentType, parentId }`, answer 404 for an
 // item the viewer cannot see, and are rate-limited (the Origin/CSRF check applies to both in the
 // middleware). Comments and likes are never anonymous (§9) — the like itself always records the
-// real user, only the ITEM's authorship may be masked. Likes are frozen once the challenge is
-// solved (§8.3) — both verbs refuse with 409.
+// real user, only the ITEM's authorship may be masked. Likes are frozen while the challenge is
+// closed — solved, rejected or withdrawn (§8.3) — both verbs refuse with 409.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { parseLikeToggle } from "../challenges/validation";
@@ -13,6 +13,8 @@ import { removeLike } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
+
+const LIKES_CLOSED_MESSAGE = "likes are closed for this challenge";
 
 async function handlePOST(req: Request): Promise<Response> {
   const gate = await requireUser();
@@ -36,8 +38,9 @@ async function handlePOST(req: Request): Promise<Response> {
     return Response.json({ error: "not found" }, { status: 404 });
   }
   if (result.status === "frozen") {
-    // §8.3: a solved challenge freezes likes (on it and its solutions); counts stay as they are.
-    return Response.json({ error: "likes are closed on a solved challenge" }, { status: 409 });
+    // §8.3: a closed challenge (solved, rejected, withdrawn) freezes likes, on it and its
+    // solutions; counts stay as they are. The message names no particular status.
+    return Response.json({ error: LIKES_CLOSED_MESSAGE }, { status: 409 });
   }
   return Response.json({ liked: result.liked, count: result.count });
 }
@@ -55,7 +58,7 @@ async function handleDELETE(req: Request): Promise<Response> {
 
   const result = await removeLike(pool, { userId: gate.user.id, roles: gate.user.roles }, parsed.value.parentType, parsed.value.parentId);
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
-  if (result.status === "frozen") return Response.json({ error: "likes are closed on a solved challenge" }, { status: 409 });
+  if (result.status === "frozen") return Response.json({ error: LIKES_CLOSED_MESSAGE }, { status: 409 });
   return Response.json({ liked: result.liked, count: result.count });
 }
 

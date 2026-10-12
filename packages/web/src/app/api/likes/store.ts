@@ -20,7 +20,7 @@ export async function removeLike(
   if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
 
   return inTransaction(pool, async (client) => {
-    // §8.3: likes are frozen on a solved challenge and its solutions — an unlike is refused too.
+    // §8.3: likes are frozen on a closed challenge (solved, rejected, withdrawn) and its solutions — an unlike is refused too.
     const gate = await lockLikeParent(client, parentType, parentId);
     if (gate !== "open") return { status: gate };
     const removed = await client.query(`delete from likes where user_id = $1 and parent_type = $2 and parent_id = $3`, [
