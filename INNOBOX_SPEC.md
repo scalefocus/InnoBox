@@ -5278,12 +5278,6 @@ encrypted-token pattern. Platform admins only.
 
 ### §22.10 Improve with AI — drafting on the submit forms
 
-> **⚠ GAP-69 · new feature:** the **Improve with AI** button on `/challenges/new` and
-> the solution form does not exist. Build: the `submit_draft` registry entry, `GET` and
-> `POST /api/ai/draft` (availability; the draft call with its per-minute and 24-hour
-> limits), the button, confirm-before-replace, Undo, and the tests below. Its own minor
-> release, on top of the shipped plumbing (§22.1–§22.9).
-
 A writing aid for the author's **own** text. Nothing it produces is stored, marked or
 treated differently from text the author typed.
 
@@ -5320,13 +5314,6 @@ treated differently from text the author typed.
 
 ### §22.11 Triage assist
 
-> **⚠ GAP-70 · new feature:** **triage assist** does not exist. Build: the
-> `triage_assist` registry entry and switch, migration `0039_ai_results.sql` (an
-> `ai_results` table — `kind`, `parent_type`, `parent_id`, `input_hash`, `model`,
-> `status` `pending|ready|failed`, `payload` jsonb, timestamps — joining the §10.3
-> cascade), the worker pass, the detail-page and triage-queue panel, **Re-run**, and the
-> tests below. Its own minor release, on top of the shipped plumbing (§22.1–§22.9).
-
 An **advisory** note that helps triagers and the committee act faster. It never
 transitions, assigns, rejects or notifies (invariant 6).
 
@@ -5353,17 +5340,19 @@ transitions, assigns, rejects or notifies (invariant 6).
 - **Lifecycle.** Joins the §10.3 cascade; a `withdrawn` challenge's result is deleted;
   results for items that left the subject statuses are kept read-only for the record
   until the item is deleted.
+- **Run details.** The input hash covers the subject's **own** egress fields (title,
+  description, impact area) — not the candidate titles, so a new challenge elsewhere in the
+  namespace never re-sends every open subject. One result row per challenge (migration
+  `0039_ai_results.sql`); while a new run is pending the previous note stays readable,
+  labelled *"From an earlier version"*. A failed run is retried after an hour (or at once
+  by **Re-run**). With the switch off, existing notes stay readable and nothing is pending;
+  the queue indicator never shows on the reader's own challenges.
 - **Tests.** Unit: subject selection, hashing, the candidate set's visibility, output
   validation (duplicates limited to candidates). Integration: who sees the note per role
   and status (author never), cascade, the switch, restricted skipping. e2e (stub): a
   triager sees the note and re-runs it.
 
 ### §22.12 Similar challenges, explained
-
-> **⚠ GAP-71 · new feature:** the AI re-ranking of the §6.1 duplicate warning does not
-> exist. Build: the `duplicate_explain` registry entry and switch, the step inside
-> `POST /api/challenges/similar`, the reasons in the banner, and the tests below. Its own
-> minor release, on top of the shipped plumbing (§22.1–§22.9).
 
 - **Enablement.** Platform switch **"Explain similar challenges"**
   (`ai_duplicate_explain_enabled`, **off by default** — it sends other people's text).
@@ -5377,16 +5366,16 @@ transitions, assigns, rejects or notifies (invariant 6).
   restricted-content switch is off.
 - **Failure is silent:** any AI error or a timeout above **5 s** falls back to the plain
   §6.1 banner. `retry: false`. Shares the §6.1 rate limit.
+- **Details.** The submit form sends its chosen visibility: a namespace-only draft is itself
+  restricted content and is not sent while the switch is off. Candidates dropped from the AI
+  input stay in the banner, after the ranked ones and without a reason — the banner always
+  lists exactly the §6.1 set. Reasons are headed *"Reasons suggested by {name} — they may be
+  inaccurate."* The 5 s cut-off cancels the call (recorded as `ai_cancelled`, never logged).
 - **Tests.** Unit: re-ranking keeps the candidate set closed; restricted candidates
   dropped. Integration: fallback on error and timeout. e2e (stub): the banner shows
   reasons.
 
 ### §22.13 Discussion summary
-
-> **⚠ GAP-72 · new feature:** the **discussion summary** does not exist. Build: the
-> `discussion_summary` registry entry and switch, the summary rows in `ai_results`
-> (GAP-70's table), `POST` / `GET /api/ai/summary/:parentType/:number`, the comment-thread
-> control, and the tests below. Its own minor release, after GAP-70.
 
 - **Enablement.** Platform switch **"Discussion summaries"**
   (`ai_discussion_summary_enabled`, **off by default**).
@@ -5403,6 +5392,13 @@ transitions, assigns, rejects or notifies (invariant 6).
   edited comment marks it stale (*"New comments since this summary"* with **Refresh**).
   Results inherit the item's visibility and lifecycle (§22.7).
 - **Limits:** 10 per minute and 50 per 24 hours per user; `retry: false`.
+- **Details.** A solution has no title of its own, so its summary is given its challenge's
+  title (*"A solution to: …"*). A summary of the current thread state is served from the cache
+  without a call and without counting against the limits. A summary already made stays
+  readable when summaries are later switched off (Refresh then disappears). Results live in
+  `ai_results` (`kind = discussion_summary`, one row per thread). The §14.7 system log masks
+  the concrete path of the summary and triage routes for an anonymous item, as it does for
+  the item's own routes.
 - **Tests.** Unit: pseudonymization (stable letters, author not marked, no names),
   deleted comments excluded. Integration: visibility of the cached result, staleness,
   cascade. e2e (stub): summarize a long thread.

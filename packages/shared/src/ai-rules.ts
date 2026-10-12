@@ -265,10 +265,44 @@ export interface AiFeature {
 export const AI_RESERVED_FEATURE = "test";
 
 /**
- * The tasks that may call the provider. Empty until a task ships: §22.10–§22.13 register
- * `submit_draft`, `triage_assist`, `duplicate_explain` and `discussion_summary`.
+ * The tasks that may call the provider (§22.10–§22.13). Each states its egress exactly — the
+ * card's "What leaves InnoBox" notice shows it verbatim.
  */
-export const AI_FEATURES: readonly AiFeature[] = [];
+export const AI_FEATURES: readonly AiFeature[] = [
+  {
+    key: "submit_draft",
+    label: "Improve with AI (challenge and solution forms)",
+    egress:
+      "The text the author is writing — a challenge's title and description, or a solution's description and cost vs benefits with its challenge's title and description — and the names of the active impact areas. Never the client name, the anonymity choice, attachments or anything about the author.",
+    maxTokens: 8192,
+  },
+  {
+    key: "triage_assist",
+    label: "Triage assist",
+    egress:
+      "Each challenge awaiting triage or under review: its title, description and impact area, the names of the active impact areas, and the titles of up to 20 other challenges in the same namespace that every reader of the note can see. Never who wrote anything.",
+    maxTokens: 4096,
+    timeoutMs: 120_000,
+    needsSwitch: true,
+  },
+  {
+    key: "duplicate_explain",
+    label: "Explain similar challenges",
+    egress:
+      "When someone is about to submit a challenge: their draft's title and description, and the title and the first 500 characters of the description of each similar challenge the duplicate check found for them. Never who wrote anything.",
+    maxTokens: 2048,
+    timeoutMs: 10_000,
+    needsSwitch: true,
+  },
+  {
+    key: "discussion_summary",
+    label: "Discussion summaries",
+    egress:
+      "When someone asks for a summary of a challenge's or solution's comments: the item's title and the comments' text, oldest first, with every commenter replaced by \"Participant A\", \"Participant B\" and so on. Never a name, and never which participant wrote the item.",
+    maxTokens: 4096,
+    needsSwitch: true,
+  },
+];
 
 export function findAiFeature(key: string, features: readonly AiFeature[] = AI_FEATURES): AiFeature | null {
   if (key === AI_RESERVED_FEATURE) return null;

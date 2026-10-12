@@ -62,4 +62,10 @@ test("entityInPath finds the challenge/solution a numbered route targets", () =>
   assert.equal(entityInPath("/api/challenges/[number]", "/api/challenges/not-a-number"), null);
   assert.equal(entityInPath("/api/challenges/[number]", "/api/challenges"), null, "segment count mismatch");
   assert.equal(entityInPath("/api/notifications/[id]", "/api/notifications/abc"), null, "only [number] segments name an entity");
+  // §22 AI routes.
+  assert.deepEqual(entityInPath("/api/ai/triage/[number]", "/api/ai/triage/12"), { kind: "challenge", number: 12 });
+  assert.deepEqual(entityInPath("/api/ai/triage/[number]/rerun", "/api/ai/triage/12/rerun"), { kind: "challenge", number: 12 });
+  assert.deepEqual(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/solution/5"), { kind: "solution", number: 5 });
+  assert.deepEqual(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/challenge/9"), { kind: "challenge", number: 9 });
+  assert.equal(entityInPath("/api/ai/summary/[parentType]/[number]", "/api/ai/summary/comment/9"), null);
 });

@@ -88,7 +88,9 @@ export interface PathEntity {
  * When a route template names a challenge or solution by number, extract that number from the
  * concrete path so the recorder can ask whether the target is anonymous (§9 — the §14.5 masking
  * rule). Returns null for templates with no such segment. The nested
- * `/api/challenges/[number]/solutions` still names the CHALLENGE.
+ * `/api/challenges/[number]/solutions` still names the CHALLENGE. The §22 AI routes name their
+ * item too: `/api/ai/triage/[number]` a challenge, and `/api/ai/summary/[parentType]/[number]`
+ * whichever the concrete `challenge` / `solution` segment says.
  */
 export function entityInPath(template: string, pathname: string): PathEntity | null {
   const t = template.split("/").filter(Boolean);
@@ -96,7 +98,12 @@ export function entityInPath(template: string, pathname: string): PathEntity | n
   const idx = t.indexOf("[number]");
   if (idx === -1 || t.length !== p.length) return null;
   const head = t[idx - 1];
-  const kind = head === "challenges" ? "challenge" : head === "solutions" ? "solution" : null;
+  let kind: PathEntity["kind"] | null = head === "challenges" ? "challenge" : head === "solutions" ? "solution" : null;
+  if (!kind && head === "triage" && t[idx - 2] === "ai") kind = "challenge";
+  if (!kind && head === "[parentType]") {
+    const concrete = p[idx - 1];
+    kind = concrete === "challenge" ? "challenge" : concrete === "solution" ? "solution" : null;
+  }
   if (!kind) return null;
   const n = Number(/^(?:CH-|SOL-)?(\d+)$/i.exec(p[idx] ?? "")?.[1]);
   return Number.isInteger(n) && n > 0 ? { kind, number: n } : null;

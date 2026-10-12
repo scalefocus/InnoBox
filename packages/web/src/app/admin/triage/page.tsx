@@ -35,6 +35,8 @@ interface TriageRow {
   assigneeId: string | null;
   assigneeActive: boolean | null;
   createdAt: string;
+  /** §22.11 triage notes: ready / on the way / failed, or null when there are none. */
+  aiNotes?: "ready" | "pending" | "failed" | null;
 }
 
 type Tab = "challenges" | "solutions";
@@ -425,6 +427,16 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                 </Link>
                 <div className="sub mono">
                   {r.number} · {r.impactAreaName} · /{r.namespaceSlug}
+                  {r.aiNotes === "ready" && (
+                    <span className="chip" style={{ marginLeft: 8 }} title="Triage notes are ready on the challenge page">
+                      ✨ Notes
+                    </span>
+                  )}
+                  {r.aiNotes === "pending" && (
+                    <span className="chip" style={{ marginLeft: 8, opacity: 0.7 }} title="Triage notes are being prepared">
+                      ✨ Notes pending
+                    </span>
+                  )}
                 </div>
               </div>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
