@@ -181,6 +181,8 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               challenges_seen_at = null,
               system_log_seen_at = null,
               quick_start_seen_at = null,
+              whats_new_seen_version = null,   -- §13.9 What's new marker
+              whats_new_since_date = null,     -- and its one-time rollout boundary
               email_notifications_enabled = false,
               notify_followed_comments = default,
               notify_followed_status = default,

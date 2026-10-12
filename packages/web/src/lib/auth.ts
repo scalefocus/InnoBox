@@ -18,6 +18,10 @@ export interface SessionUser {
   email: string | null;
   emailNotificationsEnabled: boolean;
   quickStartSeenAt: Date | null;
+  /** §13.9 What's new marker, raw as stored (the rules treat a non-x.y.z value as null). */
+  whatsNewSeenVersion: string | null;
+  /** §13.9 one-time rollout boundary, `YYYY-MM-DD` — read only while the marker is null. */
+  whatsNewSinceDate: string | null;
   roles: RoleSet;
 }
 
@@ -94,8 +98,13 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     active: boolean;
     email_notifications_enabled: boolean;
     quick_start_seen_at: Date | null;
+    whats_new_seen_version: string | null;
+    whats_new_since_date: string | null;
   }>(
-    `select id, external_id, user_name, email, display_name, active, email_notifications_enabled, quick_start_seen_at
+    // The rollout boundary is a bare calendar date: read it as text, never through a JS Date,
+    // which would shift it by the server's offset.
+    `select id, external_id, user_name, email, display_name, active, email_notifications_enabled, quick_start_seen_at,
+            whats_new_seen_version, to_char(whats_new_since_date, 'YYYY-MM-DD') as whats_new_since_date
        from users
       where external_id = $1`,
     [oid],
@@ -115,6 +124,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     email: row.email,
     emailNotificationsEnabled: row.email_notifications_enabled,
     quickStartSeenAt: row.quick_start_seen_at,
+    whatsNewSeenVersion: row.whats_new_seen_version,
+    whatsNewSinceDate: row.whats_new_since_date,
     roles,
   };
 }

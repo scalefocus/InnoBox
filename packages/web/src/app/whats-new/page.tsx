@@ -1,11 +1,11 @@
-// What's new (CLAUDE.md "App version" / INNOBOX_SPEC.md §2): renders the CHANGELOG —
-// one user-facing line per APP_VERSION, newest first. Dates are calendar dates
-// (UTC YYYY-MM-DD), shown verbatim; they are release stamps, not timestamps.
-// Above the releases, the greyed-out "Coming soon" list (§13.9) — a client child, because it
-// filters by the viewer's roles.
+// What's new (INNOBOX_SPEC.md §13.9): renders the CHANGELOG — one user-facing entry per
+// APP_VERSION, newest first. A server component for its metadata; everything that reads `/api/me`
+// or the query string lives in client children: the greyed-out "Coming soon" list (filtered by
+// the viewer's roles) and the release list (the read receipt, the "New since your last visit"
+// highlighting and the "current" label).
 import type { Metadata } from "next";
-import { CHANGELOG } from "./changelog";
 import { ComingSoon } from "./ComingSoon";
+import { ReleaseList } from "./ReleaseList";
 
 export const metadata: Metadata = { title: "What's new — InnoBox" };
 
@@ -20,19 +20,7 @@ export default function WhatsNewPage() {
 
       <ComingSoon />
 
-      <div className="rows reveal" style={{ animationDelay: "0.08s" }}>
-        {CHANGELOG.map((entry) => (
-          <div className="row" key={entry.version}>
-            <span className="chip chip-accent">v{entry.version}</span>
-            <div className="grow">
-              <div className="ttl">{entry.summary}</div>
-            </div>
-            <span className="mono muted" style={{ fontSize: 12 }}>
-              {entry.date}
-            </span>
-          </div>
-        ))}
-      </div>
+      <ReleaseList />
     </>
   );
 }

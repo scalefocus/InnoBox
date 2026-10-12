@@ -49,6 +49,8 @@ test("the allowlist is exhaustive — an unlisted route is silent, never a defau
   ]) {
     assert.equal(presenceTouchFor(p, "GET"), null, `${p} must be silent`);
   }
+  // §13.9: the What's new stamp is a display marker — silent for presence, on POST too.
+  assert.equal(presenceTouchFor("/api/me/whats-new-seen", "POST"), null);
   // Non-API paths never reach the write path at all.
   assert.equal(presenceTouchFor("/challenges/412", "GET"), null);
 });
