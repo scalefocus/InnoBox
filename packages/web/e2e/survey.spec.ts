@@ -84,9 +84,13 @@ test("at mobile width the card is a bottom sheet with ✕ and Submit visible", a
   await expect(card).toBeVisible();
   await expect(card.getByRole("button", { name: "Close survey" })).toBeInViewport();
   await expect(card.getByRole("button", { name: "Submit" })).toBeInViewport();
-  const box = await card.boundingBox();
-  expect(box?.width).toBe(375);
-  expect(Math.round((box?.y ?? 0) + (box?.height ?? 0))).toBe(740);
+  // Poll the geometry: the card slides up on mount, so a single read can land mid-animation.
+  await expect
+    .poll(async () => {
+      const box = await card.boundingBox();
+      return box && { width: box.width, bottom: Math.round(box.y + box.height) };
+    })
+    .toEqual({ width: 375, bottom: 740 });
 
   // Opening the nav drawer hides the card (not unmounted); closing it brings it back.
   await page.getByRole("button", { name: "Open menu" }).click();
