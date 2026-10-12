@@ -14,6 +14,8 @@ export interface SettingsPatch {
   attachmentLimits?: AttachmentLimits;
   /** §13.2/§14.3 Featured challenges cap (1–6). */
   featuredLimit?: number;
+  /** §14.11 the feedback-survey platform switch. */
+  surveyEnabled?: boolean;
 }
 
 const MAX_ATTACHMENTS_PER_ITEM = 50;
@@ -68,8 +70,18 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.featuredLimit = limit.value;
   }
 
-  if (value.dateFormat === undefined && value.attachmentLimits === undefined && value.featuredLimit === undefined) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit");
+  if (rec.surveyEnabled !== undefined) {
+    if (typeof rec.surveyEnabled !== "boolean") return fail("surveyEnabled must be a boolean");
+    value.surveyEnabled = rec.surveyEnabled;
+  }
+
+  if (
+    value.dateFormat === undefined &&
+    value.attachmentLimits === undefined &&
+    value.featuredLimit === undefined &&
+    value.surveyEnabled === undefined
+  ) {
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled");
   }
 
   return { ok: true, value };

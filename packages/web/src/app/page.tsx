@@ -177,6 +177,7 @@ function DevSignInPanel() {
   // "none" leaves it unset (with an optional rollout date).
   const [whatsNewSeen, setWhatsNewSeen] = useState("");
   const [whatsNewSinceDate, setWhatsNewSinceDate] = useState("");
+  const [survey, setSurvey] = useState("0");
   return (
     <form
       className="card card-pad reveal"
@@ -184,7 +185,7 @@ function DevSignInPanel() {
       onSubmit={(e) => {
         e.preventDefault();
         const callbackUrl = new URLSearchParams(window.location.search).get("callbackUrl") || "/";
-        void signIn("dev", { name, email, admin, freshOnboarding, whatsNewSeen, whatsNewSinceDate, callbackUrl });
+        void signIn("dev", { name, email, admin, freshOnboarding, whatsNewSeen, whatsNewSinceDate, survey, callbackUrl });
       }}
     >
       <div className="sub mono">DEVELOPER SIGN-IN</div>
@@ -241,6 +242,12 @@ function DevSignInPanel() {
           value={whatsNewSinceDate}
           onChange={(e) => setWhatsNewSinceDate(e.target.value)}
         />
+      </div>
+      <div>
+        <label style={devLabelStyle} htmlFor="dev-survey">
+          Feedback survey (&quot;1&quot; = eligible, every roll wins)
+        </label>
+        <input id="dev-survey" className="field" style={{ width: "100%" }} value={survey} onChange={(e) => setSurvey(e.target.value)} />
       </div>
       <button type="submit" className="btn btn-primary" style={{ justifyContent: "center" }}>
         Dev sign-in

@@ -187,6 +187,12 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               notify_followed_comments = default,
               notify_followed_status = default,
               notify_followed_solutions = default,
+              -- §13.10: the per-user survey state goes too. Responses are untouched — they
+              -- reference no one, so there is nothing of this user in them to erase.
+              surveys_enabled = default,
+              survey_last_shown_at = null,
+              survey_offer = null,
+              survey_self_shown_at = null,
               active = false,
               deactivated_at = coalesce(deactivated_at, now()),
               scim_synced = false,
@@ -198,6 +204,8 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // The transient per-day activity detail is personal data too (§14.5). Only the aggregate
     // presence_daily counts survive, and those carry no user ids — nothing to erase there.
     await client.query(`delete from user_activity_days where user_id = $1`, [userId]);
+    // §13.10: which features the user has used is personal data; the survey responses are not.
+    await client.query(`delete from user_feature_uses where user_id = $1`, [userId]);
     // §14.7: the system log is mutable operational telemetry, so — unlike audit_log — the
     // user's actor snapshots are scrubbed and their rows detached from the user id.
     await scrubSystemEventsForUser(client, userId);

@@ -7,6 +7,7 @@ import type { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
 import { appendAudit } from "./audit";
 import { isCalendarDate, isVersion } from "./whats-new";
+import { setSurveyForcedWin } from "./survey-dev";
 
 export interface UserRow {
   id: string;
@@ -164,6 +165,10 @@ export interface DevUserInput {
    *  §13.7) so its e2e test can exercise the real first-sign-in redirect. Defaults to marking
    *  the persona as already seen, so ordinary dev/e2e sign-ins aren't interrupted by onboarding. */
   freshOnboarding?: boolean;
+  /** §13.10: true → the persona is survey-eligible right now (surveys on, Quick start 15 days ago,
+   *  no survey history or first uses) and its rolls are forced to win (lib/survey-dev.ts). False
+   *  (the default) → surveys off, so ordinary dev/e2e sessions never see the card. */
+  survey?: boolean;
   /** §13.9 seam. Blank (the default) stamps the What's new marker at APP_VERSION, so ordinary
    *  dev/e2e sessions are never interrupted by the update notice. A strict x.y.z seeds that
    *  marker; `none` leaves it null so the rollout boundary below applies. */
@@ -225,6 +230,7 @@ export async function upsertDevUser(db: Pool, input: DevUserInput): Promise<User
     seed.seen,
     seed.sinceDate,
   ]);
+  await prepareDevSurveyState(db, user.id, Boolean(input.survey));
   if (input.admin) {
     const { rows } = await db.query<{ id: string }>(
       `insert into groups (external_id, display_name)
@@ -259,4 +265,23 @@ export async function upsertDevUser(db: Pool, input: DevUserInput): Promise<User
     );
   }
   return user;
+}
+
+/** The dev sign-in's survey switch (INNOBOX_SPEC.md §13.10). Every dev sign-in resets the persona's
+ *  survey state: off by default; with `survey`, eligible at once and with the roll forced to win. */
+async function prepareDevSurveyState(db: Pool, userId: string, survey: boolean): Promise<void> {
+  if (survey) {
+    await db.query(
+      `update users
+          set surveys_enabled = true,
+              quick_start_seen_at = now() - interval '15 days',
+              survey_last_shown_at = null, survey_offer = null, survey_self_shown_at = null
+        where id = $1`,
+      [userId],
+    );
+    await db.query(`delete from user_feature_uses where user_id = $1`, [userId]);
+  } else {
+    await db.query(`update users set surveys_enabled = false, survey_offer = null where id = $1`, [userId]);
+  }
+  setSurveyForcedWin(userId, survey);
 }

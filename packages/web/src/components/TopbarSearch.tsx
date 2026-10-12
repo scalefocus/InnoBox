@@ -5,6 +5,7 @@
 import { useRouter } from "next/navigation";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { itemHref } from "@/lib/deep-link";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 interface SearchItem {
   number: string;
@@ -58,6 +59,7 @@ export const TopbarSearch = forwardRef<TopbarSearchHandle>(function TopbarSearch
         .then((res) => res.json())
         .then((json) => {
           if (!live) return;
+          reportFeatureUse("search"); // §13.10: a non-empty topbar query
           setChallenges((json.challenges ?? []).slice(0, 4));
           setSolutions((json.solutions ?? []).slice(0, 4));
         })

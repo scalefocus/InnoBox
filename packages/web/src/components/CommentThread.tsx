@@ -8,6 +8,7 @@ import { readJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { DiscussionSummary } from "@/components/DiscussionSummary";
 import { useDateFmt } from "@/components/DateFormat";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 interface CommentRecord {
   id: string;
@@ -70,6 +71,7 @@ export function CommentThread({
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not post comment");
+      reportFeatureUse("comment"); // §13.10 first use
       setDraft("");
       refresh();
     } catch {

@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 interface LeaderboardEntry {
   userId: string;
@@ -30,6 +31,11 @@ export default function LeaderboardPage() {
   const [metric, setMetric] = useState("solutions_implemented");
   const [window_, setWindow] = useState("all");
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
+
+  // §13.10 first use: opening the leaderboard (queued by the shell until its What's new decision).
+  useEffect(() => {
+    reportFeatureUse("leaderboard");
+  }, []);
 
   useEffect(() => {
     setEntries(null);

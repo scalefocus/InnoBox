@@ -66,3 +66,10 @@ test("parseImpactAreaPatch: accepts name and/or active, rejects an empty patch",
   assert.equal(parseImpactAreaPatch({}).ok, false);
   assert.equal(parseImpactAreaPatch({ active: "no" }).ok, false);
 });
+
+test("parseSettingsPatch: surveyEnabled is a boolean and may be sent alone (§14.11)", () => {
+  const parsed = parseSettingsPatch({ surveyEnabled: false });
+  assert.ok(parsed.ok);
+  if (parsed.ok) assert.deepEqual(parsed.value, { surveyEnabled: false });
+  for (const bad of ["false", 0, null]) assert.equal(parseSettingsPatch({ surveyEnabled: bad }).ok, false, String(bad));
+});

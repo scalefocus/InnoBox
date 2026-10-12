@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.53.0",
+    date: "2026-10-12",
+    summary:
+      "Have your say: now and then, at most once a month, a short anonymous survey asks how InnoBox works for you and about a feature you just started using. Close it to answer later from the account menu, or switch it off under Feedback in your profile. Platform admins get a Survey results card with scores, trends and comments, and a switch to turn the survey off.",
+  },
+  {
     version: "0.52.1",
     date: "2026-10-12",
     summary:

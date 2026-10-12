@@ -1,7 +1,7 @@
 // Unit tests for the §2.4 per-user token buckets (INNOBOX_SPEC.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RATE_LIMITS, effectiveLimit, rateLimit, resetRateLimits, takeToken } from "./rate-limit";
+import { RATE_LIMITS, effectiveLimit, rateLimit, rateLimitWarning, resetRateLimits, takeToken } from "./rate-limit";
 
 test("a bucket allows exactly its limit, then refuses with a Retry-After", () => {
   resetRateLimits();
@@ -66,4 +66,29 @@ test("RATE_LIMIT_MULTIPLIER scales every bucket's limit", () => {
   assert.equal(effectiveLimit("create", 1), RATE_LIMITS.create.limit);
   for (let i = 0; i < RATE_LIMITS.create.limit * 2; i++) assert.equal(takeToken("u1", "create", t0, 2).ok, true);
   assert.equal(takeToken("u1", "create", t0, 2).ok, false);
+});
+
+test("survey: its own 10-per-minute bucket (§13.10)", () => {
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  assert.deepEqual(RATE_LIMITS.survey, { limit: 10, windowMs: 60_000 });
+  for (let i = 0; i < 10; i++) assert.equal(takeToken("u1", "survey", t0, 1).ok, true);
+  assert.equal(takeToken("u1", "survey", t0, 1).ok, false);
+  assert.equal(takeToken("u1", "mutation", t0, 1).ok, true, "the survey bucket does not drain mutation");
+});
+
+test("the survey routes' rate-limit warning omits the user id (§13.10)", () => {
+  assert.deepEqual(rateLimitWarning("u1", "survey", true), { level: "warn", msg: "rate limit exceeded", bucket: "survey" });
+  assert.equal(rateLimitWarning("u1", "mutation").userId, "u1", "every other route still names the user");
+  resetRateLimits();
+  const original = console.warn;
+  const lines: string[] = [];
+  console.warn = (line: string) => lines.push(line);
+  try {
+    for (let i = 0; i <= effectiveLimit("survey"); i++) rateLimit("u-survey", "survey", { anonymous: true });
+    assert.equal(lines.length, 1);
+    assert.ok(!lines[0]!.includes("u-survey"), "no user id in the warning");
+  } finally {
+    console.warn = original;
+  }
 });

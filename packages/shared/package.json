@@ -65,6 +65,14 @@
     "./public-url": {
       "types": "./dist/public-url.d.ts",
       "default": "./dist/public-url.js"
+    },
+    "./survey": {
+      "types": "./dist/survey.d.ts",
+      "default": "./dist/survey.js"
+    },
+    "./survey-results": {
+      "types": "./dist/survey-results.d.ts",
+      "default": "./dist/survey-results.js"
     }
   },
   "scripts": {

@@ -46,7 +46,9 @@ export interface WhatsNewMe {
   whatsNewSinceDate: string | null;
 }
 
-export function WhatsNewNotice({ me, pathname }: { me: WhatsNewMe | null; pathname: string }) {
+/** `onClosed` tells the shell the notice is gone for this load (dismissed, or acknowledged on the
+ *  page), so the §13.10 feedback survey — which never shows while the notice is due — may. */
+export function WhatsNewNotice({ me, pathname, onClosed }: { me: WhatsNewMe | null; pathname: string; onClosed?: () => void }) {
   const action = me ? whatsNewAction(me.whatsNewSeenVersion, APP_VERSION, me.quickStartSeenAt !== null) : "none";
   const [closed, setClosed] = useState(false);
   const [changelog, setChangelog] = useState<ChangelogEntry[] | null>(null);
@@ -80,8 +82,9 @@ export function WhatsNewNotice({ me, pathname }: { me: WhatsNewMe | null; pathna
 
   const dismiss = useCallback(() => {
     setClosed(true); // optimistic
+    onClosed?.();
     void stampWhatsNewSeen();
-  }, []);
+  }, [onClosed]);
 
   if (action !== "show" || closed || onPage || !changelog || !me) return null;
 

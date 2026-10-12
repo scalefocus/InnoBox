@@ -10,6 +10,7 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "
 import { applyGalleryFilters, GalleryFilterFields, type GalleryFilterValues } from "../challenges/GalleryFilters";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { itemHref } from "@/lib/deep-link";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 interface ChallengeResult {
   number: string;
@@ -73,6 +74,9 @@ function SearchPageInner() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "Search failed");
         if (!live) return;
+        // §13.10: a non-empty query — also one arriving in the URL, which the shell queues until
+        // it has made its What's new decision.
+        reportFeatureUse("search");
         setChallenges(json.challenges ?? []);
         setSolutions(json.solutions ?? []);
       })

@@ -8,7 +8,7 @@ import { pool } from "./db";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
 import { createSystemLogWrapper, type ActorSnapshot } from "./system-log-core";
 
-export { INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, type ActorSnapshot, type SystemLogDeps } from "./system-log-core";
+export { INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, type ActorSnapshot, type SystemLogDeps, type SystemLogOptions } from "./system-log-core";
 
 // ── The real dependencies ────────────────────────────────────────────────────────────────
 

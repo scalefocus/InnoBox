@@ -24,6 +24,7 @@ import {
   uploadMode,
   type AttachmentScanStatus,
 } from "@/lib/attachment-control";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 export interface AttachmentControlItem {
   id: string;
@@ -206,6 +207,7 @@ export function AttachmentControl({
       }
       // Removed while the final request was landing: the row now exists, so tombstone it.
       if (controller.signal.aborted && createdId) await removeStored(createdId);
+      else if (createdId) reportFeatureUse("attachments"); // §13.10: a completed upload
     } catch (err) {
       if (!isAbortError(err)) setError(err instanceof Error ? err.message : "Could not upload attachment");
     } finally {

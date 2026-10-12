@@ -22,6 +22,8 @@ export interface OwnProfile {
   emailNotificationsEnabled: boolean;
   /** §12.1 per-event preferences. */
   notificationPreferences: NotificationPreferences;
+  /** §13.10 the random feedback-survey opt-out ("Ask me for feedback"). */
+  surveysEnabled: boolean;
   challengesByStatus: Record<string, number>;
   solutionsByStatus: Record<string, number>;
   likesReceived: number;
@@ -82,9 +84,10 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
     notify_followed_comments: boolean;
     notify_followed_status: boolean;
     notify_followed_solutions: boolean;
+    surveys_enabled: boolean;
   }>(
     `select id, display_name, email, department, job_title, office_location, email_notifications_enabled,
-            notify_followed_comments, notify_followed_status, notify_followed_solutions
+            notify_followed_comments, notify_followed_status, notify_followed_solutions, surveys_enabled
        from users where id = $1`,
     [userId],
   );
@@ -165,6 +168,7 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
       followedStatus: userRow.notify_followed_status,
       followedSolutions: userRow.notify_followed_solutions,
     },
+    surveysEnabled: userRow.surveys_enabled,
     challengesByStatus,
     solutionsByStatus,
     likesReceived: Number(likeRows.rows[0]?.count ?? 0),

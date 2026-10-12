@@ -37,6 +37,8 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     "audit.%",
     "webhook.%",
     "ai.%",
+    // §14.11: a platform admin deleting a survey response (the switch is under settings.%).
+    "survey.%",
     "%.exported",
     // The triage CSV export was once audited under this name (now `triage.exported`). Audit rows
     // are immutable, so the historical ones are kept under the same chip by name.

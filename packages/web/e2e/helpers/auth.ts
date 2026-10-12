@@ -29,6 +29,8 @@ export async function signIn(
     whatsNewSeen?: string;
     /** With `whatsNewSeen: "none"`: the rollout boundary date to seed (YYYY-MM-DD). */
     whatsNewSinceDate?: string;
+    /** §13.10: "1" = survey-eligible with every roll forced to win; otherwise surveys are off. */
+    survey?: boolean;
   },
 ): Promise<{ userId: string }> {
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
@@ -41,6 +43,8 @@ export async function signIn(
     await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
     await page.locator("#dev-whats-new-seen").fill(opts.whatsNewSeen ?? "");
     await page.locator("#dev-whats-new-since").fill(opts.whatsNewSinceDate ?? "");
+    // §13.10: "1" = survey-eligible with every roll forced to win; otherwise surveys are off.
+    await page.locator("#dev-survey").fill(opts.survey ? "1" : "0");
     await page.getByRole("button", { name: "Dev sign-in" }).click();
     // On success the app returns to "/" authenticated and the account menu (.user-trigger, rendered
     // only when signed in) appears; on failure it stays on the signed-out landing with the dev

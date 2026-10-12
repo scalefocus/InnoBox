@@ -13,6 +13,7 @@ import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
+import { reportFeatureUse } from "@/lib/survey-client";
 
 interface MeResponse {
   user: { id: string };
@@ -58,6 +59,7 @@ export default function AdminTriagePage() {
         const ok = me.roles.platformAdmin || me.roles.namespaceAdmin.length > 0;
         setGate(ok ? "ok" : "forbidden");
         if (ok) {
+          reportFeatureUse("triage"); // §13.10 first use: opening the triage queue
           // §14.4: opening the queue marks the actionable items seen — stamp triage_seen_at,
           // then tell the app shell to refetch so the nav attention bubbles clear immediately.
           fetch("/api/admin/triage/seen", { method: "POST" })
