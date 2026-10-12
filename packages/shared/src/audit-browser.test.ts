@@ -52,3 +52,16 @@ test("every export lands under Admin — the triage export under its current and
   assert.equal(LEGACY_TRIAGE_EXPORT_ACTION, "admin.triage_exported", "historical rows carry exactly this name");
   assert.ok(!inCategory("admin", "challenge.status_changed"), "the Admin chip does not swallow domain events");
 });
+
+test("anonymity reveals have their own chip and land nowhere else", () => {
+  assert.ok(AUDIT_CATEGORIES.includes("anonymity"));
+  assert.equal(AUDIT_CATEGORY_LABEL.anonymity, "Anonymity");
+  assert.deepEqual(AUDIT_CATEGORY_PATTERNS.anonymity, ["anonymity.%"]);
+  for (const action of ["anonymity.revealed", "anonymity.self_revealed"]) {
+    assert.ok(inCategory("anonymity", action), action);
+    for (const other of Object.keys(AUDIT_CATEGORY_PATTERNS) as (keyof typeof AUDIT_CATEGORY_PATTERNS)[]) {
+      if (other !== "anonymity") assert.ok(!inCategory(other, action), `${action} must not match ${other}`);
+    }
+  }
+  assert.ok(!inCategory("anonymity", "challenge.status_changed"));
+});

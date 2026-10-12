@@ -4532,12 +4532,6 @@ optional and composable (each an additional `AND`):
   JSON payload is deliberately **not** searched and there is no trigram index — the
   query is bounded by `ORDER BY id DESC LIMIT 100` on the primary key (newest first;
   `id` is unique, so paging never skips or repeats a row with a shared timestamp).
-
-> **⚠ GAP-48 · code fix:** there is no Anonymity chip: `AUDIT_CATEGORIES` and
-> `AUDIT_CATEGORY_PATTERNS` (`shared/src/audit-browser.ts`) stop at Admin, so
-> `anonymity.*` rows show only under All. Add the chip (pattern `anonymity.%`) to the
-> shared lists and the `/admin/audit` page, and correct the comment on
-> `AUDIT_CATEGORY_PATTERNS` that says anonymity reveals appear under All.
 - **Date range** — two native date inputs; the picked **local** day resolves to UTC
   instants, From = start of day, To = **inclusive** end of day.
 - **`✕ clear filters`** — shown only while any filter is active; resets to the default
@@ -4559,11 +4553,6 @@ same admins hold the §9 reveal power — a masked export would be lossy while l
 browser as the unmasked path. The compensating control is that **every export is
 itself audited** — `audit.exported` with actor, active filters and row count — so a
 bulk download of identities is never silent.
-
-> **⚠ GAP-49 · code fix:** `api/admin/audit/csv.ts` re-serializes the parsed objects
-> with `JSON.stringify`, which differs from the stored jsonb text in spacing; the
-> export query in `api/admin/audit/store.ts` selects `a.before, a.after` as jsonb.
-> Select `before::text` / `after::text` for the export and write them verbatim.
 
 ---
 

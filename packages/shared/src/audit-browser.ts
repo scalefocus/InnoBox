@@ -2,7 +2,7 @@
 // `@innobox/shared/audit-browser` subpath for the admin page). The category chips group audit
 // actions by their dotted prefix; the store turns a category into `action LIKE` predicates.
 
-export const AUDIT_CATEGORIES = ["all", "challenges", "solutions", "comments", "attachments", "identity", "admin"] as const;
+export const AUDIT_CATEGORIES = ["all", "challenges", "solutions", "comments", "attachments", "identity", "admin", "anonymity"] as const;
 export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
 
 export const AUDIT_CATEGORY_LABEL: Record<AuditCategory, string> = {
@@ -13,13 +13,14 @@ export const AUDIT_CATEGORY_LABEL: Record<AuditCategory, string> = {
   attachments: "Attachments",
   identity: "Identity",
   admin: "Admin",
+  anonymity: "Anonymity",
 };
 
 /** The pre-rename action of the triage CSV export (§14.1), still present in historical rows. */
 export const LEGACY_TRIAGE_EXPORT_ACTION = "admin.triage_exported";
 
-/** SQL LIKE patterns per category (`%` is the wildcard). Anything not covered by a chip —
- *  likes, anonymity reveals, probes — still appears under All. */
+/** SQL LIKE patterns per category (`%` is the wildcard). Anything not covered by a chip — likes,
+ *  probes — still appears under All. */
 export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, readonly string[]> = {
   challenges: ["challenge.%"],
   solutions: ["solution.%"],
@@ -41,6 +42,8 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     // are immutable, so the historical ones are kept under the same chip by name.
     LEGACY_TRIAGE_EXPORT_ACTION,
   ],
+  // Admin reveals and self-reveals (§9) — the most sensitive reads to review.
+  anonymity: ["anonymity.%"],
 };
 
 export function parseAuditCategory(raw: string | null | undefined): AuditCategory {
