@@ -3,6 +3,8 @@
 // awaiting triage — the author can always see their own), likes received, items followed,
 // recent activity (newest first, any status), the e-mail notification opt-out switch, and the
 // Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open.
+// While gamification is on (§23.6): the Achievements section, the level ring on the bubble, and the
+// two gamification switches (the Achievements notification and "Show my level and badges to others").
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
@@ -11,6 +13,8 @@ import { cachedGet, invalidateApi } from "@/lib/ui";
 import { SURVEY_CHANGED_EVENT, announceSurveyChanged, requestSurveyOpen, requestSurveyStart } from "@/lib/survey-client";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { Achievements, type EarnedBadgeData, type LevelData, type LockedBadgeData } from "@/components/Gamification";
+import type { GamificationPreferences, LeaderBadge } from "@innobox/shared/gamification";
 import {
   NOTIFICATION_PREFERENCES,
   NOTIFICATION_PREFERENCE_LABEL,
@@ -38,13 +42,27 @@ interface OwnProfile {
     solutions: { number: string; description: string; status: string; challengeNumber: string }[];
   };
   recentActivity: { type: "challenge" | "solution"; number: string; challengeNumber: string; label: string; status: string; at: string }[];
+  /** §23.6 — null while gamification is off. */
+  gamification: (LevelData & { leading: LeaderBadge[]; earned: EarnedBadgeData[]; locked: LockedBadgeData[] }) | null;
+  gamificationPreferences: GamificationPreferences | null;
 }
+
+const GAMIFICATION_SWITCHES: { key: keyof GamificationPreferences; title: string; sub: string; on: string; off: string }[] = [
+  { key: "notifyAchievements", title: "Achievements", sub: "A notification and a short celebration when you earn a badge or reach a new level.", on: "🏅", off: "🔕" },
+  {
+    key: "gamificationPublic",
+    title: "Show my level and badges to others",
+    sub: "When off, others see no level, badges or points ranking for you. You keep earning and see everything here.",
+    on: "👁️",
+    off: "🙈",
+  },
+];
 
 export default function ProfilePage() {
   const fmt = useDateFmt();
   const [profile, setProfile] = useState<OwnProfile | null>(null);
   const [emailPrefError, setEmailPrefError] = useState<string | null>(null);
-  const [prefErrors, setPrefErrors] = useState<Partial<Record<NotificationPreference, string>>>({});
+  const [prefErrors, setPrefErrors] = useState<Partial<Record<NotificationPreference | keyof GamificationPreferences, string>>>({});
   const [surveyPrefError, setSurveyPrefError] = useState<string | null>(null);
   // §13.10: whether a survey offer is open (from the `me` resource), kept in step with the shell.
   const [surveyOpen, setSurveyOpen] = useState(false);
@@ -147,12 +165,41 @@ export default function ProfilePage() {
     }
   };
 
+  // §23.7/§23.9: the two gamification switches — same optimistic flip and slide-back as above.
+  const toggleGamificationPref = async (key: keyof GamificationPreferences) => {
+    if (!profile?.gamificationPreferences) return;
+    const previous = profile.gamificationPreferences[key];
+    const next = !previous;
+    setPrefErrors((cur) => ({ ...cur, [key]: undefined }));
+    setProfile({ ...profile, gamificationPreferences: { ...profile.gamificationPreferences, [key]: next } });
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ [key]: next }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not update preference");
+    } catch (err) {
+      setProfile((current) =>
+        current?.gamificationPreferences ? { ...current, gamificationPreferences: { ...current.gamificationPreferences, [key]: previous } } : current,
+      );
+      setPrefErrors((cur) => ({ ...cur, [key]: err instanceof Error ? err.message : "Could not update preference" }));
+    }
+  };
+
   if (!profile) return <p className="muted">Loading…</p>;
+  const g = profile.gamification;
 
   return (
     <>
       <div className="page-head reveal" style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <AvatarBubble size="lg" userId={profile.user.id} displayName={profile.user.displayName} />
+        <AvatarBubble
+          size="lg"
+          userId={profile.user.id}
+          displayName={profile.user.displayName}
+          ring={g ? { level: g.level, progress: g.progress, top: g.next === null } : null}
+        />
         <div style={{ minWidth: 0 }}>
           <div className="eyebrow">Profile</div>
           <h1 className="page-title">{profile.user.displayName}</h1>
@@ -161,6 +208,8 @@ export default function ProfilePage() {
           </p>
         </div>
       </div>
+
+      {g && <Achievements level={g} leading={g.leading} earned={g.earned} locked={g.locked} />}
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
         <div className="row" style={{ border: 0, padding: 0 }}>
@@ -214,6 +263,33 @@ export default function ProfilePage() {
             </div>
           );
         })}
+        {profile.gamificationPreferences &&
+          GAMIFICATION_SWITCHES.map((sw) => {
+            const on = profile.gamificationPreferences![sw.key];
+            return (
+              <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }} key={sw.key}>
+                <div className="grow">
+                  <div className="ttl">{sw.title}</div>
+                  <div className="sub">{sw.sub}</div>
+                  {prefErrors[sw.key] && (
+                    <div className="sub" style={{ color: "var(--danger)" }} role="status">
+                      {prefErrors[sw.key]}
+                    </div>
+                  )}
+                </div>
+                <div className="toggle-field">
+                  <span className={`toggle-state${on ? " is-on" : ""}`} aria-hidden="true">
+                    {on ? "On" : "Off"}
+                  </span>
+                  <button type="button" className="toggle toggle-pref" role="switch" aria-checked={on} aria-label={sw.title} onClick={() => toggleGamificationPref(sw.key)}>
+                    <span className="toggle-knob" aria-hidden="true">
+                      {on ? sw.on : sw.off}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
       </div>
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="profile-feedback">

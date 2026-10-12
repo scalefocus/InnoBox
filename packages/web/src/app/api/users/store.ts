@@ -193,6 +193,10 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               survey_last_shown_at = null,
               survey_offer = null,
               survey_self_shown_at = null,
+              -- §23: the gamification switches back to their defaults, the toast marker nulled.
+              gamification_public = default,
+              notify_achievements = default,
+              achievements_seen_at = null,
               active = false,
               deactivated_at = coalesce(deactivated_at, now()),
               scim_synced = false,
@@ -212,6 +216,9 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §22.3: AI usage telemetry keeps its counts but loses the person it ran for.
     await client.query(`update ai_usage set user_id = null where user_id = $1`, [userId]);
     await client.query(`update ai_results set requested_by = null where requested_by = $1`, [userId]);
+    // §23.9: the user's points ledger and badges go — the only DELETE the app role holds on them.
+    await client.query(`delete from gamification_ledger where user_id = $1`, [userId]);
+    await client.query(`delete from user_badges where user_id = $1`, [userId]);
     // §3 optional successor: hand over the open assignments the successor can see, same transaction.
     const reassignment = handover ? await handOverOpenAssignments(client, adminUserId, userId, handover) : null;
     await appendAudit(client, {

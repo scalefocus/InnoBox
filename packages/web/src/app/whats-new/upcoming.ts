@@ -25,15 +25,7 @@ export interface UpcomingViewer {
   namespaceAdmin: readonly string[];
 }
 
-export const UPCOMING: UpcomingEntry[] = [
-  {
-    ids: ["GAP-73"],
-    title: "Points, levels and badges",
-    teaser:
-      "Earn points when your challenges and solutions move forward, level up, and collect badges for your milestones. You can choose whether others see them.",
-    audience: "everyone",
-  },
-];
+export const UPCOMING: UpcomingEntry[] = [];
 
 /** True when an entry applies to a viewer with these roles. */
 export function appliesTo(audience: UpcomingAudience, viewer: UpcomingViewer): boolean {

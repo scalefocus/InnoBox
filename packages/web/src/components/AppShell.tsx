@@ -26,6 +26,8 @@ import { isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type Surv
 import { SURVEY_OPEN_EVENT, SURVEY_START_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
 import { WHATS_NEW_SEEN_EVENT, WhatsNewNotice } from "./WhatsNewNotice";
 import { whatsNewAction } from "../lib/whats-new";
+import { AchievementToast } from "./AchievementToast";
+import type { Achievement } from "@innobox/shared/gamification";
 
 // Shape of the §16 `me` resource (packages/web/src/app/api/me/route.ts) — only the fields
 // this shell needs (identity for the account menu, the admin role hints for nav gating, the
@@ -40,6 +42,9 @@ interface MeResponse {
   openSurvey?: SurveyOfferPayload | null;
   /** §13.10 on-demand survey: null while the switch is off, else the cooldown's end (null = now). */
   selfSurvey?: { nextAt: string | null } | null;
+  /** §23.12: the sidebar ring's level (null while gamification is off) and the toast queue. */
+  gamification?: { points: number; level: number; levelName: string; progress: number } | null;
+  newAchievements?: Achievement[];
 }
 
 /** The mobile layout's breakpoint — where the nav becomes a drawer and the bell a full sheet. */
@@ -546,6 +551,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
       {/* §13.9 update notice — portaled to <body>; renders nothing unless a release is unacknowledged. */}
       {authed && <WhatsNewNotice me={me} pathname={pathname} onClosed={() => setWhatsNewClosed(true)} suppressed={noticeSuppressed} />}
+      {/* §23.7 achievement toast — one per page load, then the marker advances. */}
+      {authed && <AchievementToast achievements={me?.newAchievements ?? null} />}
     </div>
   );
 }
@@ -560,7 +567,7 @@ function AccountMenu({
   canGiveFeedback,
   onGiveFeedback,
 }: {
-  me: { user: { id: string; displayName: string; email: string | null } } | null;
+  me: Pick<MeResponse, "user" | "gamification"> | null;
   /** §13.10: while an offer is open, "Take the survey" leads the menu. */
   survey: SurveyOfferPayload | null;
   onTakeSurvey: () => void;
@@ -661,8 +668,15 @@ function AccountMenu({
         {/* The 26px bubble must not sit inside the 16px .nav-ico slot — it would overflow
             the slot and swallow the flex gap before the name. */}
         {me?.user.id && displayName ? (
-          /* noCard (§13.8): this element already opens the account menu on click. */
-          <AvatarBubble size="sm" userId={me.user.id} displayName={displayName} noCard />
+          /* noCard (§13.8): this element already opens the account menu on click. The §23.6 ring
+             shows your own level progress (medium while it is on, so the ring has room). */
+          <AvatarBubble
+            size={me.gamification ? "md" : "sm"}
+            userId={me.user.id}
+            displayName={displayName}
+            noCard
+            ring={me.gamification ? { level: me.gamification.level, progress: me.gamification.progress, top: me.gamification.level >= 10 } : null}
+          />
         ) : (
           <span className="nav-ico" aria-hidden="true">
             <PersonIcon />

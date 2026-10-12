@@ -13,6 +13,7 @@ import { isUuid } from "../../../challenges/validation";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getUserCard } from "../../store";
+import { cardGamification } from "@/lib/gamification-read";
 import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
@@ -27,8 +28,9 @@ async function handleGET(_req: Request, context: { params: Promise<{ userId: str
   const card = await getUserCard(pool, userId);
   if (!card) return Response.json({ error: "not found" }, { status: 404 });
   // §13.8: the body IS the card — `{ userId, displayName, jobTitle, officeLocation, department,
-  // deactivated, scrubbed }`, flat, with no wrapper key.
-  return Response.json(card);
+  // deactivated, scrubbed, gamification }`, flat, with no wrapper key. `gamification` is the §23.12
+  // block: level, leader badges, the 3 newest badges — null when off or the user hides it.
+  return Response.json({ ...card, gamification: card.scrubbed ? null : await cardGamification(pool, userId) });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

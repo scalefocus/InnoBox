@@ -15,6 +15,11 @@
 // timestamp ascending. For "solutions implemented" that timestamp is when the solution
 // ENTERED `implemented` (`status_changed_at`), not its last edit (`updated_at`), so a later
 // unrelated touch never reorders a tie or drops an achievement out of the 30-day window.
+//
+// §23 adds a fifth metric, **points**: the sum of a user's ledger points whose item passes the same
+// live org-visible test, windowed and tie-broken by the award's occurred_at, excluding users who
+// hide their gamification. The ranked boards are cached briefly per (metric, window) — the same
+// results the §23.5 leader badges are derived from.
 import type { Pool } from "pg";
 import type { LeaderboardMetric, LeaderboardWindow } from "@innobox/shared";
 
@@ -80,6 +85,25 @@ export async function getLeaderboard(
            and ($1::timestamptz is null or s.created_at >= $1)
          group by s.author_id`;
       break;
+    case "points":
+      // §23.9: rows whose item no longer exists, or is no longer org-visible, drop out of the
+      // ranking (not out of the person's total); users who hide their gamification are excluded.
+      sql = `
+        select gl.user_id, sum(gl.points)::int as cnt, min(gl.occurred_at) filter (where gl.points > 0) as first_at
+          from gamification_ledger gl
+          join users pu on pu.id = gl.user_id and pu.gamification_public
+          left join challenges c on gl.item_type = 'challenge' and c.id = gl.item_id
+          left join solutions s on gl.item_type = 'solution' and s.id = gl.item_id
+          left join challenges sc on sc.id = s.challenge_id
+         where ($1::timestamptz is null or gl.occurred_at >= $1)
+           and (
+             (gl.item_type = 'challenge' and ${CHALLENGE_ORG_VISIBLE})
+             or (gl.item_type = 'solution' and ${SOLUTION_ORG_VISIBLE}
+                 and sc.visibility = 'org' and sc.status not in ('awaiting_triage', 'withdrawn'))
+           )
+         group by gl.user_id
+        having sum(gl.points) > 0`;
+      break;
     case "likes_received":
       sql = `
         select author_id as user_id, count(*)::int as cnt, min(liked_at) as first_at
@@ -113,4 +137,25 @@ export async function getLeaderboard(
     [since, limit],
   );
   return rows.map((r) => ({ userId: r.user_id, displayName: r.display_name, active: r.active, scrubbed: r.scrubbed, count: r.cnt }));
+}
+
+/** How long a ranked board is reused. Every viewer sees the same board (it is viewer-independent),
+ *  so a short process-local cache is safe; the leader badges (§23.5) read the same entries. */
+export const BOARD_CACHE_MS = 30_000;
+const boardCache = new Map<string, { at: number; entries: Promise<LeaderboardEntry[]> }>();
+
+/** The §13.3 top 10 for a (metric, window), cached for BOARD_CACHE_MS. */
+export function getCachedLeaderboard(pool: Pool, metric: LeaderboardMetric, window: LeaderboardWindow): Promise<LeaderboardEntry[]> {
+  const key = `${metric}:${window}`;
+  const hit = boardCache.get(key);
+  if (hit && Date.now() - hit.at < BOARD_CACHE_MS) return hit.entries;
+  const entries = getLeaderboard(pool, metric, window);
+  boardCache.set(key, { at: Date.now(), entries });
+  entries.catch(() => boardCache.delete(key)); // never cache a failure
+  return entries;
+}
+
+/** Test hook: forget every cached board. */
+export function clearLeaderboardCache(): void {
+  boardCache.clear();
 }

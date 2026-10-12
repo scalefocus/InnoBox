@@ -12,6 +12,7 @@ import {
   formatChallengeNumber,
   formatSolutionNumber,
   type ChallengeStatus,
+  type GamificationPreferences,
   type NotificationPreferences,
   type SolutionStatus,
 } from "@innobox/shared";
@@ -199,6 +200,31 @@ export async function setNotificationPreferences(pool: Pool, userId: string, pre
     if (typeof v !== "boolean") continue;
     params.push(v);
     sets.push(`${NOTIFICATION_PREFERENCE_COLUMN[key]} = $${params.length}`); // column from the fixed map
+  }
+  if (sets.length === 0) return;
+  await pool.query(`update users set ${sets.join(", ")}, updated_at = now() where id = $1`, params);
+}
+
+/** §23.7/§23.9: the Achievements notification switch and "Show my level and badges to others". */
+export async function getGamificationPreferences(pool: Pool, userId: string): Promise<GamificationPreferences | null> {
+  const { rows } = await pool.query<{ gamification_public: boolean; notify_achievements: boolean }>(
+    `select gamification_public, notify_achievements from users where id = $1`,
+    [userId],
+  );
+  return rows[0] ? { gamificationPublic: rows[0].gamification_public, notifyAchievements: rows[0].notify_achievements } : null;
+}
+
+/** Writes either switch. Silent (not audited) and forward-only, like the §12.1 toggles. */
+export async function setGamificationPreferences(pool: Pool, userId: string, prefs: Partial<GamificationPreferences>): Promise<void> {
+  const sets: string[] = [];
+  const params: unknown[] = [userId];
+  if (typeof prefs.gamificationPublic === "boolean") {
+    params.push(prefs.gamificationPublic);
+    sets.push(`gamification_public = $${params.length}`);
+  }
+  if (typeof prefs.notifyAchievements === "boolean") {
+    params.push(prefs.notifyAchievements);
+    sets.push(`notify_achievements = $${params.length}`);
   }
   if (sets.length === 0) return;
   await pool.query(`update users set ${sets.join(", ")}, updated_at = now() where id = $1`, params);

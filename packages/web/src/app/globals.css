@@ -1584,3 +1584,59 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 .colophon-link:hover, .colophon-link:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
 .survey-topic { width: 100%; }
+
+/* ── Gamification: points, levels & badges (INNOBOX_SPEC.md §23.5–§23.7) ────────────────────
+   Tokens only. The level-progress ring wraps medium/large bubbles: an --accent arc on a --line
+   track, filled clockwise from 12 o'clock; a full --warn (gold) ring at the top level. The ring
+   is decorative (the bubble's label carries the level) and never animates under reduced motion. */
+.avatar-ring-wrap { position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 3px; vertical-align: middle; }
+.avatar-ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); pointer-events: none; }
+.avatar-ring circle { fill: none; stroke-width: 2; }
+.avatar-ring-track { stroke: var(--line); }
+.avatar-ring-arc { stroke: var(--accent); stroke-linecap: round; transition: stroke-dasharray 0.6s ease; }
+.avatar-ring-wrap.is-top .avatar-ring-arc { stroke: var(--warn); }
+
+.level-chip { white-space: nowrap; }
+.leader-glyphs { display: inline-flex; flex-wrap: wrap; gap: 5px; vertical-align: middle; }
+.leader-glyph {
+  position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  font-size: 12px; line-height: 1;
+  background: color-mix(in oklab, var(--leader-color, var(--accent)) 18%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--leader-color, var(--accent)) 45%, transparent);
+}
+.leader-crown { position: absolute; top: -8px; right: -6px; font-size: 10px; }
+
+.level-card { display: flex; gap: 14px; align-items: center; }
+.level-num {
+  flex: 0 0 auto; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
+  font-family: var(--font-display); font-size: 20px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent-2);
+}
+.level-bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 8px 0 6px; }
+.level-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.leading-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 16px; }
+.badge-tile {
+  display: flex; flex-direction: column; gap: 3px; padding: 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface-2); min-width: 0;
+}
+.badge-tile.tier-1 { border-color: color-mix(in oklab, var(--warn) 30%, var(--line)); }
+.badge-tile.tier-2 { border-color: color-mix(in oklab, var(--muted) 55%, var(--line)); }
+.badge-tile.tier-3 { border-color: var(--warn); }
+.badge-tile.locked { opacity: 0.55; filter: grayscale(1); border-style: dashed; }
+.badge-glyph { font-size: 22px; line-height: 1; }
+.badge-name { font-weight: 600; font-size: 13.5px; }
+.badge-tier { font-family: var(--font-mono); font-size: 11px; color: var(--warn); text-transform: uppercase; letter-spacing: 0.06em; }
+.badge-meta { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+.dir-card-gamification { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.dir-card-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* The celebratory achievement toast: the shared .toast, allowed to wrap and pinned to the accent. */
+.toast.toast-achievement {
+  white-space: normal; max-width: min(520px, calc(100vw - 32px)); text-align: center;
+  border-color: var(--accent); font-family: var(--font-body);
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-ring-arc { transition: none; }
+}

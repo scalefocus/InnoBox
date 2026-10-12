@@ -62,6 +62,8 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 12: the successor's one summary item when a GDPR erasure (§3) hands over
   // the erased user's open assignments.
   "assignments_transferred",
+  // §12.1 event 13 / §23.7: a badge, a badge tier or a level — in-app only, never e-mailed.
+  "achievement_earned",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

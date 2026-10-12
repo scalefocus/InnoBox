@@ -5,7 +5,8 @@
 import { isLeaderboardMetric, isLeaderboardWindow, type LeaderboardMetric, type LeaderboardWindow } from "@innobox/shared";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { getLeaderboard } from "./store";
+import { getCachedLeaderboard } from "./store";
+import { isGamificationOn, levelChips } from "@/lib/gamification-read";
 import { withSystemLog } from "@/lib/system-log";
 
 export const dynamic = "force-dynamic";
@@ -26,8 +27,17 @@ async function handleGET(req: Request): Promise<Response> {
   const metric: LeaderboardMetric = metricRaw;
   const window: LeaderboardWindow = windowRaw;
 
-  const entries = await getLeaderboard(pool, metric, window);
-  return Response.json({ metric, window, entries });
+  // §23: the Points metric exists only while gamification is on.
+  const gamificationOn = await isGamificationOn(pool);
+  if (metric === "points" && !gamificationOn) {
+    return Response.json({ error: "metric must be one of the documented leaderboard metrics" }, { status: 400 });
+  }
+
+  const ranked = await getCachedLeaderboard(pool, metric, window);
+  // §23.6: every row carries the user's level chip — null when they hide it or the feature is off.
+  const chips = await levelChips(pool, ranked.map((e) => e.userId));
+  const entries = ranked.map((e) => ({ ...e, level: chips.get(e.userId)?.level ?? null, progress: chips.get(e.userId)?.progress ?? null }));
+  return Response.json({ metric, window, entries, gamification: gamificationOn });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

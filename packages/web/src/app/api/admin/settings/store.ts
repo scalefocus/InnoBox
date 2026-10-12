@@ -4,7 +4,7 @@
 // notification sender (Graph connect flow) lives under /api/admin/email, reusing the
 // carried-over lib/email.ts helpers. Every change here is audited (platform-admin only).
 import type { Pool } from "pg";
-import { isDateFormat, type DateFormat } from "@innobox/shared";
+import { GAMIFICATION_ENABLED_AT_KEY, GAMIFICATION_ENABLED_KEY, getGamificationSettings, isDateFormat, type DateFormat } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
 
@@ -32,6 +32,41 @@ export async function setDateFormat(pool: Pool, format: DateFormat, actorUserId:
     targetType: "platform_settings",
     targetId: DATE_FORMAT_KEY,
     after: { format },
+  });
+}
+
+// ── Gamification switch (§23.10) ─────────────────────────────────────────────────────────
+
+export async function getGamificationEnabled(pool: Pool): Promise<boolean> {
+  return (await getGamificationSettings(pool)).enabled;
+}
+
+/** One switch, off by default. Each off → on flip stamps gamification_enabled_at, so the §23.7
+ *  toast never reports anything earned before it. Accrual is independent of the switch. */
+export async function setGamificationEnabled(pool: Pool, enabled: boolean, actorUserId: string): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    const before = await getGamificationSettings(client);
+    await client.query(
+      `insert into platform_settings (key, value, updated_by, updated_at)
+       values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [GAMIFICATION_ENABLED_KEY, JSON.stringify(enabled), actorUserId],
+    );
+    if (enabled && !before.enabled) {
+      await client.query(
+        `insert into platform_settings (key, value, updated_by, updated_at)
+         values ($1, to_jsonb(now()), $2, now())
+         on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+        [GAMIFICATION_ENABLED_AT_KEY, actorUserId],
+      );
+    }
+    await appendAudit(client, {
+      actorUserId,
+      action: "settings.gamification_enabled_changed",
+      targetType: "platform_settings",
+      targetId: GAMIFICATION_ENABLED_KEY,
+      after: { enabled },
+    });
   });
 }
 

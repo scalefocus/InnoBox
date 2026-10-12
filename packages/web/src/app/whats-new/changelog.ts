@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.0",
+    date: "2026-10-12",
+    summary:
+      "InnoBox 1.0 brings points, levels and badges: earn points when your challenges and solutions move forward, level up, collect badges and see who leads each leaderboard. Platform admins switch it on under Settings. Your profile lets you hide your level and badges from others or turn off achievement notifications.",
+  },
+  {
     version: "0.54.0",
     date: "2026-10-12",
     summary:

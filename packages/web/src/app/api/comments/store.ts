@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import { canEditOwnComment, validateCommentBody } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
+import { awardCommentPosted } from "../../../lib/gamification";
 import { getParentNamespaceId, isParentVisible, type Viewer } from "../challenges/store";
 import { isUuid } from "./validation";
 
@@ -131,6 +132,8 @@ export async function createComment(
       targetId: inserted.id,
       after: { parentType, parentId },
     });
+    // §23.2: comment_posted for the commenter (daily-capped; comments are never anonymous).
+    await awardCommentPosted(client, { id: inserted.id, authorId: viewer.userId, parentType, parentId });
     const namespaceId = await getParentNamespaceId(client, parentType, parentId);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: userRows } = await client.query<{ display_name: string; active: boolean; scrubbed: boolean }>(
