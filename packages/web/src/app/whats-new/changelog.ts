@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Attachment uploads are sturdier. A large file no longer fails because of one dropped piece: each piece is retried a couple of times before the upload gives up. Submitting now reliably waits for every attached file to finish scanning, and a submission with too many files is refused with a clear message instead of quietly leaving some behind. A file that is still uploading now offers Cancel instead of Remove.",
   },
   {
+    version: "0.47.0",
+    date: "2026-10-12",
+    summary:
+      "Platform admins can now connect InnoBox to one AI provider, Open WebUI or OpenAI, from Platform settings: test the connection, pick a model, then switch AI on. The API key is stored encrypted and never shown again, and usage is counted. No feature uses AI yet. To enable the card, set AI_TOKEN_ENC_KEY on web and worker.",
+  },
+  {
     version: "0.46.0",
     date: "2026-10-12",
     summary:

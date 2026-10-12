@@ -11,6 +11,7 @@ import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
 import { parseEmailTokenKey, type GraphMailEnv } from "@innobox/shared";
+import { pruneAiUsage } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
 import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
@@ -143,7 +144,7 @@ const leaderElection = startLeaderElection(dbUrl, {
     const scanDeps = buildScanDeps();
 
     // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.7 system-log
-    // trim, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what
+    // trim, §22.3 AI usage prune, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what
     // keeps per-person presence detail from accumulating past its 3-day floor — skipping it
     // because a mail or storage integration is unconfigured would silently turn presence into an
     // unbounded attendance record. (The §12.4 webhook-delivery trim runs on the same hourly
@@ -163,6 +164,14 @@ const leaderElection = startLeaderElection(dbUrl, {
         if (trimmed) console.log(JSON.stringify({ level: "info", msg: "system log trim", trimmed }));
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "system log trim failed", error: String(err) }));
+      }
+      // §22.3 retention: AI usage telemetry keeps 365 days. Pure DB work — it runs whether or not
+      // an AI provider is configured (usage history survives *Remove*).
+      try {
+        const pruned = await pruneAiUsage(pool);
+        if (pruned) console.log(JSON.stringify({ level: "info", msg: "ai usage prune", pruned }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "ai usage prune failed", error: String(err) }));
       }
       // §11 upload-session GC: reaps chunked-upload sessions abandoned after 2h (backstop to the
       // on-initiate cleanup). The session rows are reaped regardless; the MinIO multipart abort
