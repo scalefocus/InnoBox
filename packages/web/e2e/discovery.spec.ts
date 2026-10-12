@@ -85,9 +85,9 @@ test("what's new: Coming soon starts collapsed, expands on click, and hides admi
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const list = page.getByRole("list", { name: "Coming soon" });
   await expect(list).toBeVisible();
-  await expect(list.getByText("Points, levels and badges")).toBeVisible();
+  await expect(list.getByText("Replies to comments")).toBeVisible();
   // Platform-admin tooling is teased only to platform admins.
-  await expect(list.getByText("Survey results")).toHaveCount(0);
+  await expect(list.getByText("Trash and restore")).toHaveCount(0);
 
   await toggle.click();
   await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);

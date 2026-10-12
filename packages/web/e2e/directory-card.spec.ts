@@ -57,10 +57,10 @@ test("directory card: hover opens it, keyboard reaches it, and an anonymous auth
   const card = page.getByRole("dialog", { name: authorName });
   await expect(card).toBeVisible();
   expect(cardRequests.length, "hovering fetches the card exactly once").toBe(1);
-  // §13.8: the body is the flat card — no wrapper key.
+  // §13.8: the body is the flat card — no wrapper key. `gamification` is the §23.12 card block.
   const body = await (await cardResponse).json();
   expect(Object.keys(body).sort()).toEqual(
-    ["deactivated", "department", "displayName", "jobTitle", "officeLocation", "scrubbed", "userId"],
+    ["deactivated", "department", "displayName", "gamification", "jobTitle", "officeLocation", "scrubbed", "userId"],
   );
   expect(body.displayName).toBe(authorName);
 
