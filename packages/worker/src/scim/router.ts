@@ -67,6 +67,14 @@ function pagination(req: Request): { startIndex: number; count: number } {
   return { startIndex, count };
 }
 
+/** Resource ids are server-assigned uuids. Anything else names no resource and must never reach a
+ *  uuid column, where Postgres would reject it and the request would fall through to a 500. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isScimId(id: string | undefined): id is string {
+  return typeof id === "string" && UUID_RE.test(id);
+}
+
 function isoOrNull(d: Date | string | null | undefined): string | null {
   if (d === null || d === undefined) return null;
   return d instanceof Date ? d.toISOString() : new Date(d).toISOString();
@@ -84,7 +92,8 @@ async function findUserByUserNameCI(pool: Pool, userName: string): Promise<UserR
   return rows[0] ?? null;
 }
 
-async function findUserById(pool: Pool, id: string): Promise<UserRow | null> {
+async function findUserById(pool: Pool, id: string | undefined): Promise<UserRow | null> {
+  if (!isScimId(id)) return null;
   const { rows } = await pool.query<UserRow>(`select * from users where id = $1`, [id]);
   return rows[0] ?? null;
 }
@@ -141,6 +150,7 @@ async function updateUserFull(pool: Pool, id: string, data: ParsedUserWrite & { 
 }
 
 interface UserPatchValues {
+  externalId: string;
   active: boolean;
   userName: string;
   email: string | null;
@@ -157,10 +167,11 @@ async function updateUserPatch(pool: Pool, id: string, v: UserPatchValues): Prom
             -- §3.1: drop the cached photo when going inactive (greyed initials bubble thereafter)
             photo = case when $7 then photo else null end,
             photo_etag = case when $7 then photo_etag else null end,
+            external_id = $8,
             scim_synced = true, updated_at = now()
       where id = $1
       returning *`,
-    [id, v.userName, v.email, v.displayName, v.department, v.jobTitle, v.active],
+    [id, v.userName, v.email, v.displayName, v.department, v.jobTitle, v.active, v.externalId],
   );
   return rows[0]!;
 }
@@ -205,6 +216,7 @@ async function auditUserTransition(pool: Pool, before: UserRow, after: UserRow):
     return;
   }
   const changed =
+    before.external_id !== after.external_id ||
     before.user_name !== after.user_name ||
     before.email !== after.email ||
     before.display_name !== after.display_name ||
@@ -217,6 +229,7 @@ async function auditUserTransition(pool: Pool, before: UserRow, after: UserRow):
     targetType: "user",
     targetId: after.id,
     before: {
+      externalId: before.external_id,
       userName: before.user_name,
       email: before.email,
       displayName: before.display_name,
@@ -224,6 +237,7 @@ async function auditUserTransition(pool: Pool, before: UserRow, after: UserRow):
       jobTitle: before.job_title,
     },
     after: {
+      externalId: after.external_id,
       userName: after.user_name,
       email: after.email,
       displayName: after.display_name,
@@ -245,7 +259,8 @@ async function findGroupByDisplayNameCI(pool: Pool, displayName: string): Promis
   return rows[0] ?? null;
 }
 
-async function findGroupById(pool: Pool, id: string): Promise<GroupRow | null> {
+async function findGroupById(pool: Pool, id: string | undefined): Promise<GroupRow | null> {
+  if (!isScimId(id)) return null;
   const { rows } = await pool.query<GroupRow>(`select * from groups where id = $1`, [id]);
   return rows[0] ?? null;
 }
@@ -266,11 +281,16 @@ async function renameGroup(pool: Pool, id: string, displayName: string): Promise
   return rows[0]!;
 }
 
-/** §14.10: every SCIM group write (create / replace / patch) marks the row SCIM-provisioned —
- *  including a write that changes nothing else (a replayed POST, a membership-only PATCH).
- *  Reconciliation's mirroring never calls this, so it cannot mask missing group provisioning. */
-async function markGroupScimSynced(pool: Pool, id: string): Promise<void> {
-  await pool.query(`update groups set scim_synced = true where id = $1 and not scim_synced`, [id]);
+/** §14.10: every SCIM group write (create / replace / patch) marks the row SCIM-provisioned and
+ *  stamps `updated_at` — including a write that changes nothing else (a replayed POST, a
+ *  membership-only PATCH), so `meta.lastModified` moves with every SCIM write (ENTRA_AUTH_SPEC.md
+ *  §5). Reconciliation's mirroring never calls this, so it cannot mask missing group provisioning. */
+async function markGroupScimSynced(pool: Pool, id: string): Promise<GroupRow> {
+  const { rows } = await pool.query<GroupRow>(
+    `update groups set scim_synced = true, updated_at = now() where id = $1 returning *`,
+    [id],
+  );
+  return rows[0]!;
 }
 
 async function deleteGroupCascade(pool: Pool, id: string): Promise<void> {
@@ -294,6 +314,7 @@ async function removeGroupMember(pool: Pool, groupId: string, userId: string): P
 
 /** A user a membership add may name: known and not erased (a scrubbed row counts as unknown). */
 async function userExists(pool: Pool, userId: string): Promise<boolean> {
+  if (!isScimId(userId)) return false; // a malformed member id is an unknown member, not a 500
   const { rows } = await pool.query(`select 1 from users where id = $1 and scrubbed_at is null`, [userId]);
   return rows.length > 0;
 }
@@ -438,7 +459,15 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     }
     if (existing) {
       // Idempotent upsert: a duplicate POST (retry, replayed sync cycle) must not create a
-      // second row — bring the existing one in line with the latest payload instead.
+      // second row — bring the existing one in line with the latest payload instead. The new
+      // userName gets the same conflict check PUT and PATCH run.
+      if (parsedBody.userName) {
+        const conflicting = await findUserByUserNameCI(pool, parsedBody.userName);
+        if (conflicting && conflicting.id !== existing.id) {
+          res.status(409).json(scimError(409, `userName already in use: ${parsedBody.userName}`, "uniqueness"));
+          return;
+        }
+      }
       const updated = await updateUserFull(pool, existing.id, { ...parsedBody, externalId });
       await auditUserTransition(pool, existing, updated);
       res.status(200).json(toScimUser(updated));
@@ -465,7 +494,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.get("/Users/:id", async (req, res) => {
-    const user = await findUserById(pool, req.params.id!);
+    const user = await findUserById(pool, req.params.id);
     if (isScrubbed(user)) {
       await auditScrubbedRefusal(pool, user.id, "GET /Users/:id");
       res.status(404).json(scimError(404, "User not found"));
@@ -479,7 +508,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.put("/Users/:id", async (req, res) => {
-    const existing = await findUserById(pool, req.params.id!);
+    const existing = await findUserById(pool, req.params.id);
     if (isScrubbed(existing)) {
       await auditScrubbedRefusal(pool, existing.id, "PUT /Users/:id");
       res.status(404).json(scimError(404, "User not found"));
@@ -504,7 +533,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.patch("/Users/:id", async (req, res) => {
-    const existing = await findUserById(pool, req.params.id!);
+    const existing = await findUserById(pool, req.params.id);
     if (isScrubbed(existing)) {
       await auditScrubbedRefusal(pool, existing.id, "PATCH /Users/:id");
       res.status(404).json(scimError(404, "User not found"));
@@ -516,6 +545,15 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     }
     const patch = normalizeUserPatch((req.body as { Operations?: unknown })?.Operations);
     const newUserName = patch.userName ?? existing.user_name;
+    if (patch.externalId && patch.externalId !== existing.external_id) {
+      // A re-mapped tenant undoing a sign-in relink (INNOBOX_SPEC.md §3): the new key must not
+      // already belong to another row.
+      const conflicting = await findUserByExternalId(pool, patch.externalId);
+      if (conflicting && conflicting.id !== existing.id) {
+        res.status(409).json(scimError(409, `externalId already in use: ${patch.externalId}`, "uniqueness"));
+        return;
+      }
+    }
     if (patch.userName && patch.userName !== existing.user_name) {
       const conflicting = await findUserByUserNameCI(pool, patch.userName);
       if (conflicting && conflicting.id !== existing.id) {
@@ -524,6 +562,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       }
     }
     const updated = await updateUserPatch(pool, existing.id, {
+      externalId: patch.externalId ?? existing.external_id,
       active: patch.active ?? existing.active,
       userName: newUserName,
       email: patch.email ?? existing.email,
@@ -536,7 +575,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.delete("/Users/:id", async (req, res) => {
-    const existing = await findUserById(pool, req.params.id!);
+    if (!isScimId(req.params.id)) {
+      res.status(404).json(scimError(404, "User not found"));
+      return;
+    }
+    const existing = await findUserById(pool, req.params.id);
     if (isScrubbed(existing)) {
       // §3: an erased row is "not found", not "already gone" — and is never touched.
       await auditScrubbedRefusal(pool, existing.id, "DELETE /Users/:id");
@@ -565,23 +608,26 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   router.get("/Groups", async (req, res) => {
     const filtered = parseFilterOr400(req, res, ["displayname", "externalid"]);
     if (!filtered.ok) return;
-    let rows: GroupRow[];
+    const toResources = (rows: GroupRow[]) =>
+      Promise.all(rows.map(async (g) => toScimGroup(g, await listGroupMemberIds(pool, g.id))));
     if (filtered.parsed) {
       const group =
         filtered.parsed.attr === "displayname"
           ? await findGroupByDisplayNameCI(pool, filtered.parsed.value)
           : await findGroupByExternalId(pool, filtered.parsed.value);
-      rows = group ? [group] : [];
-    } else {
-      const { startIndex, count } = pagination(req);
-      const { rows: page } = await pool.query<GroupRow>(`select * from groups order by created_at limit $1 offset $2`, [
-        count,
-        startIndex - 1,
-      ]);
-      rows = page;
+      const resources = await toResources(group ? [group] : []);
+      res.status(200).json(scimListResponse(resources, resources.length));
+      return;
     }
-    const resources = await Promise.all(rows.map(async (g) => toScimGroup(g, await listGroupMemberIds(pool, g.id))));
-    res.status(200).json(scimListResponse(resources, resources.length));
+    // Like /Users: totalResults is the full match count, not the page size, and startIndex
+    // echoes the request.
+    const { startIndex, count } = pagination(req);
+    const [{ rows: page }, { rows: totalRows }] = await Promise.all([
+      pool.query<GroupRow>(`select * from groups order by created_at limit $1 offset $2`, [count, startIndex - 1]),
+      pool.query<{ count: string }>(`select count(*)::text as count from groups`),
+    ]);
+    const resources = await toResources(page);
+    res.status(200).json(scimListResponse(resources, Number(totalRows[0]?.count ?? page.length), startIndex));
   });
 
   router.post("/Groups", async (req, res) => {
@@ -594,7 +640,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
 
     let group = await findGroupByExternalId(pool, externalId);
     let created = false;
-    if (group) await markGroupScimSynced(pool, group.id);
+    if (group) group = await markGroupScimSynced(pool, group.id);
     if (!group) {
       group = await insertGroup(pool, { externalId, displayName: parsedBody.displayName });
       created = true;
@@ -625,7 +671,7 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.get("/Groups/:id", async (req, res) => {
-    const group = await findGroupById(pool, req.params.id!);
+    const group = await findGroupById(pool, req.params.id);
     if (!group) {
       res.status(404).json(scimError(404, "Group not found"));
       return;
@@ -635,14 +681,13 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.put("/Groups/:id", async (req, res) => {
-    const existing = await findGroupById(pool, req.params.id!);
+    const existing = await findGroupById(pool, req.params.id);
     if (!existing) {
       res.status(404).json(scimError(404, "Group not found"));
       return;
     }
     const parsedBody = parseGroupWrite(req.body);
-    await markGroupScimSynced(pool, existing.id);
-    let group = existing;
+    let group = await markGroupScimSynced(pool, existing.id);
     if (parsedBody.displayName && parsedBody.displayName !== existing.display_name) {
       const before = existing.display_name;
       group = await renameGroup(pool, existing.id, parsedBody.displayName);
@@ -666,14 +711,13 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.patch("/Groups/:id", async (req, res) => {
-    const existing = await findGroupById(pool, req.params.id!);
+    const existing = await findGroupById(pool, req.params.id);
     if (!existing) {
       res.status(404).json(scimError(404, "Group not found"));
       return;
     }
     const patch = normalizeGroupPatch((req.body as { Operations?: unknown })?.Operations);
-    await markGroupScimSynced(pool, existing.id);
-    let group = existing;
+    let group = await markGroupScimSynced(pool, existing.id);
     if (patch.displayName && patch.displayName !== existing.display_name) {
       const before = existing.display_name;
       group = await renameGroup(pool, existing.id, patch.displayName);
@@ -700,8 +744,13 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   });
 
   router.delete("/Groups/:id", async (req, res) => {
-    const existing = await findGroupById(pool, req.params.id!);
+    if (!isScimId(req.params.id)) {
+      res.status(404).json(scimError(404, "Group not found"));
+      return;
+    }
+    const existing = await findGroupById(pool, req.params.id);
     if (!existing) {
+      // Idempotent, like the user DELETE: a well-formed id that matches no row is already gone.
       res.status(204).end();
       return;
     }
@@ -755,6 +804,12 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
   router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof SyntaxError) {
       res.status(400).json(scimError(400, "Malformed JSON body"));
+      return;
+    }
+    // Backstop for a uniqueness race the explicit checks above did not catch (two writes landing
+    // at once): a unique-index violation is the client's conflict, not a server failure.
+    if ((err as { code?: unknown })?.code === "23505") {
+      res.status(409).json(scimError(409, "A resource with this identifier already exists", "uniqueness"));
       return;
     }
     console.error(

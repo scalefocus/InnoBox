@@ -10,6 +10,8 @@ export interface NormalizedUserPatch {
   displayName?: string;
   userName?: string;
   email?: string;
+  /** A re-keyed Entra object id — how a re-mapped tenant undoes a sign-in relink (INNOBOX_SPEC.md §3). */
+  externalId?: string;
   jobTitle?: string;
   department?: string;
 }
@@ -30,7 +32,33 @@ function opName(rawOp: any): string {
   return typeof rawOp?.op === "string" ? rawOp.op.toLowerCase() : "";
 }
 
+/** The work e-mail Entra maps `mail` onto, as a filter path: `emails[type eq "work"].value`. */
+const WORK_EMAIL_PATH_RE = /^emails\[\s*type\s+eq\s+"work"\s*\]\.value$/i;
+
+function nonBlank(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** The work address out of an `emails` multi-valued array: the `type: "work"` entry, else the
+ *  primary one, else the first — mirroring how POST/PUT pick the stored address. */
+function workEmailFromArray(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.filter((e): e is { value: string; type?: unknown; primary?: unknown } => nonBlank(e?.value) !== undefined);
+  const pick =
+    entries.find((e) => typeof e.type === "string" && e.type.toLowerCase() === "work") ??
+    entries.find((e) => e.primary === true) ??
+    entries[0];
+  return pick ? nonBlank(pick.value) : undefined;
+}
+
 function applyUserAttr(result: NormalizedUserPatch, key: string, value: unknown): void {
+  if (WORK_EMAIL_PATH_RE.test(key)) {
+    const email = nonBlank(value);
+    if (email !== undefined) result.email = email;
+    return;
+  }
   switch (key.toLowerCase()) {
     case "active": {
       const b = parseActiveValue(value);
@@ -43,6 +71,17 @@ function applyUserAttr(result: NormalizedUserPatch, key: string, value: unknown)
     case "username":
       if (typeof value === "string") result.userName = value;
       return;
+    case "emails": {
+      // The path-less / bare-path form: the whole multi-valued array.
+      const email = workEmailFromArray(value);
+      if (email !== undefined) result.email = email;
+      return;
+    }
+    case "externalid": {
+      const externalId = nonBlank(value);
+      if (externalId !== undefined) result.externalId = externalId;
+      return;
+    }
     case "title":
       if (typeof value === "string") result.jobTitle = value;
       return;

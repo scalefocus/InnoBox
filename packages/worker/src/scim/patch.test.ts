@@ -67,6 +67,65 @@ test("user patch: displayName, title, enterprise department", () => {
   assert.deepEqual(result, { displayName: "Ada L.", jobTitle: "Principal Engineer", department: "R&D" });
 });
 
+// The work e-mail, in both forms Entra sends (ENTRA_AUTH_SPEC.md §5 PATCH quirks).
+test("user patch: work e-mail via the emails[type eq \"work\"].value filter path (Entra's literal payload)", () => {
+  const result = normalizeUserPatch([
+    { op: "Replace", path: 'emails[type eq "work"].value', value: "ada.lovelace@example.com" },
+  ]);
+  assert.deepEqual(result, { email: "ada.lovelace@example.com" });
+});
+
+test("user patch: work e-mail filter path tolerates spacing and casing", () => {
+  const result = normalizeUserPatch([{ op: "add", path: 'Emails[ Type EQ "work" ].Value', value: " ada@example.com " }]);
+  assert.deepEqual(result, { email: "ada@example.com" });
+});
+
+test("user patch: work e-mail via a path-less emails array", () => {
+  const result = normalizeUserPatch([
+    {
+      op: "replace",
+      value: { emails: [{ type: "work", value: "ada.lovelace@example.com", primary: true }] },
+    },
+  ]);
+  assert.deepEqual(result, { email: "ada.lovelace@example.com" });
+});
+
+test("user patch: emails array on the bare emails path prefers type work, then primary, then first", () => {
+  const work = normalizeUserPatch([
+    {
+      op: "replace",
+      path: "emails",
+      value: [
+        { type: "other", value: "home@example.com", primary: true },
+        { type: "work", value: "work@example.com" },
+      ],
+    },
+  ]);
+  assert.deepEqual(work, { email: "work@example.com" });
+  const primary = normalizeUserPatch([
+    { op: "replace", path: "emails", value: [{ value: "a@example.com" }, { value: "b@example.com", primary: true }] },
+  ]);
+  assert.deepEqual(primary, { email: "b@example.com" });
+  const first = normalizeUserPatch([{ op: "replace", path: "emails", value: [{ value: "a@example.com" }] }]);
+  assert.deepEqual(first, { email: "a@example.com" });
+});
+
+test("user patch: a non-work filter path, blank value or empty array leaves the e-mail alone", () => {
+  assert.deepEqual(normalizeUserPatch([{ op: "replace", path: 'emails[type eq "home"].value', value: "h@example.com" }]), {});
+  assert.deepEqual(normalizeUserPatch([{ op: "replace", path: 'emails[type eq "work"].value', value: "  " }]), {});
+  assert.deepEqual(normalizeUserPatch([{ op: "replace", value: { emails: [] } }]), {});
+});
+
+test("user patch: externalId (Entra's literal payload, and the path-less form)", () => {
+  const oid = "8d2f1b6e-3c4a-4e5f-9a0b-1c2d3e4f5a6b";
+  assert.deepEqual(normalizeUserPatch([{ op: "Replace", path: "externalId", value: oid }]), { externalId: oid });
+  assert.deepEqual(normalizeUserPatch([{ op: "replace", value: { externalId: oid, active: true } }]), {
+    externalId: oid,
+    active: true,
+  });
+  assert.deepEqual(normalizeUserPatch([{ op: "replace", path: "externalId", value: "" }]), {}, "blank is ignored");
+});
+
 test("user patch: unknown path is ignored, never throws", () => {
   assert.deepEqual(normalizeUserPatch([{ op: "replace", path: "name.givenName", value: "Ada" }]), {});
   assert.deepEqual(normalizeUserPatch([{ op: "replace", path: "nickName", value: "Ada" }]), {});

@@ -1,7 +1,7 @@
 // Next.js instrumentation hook — register() runs once when the server starts (in the standalone
 // production server too; never during `next build`). INNOBOX_SPEC.md §2.3: a production build
 // that finds INNOBOX_DEV_AUTH set, CSP_MODE=off / an unrecognised CSP_MODE, or no PUBLIC_BASE_URL
-// refuses to start. Only the Node.js runtime can exit the process; the edge runtime (middleware) has no process.exit and needs no second check.
+// refuses to start — and so does one with no single Entra tenant (ENTRA_AUTH_SPEC.md §5). Only the Node.js runtime can exit the process; the edge runtime (middleware) has no process.exit and needs no second check.
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   const { devAuthStartupViolation } = await import("./lib/dev-auth-guard");
@@ -11,6 +11,18 @@ export async function register(): Promise<void> {
   });
   if (fatal) {
     console.error(fatal);
+    process.exit(1);
+  }
+
+  // ENTRA_AUTH_SPEC.md §5 layer 1: sign-in must be pinned to one tenant — an unset, blank or
+  // multi-tenant ENTRA_TENANT_ID would let the provider fall back to `common`.
+  const { entraTenantStartupViolation } = await import("./lib/entra-tenant");
+  const tenantFatal = entraTenantStartupViolation({
+    NODE_ENV: process.env.NODE_ENV,
+    ENTRA_TENANT_ID: process.env.ENTRA_TENANT_ID,
+  });
+  if (tenantFatal) {
+    console.error(tenantFatal);
     process.exit(1);
   }
 
