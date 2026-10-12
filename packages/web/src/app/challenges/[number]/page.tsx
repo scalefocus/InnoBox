@@ -25,6 +25,7 @@ interface MaskedAuthor {
   displayName: string;
   anonymous: boolean;
   active?: boolean;
+  scrubbed?: boolean;
 }
 
 interface AttachmentItem {
@@ -79,6 +80,7 @@ interface ChallengeDetail {
   assigneeId: string | null;
   assigneeDisplayName: string | null;
   assigneeActive?: boolean | null;
+  assigneeScrubbed?: boolean | null;
   likeCount: number;
   likedByViewer: boolean;
   followedByViewer: boolean;
@@ -294,6 +296,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         displayName: json.displayName as string,
         email: (json.email as string) ?? null,
         userId: (json.userId as string) ?? null,
+        active: json.active !== false,
+        scrubbed: json.scrubbed === true,
       });
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not reveal author");
@@ -449,7 +453,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span className="chip mono">{s.number}</span>
         <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-        <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} />
+        <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} scrubbed={s.author.scrubbed === true} />
         <span className="sub" style={{ flex: 1 }}>
           {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
         </span>
@@ -587,6 +591,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             displayName={challenge.author.displayName}
             anonymous={challenge.author.anonymous}
             deactivated={challenge.author.active === false}
+            scrubbed={challenge.author.scrubbed === true}
           />
           <div className="grow">
             <div className="ttl">{challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}</div>
@@ -603,6 +608,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                   userId={challenge.assigneeId}
                   displayName={challenge.assigneeDisplayName}
                   deactivated={challenge.assigneeActive === false}
+                  scrubbed={challenge.assigneeScrubbed === true}
                 />{" "}
                 {challenge.assigneeDisplayName}
               </div>
@@ -737,6 +743,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                     userId={challenge.assigneeId}
                     displayName={challenge.assigneeDisplayName}
                     deactivated={challenge.assigneeActive === false}
+                    scrubbed={challenge.assigneeScrubbed === true}
                   />
                   <span style={{ fontSize: 14 }}>{challenge.assigneeDisplayName}</span>
                   <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => assign(null)}>
@@ -832,6 +839,9 @@ interface RevealedAuthor {
   displayName: string;
   email: string | null;
   userId: string | null;
+  /** §13.6: the revealed author's account state — greyed or neutral bubble in the dialog. */
+  active: boolean;
+  scrubbed: boolean;
 }
 
 /** `/api/challenges/<n>` or `/api/solutions/<n>` for a CH-/SOL- number. */
@@ -866,7 +876,14 @@ function RevealDialog({ revealed, onClose }: { revealed: RevealedAuthor; onClose
     >
       <div className="author-reveal-body">
         <div className="eyebrow">Author of {revealed.itemNumber}</div>
-        <AvatarBubble size="lg" userId={revealed.userId} displayName={revealed.displayName} noCard />
+        <AvatarBubble
+          size="lg"
+          userId={revealed.userId}
+          displayName={revealed.displayName}
+          deactivated={!revealed.active}
+          scrubbed={revealed.scrubbed}
+          noCard
+        />
         <h2 id="author-reveal-name" className="author-reveal-name">
           {revealed.displayName}
         </h2>

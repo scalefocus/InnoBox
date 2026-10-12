@@ -20,6 +20,8 @@ export interface CommentRecord {
   /** §13.6: the author's `users.active` — false renders the greyed bubble. Comments are never
    *  anonymous (§9), so this discloses nothing the name doesn't already. */
   authorActive: boolean;
+  /** §13.6: the author is GDPR-scrubbed — the bubble renders "Deleted User" from this flag. */
+  authorScrubbed: boolean;
   body: string;
   createdAt: string;
   editedAt: string | null;
@@ -38,6 +40,7 @@ interface CommentRow {
   author_id: string;
   author_display_name: string;
   author_active: boolean;
+  author_scrubbed: boolean;
   body: string;
   created_at: Date;
   edited_at: Date | null;
@@ -55,6 +58,7 @@ function toRecord(row: CommentRow, viewer: Viewer, isNamespaceAdmin: boolean, au
     authorId: row.author_id,
     authorDisplayName: row.author_display_name,
     authorActive: row.author_active,
+    authorScrubbed: row.author_scrubbed,
     body: deleted ? MODERATION_PLACEHOLDER : row.body,
     createdAt: row.created_at.toISOString(),
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
@@ -89,7 +93,7 @@ export async function listComments(
   const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
   const committee = namespaceId !== null ? await committeeMemberIds(pool, namespaceId) : new Set<string>();
   const { rows } = await pool.query<CommentRow>(
-    `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active,
+    `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
             c.body, c.created_at, c.edited_at, c.deleted_at
        from comments c
        join users u on u.id = c.author_id
@@ -129,8 +133,8 @@ export async function createComment(
     });
     const namespaceId = await getParentNamespaceId(client, parentType, parentId);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
-    const { rows: userRows } = await client.query<{ display_name: string; active: boolean }>(
-      `select display_name, active from users where id = $1`,
+    const { rows: userRows } = await client.query<{ display_name: string; active: boolean; scrubbed: boolean }>(
+      `select display_name, active, scrubbed_at is not null as scrubbed from users where id = $1`,
       [viewer.userId],
     );
     const comment = toRecord(
@@ -141,6 +145,7 @@ export async function createComment(
         author_id: viewer.userId,
         author_display_name: userRows[0]?.display_name ?? "",
         author_active: userRows[0]?.active ?? true,
+        author_scrubbed: userRows[0]?.scrubbed ?? false,
         body: validated.value,
         created_at: inserted.created_at,
         edited_at: null,
@@ -184,7 +189,7 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
     const namespaceId = await getParentNamespaceId(client, row.parent_type, row.parent_id);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: full } = await client.query<CommentRow>(
-      `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active,
+      `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
               c.body, c.created_at, c.edited_at, c.deleted_at
          from comments c join users u on u.id = c.author_id where c.id = $1`,
       [commentId],

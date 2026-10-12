@@ -18,7 +18,7 @@ import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/Fea
 interface SpotlightSolution {
   number: string;
   description: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
   challengeNumber: string;
   challengeTitle: string;
   updatedAt: string;
@@ -173,6 +173,10 @@ function DevSignInPanel() {
   const [email, setEmail] = useState("dev@innobox.innovate");
   const [admin, setAdmin] = useState("1");
   const [freshOnboarding, setFreshOnboarding] = useState("0");
+  // §13.9 update-notice seam: blank stamps the running release; an x.y.z seeds a lower marker,
+  // "none" leaves it unset (with an optional rollout date).
+  const [whatsNewSeen, setWhatsNewSeen] = useState("");
+  const [whatsNewSinceDate, setWhatsNewSinceDate] = useState("");
   return (
     <form
       className="card card-pad reveal"
@@ -180,7 +184,7 @@ function DevSignInPanel() {
       onSubmit={(e) => {
         e.preventDefault();
         const callbackUrl = new URLSearchParams(window.location.search).get("callbackUrl") || "/";
-        void signIn("dev", { name, email, admin, freshOnboarding, callbackUrl });
+        void signIn("dev", { name, email, admin, freshOnboarding, whatsNewSeen, whatsNewSinceDate, callbackUrl });
       }}
     >
       <div className="sub mono">DEVELOPER SIGN-IN</div>
@@ -214,6 +218,30 @@ function DevSignInPanel() {
           onChange={(e) => setFreshOnboarding(e.target.value)}
         />
       </div>
+      <div>
+        <label style={devLabelStyle} htmlFor="dev-whats-new-seen">
+          What&apos;s new marker (blank = current release, x.y.z, or &quot;none&quot;)
+        </label>
+        <input
+          id="dev-whats-new-seen"
+          className="field"
+          style={{ width: "100%" }}
+          value={whatsNewSeen}
+          onChange={(e) => setWhatsNewSeen(e.target.value)}
+        />
+      </div>
+      <div>
+        <label style={devLabelStyle} htmlFor="dev-whats-new-since">
+          What&apos;s new rollout date (YYYY-MM-DD, with &quot;none&quot;)
+        </label>
+        <input
+          id="dev-whats-new-since"
+          className="field"
+          style={{ width: "100%" }}
+          value={whatsNewSinceDate}
+          onChange={(e) => setWhatsNewSinceDate(e.target.value)}
+        />
+      </div>
       <button type="submit" className="btn btn-primary" style={{ justifyContent: "center" }}>
         Dev sign-in
       </button>
@@ -239,7 +267,7 @@ function SpotlightCard({ title, solution, empty }: { title: string; solution: Sp
           </p>
           <div className="sub mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {solution.number} ·{" "}
-            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} deactivated={solution.author.active === false} />
+            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} deactivated={solution.author.active === false} scrubbed={solution.author.scrubbed === true} />
             {solution.author.anonymous ? "Anonymous" : solution.author.displayName} · {fmt.date(solution.updatedAt)}
           </div>
         </Link>

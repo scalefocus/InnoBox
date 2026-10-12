@@ -42,11 +42,12 @@ export const DELETED_USER_DISPLAY_NAME = "Deleted User";
 
 export type AvatarVariant = "anon" | "deleted" | "off" | "color";
 
-/** Which §13.6 bubble a user renders as, decided from the data every payload already carries:
+/** Which §13.6 bubble a user renders as, decided from the explicit flags every person payload
+ *  carries beside the user id:
  *  - `anon` — the generic anonymous bubble (§9), identical for every anonymous author;
- *  - `deleted` — the neutral bubble for a scrubbed "Deleted User": erasure always deactivates
- *    the account, so an inactive (or id-less) row named "Deleted User" is a scrubbed one and
- *    gets no initials and no per-user color;
+ *  - `deleted` — the neutral bubble for a GDPR-scrubbed user (`scrubbed`, §3 erasure): no
+ *    initials and no per-user color. Decided from the flag, never from the display name — an
+ *    active user who happens to be called "Deleted User" keeps their colored bubble;
  *  - `off` — the greyed initials bubble for a deactivated user (photo dropped, §3.1) or an
  *    id-less actor;
  *  - `color` — the palette-colored initials bubble (photo layered on top when present). */
@@ -55,10 +56,10 @@ export function avatarVariant(input: {
   displayName: string;
   anonymous?: boolean;
   deactivated?: boolean;
+  scrubbed?: boolean;
 }): AvatarVariant {
   if (input.anonymous || (input.userId === null && input.displayName === "Anonymous")) return "anon";
-  const inactive = input.userId === null || input.deactivated === true;
-  if (inactive && input.displayName === DELETED_USER_DISPLAY_NAME) return "deleted";
-  if (inactive) return "off";
+  if (input.scrubbed) return "deleted";
+  if (input.userId === null || input.deactivated === true) return "off";
   return "color";
 }

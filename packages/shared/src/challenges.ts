@@ -84,21 +84,33 @@ export interface MaskedAuthor {
    *  their identity (invariant 3), so the masked shape is identical for every anonymous author
    *  whatever their account state. */
   active?: boolean;
+  /** §13.6: true for a GDPR-scrubbed author ("Delete user info", §3) — the bubble renders the
+   *  neutral "Deleted User" bubble from this flag, never from the display name. Absent when
+   *  anonymous, like `active`. */
+  scrubbed?: boolean;
 }
 
 /** Masking is total by default: an anonymous item shows "Anonymous" (and null userId, so no
  *  avatar/photo) to EVERY viewer, no exceptions — not even the author's own view, not admins,
  *  not committee. The audited admin reveal (§9) is a separate, transient path that never flows
  *  through this projection. `authorActive` (the author's `users.active`, the §13.6 greyed
- *  bubble) is carried only for a non-anonymous author; it defaults to true when omitted. */
+ *  bubble) and `authorScrubbed` (`users.scrubbed_at is not null`, the "Deleted User" bubble) are
+ *  carried only for a non-anonymous author; they default to true / false when omitted. */
 export function maskAuthor(item: {
   isAnonymous: boolean;
   authorId: string;
   authorDisplayName: string;
   authorActive?: boolean;
+  authorScrubbed?: boolean;
 }): MaskedAuthor {
   if (item.isAnonymous) return { userId: null, displayName: "Anonymous", anonymous: true };
-  return { userId: item.authorId, displayName: item.authorDisplayName, anonymous: false, active: item.authorActive ?? true };
+  return {
+    userId: item.authorId,
+    displayName: item.authorDisplayName,
+    anonymous: false,
+    active: item.authorActive ?? true,
+    scrubbed: item.authorScrubbed ?? false,
+  };
 }
 
 // ── Visibility (§4.3, invariant 2) ──────────────────────────────────────────────────────

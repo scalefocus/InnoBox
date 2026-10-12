@@ -61,6 +61,11 @@ if (devAuthEnabled) {
         // used only by the dedicated onboarding e2e spec; every other dev/e2e sign-in defaults
         // to already-seen so it isn't interrupted by the onboarding redirect.
         freshOnboarding: { label: "Fresh onboarding (\"1\" = yes)", type: "text", value: "0" },
+        // §13.9: blank stamps the What's new marker at the running release; an x.y.z seeds a
+        // lower one, and "none" (plus an optional rollout date) leaves it unset — only the
+        // update-notice e2e spec sets these.
+        whatsNewSeen: { label: "What's new marker (blank = current)", type: "text", value: "" },
+        whatsNewSinceDate: { label: "What's new rollout date", type: "text", value: "" },
       },
       // Upserts a REAL local user (+ dev admin group/mapping/membership when requested)
       // so RBAC still resolves from the database — the session never carries roles.
@@ -72,6 +77,8 @@ if (devAuthEnabled) {
           email: credentials?.email?.trim() || null,
           admin: credentials?.admin === "1",
           freshOnboarding: credentials?.freshOnboarding === "1",
+          whatsNewSeen: credentials?.whatsNewSeen,
+          whatsNewSinceDate: credentials?.whatsNewSinceDate,
         });
         if (!user.active) return null; // deactivated dev users are refused like real leavers
         return { id: user.externalId, name: user.displayName, email: user.email };

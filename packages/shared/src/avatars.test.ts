@@ -43,9 +43,19 @@ test("avatarVariant: anonymous wins over everything (§9 generic bubble)", () =>
   assert.equal(avatarVariant({ userId: "u1", displayName: "Jane Doe", anonymous: true, deactivated: true }), "anon");
 });
 
-test("avatarVariant: a scrubbed 'Deleted User' renders the neutral bubble, not colored 'DU' (§13.6)", () => {
-  assert.equal(avatarVariant({ userId: "u1", displayName: DELETED_USER_DISPLAY_NAME, deactivated: true }), "deleted");
-  assert.equal(avatarVariant({ userId: null, displayName: DELETED_USER_DISPLAY_NAME }), "deleted");
+test("avatarVariant: a scrubbed user renders the neutral bubble, not colored 'DU' (§13.6)", () => {
+  assert.equal(avatarVariant({ userId: "u1", displayName: DELETED_USER_DISPLAY_NAME, deactivated: true, scrubbed: true }), "deleted");
+  assert.equal(avatarVariant({ userId: null, displayName: DELETED_USER_DISPLAY_NAME, scrubbed: true }), "deleted");
+});
+
+test("avatarVariant: 'Deleted User' is decided from the scrubbed flag, never the display name (§13.6)", () => {
+  // A deactivated (not scrubbed) user named "Deleted User" is greyed, not the neutral bubble.
+  assert.equal(avatarVariant({ userId: "u1", displayName: DELETED_USER_DISPLAY_NAME, deactivated: true }), "off");
+  assert.equal(avatarVariant({ userId: null, displayName: DELETED_USER_DISPLAY_NAME }), "off");
+  // A scrubbed flag wins whatever the name.
+  assert.equal(avatarVariant({ userId: "u1", displayName: "Jane Doe", deactivated: true, scrubbed: true }), "deleted");
+  // Anonymity still wins over scrubbed (§9).
+  assert.equal(avatarVariant({ userId: null, displayName: "Anonymous", anonymous: true, scrubbed: true }), "anon");
 });
 
 test("avatarVariant: deactivated users get the greyed initials bubble; active users the colored one", () => {
