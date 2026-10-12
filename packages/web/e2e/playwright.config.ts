@@ -61,7 +61,7 @@ export default defineConfig({
     // §2.4 CSRF: every state-changing /api/* request must carry an Origin equal to the app's own
     // origin. A browser adds it on its own; Playwright's APIRequestContext (context.request — what
     // the e2e/helpers/api.ts fixtures and the specs' direct API calls use) does not, so every
-    // request from these contexts sends it. The dev server's NEXTAUTH_URL must match E2E_BASE_URL.
+    // request from these contexts sends it. The dev server's PUBLIC_BASE_URL must match E2E_BASE_URL.
     extraHTTPHeaders: { origin: new URL(baseURL).origin },
     trace: "on-first-retry",
     screenshot: "only-on-failure",
