@@ -10,15 +10,14 @@
 import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
-import { parseEmailTokenKey, type GraphMailEnv } from "@innobox/shared";
-import { pruneAiUsage } from "@innobox/shared/ai";
+import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, type GraphMailEnv } from "@innobox/shared";
+import { aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
 import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
-import { buildSmtpEnv } from "./notifications/smtp-env.js";
 import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps, type WorkerS3Client } from "./attachments/scan.js";
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
@@ -36,6 +35,7 @@ import { createScimRateLimit, parseTrustProxy } from "./ratelimit.js";
 import { createScimEventRecorder, trimSystemEvents } from "./system-log/record.js";
 import { runSystemLogAlertSweep } from "./system-log/alert.js";
 import { startWebhookSweeps } from "./webhooks/deliver.js";
+import { startTriageAssistSweeps } from "./ai/triage.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -46,6 +46,14 @@ if (!scimTokenCheck.ok) {
   process.exit(1);
 }
 const scimToken = scimTokenCheck.token;
+
+// INNOBOX_SPEC.md §2.3: every deep link derives from PUBLIC_BASE_URL, so a production worker
+// without it refuses to start rather than send e-mails and webhook cards with empty links.
+const baseUrlFatal = publicBaseUrlStartupViolation(process.env);
+if (baseUrlFatal) {
+  console.error(baseUrlFatal);
+  process.exit(1);
+}
 
 const port = Number(process.env.WORKER_PORT ?? 4000);
 const app = express();
@@ -98,7 +106,7 @@ function buildGraphMailEnv(): GraphMailEnv | null {
   return { tenantId, clientId, clientSecret, key };
 }
 
-/** The optional plain-text fallback transport (§12.1) — see notifications/smtp-env.ts. An empty
+/** The optional plain-text fallback transport (§12.1) — see @innobox/shared smtp-env.ts. An empty
  *  SMTP_FROM (compose passes `${SMTP_FROM:-}`) falls back to SMTP_USER like an unset one. */
 function currentSmtpEnv() {
   return buildSmtpEnv(process.env, (msg) => console.log(JSON.stringify({ level: "warn", msg })));
@@ -130,6 +138,7 @@ let scanInterval: NodeJS.Timeout | null = null;
 let housekeepingInterval: NodeJS.Timeout | null = null;
 let systemLogAlertInterval: NodeJS.Timeout | null = null;
 let stopWebhookSweeps: (() => void) | null = null;
+let stopTriageAssistSweeps: (() => void) | null = null;
 
 const leaderElection = startLeaderElection(dbUrl, {
   lockKey: WORKER_LEADER_LOCK_KEY,
@@ -216,6 +225,17 @@ const leaderElection = startLeaderElection(dbUrl, {
     // §12.4 channel-webhook delivery sweep (30 s) + 30-day trim (hourly). Pure DB + outbound HTTPS.
     stopWebhookSweeps = startWebhookSweeps(pool, { onSweep: recordWebhookSweep });
 
+    // §22.11 triage assist (every minute): idle unless its switch is on and AI is available. The
+    // helper client is rebuilt per sweep so AI_TOKEN_ENC_KEY is read like every other key.
+    stopTriageAssistSweeps = startTriageAssistSweeps(pool, () =>
+      createAiClient({
+        db: pool,
+        key: parseAiKey(process.env.AI_TOKEN_ENC_KEY),
+        source: "worker",
+        transport: { allowLocalhost: aiLocalhostAllowed(process.env.NODE_ENV) },
+      }),
+    );
+
     // Notification dispatch sweep (§12): frequent, since "delivery is immediate" — no digest in
     // v1. Transport availability (Graph via the separate e-mail app registration, or SMTP) is
     // re-checked every sweep, and neither depends on the OIDC/reconciliation credentials — SMTP
@@ -225,7 +245,7 @@ const leaderElection = startLeaderElection(dbUrl, {
         const summary = await runNotificationSweep(pool, {
           graphEnv: buildGraphMailEnv(),
           smtpEnv: currentSmtpEnv(),
-          baseUrl: process.env.PUBLIC_BASE_URL ?? "",
+          baseUrl: publicBaseUrl(),
         });
         recordNotificationSweep(summary);
         if (summary.sent || summary.failed) {
@@ -329,6 +349,8 @@ const leaderElection = startLeaderElection(dbUrl, {
     }
     stopWebhookSweeps?.();
     stopWebhookSweeps = null;
+    stopTriageAssistSweeps?.();
+    stopTriageAssistSweeps = null;
     console.log(JSON.stringify({ level: "info", msg: "lost leader lock" }));
   },
 });
@@ -342,6 +364,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     if (housekeepingInterval) clearInterval(housekeepingInterval);
     if (systemLogAlertInterval) clearInterval(systemLogAlertInterval);
     stopWebhookSweeps?.();
+    stopTriageAssistSweeps?.();
     await leaderElection.stop();
     await pool.end();
     server.close(() => process.exit(0));

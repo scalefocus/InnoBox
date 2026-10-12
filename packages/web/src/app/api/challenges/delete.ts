@@ -15,6 +15,7 @@
 // Metadata, cascade counts, and the admin's mandatory reason only.
 import type { Pool, PoolClient } from "pg";
 import { notificationLinkScope, parentStatusAfterSolutionDelete, type ChallengeStatus, type SolutionStatus } from "@innobox/shared";
+import { deleteAiResults } from "@innobox/shared/ai";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import type { StorageClient } from "../../../lib/storage";
@@ -39,6 +40,8 @@ export interface CascadeCounts {
   uploadSessions: number;
   /** §12.4 channel-webhook deliveries targeting the subtree (any status). */
   webhookDeliveries: number;
+  /** §22.11/§22.13 cached AI results (triage notes, discussion summaries) of the subtree. */
+  aiResults: number;
 }
 
 export type DeleteChallengeResult = { status: "ok"; counts: CascadeCounts } | { status: "not_found" };
@@ -91,6 +94,9 @@ async function deleteChildren(
     params,
   );
 
+  // §22.7: cached AI output shares its item's lifecycle (polymorphic parent, no FK).
+  const aiResults = await deleteAiResults(client, challengeIds, solutionIds);
+
   return {
     counts: {
       comments: comments.rowCount ?? 0,
@@ -99,6 +105,7 @@ async function deleteChildren(
       attachments: attachments.rowCount ?? 0,
       uploadSessions: sessions.rowCount ?? 0,
       webhookDeliveries: webhookDeliveries.rowCount ?? 0,
+      aiResults,
     },
     purge: {
       objectKeys: attachments.rows.map((r) => r.object_key),

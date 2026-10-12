@@ -1,9 +1,9 @@
 // GET /api/admin/audit/export (INNOBOX_SPEC.md §15): CSV of the current filtered view, newest-
 // first, capped at AUDIT_EXPORT_CAP rows; X-Total-Matching / X-Exported-Count drive the in-app
-// "exported N of M — narrow the range" notice. Every column of the row, before/after as raw JSON
-// (lossless), then the hash-chain columns chain_seq / prev_hash / row_hash. RFC 4180 quoting,
-// UTF-8 BOM. Platform admin only — the only role that sees the
-// browser at all. Rows are NOT anonymity-masked (the log is the provenance record and already shows
+// "exported N of M — narrow the range" notice. Every column of the row, before/after as the stored
+// jsonb's own ::text (the bytes the hash chain covers), then the hash-chain columns chain_seq /
+// prev_hash / row_hash. RFC 4180 quoting, UTF-8 BOM. Platform admin only — the only role that sees
+// the browser at all. Rows are NOT anonymity-masked (the log is the provenance record and already shows
 // the true actor to platform admins); the compensating control is that every export is itself
 // audited as audit.exported with actor, filters and row count.
 import { appendAudit } from "@/lib/audit";

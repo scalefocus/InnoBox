@@ -75,3 +75,8 @@ export * from "./audit-chain.js";
 // at `@innobox/shared/webhooks`. The transport is server-only at `@innobox/shared/webhook-send`.
 export * from "./webhooks.js";
 export * from "./webhook-address.js";
+
+// §2.3 deployment config: the one canonical URL (also at the edge-safe `@innobox/shared/public-url`
+// subpath) and the SMTP fallback rule web and worker share.
+export * from "./public-url.js";
+export * from "./smtp-env.js";

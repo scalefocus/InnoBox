@@ -19,6 +19,7 @@ import {
   WEBHOOK_DELIVERY_RETENTION_DAYS,
   WEBHOOK_SWEEP_BATCH,
   isOrgVisibleWebhookItem,
+  publicBaseUrl,
   renderWebhookBody,
   webhookFailureSystemEvent,
   webhookHeaders,
@@ -225,7 +226,7 @@ export async function trimWebhookDeliveries(pool: Pool, retentionDays: number = 
  */
 export function startWebhookSweeps(
   pool: Pool,
-  opts: { onSweep?: (summary: WebhookSweepSummary) => void; env?: () => { WEBHOOK_ENC_KEY?: string; PUBLIC_BASE_URL?: string } } = {},
+  opts: { onSweep?: (summary: WebhookSweepSummary) => void; env?: () => { WEBHOOK_ENC_KEY?: string; PUBLIC_BASE_URL?: string; NODE_ENV?: string } } = {},
 ): () => void {
   const env = opts.env ?? (() => process.env);
   let running = false;
@@ -234,7 +235,7 @@ export function startWebhookSweeps(
     running = true;
     try {
       const e = env();
-      const summary = await runWebhookDeliverySweep(pool, { key: parseWebhookKey(e.WEBHOOK_ENC_KEY), baseUrl: e.PUBLIC_BASE_URL ?? "" });
+      const summary = await runWebhookDeliverySweep(pool, { key: parseWebhookKey(e.WEBHOOK_ENC_KEY), baseUrl: publicBaseUrl(e) });
       opts.onSweep?.(summary);
       if (summary.sent || summary.failed || summary.skipped || summary.retried) log("info", "webhook delivery sweep", { ...summary });
     } catch (err) {

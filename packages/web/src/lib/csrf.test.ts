@@ -71,12 +71,12 @@ test("safe methods and /api/auth/* pass without any Origin", () => {
   assert.equal(check({ pathname: "/api/auth/callback/azure-ad", origin: null }), true);
 });
 
-test("PUBLIC_BASE_URL wins; NEXTAUTH_URL is the fallback", () => {
-  assert.deepEqual(allowedOrigins({ env: { PUBLIC_BASE_URL: "https://a.example.com", NEXTAUTH_URL: "https://b.example.com" }, requestOrigin: "", dev: false }), [
-    "https://a.example.com",
-  ]);
-  assert.deepEqual(allowedOrigins({ env: { NEXTAUTH_URL: "http://127.0.0.1:3000" }, requestOrigin: "", dev: false }), ["http://127.0.0.1:3000"]);
-  assert.equal(check({ env: { NEXTAUTH_URL: "https://innobox.example.com" } }), true);
+test("PUBLIC_BASE_URL is the only configured origin; NEXTAUTH_URL is never a fallback", () => {
+  assert.deepEqual(allowedOrigins({ env: { PUBLIC_BASE_URL: "https://a.example.com" }, requestOrigin: "", dev: false }), ["https://a.example.com"]);
+  const nextAuthOnly = { NEXTAUTH_URL: "https://innobox.example.com" } as OriginCheckInput["env"];
+  assert.deepEqual(allowedOrigins({ env: nextAuthOnly, requestOrigin: "", dev: false }), [], "production fails closed");
+  assert.equal(check({ env: nextAuthOnly }), false);
+  assert.equal(check({ env: { PUBLIC_BASE_URL: "   " } }), false, "a blank value counts as unset");
 });
 
 test("the server's own origin stands in only in dev with nothing configured; production fails closed", () => {
@@ -84,5 +84,5 @@ test("the server's own origin stands in only in dev with nothing configured; pro
   assert.equal(check({ env: {}, dev: true, origin: "http://evil.localhost:3000", requestOrigin: "http://localhost:3000" }), false);
   assert.equal(check({ env: {}, dev: false, origin: "http://localhost:3000", requestOrigin: "http://localhost:3000" }), false);
   // Configured URL in dev: the request's own origin is NOT additionally accepted.
-  assert.equal(check({ env: { NEXTAUTH_URL: "http://localhost:3000" }, dev: true, origin: "http://127.0.0.1:3000", requestOrigin: "http://127.0.0.1:3000" }), false);
+  assert.equal(check({ env: { PUBLIC_BASE_URL: "http://localhost:3000" }, dev: true, origin: "http://127.0.0.1:3000", requestOrigin: "http://127.0.0.1:3000" }), false);
 });

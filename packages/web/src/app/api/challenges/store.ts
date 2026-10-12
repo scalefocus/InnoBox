@@ -486,6 +486,19 @@ const SIMILAR_MAX_TERMS = 48;
  * masked per §9. Advisory: nothing here can block a submission.
  */
 export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: { title: string; description: string }): Promise<SimilarChallenge[]> {
+  return (await findSimilarChallengeCandidates(pool, viewer, input)).map(({ visibility: _v, excerpt: _e, ...publicFields }) => publicFields);
+}
+
+/** A §6.1 match plus what the §22.12 explanation step may send for it — never returned to the
+ *  browser: the visibility (restricted candidates are dropped from the AI input while the switch
+ *  is off) and the first 500 characters of the description. */
+export interface SimilarCandidate extends SimilarChallenge {
+  visibility: "org" | "namespace";
+  excerpt: string;
+}
+
+/** findSimilarChallenges with the internal fields the explanation step needs. Same set, same order. */
+export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer, input: { title: string; description: string }): Promise<SimilarCandidate[]> {
   // Distinct stems, title first, capped — computed by Postgres's own English parser so the query
   // terms are exactly the lexemes stored in challenges.search_vector.
   const { rows: termRows } = await pool.query<{ term: string }>(
@@ -526,11 +539,13 @@ export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: {
     author_id: string;
     author_display_name: string;
     author_active: boolean;
+    visibility: "org" | "namespace";
+    excerpt: string;
     shared: number;
   }>(
     `select * from (
        select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
-              u.active as author_active,
+              u.active as author_active, c.visibility, left(c.description, 500) as excerpt,
               ts_rank(c.search_vector, ${tsquery}) as rank,
               (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
          from challenges c
@@ -554,6 +569,8 @@ export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: {
       authorDisplayName: r.author_display_name,
       authorActive: r.author_active,
     }),
+    visibility: r.visibility,
+    excerpt: r.excerpt,
   }));
 }
 
@@ -1587,6 +1604,13 @@ export async function withdrawChallenge(pool: Pool, author: Viewer, number: stri
   return inTransaction(pool, async (client) => {
     await unpinOnStatusChange(client, author.userId, cur.id, "withdrawn"); // §13.2 auto-unpin
     await client.query(`update challenges set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
+    // §22.7/§22.11: a withdrawn item keeps no AI output — its own, or its solutions'.
+    await client.query(
+      `delete from ai_results
+        where (parent_type = 'challenge' and parent_id = $1)
+           or (parent_type = 'solution' and parent_id in (select id from solutions where challenge_id = $1))`,
+      [cur.id],
+    );
     await appendAudit(client, {
       actorUserId: author.userId,
       action: "challenge.status_changed",
@@ -1619,6 +1643,7 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
 
   return inTransaction(pool, async (client) => {
     await client.query(`update solutions set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
+    await client.query(`delete from ai_results where parent_type = 'solution' and parent_id = $1`, [cur.id]); // §22.7
     await appendAudit(client, {
       actorUserId: author.userId,
       action: "solution.status_changed",

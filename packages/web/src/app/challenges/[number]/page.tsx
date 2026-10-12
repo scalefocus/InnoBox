@@ -17,6 +17,8 @@ import { LIKES_FROZEN_HINT, proposeDisabledReason } from "@/lib/challenge-detail
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
 import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
+import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
+import { TriageNotesPanel } from "@/components/TriageNotesPanel";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -658,9 +660,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         )}
       </div>
 
+      {/* §22.11: shown only to those the server allows (never the author); renders nothing otherwise. */}
+      <TriageNotesPanel challengeNumber={challenge.number} version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`} />
+
       <ProposeSolutionForm
         challengeNumber={challenge.number}
         disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status)}
+        restricted={challenge.visibility === "namespace"}
         onProposed={onChanged}
       />
 
@@ -787,14 +793,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                 parentType="solution"
                 target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
               />
-              <CommentThread parentType="solution" parentId={s.id} authoredAnonymously={s.isMine && s.author.anonymous} />
+              <CommentThread parentType="solution" parentId={s.id} parentNumber={s.number} authoredAnonymously={s.isMine && s.author.anonymous} />
             </div>
           ))}
         </div>
       )}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>Discussion</h2>
-      <CommentThread parentType="challenge" parentId={challenge.id} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
+      <CommentThread parentType="challenge" parentId={challenge.id} parentNumber={challenge.number} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
 
       {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}
       {toast && <div className="toast">{toast}</div>}
@@ -968,13 +974,17 @@ function ResubmitButton({ locked, busy, label, onClick }: { locked: boolean; bus
 
 // §6.2 propose form. §6.4: locked while the create is in flight; on error it releases with the
 // fields and staged files intact; on success it stays locked until the parent challenge has been
-// re-read AND re-rendered, and only then closes.
+// re-read AND re-rendered, and only then closes. Improve with AI (§22.10) drafts the description
+// and cost vs benefits from the author's text, with the challenge as context.
 function ProposeSolutionForm({
   challengeNumber,
   disabledReason,
+  restricted,
   onProposed,
 }: {
   challengeNumber: string;
+  /** The parent challenge is namespace-only — restricted content for the AI draft (§22.7). */
+  restricted: boolean;
   /** §13.1: the button is visible to every viewer but enabled only while `valid`; a non-null
    *  reason disables it and is shown beside it. The server refuses a proposal off `valid` anyway. */
   disabledReason: string | null;
@@ -988,6 +998,12 @@ function ProposeSolutionForm({
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
+  const ai = useImproveWithAi({
+    kind: "solution",
+    fields: { description: [description, setDescription], costVsBenefits: [costVsBenefits, setCostVsBenefits] },
+    body: () => ({ kind: "solution", challengeNumber, description, costVsBenefits }),
+    restricted,
+  });
 
   if (!open || disabledReason !== null) {
     return (
@@ -1013,7 +1029,8 @@ function ProposeSolutionForm({
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     // A second submit (double click, Enter) while locked is a no-op.
-    if (!lock.lock()) return;
+    if (ai.busy || !lock.lock()) return;
+    ai.noteSubmit();
     setError(null);
     try {
       const res = await fetch(`/api/challenges/${challengeNumber.replace("CH-", "")}/solutions`, {
@@ -1053,8 +1070,13 @@ function ProposeSolutionForm({
           className="field"
           style={{ minHeight: 100, resize: "vertical" }}
           placeholder="Describe your solution"
+          aria-label="Solution description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value);
+            ai.noteEdit("description");
+          }}
+          readOnly={ai.busy}
           maxLength={10000}
           required
         />
@@ -1062,10 +1084,16 @@ function ProposeSolutionForm({
           className="field"
           style={{ minHeight: 60, resize: "vertical" }}
           placeholder="Cost vs. benefits (optional)"
+          aria-label="Cost vs. benefits"
           value={costVsBenefits}
-          onChange={(e) => setCostVsBenefits(e.target.value)}
+          onChange={(e) => {
+            setCostVsBenefits(e.target.value);
+            ai.noteEdit("costVsBenefits");
+          }}
+          readOnly={ai.busy}
           maxLength={5000}
         />
+        <ImproveWithAiBar ai={ai} disabled={lock.locked} />
         <AttachmentControl parentType="solution" target={{ kind: "staged", draftKey }} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
           <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
@@ -1078,7 +1106,7 @@ function ProposeSolutionForm({
         )}
       </div>
       <div style={{ display: "flex", gap: 10 }}>
-        <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled}>
+        <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled || ai.busy}>
           <PrimaryButtonLabel state={button} />
         </button>
         <span className="form-lock-body" inert={lock.locked}>

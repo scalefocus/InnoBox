@@ -154,13 +154,16 @@ export function parseLikeToggle(body: unknown): Parsed<{ parentType: "challenge"
 const SIMILAR_TITLE_MAX = 120;
 const SIMILAR_DESCRIPTION_MAX = 2_000;
 
-export function parseSimilarRequest(body: unknown): Parsed<{ title: string; description: string }> {
+export function parseSimilarRequest(body: unknown): Parsed<{ title: string; description: string; visibility: "org" | "namespace" }> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "request body must be a JSON object" };
   const rec = body as Record<string, unknown>;
   const title = typeof rec.title === "string" ? rec.title.trim().slice(0, SIMILAR_TITLE_MAX) : "";
   const description = typeof rec.description === "string" ? rec.description.trim().slice(0, SIMILAR_DESCRIPTION_MAX) : "";
   if (title === "" && description === "") return { ok: false, error: "title or description is required" };
-  return { ok: true, value: { title, description } };
+  // §22.12: the audience the draft is meant for — a namespace-only draft is restricted content
+  // for the AI explanation step. Absent → org (the check itself never depends on it).
+  const visibility = rec.visibility === "namespace" ? "namespace" : "org";
+  return { ok: true, value: { title, description, visibility } };
 }
 
 /** The numbers a submitter saw in the warning and submitted past (`challenge.created` audit

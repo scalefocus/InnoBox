@@ -176,7 +176,7 @@ test("upsertDevUser(admin): ensures dev group, platform_admin mapping, and membe
   const insertUser = calls.find((c) => /insert into users/i.test(c.text));
   assert.ok(insertUser, "dev user is a real users row");
   assert.equal(insertUser.params[0], "dev-ada-lovelace"); // external_id = "dev-" + slug
-  assert.equal(insertUser.params[1], "ada-lovelace@dev.local"); // no email → synthetic UPN
+  assert.equal(insertUser.params[1], "ada-lovelace@dev.test"); // no email → synthetic UPN
 
   const group = calls.find((c) => /insert into groups/i.test(c.text));
   assert.ok(group);
@@ -203,7 +203,7 @@ test("upsertDevUser: user_name is slug-derived, never the email — so shared em
   const insertUser = calls.find((c) => /insert into users/i.test(c.text));
   assert.ok(insertUser, "dev user is a real users row");
   assert.equal(insertUser.params[0], "dev-krasi-admin"); // external_id = "dev-" + slug
-  assert.equal(insertUser.params[1], "krasi-admin@dev.local"); // user_name tracks the slug, NOT the email
+  assert.equal(insertUser.params[1], "krasi-admin@dev.test"); // user_name tracks the slug, NOT the email
   assert.equal(insertUser.params[2], "dev@innobox.innovate"); // the email still lands in the email column
 });
 

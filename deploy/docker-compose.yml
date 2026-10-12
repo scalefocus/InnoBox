@@ -115,8 +115,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       INNOBOX_BOOTSTRAP_ADMIN_GROUP: ${INNOBOX_BOOTSTRAP_ADMIN_GROUP}
       S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-innobox}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # Optional S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY overrides; default to the MinIO root.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-innobox}}
+      S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}
       # MUST match the worker's S3_BUCKET — web WRITES uploaded attachments here and the
       # worker READS them for the ClamAV scan pipeline (INNOBOX_SPEC.md §11).
       S3_BUCKET: ${S3_BUCKET:-innobox-attachments}
@@ -131,8 +132,9 @@ services:
       # Same value as the worker: the CSP report sink (/api/csp-report) rate-limits per client IP,
       # read from X-Forwarded-For behind the one-hop Caddy proxy.
       TRUST_PROXY: ${TRUST_PROXY:-1}
-      # §12 email channel: token encryption key (shared with the worker) + SMTP_HOST so the
-      # admin card's status pill can tell "SMTP fallback" from "email down".
+      # §12 email channel: token encryption key (shared with the worker) + the SMTP host and
+      # sender (SMTP_USER / SMTP_FROM) so the admin card's status pill applies the worker's rule
+      # (host AND a sender) when telling "SMTP fallback" from "email down".
       # ENTRA_EMAIL_CLIENT_ID/SECRET come from the dedicated "InnoBox Email" app registration
       # (ENTRA_AUTH_SPEC.md §3.2) — separate from the OIDC app so Mail.Send can't be
       # exercised on behalf of regular users.
@@ -140,6 +142,8 @@ services:
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       # §12.4 channel webhooks: URL encryption key (shared with the worker; unset → webhooks off).
       WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
       # §22 AI provider: API-key encryption key (shared with the worker; unset → AI form off).
@@ -176,8 +180,9 @@ services:
       CLAMAV_PORT: "3310"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-innobox}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      # Optional S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY overrides; default to the MinIO root.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-${MINIO_ROOT_USER:-innobox}}
+      S3_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}
       S3_BUCKET: ${S3_BUCKET:-innobox-attachments}
       # Notification delivery (INNOBOX_SPEC.md §12): Graph is the primary transport,
       # SMTP the optional plain-text fallback; the in-app inbox always works.

@@ -6,6 +6,7 @@
 // unset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 const url = process.env.DATABASE_URL;
 
@@ -28,7 +29,7 @@ test(
     const { appendAudit, SCIM_LAST_REQUEST_AT_KEY } = shared;
 
     const pool = new Pool({ connectionString: url });
-    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const stamp = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
     const PREFIX = `idsync-${stamp}-`;
     const bearerToken = "idsync-bearer-5c1e0f7a9b2d4e68"; // gitleaks:allow — test-only fixture
     const app = express();

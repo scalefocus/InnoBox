@@ -1,11 +1,21 @@
 // The optional plain-text SMTP fallback transport's configuration (INNOBOX_SPEC.md §12.1, §2.3).
+// Shared so web and worker apply the one rule: the worker builds its transport from it, and the
+// web tier's e-mail status pill counts SMTP as configured only when it returns non-null.
 // No deployment-specific default lives in the repository (§2.3), so the sender address must be
 // configured: SMTP_USER stands in when SMTP_FROM is unset, and without either the transport
 // counts as not configured — Graph e-mail and the in-app inbox are unaffected.
 //
 // "Unset" includes empty / whitespace-only: docker compose passes `SMTP_FROM: ${SMTP_FROM:-}`, so
 // an unset variable in deploy/.env reaches the process as "" — which must fall back too.
-import type { SmtpEnv } from "./dispatch.js";
+
+export interface SmtpEnv {
+  host: string;
+  port: number;
+  secure: boolean;
+  user?: string;
+  password?: string;
+  from: string;
+}
 
 function nonEmpty(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

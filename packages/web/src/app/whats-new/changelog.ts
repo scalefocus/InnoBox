@@ -11,6 +11,42 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.51.2",
+    date: "2026-10-12",
+    summary:
+      "The audit log has a new Anonymity filter that lists every admin reveal and self-reveal in one place. Before, these only showed under All. The audit CSV export now writes the before and after values exactly as the database stores them, instead of reformatting them.",
+  },
+  {
+    version: "0.51.1",
+    date: "2026-10-12",
+    summary:
+      "Every link InnoBox sends, in e-mails, Teams cards and sign-in redirects, now comes from the one public address the server is configured with, and the e-mail status card recognises the SMTP fallback only when a sender address is set. Profile photos refresh more reliably. Operators: a production server without PUBLIC_BASE_URL now refuses to start.",
+  },
+  {
+    version: "0.51.0",
+    date: "2026-10-12",
+    summary:
+      "Long discussions can now be summarized: once a challenge or solution has ten or more comments, a Summarize discussion button gives a short summary and the open questions, without anyone's names. When new comments arrive the summary says so and can be refreshed. A platform admin switches this on.",
+  },
+  {
+    version: "0.50.0",
+    date: "2026-10-12",
+    summary:
+      "When you submit a challenge that looks like existing ones, the warning can now say why each match is similar, for example \"Same problem: manual invoice matching in finance\", most likely duplicates first. A platform admin switches this on; if AI is slow or unavailable you simply get the usual warning.",
+  },
+  {
+    version: "0.49.0",
+    date: "2026-10-12",
+    summary:
+      "Triage assist: when a platform admin switches it on, challenges awaiting triage or under review get advisory AI notes — a short summary, missing information, questions to ask and possible duplicates. Namespace admins, the committee and the assignee see them on the challenge page and in the triage queue; authors never do.",
+  },
+  {
+    version: "0.48.0",
+    date: "2026-10-12",
+    summary:
+      "When AI is switched on, the challenge and solution forms have an Improve with AI button that turns your rough notes into a clearer title and a structured description, and suggests an impact area you can apply. You review the result before anything is submitted, and Undo puts your own text back.",
+  },
+  {
     version: "0.47.1",
     date: "2026-10-12",
     summary:

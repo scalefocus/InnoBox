@@ -8,6 +8,7 @@
 // mints a fresh per-run externalId/userName instead of relying on deleting old rows.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 const url = process.env.DATABASE_URL;
 
@@ -27,7 +28,7 @@ test(
     const bearerToken = "scimtest-bearer-8f2c1a9b7e6d4f30"; // gitleaks:allow — test-only fixture
     // Unique per run: avoids colliding with a leftover user row from a prior run, since
     // this test cannot (and must not) hard-delete users.
-    const runId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const runId = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
 
     async function cleanup(): Promise<void> {
       // group_members cascades off groups(id); role_mappings has no FK to groups at all,
@@ -54,7 +55,7 @@ test(
 
       // ── create — literal Entra POST /Users payload ──────────────────────────────────
       const userExternalId = `${PREFIX}${runId}-user`;
-      const userName = `${PREFIX}${runId}-ada@contoso.com`;
+      const userName = `${PREFIX}${runId}-ada@example.com`;
       const createPayload = {
         schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
         externalId: userExternalId,

@@ -1,10 +1,12 @@
 "use client";
 // Comment thread (INNOBOX_SPEC.md §10.2): post, owner edit/delete within 15 minutes,
 // admin moderation delete anytime. Comments are never anonymous (§9) — always the real
-// name. Deleted comments render as "Comment removed by a moderator".
+// name. Deleted comments render as "Comment removed by a moderator". Above the thread, the §22.13
+// discussion summary control (when the item's number is known and summaries are available).
 import { useEffect, useState } from "react";
 import { readJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { DiscussionSummary } from "@/components/DiscussionSummary";
 
 interface CommentRecord {
   id: string;
@@ -24,10 +26,13 @@ interface CommentRecord {
 export function CommentThread({
   parentType,
   parentId,
+  parentNumber,
   authoredAnonymously = false,
 }: {
   parentType: "challenge" | "solution";
   parentId: string;
+  /** The item's CH-/SOL- number — enables the §22.13 summary control. */
+  parentNumber?: string;
   /** True when the viewer is the ANONYMOUS author of this item — §9 warns them that commenting
    *  shows their real name (comments are never anonymous), without revealing them as the author. */
   authoredAnonymously?: boolean;
@@ -89,8 +94,12 @@ export function CommentThread({
     if (res.ok || res.status === 204) refresh();
   };
 
+  // Any post, edit or delete changes this, so the summary control re-reads its state.
+  const threadVersion = comments === null ? "" : comments.map((c) => `${c.id}:${c.editedAt ?? ""}:${c.deleted ? 1 : 0}`).join("|");
+
   return (
     <div style={{ marginTop: 8 }}>
+      {parentNumber && comments !== null && <DiscussionSummary parentType={parentType} parentNumber={parentNumber} version={threadVersion} />}
       {comments === null && <p className="muted">Loading comments…</p>}
       {comments !== null && comments.length === 0 && <p className="muted">No comments yet.</p>}
       {comments !== null && comments.length > 0 && (
