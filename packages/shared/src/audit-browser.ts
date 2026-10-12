@@ -35,6 +35,7 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     "email.%",
     "audit.%",
     "webhook.%",
+    "ai.%",
     "%.exported",
     // The triage CSV export was once audited under this name (now `triage.exported`). Audit rows
     // are immutable, so the historical ones are kept under the same chip by name.

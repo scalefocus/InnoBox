@@ -12,7 +12,7 @@ export async function readJson(res: Response): Promise<{ error?: string; [key: s
   }
 }
 
-async function jsonRequest(method: "POST" | "PATCH", url: string, body: unknown): Promise<Record<string, unknown>> {
+async function jsonRequest(method: "POST" | "PATCH" | "PUT", url: string, body: unknown): Promise<Record<string, unknown>> {
   const res = await fetch(url, {
     method,
     headers: { "content-type": "application/json" },
@@ -29,6 +29,10 @@ export function postJson(url: string, body: unknown): Promise<Record<string, unk
 
 export function patchJson(url: string, body: unknown): Promise<Record<string, unknown>> {
   return jsonRequest("PATCH", url, body);
+}
+
+export function putJson(url: string, body: unknown): Promise<Record<string, unknown>> {
+  return jsonRequest("PUT", url, body);
 }
 
 export async function deleteReq(url: string): Promise<void> {

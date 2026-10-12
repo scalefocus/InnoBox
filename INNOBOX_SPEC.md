@@ -5043,17 +5043,6 @@ the plumbing; §22.10–§22.13 are the four tasks. **Every AI task is advisory 
 writing aid:** none ever changes a status, an assignment or a visibility, and none ever
 sees who wrote anything.
 
-> **⚠ GAP-68 · new feature:** the **AI plumbing** (§22.1–§22.9) does not exist. Build:
-> migration `0038_ai_integration.sql` (`ai_integration`, `ai_usage`, grants); the
-> server-only `@innobox/shared/ai` subpath (provider adapters, base-URL normalization,
-> the outbound guard reuse, `aiComplete`, `aiAvailable`, the `AI_FEATURES` registry,
-> usage recording, the system-log throttle); `AI_TOKEN_ENC_KEY` in `deploy/.env.example`
-> and compose (web + worker), encrypted with the e-mail token code through a thin
-> wrapper like the webhook key; the `admin/ai*` routes; the **AI provider** card on
-> `/admin/settings`; the `ai_usage` prune in the worker's hourly housekeeping; the
-> `innobox_ai_calls_total` metric; the `ai.*` Admin audit-chip pattern. Tests per
-> §22.9. Ships as its own minor release, with an empty registry.
-
 ### §22.1 Decisions
 
 | # | Decision | Why |
@@ -5108,7 +5097,9 @@ sees who wrote anything.
   (`openwebui` | `openai`), `base_url` (the normalized URL actually used), `model`
   (≤ 200), `token_enc` (the `v1:` AES-256-GCM blob), `token_last4`, `last_test_at` /
   `_ok` / `_error` / `_latency_ms`, `last_call_at` / `_ok` / `_error`,
-  `last_failure_logged_at` (the §22.6 throttle watermark), `updated_by` (FK → `users`,
+  `last_failure_logged_at` (the §22.6 throttle watermark), `last_test_model` (the model the
+  provider echoed on the last saved-config test — the *Last test* panel's "model that
+  answered"), `updated_by` (FK → `users`,
   `ON DELETE SET NULL`), `updated_at`. **No row = not configured.** *Remove* hard-deletes
   the row, token included.
 - **`ai_usage`** — one row per provider call: `id` (bigserial), `created_at`, `feature`
@@ -5312,7 +5303,7 @@ encrypted-token pattern. Platform admins only.
 > the solution form does not exist. Build: the `submit_draft` registry entry, `GET` and
 > `POST /api/ai/draft` (availability; the draft call with its per-minute and 24-hour
 > limits), the button, confirm-before-replace, Undo, and the tests below. Its own minor
-> release, after GAP-68.
+> release, on top of the shipped plumbing (§22.1–§22.9).
 
 A writing aid for the author's **own** text. Nothing it produces is stored, marked or
 treated differently from text the author typed.
@@ -5355,7 +5346,7 @@ treated differently from text the author typed.
 > `ai_results` table — `kind`, `parent_type`, `parent_id`, `input_hash`, `model`,
 > `status` `pending|ready|failed`, `payload` jsonb, timestamps — joining the §10.3
 > cascade), the worker pass, the detail-page and triage-queue panel, **Re-run**, and the
-> tests below. Its own minor release, after GAP-68.
+> tests below. Its own minor release, on top of the shipped plumbing (§22.1–§22.9).
 
 An **advisory** note that helps triagers and the committee act faster. It never
 transitions, assigns, rejects or notifies (invariant 6).
@@ -5393,7 +5384,7 @@ transitions, assigns, rejects or notifies (invariant 6).
 > **⚠ GAP-71 · new feature:** the AI re-ranking of the §6.1 duplicate warning does not
 > exist. Build: the `duplicate_explain` registry entry and switch, the step inside
 > `POST /api/challenges/similar`, the reasons in the banner, and the tests below. Its own
-> minor release, after GAP-68.
+> minor release, on top of the shipped plumbing (§22.1–§22.9).
 
 - **Enablement.** Platform switch **"Explain similar challenges"**
   (`ai_duplicate_explain_enabled`, **off by default** — it sends other people's text).

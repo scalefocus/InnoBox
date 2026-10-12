@@ -4,6 +4,7 @@
 // index.ts call the record* functions; leadership calls setLeader.
 import { APP_VERSION } from "@innobox/shared/version";
 import { metricsAccess, renderMetrics, type MetricSample } from "@innobox/shared";
+import { aiMetricSamples } from "@innobox/shared/ai";
 import type { Request, Response } from "express";
 
 const counters = {
@@ -76,6 +77,8 @@ export function workerMetricsSamples(): MetricSample[] {
       value: webhookDeliveries[outcome],
       labels: { outcome },
     })),
+    // §22.6: this process's AI calls (the background tasks run here), by feature and outcome.
+    ...aiMetricSamples(),
   ];
 }
 

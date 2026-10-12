@@ -1,9 +1,12 @@
 // The §16 `me` resource: session identity, DB-resolved role hints (UI only — enforcement
 // stays server-side), the e-mail opt-out flag, and the platform date-display format
-// (§14.3, `dateFormat` stays a TOP-LEVEL field — DateFormatProvider reads exactly that shape).
+// (§14.3, `dateFormat` stays a TOP-LEVEL field — DateFormatProvider reads exactly that shape),
+// and the end-user name for AI features (§22.8, `aiDisplayName`, "AI" by default).
 import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
+import { getAiDisplayNameSetting } from "@/app/api/admin/ai/store";
+import { aiDisplayName } from "@innobox/shared/ai";
 import { markQuickStartSeen } from "./store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -13,7 +16,7 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const dateFormat = await getDateFormat(pool);
+  const [dateFormat, aiName] = await Promise.all([getDateFormat(pool), getAiDisplayNameSetting(pool)]);
 
   const byRole = (role: "namespace_admin" | "committee"): string[] => [
     ...new Set(
@@ -39,6 +42,7 @@ async function handleGET(): Promise<Response> {
     },
     emailNotificationsEnabled: user.emailNotificationsEnabled,
     quickStartSeenAt: user.quickStartSeenAt ? user.quickStartSeenAt.toISOString() : null,
+    aiDisplayName: aiDisplayName(aiName),
   });
 }
 
