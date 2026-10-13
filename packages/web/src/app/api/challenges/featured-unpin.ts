@@ -1,6 +1,7 @@
 // Automatic Home-pin clearing (INNOBOX_SPEC.md §13.2 *Automatic unpin*, §15 curation). Called
 // from INSIDE the transaction of every challenge status write (store.ts applyChallengeStatusChange
-// and withdrawChallenge, delete.ts's solution-delete revert) and of the §10.3 hard delete. It must
+// and withdrawChallenge). The §10.3 purge and the §10.4 trash clear the pin through the shared
+// `unpinChallenge` (@innobox/shared/item-delete) instead. It must
 // run BEFORE the status UPDATE: the DB CHECK `challenges_featured_status_chk` refuses a pinned row
 // leaving valid/solved, so the pin has to be gone first. A cleared pin is never restored.
 //
@@ -31,23 +32,6 @@ export async function unpinOnStatusChange(
     targetId: challengeId,
     before: { featuredAt: featuredAt.toISOString() },
     after: { trigger: "status_changed", status: newStatus },
-  });
-  return true;
-}
-
-/** §10.3: inside the hard-delete transaction, before the row is removed — writes
- *  `challenge.unfeatured` with `trigger: "deleted"` when the challenge was featured. */
-export async function unpinOnDelete(client: PoolClient, actorUserId: string, challengeId: string): Promise<boolean> {
-  const { rows } = await client.query<{ featured_at: Date | null }>(`select featured_at from challenges where id = $1 for update`, [challengeId]);
-  const featuredAt = rows[0]?.featured_at ?? null;
-  if (featuredAt === null) return false;
-  await appendAudit(client, {
-    actorUserId,
-    action: "challenge.unfeatured",
-    targetType: "challenge",
-    targetId: challengeId,
-    before: { featuredAt: featuredAt.toISOString() },
-    after: { trigger: "deleted" },
   });
   return true;
 }

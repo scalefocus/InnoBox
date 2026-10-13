@@ -51,23 +51,27 @@ interface ChallengeRow {
   namespace_id: string;
   author_id: string;
   assignee_id: string | null;
+  trashed: boolean;
   hash: string;
 }
 
-type Access = { ok: true; row: ChallengeRow; isAdmin: boolean } | { ok: false };
+type Access = { ok: true; row: ChallengeRow; isAdmin: boolean } | { ok: false; trashed?: true };
 
 /** The §22.11 reader rule for one challenge. Not visible / not allowed both answer `ok: false`
  *  (the route answers 404 either way, so the note's existence never leaks). */
 async function access(pool: Pool, viewer: Viewer, number: string): Promise<Access> {
   const { rows } = await pool.query<ChallengeRow>(
-    `select c.id, c.status, c.visibility, c.namespace_id, c.author_id, c.assignee_id, ${TRIAGE_INPUT_HASH_SQL} as hash
+    `select c.id, c.status, c.visibility, c.namespace_id, c.author_id, c.assignee_id, c.trashed_at is not null as trashed, ${TRIAGE_INPUT_HASH_SQL} as hash
        from challenges c join impact_areas ia on ia.id = c.impact_area_id
       where c.number = $1`,
     [number],
   );
   const row = rows[0];
   if (!row) return { ok: false };
-  const visible = canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id });
+  // §10.4: a trashed challenge drops out of every AI task, for platform admins too (who alone can
+  // see it, and are told why a re-run is refused).
+  if (row.trashed) return viewer.roles.isPlatformAdmin ? { ok: false, trashed: true } : { ok: false };
+  const visible = canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false });
   if (!visible || row.author_id === viewer.userId || row.status === "withdrawn") return { ok: false };
   const isAdmin = viewer.roles.isNamespaceAdmin(row.namespace_id);
   if (isAdmin) return { ok: true, row, isAdmin };
@@ -114,7 +118,8 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     const dupRows = numbers.length
       ? (
           await pool.query<{ number: string; title: string; status: string; visibility: "org" | "namespace"; namespace_id: string; author_id: string }>(
-            `select number::text, title, status, visibility, namespace_id, author_id from challenges where number::text = any($1::text[])`,
+            `select number::text, title, status, visibility, namespace_id, author_id from challenges
+              where number::text = any($1::text[]) and trashed_at is null`,
             [numbers],
           )
         ).rows
@@ -122,8 +127,8 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     const duplicates: TriageDuplicateView[] = [];
     for (const d of p.duplicates) {
       const c = dupRows.find((x) => x.number === String(d.number));
-      if (!c) continue; // deleted since
-      if (!canSeeChallenge(viewer, { namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id })) continue;
+      if (!c) continue; // deleted or trashed since
+      if (!canSeeChallenge(viewer, { namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, trashed: false })) continue;
       if (c.status === "withdrawn") continue;
       duplicates.push({ number: `CH-${c.number}`, title: c.title, reason: d.reason });
     }
@@ -142,9 +147,9 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
 }
 
 /** Re-run (namespace and platform admins): clears the hash so the worker makes a fresh note. */
-export async function rerunTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, number: string): Promise<"ok" | "not_found" | "forbidden" | "unavailable"> {
+export async function rerunTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, number: string): Promise<"ok" | "not_found" | "trashed" | "forbidden" | "unavailable"> {
   const a = await access(pool, viewer, number);
-  if (!a.ok) return "not_found";
+  if (!a.ok) return a.trashed ? "trashed" : "not_found";
   if (!a.isAdmin) return "forbidden";
   if (!isTriageSubject(a.row.status)) return "unavailable";
   if (!(await effective(pool, ai))) return "unavailable";

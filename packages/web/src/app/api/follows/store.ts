@@ -2,9 +2,9 @@
 // solution the viewer can see. No audit entry — follows are a personal preference, not a
 // moderation-relevant event (§15's audit list does not mention follow/unfollow).
 import type { Pool } from "pg";
-import { isParentVisible, type Viewer } from "../challenges/store";
+import { getParentAccess, type Viewer } from "../challenges/store";
 
-export type ToggleFollowResult = { status: "ok"; following: boolean } | { status: "not_found" };
+export type ToggleFollowResult = { status: "ok"; following: boolean } | { status: "not_found" } | { status: "trashed" };
 
 export async function toggleFollow(
   pool: Pool,
@@ -12,7 +12,8 @@ export async function toggleFollow(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<ToggleFollowResult> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access !== "live") return { status: access }; // §10.4: a trashed item takes no follow
 
   const { rows: existing } = await pool.query(
     `select 1 from follows where user_id = $1 and parent_type = $2 and parent_id = $3`,
@@ -42,8 +43,9 @@ export async function unfollow(
   viewer: Viewer,
   parentType: "challenge" | "solution",
   parentId: string,
-): Promise<{ status: "ok"; following: false } | { status: "not_found" }> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+): Promise<{ status: "ok"; following: false } | { status: "not_found" } | { status: "trashed" }> {
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access !== "live") return { status: access };
   await pool.query(`delete from follows where user_id = $1 and parent_type = $2 and parent_id = $3`, [viewer.userId, parentType, parentId]);
   return { status: "ok", following: false };
 }
@@ -56,7 +58,8 @@ export async function follow(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<{ status: "ok"; following: true } | { status: "not_found" }> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+  // §10.4: a trashed item takes no follow (an agent's viewer never sees it, so it is "not found").
+  if ((await getParentAccess(pool, viewer, parentType, parentId)) !== "live") return { status: "not_found" };
   await pool.query(`insert into follows (user_id, parent_type, parent_id) values ($1, $2, $3) on conflict do nothing`, [viewer.userId, parentType, parentId]);
   return { status: "ok", following: true };
 }

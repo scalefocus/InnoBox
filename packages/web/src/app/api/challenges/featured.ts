@@ -61,6 +61,7 @@ export async function setFeaturedLimit(pool: Pool, limit: number, actorUserId: s
 export type FeatureResult =
   | { status: "ok"; featured: boolean; featuredAt: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "ineligible" }
   | { status: "at_cap"; limit: number };
@@ -72,20 +73,22 @@ interface PinRow {
   status: string;
   author_id: string;
   featured_at: Date | null;
+  trashed: boolean;
 }
 
 /** The shared front half: malformed / invisible → not_found, then non-platform-admin → forbidden. */
-async function loadForCuration(pool: Pool, viewer: Viewer, number: string): Promise<{ status: "ok"; row: PinRow } | { status: "not_found" | "forbidden" }> {
+async function loadForCuration(pool: Pool, viewer: Viewer, number: string): Promise<{ status: "ok"; row: PinRow } | { status: "not_found" | "trashed" | "forbidden" }> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<PinRow>(
-    `select id, namespace_id, visibility, status, author_id, featured_at from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, author_id, featured_at, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
   const visible =
     row !== undefined &&
-    canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id });
+    canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: row.trashed });
   if (!row || !visible) return { status: "not_found" };
+  if (row.trashed) return { status: "trashed" }; // §10.4: only a platform admin gets here
   if (!viewer.roles.isPlatformAdmin) return { status: "forbidden" };
   return { status: "ok", row };
 }

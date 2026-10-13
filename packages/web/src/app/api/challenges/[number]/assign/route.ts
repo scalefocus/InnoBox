@@ -5,7 +5,7 @@ import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyAssignmentChanged } from "@/lib/notify-events";
 import { setChallengeAssignee } from "../../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber, isUuid } from "../../validation";
 import { withSystemLog } from "@/lib/system-log";
@@ -39,6 +39,8 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     }
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be a namespace or platform admin to assign" }, { status: 403 });
     case "unknown_user":

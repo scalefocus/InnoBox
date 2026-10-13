@@ -3,7 +3,7 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { deleteComment, editComment } from "../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isUuid } from "../validation";
 import { withSystemLog } from "@/lib/system-log";
@@ -25,6 +25,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ id: string
       return Response.json({ comment: result.comment });
     case "not_found":
       return Response.json({ error: "comment not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you can only edit your own comment within 15 minutes of posting" }, { status: 403 });
     case "invalid":
@@ -46,6 +48,8 @@ async function handleDELETE(_req: Request, context: { params: Promise<{ id: stri
       return new Response(null, { status: 204 });
     case "not_found":
       return Response.json({ error: "comment not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you can only delete your own comment within 15 minutes, or moderate as an admin" }, { status: 403 });
   }

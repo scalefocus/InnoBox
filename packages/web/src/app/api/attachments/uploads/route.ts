@@ -7,7 +7,7 @@
 // upload start; the JSON body goes through the §2.4 reader (415/413/400, never a 500).
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { isUuid } from "../../challenges/validation";
@@ -60,6 +60,8 @@ async function handlePOST(req: Request): Promise<Response> {
       return Response.json({ error: "that challenge or solution was not found" }, { status: 404 });
     case "forbidden":
       return Response.json({ error: "only the author can attach files to this item" }, { status: 403 });
+    case "trashed":
+      return trashedResponse();
     case "not_editable":
       return Response.json({ error: "attachments can only be added while the item is editable" }, { status: 409 });
     case "too_many":

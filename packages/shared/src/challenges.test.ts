@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildRoleSet } from "./rbac.js";
 import {
   CLIENT_NAME_MAX,
+  TRASH_RETENTION_DAYS,
   blocksAcceptedInternally,
   canAuthorEditChallenge,
   canAuthorEditSolution,
@@ -12,19 +13,24 @@ import {
   canSeeChallenge,
   canSeeSolution,
   challengeEnforcedTargets,
+  daysInTrash,
   decideTransition,
   isChallengeEnforcedTransition,
   isChallengeStatus,
   isSolutionEnforcedTransition,
+  isTrashPurgeDue,
   isSolutionStatus,
   maskAuthor,
   notificationLinkScope,
   parentStatusAfterSolutionDelete,
   siblingsToAutoClose,
   solutionEnforcedTargets,
+  solutionRestoreBlocked,
+  trashPurgesOn,
   validateChallengeFields,
   validateDeleteReason,
   validateSolutionFields,
+  validateTrashReason,
 } from "./challenges.js";
 
 const GLOBAL = "00000000-0000-0000-0000-000000000001";
@@ -83,7 +89,7 @@ test("maskAuthor: a scrubbed non-anonymous author carries scrubbed=true (§13.6 
 test("canSeeChallenge: org-visible, non-triage challenge is visible to any authenticated user", () => {
   const v = viewer(OTHER);
   assert.equal(
-    canSeeChallenge(v, { namespaceId: NS_A, visibility: "org", status: "valid", authorId: AUTHOR }),
+    canSeeChallenge(v, { namespaceId: NS_A, visibility: "org", status: "valid", authorId: AUTHOR, trashed: false }),
     true,
   );
 });
@@ -91,19 +97,19 @@ test("canSeeChallenge: org-visible, non-triage challenge is visible to any authe
 test("canSeeChallenge: namespace-visible challenge hidden from non-members", () => {
   const outsider = viewer(OTHER);
   assert.equal(
-    canSeeChallenge(outsider, { namespaceId: NS_A, visibility: "namespace", status: "valid", authorId: AUTHOR }),
+    canSeeChallenge(outsider, { namespaceId: NS_A, visibility: "namespace", status: "valid", authorId: AUTHOR, trashed: false }),
     false,
   );
   const member = viewer(OTHER, [{ role: "member", namespaceId: NS_A }]);
   assert.equal(
-    canSeeChallenge(member, { namespaceId: NS_A, visibility: "namespace", status: "valid", authorId: AUTHOR }),
+    canSeeChallenge(member, { namespaceId: NS_A, visibility: "namespace", status: "valid", authorId: AUTHOR, trashed: false }),
     true,
   );
 });
 
 test("canSeeChallenge: awaiting_triage hidden from everyone except author and namespace/platform admins", () => {
   const outsider = viewer(OTHER);
-  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "awaiting_triage" as const, authorId: AUTHOR };
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "awaiting_triage" as const, authorId: AUTHOR, trashed: false };
   assert.equal(canSeeChallenge(outsider, challenge), false);
 
   const author = viewer(AUTHOR);
@@ -121,14 +127,14 @@ test("canSeeChallenge: awaiting_triage hidden from everyone except author and na
 });
 
 test("canSeeChallenge: withdrawn follows the same rule as awaiting_triage", () => {
-  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "withdrawn" as const, authorId: AUTHOR };
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "withdrawn" as const, authorId: AUTHOR, trashed: false };
   assert.equal(canSeeChallenge(viewer(OTHER), challenge), false);
   assert.equal(canSeeChallenge(viewer(AUTHOR), challenge), true);
 });
 
 test("canSeeChallenge: namespace admin of a DIFFERENT namespace cannot see another namespace's awaiting_triage item", () => {
   const otherNsAdmin = viewer(OTHER, [{ role: "namespace_admin", namespaceId: NS_B }]);
-  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "awaiting_triage" as const, authorId: AUTHOR };
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "awaiting_triage" as const, authorId: AUTHOR, trashed: false };
   assert.equal(canSeeChallenge(otherNsAdmin, challenge), false);
 });
 
@@ -137,33 +143,33 @@ test("canSeeChallenge: namespace admin of a DIFFERENT namespace cannot see anoth
 test("canSeeSolution: non-proposed solution is visible to anyone who can see the challenge", () => {
   const outsider = viewer(OTHER);
   const challenge = { namespaceId: NS_A, assigneeId: null };
-  assert.equal(canSeeSolution(outsider, challenge, { status: "valid", authorId: AUTHOR }), true);
+  assert.equal(canSeeSolution(outsider, challenge, { status: "valid", authorId: AUTHOR, trashed: false }), true);
 });
 
 test("canSeeSolution: proposed solution hidden from a random viewer", () => {
   const outsider = viewer(OTHER);
   const challenge = { namespaceId: NS_A, assigneeId: null };
-  assert.equal(canSeeSolution(outsider, challenge, { status: "proposed", authorId: AUTHOR }), false);
+  assert.equal(canSeeSolution(outsider, challenge, { status: "proposed", authorId: AUTHOR, trashed: false }), false);
 });
 
 test("canSeeSolution: proposed solution visible to its own author", () => {
   const author = viewer(AUTHOR);
   const challenge = { namespaceId: NS_A, assigneeId: null };
-  assert.equal(canSeeSolution(author, challenge, { status: "proposed", authorId: AUTHOR }), true);
+  assert.equal(canSeeSolution(author, challenge, { status: "proposed", authorId: AUTHOR, trashed: false }), true);
 });
 
 test("canSeeSolution: proposed solution visible to the challenge's assignee", () => {
   const assignee = viewer(ASSIGNEE);
   const challenge = { namespaceId: NS_A, assigneeId: ASSIGNEE };
-  assert.equal(canSeeSolution(assignee, challenge, { status: "proposed", authorId: AUTHOR }), true);
+  assert.equal(canSeeSolution(assignee, challenge, { status: "proposed", authorId: AUTHOR, trashed: false }), true);
 });
 
 test("canSeeSolution: proposed solution visible to namespace committee and admins", () => {
   const challenge = { namespaceId: NS_A, assigneeId: null };
   const committee = viewer(OTHER, [{ role: "committee", namespaceId: NS_A }]);
-  assert.equal(canSeeSolution(committee, challenge, { status: "proposed", authorId: AUTHOR }), true);
+  assert.equal(canSeeSolution(committee, challenge, { status: "proposed", authorId: AUTHOR, trashed: false }), true);
   const nsAdmin = viewer(OTHER, [{ role: "namespace_admin", namespaceId: NS_A }]);
-  assert.equal(canSeeSolution(nsAdmin, challenge, { status: "proposed", authorId: AUTHOR }), true);
+  assert.equal(canSeeSolution(nsAdmin, challenge, { status: "proposed", authorId: AUTHOR, trashed: false }), true);
 });
 
 // ── §8.3 single-winner gate & auto-close ─────────────────────────────────────────────────
@@ -482,4 +488,60 @@ test("notificationLinkScope: a solution matches exactly one link", () => {
   const scope = notificationLinkScope({ challengeNumber: "CH-42", solutionNumber: "SOL-17" });
   assert.equal(scope.exact, "/challenges/42#SOL-17");
   assert.equal(scope.prefix, null);
+});
+
+// ── §10.4 trash & restore ────────────────────────────────────────────────────────────────
+
+test("canSeeChallenge: a trashed challenge is visible to platform admins only", () => {
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "valid" as const, authorId: AUTHOR, trashed: true };
+  assert.equal(canSeeChallenge(viewer(OTHER), challenge), false);
+  assert.equal(canSeeChallenge(viewer(AUTHOR), challenge), false, "not even its author");
+  assert.equal(canSeeChallenge(viewer(OTHER, [{ role: "namespace_admin", namespaceId: NS_A }]), challenge), false);
+  assert.equal(canSeeChallenge(viewer(OTHER, [{ role: "platform_admin", namespaceId: null }]), challenge), true);
+});
+
+test("canSeeSolution: a trashed solution alone is visible to platform admins only", () => {
+  const challenge = { namespaceId: NS_A, assigneeId: ASSIGNEE };
+  const solution = { status: "valid" as const, authorId: AUTHOR, trashed: true };
+  assert.equal(canSeeSolution(viewer(AUTHOR), challenge, solution), false);
+  assert.equal(canSeeSolution(viewer(ASSIGNEE), challenge, solution), false);
+  assert.equal(canSeeSolution(viewer(OTHER, [{ role: "committee", namespaceId: NS_A }]), challenge, solution), false);
+  assert.equal(canSeeSolution(viewer(OTHER, [{ role: "platform_admin", namespaceId: null }]), challenge, solution), true);
+});
+
+test("trashPurgesOn / isTrashPurgeDue: the item is due exactly 30 days after it was trashed", () => {
+  assert.equal(TRASH_RETENTION_DAYS, 30);
+  const at = new Date("2026-10-01T10:00:00Z");
+  assert.equal(trashPurgesOn(at).toISOString(), "2026-10-31T10:00:00.000Z");
+  assert.equal(isTrashPurgeDue(at, new Date("2026-10-31T09:59:59Z")), false);
+  assert.equal(isTrashPurgeDue(at, new Date("2026-10-31T10:00:00Z")), true);
+});
+
+test("daysInTrash counts whole days", () => {
+  const at = new Date("2026-10-01T10:00:00Z");
+  assert.equal(daysInTrash(at, new Date("2026-10-01T23:00:00Z")), 0);
+  assert.equal(daysInTrash(at, new Date("2026-10-04T10:00:01Z")), 3);
+});
+
+test("solutionRestoreBlocked: a solution waits for its trashed challenge to be restored first", () => {
+  assert.equal(solutionRestoreBlocked({ challengeTrashed: true }), true);
+  assert.equal(solutionRestoreBlocked({ challengeTrashed: false }), false);
+});
+
+test("validateTrashReason: required, trimmed, at most 500 characters", () => {
+  assert.equal(validateTrashReason(undefined).ok, false);
+  assert.equal(validateTrashReason("   ").ok, false);
+  assert.deepEqual(validateTrashReason("  posted by mistake "), { ok: true, value: "posted by mistake" });
+  assert.equal(validateTrashReason("x".repeat(500)).ok, true);
+  assert.equal(validateTrashReason("x".repeat(501)).ok, false);
+});
+
+test("an AI agent never sees a trashed item, not even a platform admin's (§10.4, §25)", () => {
+  const pa = viewer(OTHER, [{ role: "platform_admin", namespaceId: null }]);
+  const agent = { ...pa, viaAgent: true };
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "valid" as const, authorId: AUTHOR, trashed: true };
+  assert.equal(canSeeChallenge(pa, challenge), true, "the person in the browser gets the read-only view");
+  assert.equal(canSeeChallenge(agent, challenge), false);
+  assert.equal(canSeeSolution(agent, { namespaceId: NS_A, assigneeId: null }, { status: "valid", authorId: AUTHOR, trashed: true }), false);
+  assert.equal(canSeeChallenge(agent, { ...challenge, trashed: false }), true, "a live item is unaffected");
 });

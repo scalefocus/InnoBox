@@ -7,7 +7,7 @@ import { pool } from "@/lib/db";
 import { notifySolutionProposed } from "@/lib/notify-events";
 import { autoFollow } from "../../../follows/store";
 import { createSolution } from "../../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../validation";
 import { withSystemLog } from "@/lib/system-log";
@@ -41,6 +41,8 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     }
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "namespace_archived":
       return Response.json(
         { error: "this challenge's namespace is archived and accepts no new solutions", code: "namespace_archived" },

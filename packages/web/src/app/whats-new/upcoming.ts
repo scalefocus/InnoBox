@@ -26,12 +26,6 @@ export interface UpcomingViewer {
 }
 
 export const UPCOMING: UpcomingEntry[] = [
-  {
-    ids: ["GAP-77"],
-    title: "Trash and restore",
-    teaser: "Deleted challenges and solutions will wait in a trash for 30 days, so a mistaken delete can be undone.",
-    audience: "platform_admin",
-  },
 ];
 
 /** True when an entry applies to a viewer with these roles. */

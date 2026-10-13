@@ -4,6 +4,7 @@
 // status, PUT only) → 409 (at the cap). Success: `{ featured, featuredAt }`. Audited, silent.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 import { featureChallenge, unfeatureChallenge, type FeatureResult } from "../../featured";
@@ -18,6 +19,8 @@ function toResponse(result: FeatureResult): Response {
       return Response.json({ featured: result.featured, featuredAt: result.featuredAt });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: FEATURE_FORBIDDEN_MESSAGE }, { status: 403 });
     case "ineligible":

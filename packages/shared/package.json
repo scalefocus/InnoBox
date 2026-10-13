@@ -66,6 +66,10 @@
       "types": "./dist/ai.d.ts",
       "default": "./dist/ai.js"
     },
+    "./item-delete": {
+      "types": "./dist/item-delete.d.ts",
+      "default": "./dist/item-delete.js"
+    },
     "./public-url": {
       "types": "./dist/public-url.d.ts",
       "default": "./dist/public-url.js"

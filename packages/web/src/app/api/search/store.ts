@@ -200,6 +200,7 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
         visibility: row.visibility,
         status: row.status as ChallengeStatus,
         authorId: row.author_id,
+        trashed: false, // §10.4: the SQL predicate already dropped trashed rows
       }),
     )
     .slice(0, RESULT_LIMIT)
@@ -227,12 +228,13 @@ function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionS
         visibility: row.visibility,
         status: row.challenge_status as ChallengeStatus,
         authorId: row.challenge_author_id,
+        trashed: false, // §10.4: dropped in SQL
       });
       if (!challengeVisible) return false;
       return canSeeSolution(
         viewer,
         { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-        { status: row.status as SolutionStatus, authorId: row.author_id },
+        { status: row.status as SolutionStatus, authorId: row.author_id, trashed: false },
       );
     })
     .slice(0, RESULT_LIMIT)
@@ -330,7 +332,13 @@ export async function searchChallengePage(pool: Pool, viewer: Viewer, input: Cha
     params,
   );
   const visible = rows.filter((row) =>
-    canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id }),
+    canSeeChallenge(viewer, {
+      namespaceId: row.namespace_id,
+      visibility: row.visibility,
+      status: row.status as ChallengeStatus,
+      authorId: row.author_id,
+      trashed: row.trashed_at !== null,
+    }),
   );
   return { items: visible.slice(0, input.limit).map(toListItem), hasMore: rows.length > input.limit };
 }

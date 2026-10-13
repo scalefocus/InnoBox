@@ -91,6 +91,9 @@ export async function handOverOpenAssignments(
       visibility: row.visibility,
       status: row.status,
       authorId: row.author_id,
+      // §10.4: a trashed challenge is handed over like any other, so a restore brings it back with
+      // a live assignee; the test is whether the successor could see it once it is back.
+      trashed: false,
     });
     if (!visible) {
       result.skipped.push({ ...item, reason: "not_visible" });

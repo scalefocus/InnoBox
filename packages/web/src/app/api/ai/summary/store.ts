@@ -42,15 +42,18 @@ interface Item {
   restricted: boolean;
 }
 
-/** The item, when `viewer` can see it (else null — answered as 404). */
-async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentType, number: string): Promise<Item | null> {
+/** The item, when `viewer` can see it (else null — answered as 404). `"trashed"` when it is in
+ *  the trash (§10.4) and the viewer is a platform admin — the only one who can see it there: AI
+ *  tasks drop out, and a request to run one is refused with 409. */
+async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentType, number: string): Promise<Item | "trashed" | null> {
   if (parentType === "challenge") {
-    const { rows } = await pool.query<{ id: string; title: string; status: string; visibility: "org" | "namespace"; namespace_id: string; author_id: string }>(
-      `select id, title, status, visibility, namespace_id, author_id from challenges where number = $1`,
+    const { rows } = await pool.query<{ id: string; title: string; status: string; visibility: "org" | "namespace"; namespace_id: string; author_id: string; trashed: boolean }>(
+      `select id, title, status, visibility, namespace_id, author_id, trashed_at is not null as trashed from challenges where number = $1`,
       [number],
     );
     const c = rows[0];
-    if (!c || !canSeeChallenge(viewer, { namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id })) return null;
+    if (c?.trashed) return viewer.roles.isPlatformAdmin ? "trashed" : null; // §10.4
+    if (!c || !canSeeChallenge(viewer, { namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, trashed: false })) return null;
     return { id: c.id, title: c.title, withdrawn: c.status === "withdrawn", restricted: c.visibility === "namespace" };
   }
   const { rows } = await pool.query<{
@@ -63,17 +66,20 @@ async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentTyp
     c_namespace_id: string;
     c_author_id: string;
     c_assignee_id: string | null;
+    trashed: boolean;
   }>(
     `select s.id, s.status, s.author_id, c.title as c_title, c.status as c_status, c.visibility as c_visibility,
-            c.namespace_id as c_namespace_id, c.author_id as c_author_id, c.assignee_id as c_assignee_id
+            c.namespace_id as c_namespace_id, c.author_id as c_author_id, c.assignee_id as c_assignee_id,
+            (s.trashed_at is not null or c.trashed_at is not null) as trashed
        from solutions s join challenges c on c.id = s.challenge_id
       where s.number = $1`,
     [number],
   );
   const s = rows[0];
   if (!s) return null;
-  const challengeVisible = canSeeChallenge(viewer, { namespaceId: s.c_namespace_id, visibility: s.c_visibility, status: s.c_status as ChallengeStatus, authorId: s.c_author_id });
-  if (!challengeVisible || !canSeeSolution(viewer, { namespaceId: s.c_namespace_id, assigneeId: s.c_assignee_id }, { status: s.status as SolutionStatus, authorId: s.author_id })) return null;
+  if (s.trashed) return viewer.roles.isPlatformAdmin ? "trashed" : null; // §10.4: no AI task on a trashed item
+  const challengeVisible = canSeeChallenge(viewer, { namespaceId: s.c_namespace_id, visibility: s.c_visibility, status: s.c_status as ChallengeStatus, authorId: s.c_author_id, trashed: false });
+  if (!challengeVisible || !canSeeSolution(viewer, { namespaceId: s.c_namespace_id, assigneeId: s.c_assignee_id }, { status: s.status as SolutionStatus, authorId: s.author_id, trashed: false })) return null;
   // A solution has no title of its own: its challenge's title names what is being discussed.
   return { id: s.id, title: `A solution to: ${s.c_title}`, withdrawn: s.status === "withdrawn" || s.c_status === "withdrawn", restricted: s.c_visibility === "namespace" };
 }
@@ -84,13 +90,18 @@ async function visibleComments(
   parentType: SummaryParentType,
   parentId: string,
 ): Promise<{ id: string; authorId: string; body: string; replyToId: string | null }[]> {
-  const { rows } = await pool.query<{ id: string; author_id: string; body: string; thread_root_id: string | null; reply_to_id: string | null; created_at: Date }>(
-    `select id, author_id, body, thread_root_id, reply_to_id, created_at from comments
+  // The sort key keeps Postgres's full microsecond precision: a JS Date keeps only milliseconds,
+  // so comments written within the same millisecond would otherwise tie and fall back to their
+  // (random) ids, reordering the thread — and with it the order participants are lettered in.
+  const { rows } = await pool.query<{ id: string; author_id: string; body: string; thread_root_id: string | null; reply_to_id: string | null; sort_key: string }>(
+    `select id, author_id, body, thread_root_id, reply_to_id,
+            to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') as sort_key
+       from comments
       where parent_type = $1 and parent_id = $2 and deleted_at is null
       order by created_at asc, id asc`,
     [parentType, parentId],
   );
-  const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.created_at.toISOString(), row })));
+  const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.sort_key, row })));
   return threaded.map(({ row: r }) => ({ id: r.id, authorId: r.author_id, body: r.body, replyToId: r.reply_to_id }));
 }
 
@@ -120,7 +131,7 @@ async function effective(pool: Pool, ai: AiClient, item: Item): Promise<boolean>
 
 export async function getSummary(pool: Pool, ai: AiClient, viewer: Viewer, parentType: SummaryParentType, number: string): Promise<SummaryView | null> {
   const item = await loadItem(pool, viewer, parentType, number);
-  if (!item) return null;
+  if (!item || item === "trashed") return null;
   const comments = await visibleComments(pool, parentType, item.id);
   const { rows } = await pool.query<{ input_hash: string | null; payload: DiscussionSummary | null; updated_at: Date }>(
     `select input_hash, payload, updated_at from ai_results where kind = $1 and parent_type = $2 and parent_id = $3 and status = 'ready'`,
@@ -140,11 +151,12 @@ export async function getSummary(pool: Pool, ai: AiClient, viewer: Viewer, paren
 
 export type SummarizeOutcome =
   | { status: "ok"; summary: DiscussionSummary & { createdAt: string; stale: false }; cached: boolean }
-  | { status: "not_found" | "unavailable" | "too_short" | "minute" | "day" | "failed" };
+  | { status: "not_found" | "trashed" | "unavailable" | "too_short" | "minute" | "day" | "failed" };
 
 export async function summarize(pool: Pool, ai: AiClient, viewer: Viewer, parentType: SummaryParentType, number: string, signal?: AbortSignal): Promise<SummarizeOutcome> {
   const item = await loadItem(pool, viewer, parentType, number);
   if (!item) return { status: "not_found" };
+  if (item === "trashed") return { status: "trashed" };
   if (!(await effective(pool, ai, item))) return { status: "unavailable" };
   const comments = await visibleComments(pool, parentType, item.id);
   if (comments.length < DISCUSSION_MIN_COMMENTS) return { status: "too_short" };

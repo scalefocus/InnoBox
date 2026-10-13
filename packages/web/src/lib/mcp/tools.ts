@@ -579,6 +579,7 @@ export const TOOLS: readonly ToolDef[] = [
           await notifySolutionProposed(notifyCtx(ctx), number, s).catch(logNotifyFailure("solution.proposed notification failed"));
           return { ok: true, data: { number: s.number, status: s.status, anonymous: s.author.anonymous, url: solutionUrl(ctx, number, s.number) } };
         }
+        case "trashed": // §10.4: an agent never sees the trash, so it reads as missing
         case "not_found":
           return NOT_FOUND("challenge");
         case "namespace_archived":
@@ -630,6 +631,7 @@ export const TOOLS: readonly ToolDef[] = [
       switch (result.status) {
         case "ok":
           return { ok: true, data: { number: result.challenge.number, title: result.challenge.title, status: result.challenge.status, url: challengeUrl(ctx, number) } };
+        case "trashed": // §10.4: an agent never sees the trash, so it reads as missing
         case "not_found":
           return NOT_FOUND("challenge");
         case "forbidden":
@@ -674,6 +676,7 @@ export const TOOLS: readonly ToolDef[] = [
       switch (result.status) {
         case "ok":
           return { ok: true, data: { number: result.solution.number, status: result.solution.status, url: solutionUrl(ctx, current.challenge.number, number) } };
+        case "trashed": // §10.4: an agent never sees the trash, so it reads as missing
         case "not_found":
           return NOT_FOUND("solution");
         case "forbidden":
@@ -744,7 +747,7 @@ export const TOOLS: readonly ToolDef[] = [
       if (!parent.id) return NOT_FOUND(parent.type);
       const replyTo = str(args, "replyTo", { max: 100 }) ?? null;
       const result = await createComment(ctx.pool, ctx.viewer, parent.type, parent.id, str(args, "body", { required: true }), undefined, replyTo, via(ctx));
-      if (result.status === "not_found") return NOT_FOUND(parent.type);
+      if (result.status === "not_found" || result.status === "trashed") return NOT_FOUND(parent.type);
       if (result.status === "invalid") return fail(400, result.error);
       if (result.status === "unprocessable") return fail(422, result.error);
       await notifyCommentPosted(notifyCtx(ctx), parent.type, parent.id, ctx.viewer.userId, result.replyToAuthorId).catch(logNotifyFailure("comment notification failed"));
@@ -768,7 +771,7 @@ export const TOOLS: readonly ToolDef[] = [
       const parent = await parentId(ctx, args);
       if (!parent.id) return NOT_FOUND(parent.type);
       const result = wanted ? await follow(ctx.pool, ctx.viewer, parent.type, parent.id) : await unfollow(ctx.pool, ctx.viewer, parent.type, parent.id);
-      if (result.status === "not_found") return NOT_FOUND(parent.type);
+      if (result.status === "not_found" || result.status === "trashed") return NOT_FOUND(parent.type);
       return { ok: true, data: { following: result.following } };
     },
   },

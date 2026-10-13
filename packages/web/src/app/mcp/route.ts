@@ -63,7 +63,7 @@ export async function POST(req: Request): Promise<Response> {
   const roles = await resolveRolesForUser(principal.userId);
   const ctx: ToolContext = {
     pool,
-    viewer: { userId: principal.userId, roles, orgVisibleOnly: !settings.restrictedContentEnabled },
+    viewer: { userId: principal.userId, roles, orgVisibleOnly: !settings.restrictedContentEnabled, viaAgent: true },
     principal,
     settings,
     baseUrl: publicBaseUrl(),

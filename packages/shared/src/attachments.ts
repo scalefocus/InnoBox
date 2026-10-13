@@ -536,16 +536,18 @@ export interface ScanEffects {
 }
 
 /** The relative deep link to a bound attachment's parent (§12.1), or null when it is unbound
- *  (a staged row has no parent yet — see stagedScanFailedLink) or has vanished. */
+ *  (a staged row has no parent yet — see stagedScanFailedLink), has vanished, or is in the trash
+ *  (§10.4: a trashed item sends no notification). */
 async function scanParentLink(db: DbClient, parentType: AttachmentParentType, parentId: string | null): Promise<string | null> {
   if (!parentId) return null;
   if (parentType === "challenge") {
-    const { rows } = await db.query<{ number: string }>(`select number::text as number from challenges where id = $1`, [parentId]);
+    const { rows } = await db.query<{ number: string }>(`select number::text as number from challenges where id = $1 and trashed_at is null`, [parentId]);
     return rows[0] ? `/challenges/${rows[0].number}` : null;
   }
   const { rows } = await db.query<{ challenge_number: string; number: string }>(
     `select c.number::text as challenge_number, s.number::text as number
-       from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+       from solutions s join challenges c on c.id = s.challenge_id
+      where s.id = $1 and s.trashed_at is null and c.trashed_at is null`,
     [parentId],
   );
   return rows[0] ? `/challenges/${rows[0].challenge_number}#SOL-${rows[0].number}` : null;

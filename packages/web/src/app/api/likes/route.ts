@@ -10,7 +10,7 @@ import { pool } from "@/lib/db";
 import { parseLikeToggle } from "../challenges/validation";
 import { toggleLike } from "../challenges/store";
 import { removeLike } from "./store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -37,6 +37,7 @@ async function handlePOST(req: Request): Promise<Response> {
   if (result.status === "not_found") {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+  if (result.status === "trashed") return trashedResponse();
   if (result.status === "frozen") {
     // §8.3: a closed challenge (solved, rejected, withdrawn) freezes likes, on it and its
     // solutions; counts stay as they are. The message names no particular status.
@@ -58,6 +59,7 @@ async function handleDELETE(req: Request): Promise<Response> {
 
   const result = await removeLike(pool, { userId: gate.user.id, roles: gate.user.roles }, parsed.value.parentType, parsed.value.parentId);
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
+  if (result.status === "trashed") return trashedResponse();
   if (result.status === "frozen") return Response.json({ error: LIKES_CLOSED_MESSAGE }, { status: 409 });
   return Response.json({ liked: result.liked, count: result.count });
 }

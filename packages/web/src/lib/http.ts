@@ -2,6 +2,8 @@
 // size-capped BEFORE it is buffered (Content-Length first, then a running byte count for
 // bodies that arrive without one), JSON endpoints require `application/json`, and a body
 // that is not a JSON object is a 400 — never a 500 from `(body as Record).x` on `null`.
+import { ITEM_IN_TRASH } from "@innobox/shared";
+
 
 /** §2.4: the cap on any JSON request body. */
 export const JSON_BODY_MAX_BYTES = 1024 * 1024;
@@ -80,4 +82,10 @@ export async function readJsonObject(
     return { ok: false, response: Response.json({ error: "request body must be a JSON object" }, { status: 400 }) };
   }
   return { ok: true, value: parsed as Record<string, unknown> };
+}
+
+/** §10.4: the refusal for any write to an item in the trash (or under a trashed challenge). Only a
+ *  platform admin can reach it — everyone else is answered 404 by the visibility gate first. */
+export function trashedResponse(): Response {
+  return Response.json({ error: ITEM_IN_TRASH }, { status: 409 });
 }
