@@ -129,6 +129,35 @@ test("profile: the e-mail-notifications toggle round-trips, and the public profi
   await ctx.close();
 });
 
+test("profile: the e-mail delivery choice round-trips, names the next digest, and waits on the e-mail switch", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const ctx = await browser.newContext();
+  await signIn(ctx, { name: `E2E Digest Member ${stamp}` });
+  const page = await ctx.newPage();
+  await page.goto("/profile");
+
+  // §12.1: a three-option choice, Immediately by default; a digest names its next send.
+  const delivery = page.getByTestId("profile-email-delivery");
+  await expect(delivery.getByRole("radio", { name: "Immediately" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("profile-next-digest")).toHaveCount(0);
+  await delivery.getByRole("radio", { name: "Weekly digest" }).click();
+  await expect(delivery.getByRole("radio", { name: "Weekly digest" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("profile-next-digest")).toContainText("Next digest:");
+
+  // Persisted, not just optimistic.
+  await page.reload();
+  await expect(page.getByTestId("profile-email-delivery").getByRole("radio", { name: "Weekly digest" })).toHaveAttribute("aria-checked", "true");
+
+  // With e-mail off there is nothing to deliver: the choice is disabled and the next send hidden.
+  const emailSwitch = page.getByRole("switch", { name: "E-mail notifications" });
+  if ((await emailSwitch.getAttribute("aria-checked")) === "true") await emailSwitch.click();
+  await expect(emailSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByTestId("profile-email-delivery").getByRole("radio", { name: "Daily digest" })).toBeDisabled();
+  await expect(page.getByTestId("profile-next-digest")).toHaveCount(0);
+
+  await ctx.close();
+});
+
 test("search results: an exact number lookup finds a challenge; gibberish yields the empty state", async ({
   browser,
 }) => {

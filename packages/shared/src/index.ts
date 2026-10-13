@@ -62,6 +62,10 @@ export * from "./system-banner.js";
 // PATCH parser. Client-safe, also exposed at `@innobox/shared/notification-preferences`.
 export * from "./notification-preferences.js";
 
+// §12.1 e-mail digests: the delivery choice, which events a digest holds, the fixed send slots and
+// the digest's copy. Client-safe, also exposed at `@innobox/shared/email-digest`.
+export * from "./email-digest.js";
+
 // §14.10 identity sync diagnostics: the SCIM last-request settings key + throttle, and the pure
 // explanation selection. Client-safe, also exposed at `@innobox/shared/identity-sync`.
 export * from "./identity-sync.js";
