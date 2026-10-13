@@ -10,7 +10,7 @@
 //
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool } from "pg";
-import { canSeeChallenge, type ChallengeStatus } from "@innobox/shared";
+import { canSeeChallenge, isRestrictedVisibility, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
 import {
   AI_DRAFT_LIMITS,
   AI_SETTING_KEYS,
@@ -64,10 +64,10 @@ export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: Dr
   let restrictedContent = false;
   let challenge: { title: string; description: string } | null = null;
   if (req.kind === "challenge") {
-    restrictedContent = req.visibility === "namespace";
+    restrictedContent = isRestrictedVisibility(req.visibility);
   } else {
-    const { rows } = await pool.query<{ title: string; description: string; visibility: "org" | "namespace"; status: string; author_id: string; namespace_id: string; trashed: boolean }>(
-      `select title, description, visibility, status, author_id, namespace_id, trashed_at is not null as trashed from challenges where number = $1`,
+    const { rows } = await pool.query<{ id: string; title: string; description: string; visibility: ChallengeVisibility; status: string; author_id: string; assignee_id: string | null; namespace_id: string; trashed: boolean }>(
+      `select id, title, description, visibility, status, author_id, assignee_id, namespace_id, trashed_at is not null as trashed from challenges where number = $1`,
       [req.challengeNumber],
     );
     const row = rows[0];
@@ -77,12 +77,12 @@ export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: Dr
     if (
       !row ||
       row.trashed ||
-      !canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false })
+      !canSeeChallenge(viewer, { id: row.id, namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, assigneeId: row.assignee_id, trashed: false })
     ) {
       return { status: "not_found" };
     }
     challenge = { title: row.title, description: row.description };
-    restrictedContent = row.visibility === "namespace";
+    restrictedContent = isRestrictedVisibility(row.visibility);
   }
   if (restrictedContent && !(await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent))) return { status: "restricted" };
 

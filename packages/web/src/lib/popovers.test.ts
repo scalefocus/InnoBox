@@ -26,7 +26,7 @@ const POPOVERS: Record<string, string> = {
   "msg-panel": "components/NotificationBell.tsx", // notification panel (desktop)
   "dir-card": "components/DirectoryCard.tsx", // directory hover card
   "search-ac": "components/TopbarSearch.tsx", // topbar search autocomplete
-  "user-search-pop": "app/admin/triage/page.tsx", // triage assignee pickers (FloatingResults)
+  "user-search-pop": "components/FloatingResults.tsx", // triage assignee pickers + the §4.3 access-list editor
 };
 
 function tsxFiles(dir: string): string[] {

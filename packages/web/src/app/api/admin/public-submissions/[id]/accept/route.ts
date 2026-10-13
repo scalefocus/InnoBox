@@ -1,5 +1,6 @@
 // POST /api/admin/public-submissions/:id/accept (INNOBOX_SPEC.md §24.5, §24.6, §24.9):
-// `{ namespaceId, visibility, impactAreaId, clientName?, title, description }` → `{ number }`. One
+// `{ namespaceId, visibility, access?, impactAreaId, clientName?, title, description }` → `{ number }`.
+// `visibility` may be `people` (§4.3), with the access list `access: { userIds, emails }`. One
 // transaction creates the challenge (awaiting_triage, no author) and marks the row accepted; after
 // commit, everything a new challenge triggers follows — §12.1 event 1 to the namespace's admins and
 // the platform admins. Nobody is auto-followed: there is no author. 409 when another admin decided
@@ -11,7 +12,7 @@ import { dispatchEvent, getNamespaceAdminUserIds } from "@/lib/notify";
 import { logNotifyFailure } from "@/lib/notify-events";
 import { withSystemLog } from "@/lib/system-log";
 import { isUuid } from "../../../../challenges/validation";
-import { acceptPublicSubmission } from "../../store";
+import { TEAMS_NEED_NAMESPACE, acceptPublicSubmission } from "../../store";
 import { decisionGate, refusal } from "../decisions";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,7 @@ async function handlePOST(req: Request, context: { params: Promise<{ id: string 
     namespaceId: body.namespaceId,
     impactAreaId: body.impactAreaId,
     visibility: body.visibility,
+    access: body.access,
     clientName: body.clientName,
     title: body.title,
     description: body.description,
@@ -57,6 +59,10 @@ async function handlePOST(req: Request, context: { params: Promise<{ id: string 
       return Response.json({ error: "impact area is retired" }, { status: 400 });
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
+    case "invalid_access":
+      return Response.json({ error: result.error }, { status: 422 });
+    case "teams_need_namespace":
+      return Response.json({ error: TEAMS_NEED_NAMESPACE, code: "teams_need_namespace" }, { status: 422 });
   }
 }
 

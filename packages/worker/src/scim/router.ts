@@ -7,7 +7,7 @@ import express from "express";
 import type { NextFunction, Request, Response, Router } from "express";
 import type { Pool, PoolClient } from "pg";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { appendAudit, revokeUserGrants } from "@innobox/shared";
+import { appendAudit, bindPendingAccess, revokeUserGrants } from "@innobox/shared";
 import { InvalidFilterError, parseFilter, requireAttr, type FilterAttr } from "./filter.js";
 import { normalizeGroupPatch, normalizeUserPatch } from "./patch.js";
 import {
@@ -128,6 +128,8 @@ async function insertUser(pool: Pool, data: ParsedUserWrite & { externalId: stri
      returning *`,
     [data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, data.active],
   );
+  // §4.3: a pending access-list entry for this address now names a user.
+  await bindPendingAccess(pool, rows[0]!.id);
   return rows[0]!;
 }
 
@@ -146,6 +148,7 @@ async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedU
       returning *`,
     [id, data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, data.active],
   );
+  await bindPendingAccess(pool, id); // §4.3: the address or user name may have changed
   return rows[0]!;
 }
 
@@ -173,6 +176,7 @@ async function updateUserPatch(pool: Pool | PoolClient, id: string, v: UserPatch
       returning *`,
     [id, v.userName, v.email, v.displayName, v.department, v.jobTitle, v.active, v.externalId],
   );
+  await bindPendingAccess(pool, id); // §4.3: the address or user name may have changed
   return rows[0]!;
 }
 

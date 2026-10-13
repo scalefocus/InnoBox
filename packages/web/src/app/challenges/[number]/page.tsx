@@ -25,6 +25,8 @@ import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { TriageNotesPanel } from "@/components/TriageNotesPanel";
 import { DangerZone, TrashedBanner, type TrashInfo } from "@/components/TrashControls";
 import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
+import { VisibilityControl } from "@/components/VisibilityControl";
+import { PEOPLE_VISIBILITY_LABEL, type AccessEntryView } from "@innobox/shared/challenge-access";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -95,7 +97,9 @@ interface ChallengeDetail {
   namespaceId: string;
   impactAreaName: string;
   clientName: string | null;
-  visibility: "org" | "namespace";
+  visibility: "org" | "namespace" | "people";
+  /** §4.3: the access list of a `people` challenge — sent to its admins only, null otherwise. */
+  access: AccessEntryView[] | null;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -278,24 +282,6 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not change status");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const changeVisibility = async (visibility: string) => {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}/visibility`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ visibility }),
-      });
-      const json = await readJson(res);
-      if (!res.ok) throw new Error(json.error ?? "Could not change visibility");
-      onChanged();
-    } catch (err) {
-      notify(err instanceof Error ? err.message : "Could not change visibility");
     } finally {
       setBusy(false);
     }
@@ -686,7 +672,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <span className="chip">{challenge.impactAreaName}</span>
           {challenge.clientName && <span className="chip">{challenge.clientName}</span>}
           <span className="chip">/{challenge.namespaceSlug}</span>
-          <span className="chip">{challenge.visibility === "org" ? "Organization-wide" : "Namespace-only"}</span>
+          <span className="chip">
+            {challenge.visibility === "org" ? "Organization-wide" : challenge.visibility === "namespace" ? "Namespace-only" : PEOPLE_VISIBILITY_LABEL}
+          </span>
         </div>
       </div>
 
@@ -836,15 +824,16 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
                 ))}
             </select>
 
-            <div style={{ marginTop: 14 }}>
-              <label style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 8, display: "block" }}>
-                Visibility
-              </label>
-              <select className="field" value={challenge.visibility} disabled={busy} onChange={(e) => changeVisibility(e.target.value)}>
-                <option value="org">Organization-wide</option>
-                <option value="namespace">Namespace-only</option>
-              </select>
-            </div>
+            {/* §4.3: keyed on the saved state, so a reload after a save starts the editor afresh. */}
+            <VisibilityControl
+              key={`${challenge.visibility}|${(challenge.access ?? []).map((e) => e.user?.id ?? e.email).join(",")}`}
+              challengeNumber={challenge.number}
+              visibility={challenge.visibility}
+              access={challenge.access}
+              disabled={busy}
+              onSaved={onChanged}
+              onError={notify}
+            />
           </div>
         )}
 
@@ -926,7 +915,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <ProposeSolutionForm
             challengeNumber={challenge.number}
             disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
-            restricted={challenge.visibility === "namespace"}
+            restricted={challenge.visibility !== "org"}
             onProposed={onChanged}
           />
         </>

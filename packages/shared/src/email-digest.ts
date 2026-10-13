@@ -22,7 +22,7 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented). */
 const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8]);

@@ -970,12 +970,61 @@ A user may hold different roles in different namespaces. Roles are additive.
 
 ### §4.3 Visibility
 
-- Every challenge has **`visibility: org | namespace`** chosen at submission
-  (default `org`) and changeable later only by a namespace/platform admin (audited).
+- Every challenge has **`visibility: org | namespace | people`**. The submitter
+  chooses `org` or `namespace` at submission (default `org`; §6.1). `people` is never
+  offered on the employee submit form: it is set only by an admin, on the §24.5
+  **Accept** dialog or through a later visibility change. Visibility is changeable later
+  only by a namespace/platform admin (audited).
 - `org` → readable by every authenticated user. `namespace` → readable only by
-  members of the challenge's namespace (any role) and platform admins.
+  members of the challenge's namespace (any role) and platform admins. **"Restricted"**
+  in this document means any visibility other than `org`.
 - **Solutions, comments, likes, attachments, and notifications inherit the parent
   challenge's visibility.**
+
+#### `people` — shared with specific people
+
+- **Who can read it:** the people on the challenge's **access list**
+  (`challenge_access`, §5); the **admins and committee members of the challenge's
+  namespace**; the challenge's **assignee**; and platform admins. Nobody else in the
+  namespace — membership alone grants nothing. The state rules below apply on top, as
+  for any visibility: while the challenge is `awaiting_triage` or `withdrawn`, the
+  listed people do **not** see it.
+- **The access list** holds up to **100** entries. An entry is either a **user** or a
+  **pending e-mail** — a syntactically valid address that matched no InnoBox user when
+  it was added. A pending entry grants nothing until a user with that address
+  (compared lower-cased against `users.email` and `users.user_name`) is created or
+  updated by SCIM, JIT sign-in or reconciliation (§3); the entry is then bound to that
+  user in the same transaction, and event 15 follows (§12.1). A deactivated user's
+  entry stays but grants nothing while they cannot sign in; the §3 erasure deletes the
+  erased user's entries.
+- **Who sees the list.** The item's namespace admins and platform admins see and edit
+  it — each entry shows the user's avatar bubble, name and e-mail, or the address with a
+  muted *"No InnoBox user yet"* tag. Everyone else who can open the challenge sees only
+  the chip **"Shared with specific people"** in place of *Organization-wide* /
+  *Namespace-only*, never who is on it, and no list, count or API field reveals the
+  members to them.
+- **The editor** (the §24.5 Accept dialog and the detail page's visibility control) is
+  a tag field: typing searches active users (the directory picker of §7.3, unfiltered
+  by the challenge); picking a result adds that user as a tag. A typed string that is a
+  valid e-mail and matches no result can be committed as a pending entry with
+  **Enter** or **comma**. Duplicates (same user, or same address case-insensitively)
+  are refused inline. Each tag has a **✕**, and Backspace in an empty field removes the
+  last one. At least one entry is required while `people` is selected; saving an empty
+  list is refused (**422**, *"Add at least one person, or choose a different
+  visibility."*).
+- **Removal.** Removing someone takes their access away completely, including to their
+  own solutions and comments on the challenge (as losing namespace membership does);
+  their follow stays in place but delivers nothing, because recipients outside the
+  item's visibility are dropped (§12.1). **Switching away from `people`** clears the
+  list; switching back starts from an empty one. The audit row records what was
+  removed (§15).
+- **Assignment** of someone who cannot yet see a `people` challenge adds them to the
+  list (§7.3).
+- **Everywhere else** a `people` challenge behaves like a `namespace` one: the
+  per-viewer predicate governs lists, counts, search, the §6.1 similarity check, the
+  §13.2 featured section and notifications; org-only surfaces (leaderboards, profiles,
+  gamification ranking, §12.4 webhooks) leave it out; AI tasks and MCP treat it as
+  restricted content (§22.7, §25.5).
 - Additional state-based visibility (applies on top, most restrictive wins):
   - `awaiting_triage` and `withdrawn` challenges: visible only to their author,
     the namespace's admins, and platform admins. For these three the state rule
@@ -1055,7 +1104,7 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   its challenges to another active area as part of the delete. Deletion is the only
   path that removes a row.
 - **`challenges`** — id (uuid), **number** (global sequence, displayed `CH-<n>`),
-  namespace_id, visibility, title (≤ 120 chars), description (plain text, ≤ 10 000
+  namespace_id, visibility (`org | namespace | people`, §4.3), title (≤ 120 chars), description (plain text, ≤ 10 000
   chars), impact_area_id, client_name (**required iff impact area = Client**, hidden
   otherwise), is_anonymous, author_id, assignee_id (nullable), status (§7.1),
   status_changed_at (defaults to created_at at genesis, bumped on every transition —
@@ -1078,6 +1127,14 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   `public_submission_id` to be non-null, so every other challenge keeps a real author.
   A platform admin may **hard-delete** a challenge, cascading to every child row
   (§10.3); that is the only path that removes the row.
+- **`challenge_access`** — the §4.3 `people` access list: id, challenge_id (FK,
+  `ON DELETE CASCADE`), user_id (nullable FK), email (nullable, ≤ 254, stored
+  lower-cased; set only on a **pending** entry), added_by (user FK), added_at,
+  notified_at (nullable; stamped when event 15 is written for the entry, so it fires at
+  most once per entry, §12.1). A check constraint requires exactly one of user_id and
+  email; uniques on `(challenge_id, user_id)` and `(challenge_id, email)`. Rows exist
+  only while the challenge's visibility is `people` (switching away deletes them, §4.3);
+  at most 100 per challenge, enforced by the API.
 - **`solutions`** — id, **number** (`SOL-<n>`), challenge_id, description (≤ 10 000),
   cost_vs_benefits (≤ 5 000, optional), is_anonymous, author_id, status (§8.1),
   status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at,
@@ -1096,9 +1153,14 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   erased), company (≤ 200, optional), confirm_token_hash (SHA-256; nullable once
   used), confirm_expires_at, pow_salt (unique — a proof-of-work challenge is spendable
   once), created_at, confirmed_at, decided_at + decided_by, decline_note (≤ 1 000,
-  optional), contact_erase_due_at, contact_erased_at. **Not** a challenge: it carries no
-  number, no namespace and no visibility, and it is never read by any surface except the
-  platform-admin review queue (§24.5).
+  optional), contact_erase_due_at, contact_erased_at, **requested_visibility**
+  (`people | teams | org`, not null, default `org` — the submitter's *Who should see
+  this?* choice, §24.3), **requested_emails** (text[], ≤ 20, lower-cased; non-empty iff
+  `people`) and **requested_teams** (text[], ≤ 10; non-empty iff `teams`). Both arrays
+  are contact-adjacent data and are emptied by the §24.8 erasure. **Not** a challenge:
+  it carries no number, no namespace and no **effective** visibility — the requested one
+  is a request the admin settles on accept — and it is never read by any surface except
+  the platform-admin review queue (§24.5).
 - **`likes`** — (user_id, parent) unique; created_at. Toggling like/unlike
   inserts/deletes the row.
 - **`follows`** — (user_id, parent) unique; created_at.
@@ -1357,6 +1419,16 @@ applies **at assignment time only**:
   a visibility change to `namespace`) keeps the assignment — there is no automatic
   unassign and no assignee carve-out in §4.3, so they cannot open it — until an admin
   reassigns it.
+
+**`people` challenges (§4.3)** relax the gate instead of refusing. Past
+`awaiting_triage`, the per-challenge pickers list **every active user**, and assigning
+someone who cannot yet see the challenge **adds them to its access list** in the same
+transaction, audited as `challenge.access_changed` with `via: "assignment"` (§15). The
+entry is stamped as notified, because event 7 already tells them (no event 15, no
+auto-follow). Unassigning or reassigning does **not** remove the entry; an admin
+removes it explicitly. While the challenge is `awaiting_triage` the ordinary gate
+applies: only a namespace or platform admin of its namespace. Bulk assign (§14.1)
+applies the same rule per item.
 
 Assignment/unassignment is audited and notifies the assignee (§12.1 event 7 — fixing the legacy bug where the
 notification went to the assigning admin with a `[TEST]` subject); a **reassignment**
@@ -2185,9 +2257,14 @@ e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivere
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
 | 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
+| 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
 
 Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
 in-app only, by design (§23.1).
+
+Event 15's subject is *"A challenge has been shared with you"*; the body carries the
+number, the title and the author (masked per §9, or *"External submission"*, §24.6),
+and the link. It names neither the admin who shared it nor anyone else on the list.
 
 "Assignee" in events 3 and 9 means the **challenge's** assignee, including for an
 event on one of its solutions. "Challenge author" in event 8 is a recipient in its own
@@ -4028,7 +4105,7 @@ delegated per namespace.**
   notice entered and an e-mail transport available), the privacy notice, and the
   read-only public address. Audited as `settings.public_submissions_changed`.
 - **AI agents (MCP)** — the §25.10 card: *Allow AI agents to connect* (**off** by
-  default), *Allow namespace-restricted content over MCP* (**off** by default), the
+  default), *Allow restricted content over MCP* (**off** by default), the
   access- and refresh-token lifetimes, the read-only server URL, and the registered
   clients with Block / Unblock. Audited as `settings.mcp_changed`,
   `mcp.client_blocked` and `mcp.client_unblocked`.
@@ -4445,7 +4522,12 @@ payload. Audited events at minimum: challenge/solution created, edited (diff),
 withdrawn, **deleted** (the platform-admin hard delete, §10.3 — metadata, cascade
 counts and the mandatory reason only, never content); every status transition
 (enforced vs override, from → to); assignment
-changes; visibility changes; anonymity reveals (admin and self); comment posted,
+changes; visibility changes (`challenge.visibility_changed`, now also to and from
+`people`) and **access-list changes** (`challenge.access_changed`, `{ added, removed,
+via: "editor" | "accept" | "assignment" | "binding" }`, where each side lists user ids
+and only a **count** of pending e-mails — an address never enters the append-only log;
+a switch away from `people` records the removed list on the `visibility_changed` row
+the same way); anonymity reveals (admin and self); comment posted,
 edited, deleted (incl. moderator deletes); like/unlike; attachment uploaded, bound
 (staged → parent), draft-expired and **chunk-upload-aborted** (§11, with its reason —
 `stale`, `client_abort`, or `size_mismatch`), scan verdict (clean, infected, or
@@ -4688,7 +4770,12 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   **delete**; `challenges/similar` — the §6.1 duplicate check; `challenges/new-count`
   — the §13.1 bare integer; `challenges/:number/featured` `PUT`/`DELETE` — platform
   admin, §13.2, 409 at the cap or on an ineligible status; the detail payload carries
-  `featured`/`canFeature`)
+  `featured`/`canFeature`; `challenges/:number/visibility` `POST { visibility: "org" |
+  "namespace" | "people", access?: { userIds, emails } }` — namespace/platform admin,
+  `access` required iff `people` (1–100 entries) and replacing the whole list, so the
+  same call edits the list of a challenge that stays `people`; the detail payload
+  carries `access: [{ user: { id, displayName, email } | null, email | null }]` for the
+  item's admins only, and nothing about the list for anyone else, §4.3)
 - `challenges/:number/solutions` (create — `POST` only; solutions are **read** inside
   the challenge detail payload, there is no standalone solution `GET`, matching the
   page model of §13.1), `solutions/:number` (edit/withdraw/resubmit/transition/reveal/
@@ -5278,7 +5365,8 @@ encrypted-token pattern. Platform admins only.
   the **egress notice** — *"When enabled, the features below send data to {provider} at
   {host}."* followed by each registered task's label and its egress statement (§22.7).
 - **Independent rows** — each with its own Save, no test, no token, usable without a
-  configuration or key, kept on *Remove*: **Allow namespace-restricted content** (switch,
+  configuration or key, kept on *Remove*: **Allow restricted content** (switch, hint
+  *"Namespace-only challenges and challenges shared with specific people."*,
   off by default — §22.7), one **switch per task** that needs one (§22.11–§22.13, off by
   default), **Timeouts** (§22.8) and **Display name** (§22.8).
 - **Key missing:** without a valid `AI_TOKEN_ENC_KEY` the provider form is disabled with
@@ -5397,8 +5485,8 @@ encrypted-token pattern. Platform admins only.
   than masking it per item, makes anonymity (invariant 3) structural.
 - **Each task states its egress** — exactly which fields it sends — in its section below
   and in its registry entry; the card shows it.
-- **Namespace-restricted content** (`visibility = namespace`) is sent **only** while the
-  platform switch **"Allow namespace-restricted content to be sent to the AI provider"**
+- **Restricted content** (`visibility` `namespace` or `people`, §4.3) is sent **only** while the
+  platform switch **"Allow restricted content to be sent to the AI provider"**
   (`ai_restricted_content_enabled`, **off by default**) is on. While it is off, a task
   whose input would include restricted content refuses with `ai_restricted_content`
   before any network call (the affordance is hidden or explains why), and cross-item
@@ -5929,6 +6017,7 @@ other, unauthenticated surface (§2.1 invariant 2).
 | 6 | Inside InnoBox the author shows as **"External submission"** plus the company. Name and e-mail are visible to the item's admins only. | Personal data of a non-employee stays with the people who need it. |
 | 7 | The submitter gets **key e-mails only**: confirm, accepted or declined, and the final outcome. | They are kept informed without a public status page or an account. |
 | 8 | Contact details are **erased 90 days after closure**; unconfirmed submissions are deleted after **7 days**. | Data minimization for people with no other relationship to the platform. |
+| 9 | The submitter may say **who should see** the challenge — specific people (by e-mail), specific teams (free text), or everyone in the organization. It is a **request**: the admin settles the real visibility on accept. | Outside submitters often know who inside should handle their challenge; the platform admin stays the gate, and the form still reads no application data. |
 
 ### §24.2 The switch and its preconditions
 
@@ -5971,17 +6060,45 @@ Fields, with the §6.1 limits where one exists:
   character counter.
 - **Your name** (required, ≤ 120), **Your e-mail** (required, ≤ 254, syntax-checked),
   **Company** (optional, ≤ 200).
+- **Who should see this?** — a radio group, required, with three options; a hint below
+  it reads *"The team that reviews your submission decides the final visibility."*
+  - **Everyone in the organization** — the default.
+  - **Specific people** — reveals a required tag field, **Their work e-mails**. Typing
+    an address and pressing **Enter** or **comma** locks it in as a tag when it passes
+    the same syntax check as *Your e-mail* (≤ 254); otherwise it stays in the field with
+    the inline error *"Enter a valid e-mail address."* Pasting splits on commas,
+    semicolons, spaces and line breaks: valid addresses become tags, and the rest stay
+    in the field, flagged. **1–20** addresses, compared lower-cased; a duplicate is
+    refused inline (*"Already added."*).
+  - **Specific teams** — reveals a required tag field, **Team names**, free text. Enter
+    or comma locks a name in when it has **at least 3 characters** after trimming (any
+    characters count) and at most 100; otherwise *"Team names need at least 3
+    characters."* Pasting splits on commas, semicolons and line breaks (not spaces —
+    team names may contain them). **1–10** names; a case-insensitive duplicate is
+    refused.
+
+  Both tag fields work the same way. Each tag has a **✕** (`aria-label="Remove <value>"`),
+  Backspace in an empty field removes the last tag, and the tags form a list announced
+  to assistive tech. When **Submit** is pressed with text still in the field, valid
+  text is locked in as a tag and the submission goes ahead; invalid text **blocks** it
+  with the inline error and focus moves to the field. An empty field under the selected
+  option blocks too (*"Add at least one e-mail address."* / *"Add at least one
+  team."*). Only the selected option's tags are sent; tags typed under the other option
+  are kept in the page until it is left, in case the submitter switches back. The
+  e-mails are checked for syntax only: the form never looks them up, because a
+  directory check would tell a stranger who works here.
 - The **privacy notice**, then **"I have read the privacy notice"** (required checkbox).
 - A **honeypot** field, hidden from people and from assistive tech (`aria-hidden`,
   `tabindex="-1"`, off-screen, `autocomplete="off"`).
 - **Submit**, disabled until the proof-of-work is solved. While it is being solved, a
   muted line reads *"Checking your browser…"*, and it needs no interaction.
 
-There is no impact area, namespace, visibility or anonymity choice. The admin decides
-those on accept. There is no duplicate check either: it would expose existing
-challenges to the public. After a successful submit the form is replaced with: *"Check
-your inbox. We've sent a confirmation link to <the address typed>. Your submission is
-sent for review only after you confirm it, and the link works for 24 hours."*
+There is no impact area, namespace or anonymity choice, and the visibility choice above
+is only a request. The admin decides all of them on accept. There is no duplicate check
+either: it would expose existing challenges to the public. After a successful submit
+the form is replaced with: *"Check your inbox. We've sent a confirmation link to <the
+address typed>. Your submission is sent for review only after you confirm it, and the
+link works for 24 hours."*
 
 ### §24.4 Bot defence and abuse limits
 
@@ -6049,10 +6166,24 @@ sent for review only after you confirm it, and the link works for 24 hours."*
   **Decided** lists accepted and declined rows from the last 90 days, newest first. Each
   row shows when it was confirmed, the title, the company, the name and the e-mail.
   Selecting a row opens a review panel with the full title and description, the contact
-  details, and **Similar challenges**: the §6.1 similarity check run as the reviewing
+  details, the **requested visibility** (*"Requested: Everyone in the organization"*,
+  *"Requested: Specific people"* with the addresses as tags, or *"Requested: Specific
+  teams"* with the team names as tags), and **Similar challenges**: the §6.1 similarity check run as the reviewing
   admin, authors masked per §9. The panel offers three actions:
   - **Accept** — a dialog to choose the **namespace** (non-archived; default `global`),
-    **visibility** (default `org`) and **impact area** (active areas). Choosing *Client*
+    **visibility** (`org`, `namespace` or `people`, §4.3) and **impact area** (active
+    areas). The visibility is pre-filled from the request:
+    - *Everyone in the organization* → `org`.
+    - *Specific people* → `people`, with the §4.3 list editor pre-filled: each address
+      that matches an active user becomes that user's tag, and each other one a pending
+      tag marked *"No InnoBox user yet"*, so the admin can spot and remove a typo.
+    - *Specific teams* → `namespace`. The requested team names are shown as read-only
+      tags above the namespace picker. While visibility is `namespace` and the
+      namespace is still `global` — which would mean everyone — **Accept** is disabled,
+      with the hint *"Choose the namespace that matches the requested teams, or a
+      different visibility."*
+
+    The admin may change any of it before accepting. Choosing *Client*
     pre-fills the client name with the company. The dialog also shows the **title and
     description**, pre-filled and editable under the §6.1 limits, so the admin can, say,
     remove a phone number before it reaches every employee.
@@ -6069,7 +6200,10 @@ sent for review only after you confirm it, and the link works for 24 hours."*
 **Accept** runs **one transaction**. It creates the challenge through the normal §6.1
 create path, in `awaiting_triage` with a new number, the chosen namespace, visibility
 and impact area, `author_id` null, `public_submission_id` set and `is_anonymous` false.
-It marks the submission `accepted` with `decided_at`/`decided_by`. After commit,
+With `people` visibility the access list is written in the same transaction
+(`challenge.access_changed`, `via: "accept"`); because the challenge starts in
+`awaiting_triage`, the listed people see it, and get event 15, only once it leaves
+triage (§4.3, §12.1). It marks the submission `accepted` with `decided_at`/`decided_by`. After commit,
 everything a new challenge triggers follows: §12.1 event 1 to the namespace's admins
 (and all platform admins), the §12.4 `challenge.created` webhook, and the audit row,
 `challenge.created` with `source: "public"` plus `editedOnAccept: ["title",
@@ -6128,8 +6262,8 @@ status change does not re-arm it. A challenge that is trashed or deleted (§10.3
 A daily worker job enforces:
 
 - **Unconfirmed** rows are **deleted** 7 days after `created_at`.
-- **Declined** rows have `submitter_name` and `submitter_email` set to null 90 days
-  after `decided_at`.
+- **Declined** rows have `submitter_name` and `submitter_email` set to null, and
+  `requested_emails` and `requested_teams` emptied, 90 days after `decided_at`.
 - **Accepted** rows are erased the same way 90 days after the challenge **first**
   reaches `solved` or `rejected`; that transition sets `contact_erase_due_at`. A
   challenge that never closes keeps its contact details while it is open.
@@ -6137,7 +6271,9 @@ A daily worker job enforces:
   submission row with it.
 
 The company name and the submission's own text are kept: they are the challenge's
-content, not contact data. A platform admin can also **Erase contact details** at any
+content, not contact data. The requested e-mails and team names go with the contact
+details, on every erasure path. The challenge's own **access list** (§4.3) is access
+control, not contact data, and is unaffected by the erasure. A platform admin can also **Erase contact details** at any
 time, from the review panel or the *Submitted from outside* panel, for example when the
 submitter asks. Every erasure writes `public_submission.contact_erased` (`trigger:
 "manual" | "retention"`). The §3 user erasure does not apply: the submitter is not a
@@ -6148,8 +6284,11 @@ user.
 - **Public routes**, all 404 while the switch is off (§24.2):
   `GET /api/public/settings` → `{ privacyNotice }`; `GET /api/public/pow` →
   `{ algorithm, salt, challenge, maxNumber, signature }`;
-  `POST /api/public/submissions` `{ title, description, name, email, company?, consent:
-  true, website (the honeypot), pow: { salt, number, signature } }` → **202**
+  `POST /api/public/submissions` `{ title, description, name, email, company?,
+  visibility: "org" | "people" | "teams", emails?: string[], teams?: string[], consent:
+  true, website (the honeypot), pow: { salt, number, signature } }` (`emails` required,
+  1–20, iff `people`; `teams` required, 1–10, iff `teams`; the other array absent or
+  empty, else **422**) → **202**
   `{ ok: true }`, **400/422** for invalid fields, **403** for a missing, invalid,
   expired or spent proof-of-work (*"Verification failed — reload the page and try
   again."*), **429** per §24.4; `POST /api/public/confirm` `{ token }` → **200**, or
@@ -6157,8 +6296,11 @@ user.
 - **Admin routes**, platform admin only (**403** for namespace admins, like the other
   platform-only admin routes): `GET /api/admin/public-submissions?status=pending|decided`,
   `GET /api/admin/public-submissions/:id` (with `similar[]`), `POST …/:id/accept`
-  `{ namespaceId, visibility, impactAreaId, clientName?, title, description }` →
-  `{ number }`, `POST …/:id/decline` `{ note? }`, `POST …/:id/discard`,
+  `{ namespaceId, visibility: "org" | "namespace" | "people", access?: { userIds,
+  emails }, impactAreaId, clientName?, title, description }` (`access` required iff
+  `people`, 1–100 entries, **422** otherwise) → `{ number }`; the detail route returns
+  `requested: { visibility, emails, teams }` and, for `people`, each address resolved
+  to `{ email, user: { id, displayName } | null }`, `POST …/:id/decline` `{ note? }`, `POST …/:id/discard`,
   `POST …/:id/erase-contact`, and `GET /api/admin/public-submissions/count` →
   `{ pending }` for the console bubble. The challenge detail payload gains
   `external: { company } | null` for every viewer, and `externalContact: { name, email,
@@ -6174,14 +6316,22 @@ user.
   spent salt); the honeypot and timing drops; the per-address and platform caps; the
   e-mail templates (the confirmation carries no submitted text); the retention due
   dates; the author label and masking helpers; `needs_improvement` refused for an
-  external challenge. Integration: every public route 404s while the switch is off;
+  external challenge; the tag-field rules (syntax, the 3-character minimum, limits,
+  duplicates, paste splitting, pending text on submit) and the visibility/array
+  consistency check. Integration: every public route 404s while the switch is off; a
+  `people` request pre-fills resolved and pending entries, and accepting it writes the
+  access list, which grants nothing until the challenge leaves triage; a `teams`
+  request cannot be accepted as `namespace` in `global`; the erasure empties the
+  requested arrays and leaves the access list;
   receive → confirm → accept creates exactly one challenge with a null author, fires
   event 1 and the webhook, and audits `source: "public"`; decline and discard create
   nothing; two concurrent decisions → one 409; the contact panel appears only for the
   item's admins, and no list, search, export, webhook or employee e-mail carries the
   name or e-mail; the retention job deletes and erases on schedule; the outcome mail is
   sent once. E2e: submit on `/submit`, confirm through the link, accept in the queue,
-  and find the challenge in the triage queue labelled "External submission".
+  and find the challenge in the triage queue labelled "External submission"; and
+  submit with *Specific people*, accept, move it out of triage, and see that a listed
+  user receives event 15 and can open it while an unlisted namespace member cannot.
 
 ## §25 Agent access (MCP server)
 
@@ -6205,7 +6355,7 @@ administration is reachable through it (§25.6).
 | 2 | **No status transitions, assignment, triage, reveal, withdraw, delete or administration** — for any role, including committee members, assignees and admins. | Closes agent-speed triage and the self-approval path where one identity authors and validates. |
 | 3 | **InnoBox is its own OAuth 2.1 authorization server**; the person signs in with Entra and consents in the browser. PKCE, open dynamic client registration, short-lived rotating tokens. | No secret in any client config; every connection is visible and revocable. |
 | 4 | **Off by default.** A platform admin switches it on in Platform settings. | Sending InnoBox content to agents is a per-deployment choice. |
-| 5 | **Namespace-restricted content is invisible through MCP** unless a platform admin turns on *"Allow namespace-restricted content over MCP"* (off by default). | The agent's model is outside InnoBox's control — the same rule as the AI provider (§22.7). |
+| 5 | **Restricted content (namespace-only or shared with specific people) is invisible through MCP** unless a platform admin turns on *"Allow restricted content over MCP"* (off by default). | The agent's model is outside InnoBox's control — the same rule as the AI provider (§22.7). |
 | 6 | **Any active user** may connect once it is on. | Consumption is universal (§4.2); per-connection revoke and per-client block cover incidents. |
 | 7 | **Anonymity works exactly as on the web.** An agent may submit anonymously; every read is masked; reveal and self-reveal stay in the browser. | Anonymity is the person's choice wherever they submit; reveal is one-way. |
 | 8 | **No likes through MCP.** | A like is a human signal that drives ranking, spotlights and points. |
@@ -6346,12 +6496,13 @@ the response shaping.
 ### §25.5 Restricted content
 
 - While **`mcp_restricted_content_enabled`** is **off** (the default), every tool
-  behaves as if namespace-restricted challenges (`visibility = namespace`), their
+  behaves as if restricted challenges (`visibility` `namespace` or `people`, §4.3), their
   solutions and their comments **do not exist**: they never appear in search, similar
   matches, the caller's own items or notifications, and a detail request for one
   answers *not found*. `submit_challenge` refuses `visibility: "namespace"` with
   *"Namespace-restricted challenges can't be created through an agent here — use the
-  browser."*
+  browser."* `people` is never a `submit_challenge` option, whatever the switch (§4.3:
+  only an admin sets it).
 - While it is **on**, a tool returns exactly what the person can see in the browser.
 - The switch governs what leaves through MCP, not what the person may see: it never
   changes the web.
@@ -6457,7 +6608,7 @@ the server is on or while the person still holds a connection. Any authenticated
 A **platform-admin** card on `/admin/settings` — **AI agents (MCP)** (§14.3):
 
 - **Allow AI agents to connect** — the `mcp_enabled` switch, **off** by default.
-- **Allow namespace-restricted content over MCP** — `mcp_restricted_content_enabled`,
+- **Allow restricted content over MCP** — `mcp_restricted_content_enabled`,
   **off** by default, with the note: *"Agents send what they read to the AI model their
   user runs. InnoBox does not control that model."*
 - **Access token lifetime** (minutes, 5–1440, default 60) and **refresh token

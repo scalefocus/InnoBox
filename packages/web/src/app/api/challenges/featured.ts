@@ -16,7 +16,7 @@
 //
 // Relative imports only, so the gated dbtest can run under the plain node test runner.
 import type { Pool, PoolClient } from "pg";
-import { canSeeChallenge, type ChallengeStatus } from "@innobox/shared";
+import { canSeeChallenge, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import {
@@ -69,9 +69,10 @@ export type FeatureResult =
 interface PinRow {
   id: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   status: string;
   author_id: string;
+  assignee_id: string | null;
   featured_at: Date | null;
   trashed: boolean;
 }
@@ -80,13 +81,21 @@ interface PinRow {
 async function loadForCuration(pool: Pool, viewer: Viewer, number: string): Promise<{ status: "ok"; row: PinRow } | { status: "not_found" | "trashed" | "forbidden" }> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<PinRow>(
-    `select id, namespace_id, visibility, status, author_id, featured_at, trashed_at is not null as trashed from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, author_id, assignee_id, featured_at, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
   const visible =
     row !== undefined &&
-    canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: row.trashed });
+    canSeeChallenge(viewer, {
+      id: row.id,
+      namespaceId: row.namespace_id,
+      visibility: row.visibility,
+      status: row.status as ChallengeStatus,
+      authorId: row.author_id,
+      assigneeId: row.assignee_id,
+      trashed: row.trashed,
+    });
   if (!row || !visible) return { status: "not_found" };
   if (row.trashed) return { status: "trashed" }; // §10.4: only a platform admin gets here
   if (!viewer.roles.isPlatformAdmin) return { status: "forbidden" };

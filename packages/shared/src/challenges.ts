@@ -140,6 +140,24 @@ export function isStatusRefusedForExternal(status: string): boolean {
 
 // ── Visibility (§4.3, invariant 2) ──────────────────────────────────────────────────────
 
+/** §4.3: a challenge's visibility. `people` is set only by an admin (the §24.5 Accept dialog or a
+ *  later visibility change) — never on the employee submit form, never through an agent. */
+export type ChallengeVisibility = "org" | "namespace" | "people";
+export const CHALLENGE_VISIBILITIES: readonly ChallengeVisibility[] = ["org", "namespace", "people"];
+
+/** The two values a submitter may choose on the employee form (§6.1) and through MCP (§25.6). */
+export type SubmittableVisibility = "org" | "namespace";
+
+export function isChallengeVisibility(v: unknown): v is ChallengeVisibility {
+  return v === "org" || v === "namespace" || v === "people";
+}
+
+/** "Restricted" in the spec's sense (§4.3): anything but `org`. Governs what AI tasks (§22.7) and
+ *  MCP (§25.5) may send while their restricted-content switches are off. */
+export function isRestrictedVisibility(v: ChallengeVisibility): boolean {
+  return v !== "org";
+}
+
 export interface ViewerContext {
   userId: string;
   roles: RoleSet;
@@ -154,9 +172,13 @@ export interface ViewerContext {
 }
 
 export interface ChallengeVisibilityInput {
+  /** The challenge's id — the §4.3 `people` access list is keyed by it. */
+  id: string;
   namespaceId: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   status: ChallengeStatus;
+  /** §4.3 `people`: the challenge's assignee may read it. */
+  assigneeId: string | null;
   /** Null for a challenge accepted from the public form (§24.6) — nobody is its author. */
   authorId: string | null;
   /** §10.4: the challenge is in the trash (`trashed_at` is set). Required, so no read path can
@@ -166,12 +188,14 @@ export interface ChallengeVisibilityInput {
 
 /** §4.3: awaiting_triage/withdrawn are visible only to their author and the
  *  namespace's admins (platform admins included, via isNamespaceAdmin); otherwise
- *  org-visibility is open to everyone and namespace-visibility is member-only. A trashed
+ *  org-visibility is open to everyone, namespace-visibility is member-only, and
+ *  people-visibility is open to the access list, the namespace's admins and committee, and the
+ *  assignee — namespace membership alone grants nothing. A trashed
  *  challenge (§10.4) is visible to platform admins only — the read-only trashed detail view;
  *  to everyone else it does not exist (invariant 2). Lists never show it to anyone: the SQL
  *  twin drops trashed rows for platform admins too. */
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
-  if (viewer.orgVisibleOnly && challenge.visibility === "namespace") return false;
+  if (viewer.orgVisibleOnly && isRestrictedVisibility(challenge.visibility)) return false;
   if (challenge.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
   const isAuthor = viewer.userId === challenge.authorId;
   const isNamespaceAdminHere = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
@@ -180,6 +204,14 @@ export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisib
   }
   if (challenge.visibility === "namespace") {
     return viewer.roles.isMemberOf(challenge.namespaceId);
+  }
+  if (challenge.visibility === "people") {
+    return (
+      isNamespaceAdminHere ||
+      viewer.roles.isCommittee(challenge.namespaceId) ||
+      (challenge.assigneeId !== null && viewer.userId === challenge.assigneeId) ||
+      viewer.roles.isOnAccessList(challenge.id)
+    );
   }
   return true;
 }

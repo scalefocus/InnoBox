@@ -2,10 +2,12 @@
 // The public form itself (INNOBOX_SPEC.md §24.3, §24.4). Its only data request is the privacy
 // notice (GET /api/public/settings); besides that it fetches a proof-of-work challenge and solves
 // it in the background — Submit stays disabled until then, with a muted "Checking your browser…".
-// The honeypot field is off-screen and out of the accessibility tree. There is no impact area,
-// namespace, visibility or anonymity choice (the reviewing admin decides those) and no duplicate
-// check (it would show the public existing challenges). On success the form gives way to the
-// "Check your inbox" message.
+// The honeypot field is off-screen and out of the accessibility tree. *Who should see this?* is a
+// request only (§24.3): specific people by work e-mail, specific teams by name, or everyone in the
+// organization — the reviewing admin settles the real visibility, and the impact area, namespace
+// and anonymity, on accept. The e-mails are checked for syntax only: the form never looks them up.
+// No duplicate check (it would show the public existing challenges). On success the form gives way
+// to the "Check your inbox" message.
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   POW_TTL_MS,
@@ -16,6 +18,13 @@ import {
   PUBLIC_TITLE_MAX,
   privacyNoticeSegments,
 } from "@innobox/shared/public-intake";
+import {
+  REQUESTED_EMAILS_MAX,
+  REQUESTED_TEAMS_MAX,
+  REQUESTED_VISIBILITY_LABELS,
+  type RequestedVisibility,
+} from "@innobox/shared/challenge-access";
+import { TagField, type TagFieldHandle } from "@/components/TagField";
 import { solvePow } from "@/lib/pow-solver";
 
 type Pow =
@@ -34,6 +43,13 @@ export function SubmitForm() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
+  const [visibility, setVisibility] = useState<RequestedVisibility>("org");
+  // Kept while the other option is chosen, in case the submitter switches back; only the chosen
+  // option's tags are sent.
+  const [emails, setEmails] = useState<string[]>([]);
+  const [teams, setTeams] = useState<string[]>([]);
+  const emailsRef = useRef<TagFieldHandle>(null);
+  const teamsRef = useRef<TagFieldHandle>(null);
   const [consent, setConsent] = useState(false);
   const [website, setWebsite] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -84,6 +100,18 @@ export function SubmitForm() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (pow.kind !== "ready" || submitting) return;
+    // §24.3: text still in the chosen tag field is locked in if valid; invalid text — or an empty
+    // field — blocks the submission with the inline error.
+    let request: { visibility: RequestedVisibility; emails?: string[]; teams?: string[] } = { visibility: "org" };
+    if (visibility === "people") {
+      const done = emailsRef.current?.finish();
+      if (!done?.ok) return;
+      request = { visibility, emails: done.values };
+    } else if (visibility === "teams") {
+      const done = teamsRef.current?.finish();
+      if (!done?.ok) return;
+      request = { visibility, teams: done.values };
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -96,6 +124,7 @@ export function SubmitForm() {
           name,
           email,
           company: company.trim() || null,
+          ...request,
           consent,
           website,
           pow: { salt: pow.salt, number: pow.number, signature: pow.signature },
@@ -193,6 +222,45 @@ export function SubmitForm() {
           </label>
           <input id="ps-company" className="field" style={{ width: "100%" }} value={company} onChange={(e) => setCompany(e.target.value)} maxLength={PUBLIC_COMPANY_MAX} autoComplete="organization" />
         </div>
+
+        <fieldset className="public-fieldset" aria-describedby="ps-visibility-hint">
+          <legend className="public-label">
+            <span>Who should see this?</span>
+          </legend>
+          <div className="public-radios">
+            {(["org", "people", "teams"] as const).map((option) => (
+              <label key={option} className="public-check">
+                <input type="radio" name="ps-visibility" value={option} checked={visibility === option} onChange={() => setVisibility(option)} />
+                <span>{REQUESTED_VISIBILITY_LABELS[option]}</span>
+              </label>
+            ))}
+          </div>
+          {visibility === "people" && (
+            <div className="public-tags">
+              <label className="public-label" htmlFor="ps-emails">
+                <span>Their work e-mails</span>
+                <span className="count">
+                  {emails.length} / {REQUESTED_EMAILS_MAX}
+                </span>
+              </label>
+              <TagField ref={emailsRef} id="ps-emails" kind="email" values={emails} onChange={setEmails} max={REQUESTED_EMAILS_MAX} placeholder="Type an address and press Enter" />
+            </div>
+          )}
+          {visibility === "teams" && (
+            <div className="public-tags">
+              <label className="public-label" htmlFor="ps-teams">
+                <span>Team names</span>
+                <span className="count">
+                  {teams.length} / {REQUESTED_TEAMS_MAX}
+                </span>
+              </label>
+              <TagField ref={teamsRef} id="ps-teams" kind="team" values={teams} onChange={setTeams} max={REQUESTED_TEAMS_MAX} placeholder="Type a team name and press Enter" />
+            </div>
+          )}
+          <p id="ps-visibility-hint" className="public-status" style={{ margin: "8px 0 0" }}>
+            The team that reviews your submission decides the final visibility.
+          </p>
+        </fieldset>
 
         {/* The honeypot (§24.4): a person never sees or reaches it. */}
         <div className="public-hp" aria-hidden="true">

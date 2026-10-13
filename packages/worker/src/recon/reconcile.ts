@@ -5,7 +5,7 @@
 // (structured JSON) and audited as scim.anomaly, then the pass CONTINUES with the next
 // item — a partial pass must never abort. DB failures do propagate; the caller wraps
 // each scheduled run. Actor is null (system) on every audit entry, per spec §15.
-import { appendAudit, revokeUserGrants, type DbClient, type DbPool } from "@innobox/shared";
+import { appendAudit, bindPendingAccess, revokeUserGrants, type DbClient, type DbPool } from "@innobox/shared";
 import { computeMembershipDiff, computeUserHeal, type GraphUser, type UserFieldPatch } from "./diff.js";
 import { createGraphClient, GraphRequestError, type GraphClient, type GraphEnv, type GraphGroup } from "./graph.js";
 
@@ -155,6 +155,8 @@ export async function runReconciliation(
         u.id,
         ...cols.map((c) => heal.patch[c] ?? null),
       ]);
+      // §4.3: a changed address or user name may match a pending access-list entry.
+      if (heal.patch.email !== undefined || heal.patch.user_name !== undefined) await bindPendingAccess(pool, u.id);
       const current: Record<keyof UserFieldPatch, unknown> = {
         user_name: u.user_name,
         display_name: u.display_name,
@@ -301,6 +303,7 @@ export async function runReconciliation(
           );
           userId = rows[0]?.id ?? (await pool.query(`select id from users where external_id = $1`, [oid])).rows[0]?.id;
           if (!userId) continue;
+          await bindPendingAccess(pool, userId); // §4.3
           await appendAudit(pool, {
             actorUserId: null,
             action: "user.jit_created",

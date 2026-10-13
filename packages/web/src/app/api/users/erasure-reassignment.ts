@@ -16,6 +16,7 @@ import {
   canSeeChallenge,
   formatChallengeNumber,
   type ChallengeStatus,
+  type ChallengeVisibility,
   type RoleSet,
 } from "@innobox/shared";
 import { applyChallengeAssigneeChange } from "../challenges/store";
@@ -67,7 +68,7 @@ export async function handOverOpenAssignments(
     number: string;
     title: string;
     namespace_id: string;
-    visibility: "org" | "namespace";
+    visibility: ChallengeVisibility;
     status: ChallengeStatus;
     author_id: string;
     assignee_id: string;
@@ -87,10 +88,14 @@ export async function handOverOpenAssignments(
   for (const row of rows) {
     const item = { number: formatChallengeNumber(row.number), title: row.title };
     const visible = canSeeChallenge(successor, {
+      id: row.id,
       namespaceId: row.namespace_id,
       visibility: row.visibility,
       status: row.status,
       authorId: row.author_id,
+      // The erased user is the assignee here: the question is whether the successor sees it as
+      // someone else would — on a `people` list, or as its namespace's admin or committee.
+      assigneeId: row.assignee_id,
       // §10.4: a trashed challenge is handed over like any other, so a restore brings it back with
       // a live assignee; the test is whether the successor could see it once it is back.
       trashed: false,

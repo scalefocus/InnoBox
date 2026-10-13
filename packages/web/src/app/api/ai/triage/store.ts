@@ -10,7 +10,7 @@
 //
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool } from "pg";
-import { canSeeChallenge, type ChallengeStatus } from "@innobox/shared";
+import { canSeeChallenge, isRestrictedVisibility, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
 import {
   AI_SETTING_KEYS,
   TRIAGE_INPUT_HASH_SQL,
@@ -47,7 +47,7 @@ export interface TriageNotesView {
 interface ChallengeRow {
   id: string;
   status: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   namespace_id: string;
   author_id: string;
   assignee_id: string | null;
@@ -71,7 +71,15 @@ async function access(pool: Pool, viewer: Viewer, number: string): Promise<Acces
   // §10.4: a trashed challenge drops out of every AI task, for platform admins too (who alone can
   // see it, and are told why a re-run is refused).
   if (row.trashed) return viewer.roles.isPlatformAdmin ? { ok: false, trashed: true } : { ok: false };
-  const visible = canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false });
+  const visible = canSeeChallenge(viewer, {
+    id: row.id,
+    namespaceId: row.namespace_id,
+    visibility: row.visibility,
+    status: row.status as ChallengeStatus,
+    authorId: row.author_id,
+    assigneeId: row.assignee_id,
+    trashed: false,
+  });
   if (!visible || row.author_id === viewer.userId || row.status === "withdrawn") return { ok: false };
   const isAdmin = viewer.roles.isNamespaceAdmin(row.namespace_id);
   if (isAdmin) return { ok: true, row, isAdmin };
@@ -91,7 +99,7 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
   const { row } = a;
   const isEffective = await effective(pool, ai);
   const restrictedOk = await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent);
-  const restrictedBlocked = row.visibility === "namespace" && !restrictedOk;
+  const restrictedBlocked = isRestrictedVisibility(row.visibility) && !restrictedOk;
   const subject = isTriageSubject(row.status);
 
   const { rows: results } = await pool.query<{ status: "pending" | "ready" | "failed"; input_hash: string | null; payload: TriageNotes | null; updated_at: Date }>(
@@ -117,8 +125,8 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     const numbers = p.duplicates.map((d) => String(d.number));
     const dupRows = numbers.length
       ? (
-          await pool.query<{ number: string; title: string; status: string; visibility: "org" | "namespace"; namespace_id: string; author_id: string }>(
-            `select number::text, title, status, visibility, namespace_id, author_id from challenges
+          await pool.query<{ id: string; number: string; title: string; status: string; visibility: ChallengeVisibility; namespace_id: string; author_id: string; assignee_id: string | null }>(
+            `select id, number::text, title, status, visibility, namespace_id, author_id, assignee_id from challenges
               where number::text = any($1::text[]) and trashed_at is null`,
             [numbers],
           )
@@ -128,7 +136,7 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     for (const d of p.duplicates) {
       const c = dupRows.find((x) => x.number === String(d.number));
       if (!c) continue; // deleted or trashed since
-      if (!canSeeChallenge(viewer, { namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, trashed: false })) continue;
+      if (!canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, assigneeId: c.assignee_id, trashed: false })) continue;
       if (c.status === "withdrawn") continue;
       duplicates.push({ number: `CH-${c.number}`, title: c.title, reason: d.reason });
     }
@@ -153,7 +161,7 @@ export async function rerunTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer,
   if (!a.isAdmin) return "forbidden";
   if (!isTriageSubject(a.row.status)) return "unavailable";
   if (!(await effective(pool, ai))) return "unavailable";
-  if (a.row.visibility === "namespace" && !(await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent))) return "unavailable";
+  if (isRestrictedVisibility(a.row.visibility) && !(await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent))) return "unavailable";
   await pool.query(
     `insert into ai_results (kind, parent_type, parent_id, input_hash, status, requested_by)
      values ($1, 'challenge', $2, null, 'pending', $3)

@@ -2,14 +2,18 @@
 // /admin/public-submissions — the §24.5 review queue (INNOBOX_SPEC.md §24.5–§24.8). Platform admins
 // only (gated in-page against /api/me; every API call is gated server-side too). Two tabs: Pending
 // review (oldest first) and Decided (the last 90 days, newest first). Selecting a row opens the
-// review panel: the full text, the contact details, the §6.1 similar challenges, and the three
-// decisions — Accept (a dialog choosing namespace, visibility and impact area, with the title and
-// description editable before they reach every employee), Decline (an optional note mailed to the
+// review panel: the full text, the contact details, the submitter's requested visibility (§24.3),
+// the §6.1 similar challenges, and the three decisions — Accept (a dialog choosing namespace,
+// visibility — `people` included, with its access list (§4.3) — and impact area, pre-filled from the
+// request, with the title and description editable before they reach every employee), Decline (an
+// optional note mailed to the
 // submitter) and Discard as spam (deletes the row, sends nothing). A row someone else decided first
 // answers 409, shown as is. Erase contact details works on any row.
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DECLINE_NOTE_MAX, PUBLIC_DESCRIPTION_MAX, PUBLIC_TITLE_MAX } from "@innobox/shared/public-intake";
+import { PENDING_ACCESS_LABEL, REQUESTED_VISIBILITY_LABELS, type RequestedVisibility } from "@innobox/shared/challenge-access";
+import { AccessListEditor, accessTagsToInput, type AccessTag } from "@/components/AccessListEditor";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
@@ -30,6 +34,14 @@ interface SubmissionRow {
   decidedAt: string | null;
   contactErasedAt: string | null;
   challengeNumber: string | null;
+  requestedVisibility: RequestedVisibility;
+}
+
+/** §24.3: the submitter's request, each address resolved against the directory. */
+interface RequestedAccess {
+  visibility: RequestedVisibility;
+  emails: { email: string; user: { id: string; displayName: string } | null }[];
+  teams: string[];
 }
 
 interface SimilarMatch {
@@ -42,7 +54,45 @@ interface SimilarMatch {
 interface SubmissionDetail extends SubmissionRow {
   description: string;
   declineNote: string | null;
+  requested: RequestedAccess;
   similar: SimilarMatch[];
+}
+
+type AcceptVisibility = "org" | "namespace" | "people";
+
+/** The Accept dialog's pre-fill for a request (§24.5): everyone → org, people → people with the
+ *  resolved users and pending addresses, teams → namespace-only. */
+function prefillFromRequest(requested: RequestedAccess): { visibility: AcceptVisibility; tags: AccessTag[] } {
+  if (requested.visibility === "people") {
+    return {
+      visibility: "people",
+      tags: requested.emails.map((e) =>
+        e.user ? { kind: "user", id: e.user.id, displayName: e.user.displayName, email: e.email } : { kind: "pending", email: e.email },
+      ),
+    };
+  }
+  return { visibility: requested.visibility === "teams" ? "namespace" : "org", tags: [] };
+}
+
+/** The read-only tags of a request, as the review panel and the Accept dialog show them. */
+function RequestedTags({ requested }: { requested: RequestedAccess }) {
+  const items =
+    requested.visibility === "people"
+      ? requested.emails.map((e) => ({ key: e.email, label: e.email, pending: e.user === null }))
+      : requested.teams.map((t) => ({ key: t, label: t, pending: false }));
+  if (items.length === 0) return null;
+  return (
+    <ul className="tag-list-static" aria-label={requested.visibility === "people" ? "Requested people" : "Requested teams"}>
+      {items.map((item) => (
+        <li key={item.key} className={`tag${item.pending ? " is-pending" : ""}`}>
+          <span className="tag-label" title={item.label}>
+            {item.label}
+          </span>
+          {item.pending && <span className="tag-note">{PENDING_ACCESS_LABEL}</span>}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 interface NamespaceOption {
@@ -278,6 +328,12 @@ function ReviewPanel({ id, onDecided, onError, onChanged }: { id: string; onDeci
         )}
       </div>
 
+      <div style={{ marginBottom: 14 }} data-testid="requested-visibility">
+        <div style={labelStyle}>Requested visibility</div>
+        <p style={{ margin: "0 0 6px", fontSize: 14 }}>Requested: {REQUESTED_VISIBILITY_LABELS[detail.requested.visibility]}</p>
+        <RequestedTags requested={detail.requested} />
+      </div>
+
       {detail.status === "declined" && detail.declineNote && (
         <p className="sub" style={{ marginBottom: 14 }}>
           Note sent with the decline: {detail.declineNote}
@@ -398,7 +454,9 @@ function AcceptDialog({
   const [namespaces, setNamespaces] = useState<NamespaceOption[]>([]);
   const [areas, setAreas] = useState<ImpactArea[]>([]);
   const [namespaceId, setNamespaceId] = useState("");
-  const [visibility, setVisibility] = useState<"org" | "namespace">("org");
+  const prefill = prefillFromRequest(detail.requested);
+  const [visibility, setVisibility] = useState<AcceptVisibility>(prefill.visibility);
+  const [tags, setTags] = useState<AccessTag[]>(prefill.tags);
   const [impactAreaId, setImpactAreaId] = useState("");
   const [clientName, setClientName] = useState(detail.company ?? "");
   const [title, setTitle] = useState(detail.title);
@@ -423,6 +481,11 @@ function AcceptDialog({
   }, []);
 
   const isClient = areas.find((a) => a.id === impactAreaId)?.name === "Client";
+  // §24.5: a teams request left namespace-only in `global` would reach everyone.
+  const teamsRequest = detail.requested.visibility === "teams";
+  const inGlobal = namespaces.find((n) => n.id === namespaceId)?.slug === "global";
+  const teamsBlocked = teamsRequest && visibility === "namespace" && inGlobal;
+  const peopleEmpty = visibility === "people" && tags.length === 0;
 
   return (
     <dialog
@@ -436,7 +499,16 @@ function AcceptDialog({
         style={{ display: "flex", flexDirection: "column", gap: 14, padding: "22px 22px 20px" }}
         onSubmit={(e) => {
           e.preventDefault();
-          onAccept({ namespaceId, visibility, impactAreaId, clientName: isClient ? clientName : null, title, description });
+          if (teamsBlocked || peopleEmpty) return;
+          onAccept({
+            namespaceId,
+            visibility,
+            ...(visibility === "people" ? { access: accessTagsToInput(tags) } : {}),
+            impactAreaId,
+            clientName: isClient ? clientName : null,
+            title,
+            description,
+          });
         }}
       >
         <h2 id="accept-title" style={{ fontFamily: "var(--font-display)", fontSize: 20, margin: 0 }}>
@@ -446,6 +518,12 @@ function AcceptDialog({
           It becomes a challenge awaiting triage, shown as &ldquo;External submission&rdquo;. Edit the text first if it holds anything that should not reach every
           employee.
         </p>
+        {teamsRequest && detail.requested.teams.length > 0 && (
+          <div>
+            <div style={labelStyle}>Requested teams</div>
+            <RequestedTags requested={detail.requested} />
+          </div>
+        )}
         <div>
           <label style={labelStyle} htmlFor="accept-ns">
             Namespace
@@ -462,11 +540,28 @@ function AcceptDialog({
           <label style={labelStyle} htmlFor="accept-visibility">
             Visibility
           </label>
-          <select id="accept-visibility" className="field" style={{ width: "100%" }} value={visibility} onChange={(e) => setVisibility(e.target.value as "org" | "namespace")}>
+          <select id="accept-visibility" className="field" style={{ width: "100%" }} value={visibility} onChange={(e) => setVisibility(e.target.value as AcceptVisibility)}>
             <option value="org">Everyone in the organization</option>
             <option value="namespace">Only this namespace&apos;s members</option>
+            <option value="people">Specific people</option>
           </select>
+          {teamsBlocked && (
+            <p className="tag-error" role="alert">
+              Choose the namespace that matches the requested teams, or a different visibility.
+            </p>
+          )}
         </div>
+        {visibility === "people" && (
+          <div>
+            <label style={labelStyle} htmlFor="accept-access">
+              People with access
+            </label>
+            <AccessListEditor id="accept-access" tags={tags} onChange={setTags} disabled={busy} />
+            <p className="muted" style={{ margin: "6px 0 0", fontSize: 12.5 }}>
+              The namespace&apos;s admins and committee can always see it. The people listed see it once it leaves triage.
+            </p>
+          </div>
+        )}
         <div>
           <label style={labelStyle} htmlFor="accept-area">
             Impact area
@@ -511,7 +606,7 @@ function AcceptDialog({
           <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => ref.current?.close()}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !namespaceId || !impactAreaId}>
+          <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !namespaceId || !impactAreaId || teamsBlocked || peopleEmpty}>
             Accept
           </button>
         </div>

@@ -66,7 +66,18 @@ export async function resolveRolesForUser(userId: string): Promise<RoleSet> {
     bootstrapPlatformAdmin = b.length > 0;
   }
 
-  return buildRoleSet(grants, { bootstrapPlatformAdmin, globalNamespaceId: await getGlobalNamespaceId() });
+  // §4.3 `people`: the challenges whose access list names the user — resolved per request with the
+  // grants, so the visibility gate and its SQL twin read it exactly like namespace membership.
+  const { rows: accessRows } = await pool.query<{ challenge_id: string }>(
+    `select challenge_id from challenge_access where user_id = $1`,
+    [userId],
+  );
+
+  return buildRoleSet(grants, {
+    bootstrapPlatformAdmin,
+    globalNamespaceId: await getGlobalNamespaceId(),
+    accessListChallengeIds: accessRows.map((r) => r.challenge_id),
+  });
 }
 
 /** Presence stamp (§14.5), on the only per-request node-layer hook there is. The pathname

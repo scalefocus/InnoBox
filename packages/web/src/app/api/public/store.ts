@@ -16,11 +16,11 @@ import {
   isAddressCapped,
   isPlatformCeilingReached,
   normalizeEmailForCap,
-  type PublicSubmissionFields,
 } from "@innobox/shared";
 import { inTransaction } from "../../../lib/db";
 import { dispatchAdminAttention, getPlatformAdminUserIds } from "../../../lib/notify";
 import { enqueueSubmitterEmail } from "../../../lib/public-intake-mail";
+import type { ReceivedSubmission } from "./handlers";
 
 export type ReceiveResult =
   /** Stored, confirmation e-mail queued. `token` is returned for the dev/e2e seam only. */
@@ -36,7 +36,7 @@ export type ReceiveResult =
  *  slip under a cap. The form's traffic is tiny; the lock is held for one short transaction. */
 const INTAKE_LOCK = "innobox.public_intake";
 
-export async function receiveSubmission(pool: Pool, fields: PublicSubmissionFields, powSalt: string): Promise<ReceiveResult> {
+export async function receiveSubmission(pool: Pool, fields: ReceivedSubmission, powSalt: string): Promise<ReceiveResult> {
   return inTransaction(pool, async (client): Promise<ReceiveResult> => {
     await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [INTAKE_LOCK]);
 
@@ -56,11 +56,24 @@ export async function receiveSubmission(pool: Pool, fields: PublicSubmissionFiel
     const token = generateConfirmToken();
     const { rows } = await client.query<{ id: string }>(
       `insert into public_submissions
-         (title, description, submitter_name, submitter_email, company, confirm_token_hash, confirm_expires_at, pow_salt)
-       values ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8)
+         (title, description, submitter_name, submitter_email, company, confirm_token_hash, confirm_expires_at, pow_salt,
+          requested_visibility, requested_emails, requested_teams)
+       values ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8, $9, $10, $11)
        on conflict (pow_salt) do nothing
        returning id`,
-      [fields.title, fields.description, fields.name, fields.email, fields.company, hashConfirmToken(token), CONFIRM_TOKEN_TTL_MS / 1000, powSalt],
+      [
+        fields.title,
+        fields.description,
+        fields.name,
+        fields.email,
+        fields.company,
+        hashConfirmToken(token),
+        CONFIRM_TOKEN_TTL_MS / 1000,
+        powSalt,
+        fields.request.visibility,
+        fields.request.emails,
+        fields.request.teams,
+      ],
     );
     const id = rows[0]?.id;
     if (!id) return { status: "spent" };

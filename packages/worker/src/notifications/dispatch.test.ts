@@ -180,3 +180,16 @@ test("composeOutboxEmail: submitter rows use their own subject and link only whe
   const user = composeOutboxEmail({ recipient_email: null, payload: { message: "CH-1 moved.", link: "/challenges/1" } }, base);
   assert.deepEqual(user, { subject: "innobox: CH-1 moved.", body: "CH-1 moved.\n\nhttps://innobox.example.com/challenges/1" });
 });
+
+// §12.1 event 15: a user's row may carry its own fixed subject; the body and link are unchanged.
+test("composeOutboxEmail: a user row with its own subject (event 15) keeps it", () => {
+  const shared = composeOutboxEmail(
+    {
+      recipient_email: null,
+      payload: { subject: "A challenge has been shared with you", message: 'CH-7 "Faster onboarding" (submitted by Anonymous) has been shared with you.', link: "/challenges/7" },
+    },
+    "https://innobox.example.com",
+  );
+  assert.equal(shared.subject, "A challenge has been shared with you");
+  assert.equal(shared.body, 'CH-7 "Faster onboarding" (submitted by Anonymous) has been shared with you.\n\nhttps://innobox.example.com/challenges/7');
+});

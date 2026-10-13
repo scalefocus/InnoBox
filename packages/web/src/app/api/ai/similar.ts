@@ -21,6 +21,7 @@ import {
   similarExplainInput,
   type AiClient,
 } from "@innobox/shared/ai";
+import { isRestrictedVisibility, type ChallengeVisibility } from "@innobox/shared";
 import type { SimilarCandidate, SimilarChallenge } from "../challenges/store";
 
 export const SIMILAR_FEATURE = "duplicate_explain";
@@ -33,7 +34,7 @@ export async function explainSimilar(
   pool: Pool,
   ai: AiClient,
   userId: string,
-  draft: { title: string; description: string; visibility: "org" | "namespace" },
+  draft: { title: string; description: string; visibility: ChallengeVisibility },
   candidates: readonly SimilarCandidate[],
   opts: { timeoutMs?: number } = {},
 ): Promise<{ similar: ExplainedSimilar[]; explained: boolean }> {
@@ -43,7 +44,7 @@ export async function explainSimilar(
     if (!(await readAiSwitch(pool, aiFeatureSwitchKey(SIMILAR_FEATURE)))) return { similar: plain, explained: false };
     if (!(await ai.available(SIMILAR_FEATURE))) return { similar: plain, explained: false };
     const restrictedOk = await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent);
-    if (draft.visibility === "namespace" && !restrictedOk) return { similar: plain, explained: false };
+    if (isRestrictedVisibility(draft.visibility) && !restrictedOk) return { similar: plain, explained: false };
 
     const sendable = similarExplainInput(candidates, restrictedOk);
     if (sendable.length === 0) return { similar: plain, explained: false };
@@ -58,7 +59,7 @@ export async function explainSimilar(
       json: true,
       retry: false,
       signal: AbortSignal.timeout(opts.timeoutMs ?? SIMILAR_EXPLAIN_TIMEOUT_MS),
-      restrictedContent: draft.visibility === "namespace" || sendable.some((c) => c.visibility === "namespace"),
+      restrictedContent: isRestrictedVisibility(draft.visibility) || sendable.some((c) => isRestrictedVisibility(c.visibility)),
     });
     const ranking = processSimilarRanking(result.json, aiCandidates.map((c) => c.number));
     if (ranking.length === 0) return { similar: plain, explained: false };
