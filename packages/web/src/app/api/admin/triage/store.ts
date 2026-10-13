@@ -8,7 +8,7 @@
 // same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
 // through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
-import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, type ChallengeStatus, type RoleSet } from "@innobox/shared";
+import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeStatus, type RoleSet } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
 import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged } from "../../../../lib/notify-events";
@@ -26,6 +26,8 @@ export interface TriageRow {
   authorActive?: boolean;
   /** §13.6 "Deleted User" bubble: the author is GDPR-scrubbed. Absent when anonymous. */
   authorScrubbed?: boolean;
+  /** §24.6: accepted from the public form — "External submission" with the neutral bubble. */
+  authorExternal?: true;
   status: ChallengeStatus;
   impactAreaName: string;
   namespaceSlug: string;
@@ -95,10 +97,11 @@ function buildTriageQuery(viewer: Viewer, filters: TriageFilters): { whereClause
 interface TriageQueryRow {
   number: string;
   title: string;
-  author_id: string;
-  author_display_name: string;
-  author_active: boolean;
-  author_scrubbed: boolean;
+  author_id: string | null;
+  author_display_name: string | null;
+  author_active: boolean | null;
+  author_scrubbed: boolean | null;
+  external_company: string | null;
   is_anonymous: boolean;
   status: ChallengeStatus;
   impact_area_name: string;
@@ -111,15 +114,25 @@ interface TriageQueryRow {
 }
 
 function toTriageRow(row: TriageQueryRow): TriageRow {
+  // The one projection (§9 masking, §24.6 external label) every author surface uses.
+  const author = maskAuthor({
+    isAnonymous: row.is_anonymous,
+    authorId: row.author_id,
+    authorDisplayName: row.author_display_name,
+    authorActive: row.author_active,
+    authorScrubbed: row.author_scrubbed,
+    externalCompany: row.external_company,
+  });
   return {
     number: formatChallengeNumber(row.number),
     title: row.title,
-    authorDisplayName: row.is_anonymous ? "Anonymous" : row.author_display_name,
-    authorAnonymous: row.is_anonymous,
+    authorDisplayName: author.displayName,
+    authorAnonymous: author.anonymous,
     // Anonymity-safe: never expose the real author id — nor their account state — for an
     // anonymous item (§9, invariant 3).
-    authorId: row.is_anonymous ? null : row.author_id,
-    ...(row.is_anonymous ? {} : { authorActive: row.author_active, authorScrubbed: row.author_scrubbed }),
+    authorId: author.userId,
+    ...(author.anonymous || author.external ? {} : { authorActive: author.active, authorScrubbed: author.scrubbed }),
+    ...(author.external ? { authorExternal: true as const } : {}),
     status: row.status,
     impactAreaName: row.impact_area_name,
     namespaceSlug: row.namespace_slug,
@@ -133,12 +146,13 @@ function toTriageRow(row: TriageQueryRow): TriageRow {
 
 const TRIAGE_SELECT = `
   select c.number::text, c.title, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-         c.is_anonymous, c.status,
+         ps.company as external_company, c.is_anonymous, c.status,
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
          au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
          c.created_at
     from challenges c
-    join users u on u.id = c.author_id
+    left join users u on u.id = c.author_id
+    left join public_submissions ps on ps.id = c.public_submission_id
     join impact_areas ia on ia.id = c.impact_area_id
     join namespaces ns on ns.id = c.namespace_id
     left join users au on au.id = c.assignee_id
@@ -192,7 +206,7 @@ export async function listTriageQueue(
 
 export interface BulkActionOutcome {
   number: string;
-  status: "ok" | "forbidden" | "not_found" | "invalid" | "terminal_status" | "unknown_user" | "assignee_cannot_see";
+  status: "ok" | "forbidden" | "not_found" | "invalid" | "terminal_status" | "unknown_user" | "assignee_cannot_see" | "external_no_author";
 }
 
 /** Bulk actions are independent per-item transactions (each individually audited) — running
@@ -234,8 +248,9 @@ export async function bulkSetStatus(
       await notifyChallengeStatusChanged(notify, { number }, newStatus).catch(logNotifyFailure("bulk status notification failed"));
     }
     // Bulk actions are admin-only, so `illegal_transition` can't occur (admins free-set) — it's
-    // folded into "invalid" alongside invalid_status purely to keep the outcome union closed. A
-    // trashed challenge is not on the queue (§10.4), so it answers like a missing one.
+    // folded into "invalid" alongside invalid_status purely to keep the outcome union closed.
+    // `external_no_author` (§24.6) is its own outcome: the row is skipped, the rest proceed.
+    // A trashed challenge is not on the queue (§10.4), so it answers like a missing one.
     return {
       number: formatChallengeNumber(number),
       status:

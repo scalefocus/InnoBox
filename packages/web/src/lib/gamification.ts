@@ -44,7 +44,7 @@ export async function awardSolutionCreated(client: PoolClient, solution: { id: s
  *  the assignee at that moment when they are not also the author). Who moved it doesn't matter. */
 export async function challengeStatusAwards(client: PoolClient, challengeId: string, status: string): Promise<AwardInput[]> {
   if (status !== "valid" && status !== "solved") return [];
-  const { rows } = await client.query<{ author_id: string; is_anonymous: boolean; assignee_id: string | null }>(
+  const { rows } = await client.query<{ author_id: string | null; is_anonymous: boolean; assignee_id: string | null }>(
     `select author_id, is_anonymous, assignee_id from challenges where id = $1`,
     [challengeId],
   );
@@ -52,11 +52,13 @@ export async function challengeStatusAwards(client: PoolClient, challengeId: str
   if (!c) return [];
   const item = { itemType: "challenge" as const, itemId: challengeId };
   const out: AwardInput[] = [];
+  // §24.6: an external challenge has no author to credit — only its assignee can earn on it.
+  const author = c.is_anonymous ? null : c.author_id;
   if (status === "valid") {
-    if (!c.is_anonymous) out.push({ ...item, userId: c.author_id, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId) });
+    if (author) out.push({ ...item, userId: author, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId) });
     return out;
   }
-  if (!c.is_anonymous) out.push({ ...item, userId: c.author_id, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId) });
+  if (author) out.push({ ...item, userId: author, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId) });
   if (c.assignee_id && c.assignee_id !== c.author_id) {
     out.push({ ...item, userId: c.assignee_id, reason: "assignment_solved", awardKey: awardKey.assignmentSolved(challengeId) });
   }
@@ -84,14 +86,15 @@ export async function writeLiveAwards(client: PoolClient, awards: AwardInput[]):
 /** `like_received` for the liked item's author — never for liking your own item, never while the
  *  item is anonymous. Unliking deducts nothing, and a re-like reuses the same key. */
 export async function awardLikeReceived(client: PoolClient, parentType: AwardItemType, parentId: string, likerId: string): Promise<void> {
-  const { rows } = await client.query<{ author_id: string; is_anonymous: boolean }>(
+  const { rows } = await client.query<{ author_id: string | null; is_anonymous: boolean }>(
     parentType === "challenge"
       ? `select author_id, is_anonymous from challenges where id = $1`
       : `select author_id, is_anonymous from solutions where id = $1`,
     [parentId],
   );
   const item = rows[0];
-  if (!item || item.is_anonymous || item.author_id === likerId) return;
+  // An external challenge (§24.6) has no author to credit.
+  if (!item || item.is_anonymous || item.author_id === null || item.author_id === likerId) return;
   await write(client, [
     {
       userId: item.author_id,

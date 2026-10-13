@@ -9,6 +9,8 @@
 // (manual re-access via the account menu is an ordinary page visit), API routes, the Auth.js
 // endpoints, health/metrics probes, and static assets.
 
+import { isPublicFormPath } from "./public-intake-paths";
+
 export const QUICK_START_PATH = "/quick-start";
 
 /** Request header the middleware sets (always overwriting any client-supplied value) so the
@@ -22,6 +24,8 @@ const EXEMPT_PREFIXES = [`${QUICK_START_PATH}/`, "/api/", "/_next/", "/brand/"];
 /** True for routes the onboarding redirect never touches. */
 export function isQuickStartExempt(pathname: string): boolean {
   if (EXEMPT_EXACT.has(pathname)) return true;
+  // §24.3: the public form answers a signed-in employee exactly as it answers anyone else.
+  if (isPublicFormPath(pathname)) return true;
   if (pathname === "/api") return true;
   return EXEMPT_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }

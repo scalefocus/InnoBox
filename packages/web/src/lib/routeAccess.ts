@@ -10,12 +10,18 @@
 // landing too — a brand asset like icon.svg/favicon, not protected data).
 // NOTE: /whats-new is deliberately NOT public — it stays behind sign-in like every other route
 // (invariant 2: all access is auth-required).
-// The CSP report sink /api/csp-report (§2.4) is the one public API route: browsers send violation
+// The CSP report sink /api/csp-report (§2.4) is a public API route: browsers send violation
 // reports without a session. Exact path only.
+// The §24 public submission form — /submit, /submit/confirm and its four /api/public/* routes —
+// is the other unauthenticated surface (invariant 2). Exact paths only; while the feature is off
+// they answer 404 themselves (§24.2), which this edge-safe layer cannot know.
+import { isPublicFormPath, isPublicIntakeApiPath } from "./public-intake-paths";
+
 const PUBLIC_EXACT = new Set(["/", "/healthz", "/readyz", "/metrics", "/icon.svg", "/favicon.ico", "/api/csp-report"]);
 
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
+  if (isPublicFormPath(pathname) || isPublicIntakeApiPath(pathname)) return true;
   if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return true;
   if (pathname.startsWith("/_next/")) return true;
   if (pathname.startsWith("/brand/")) return true;

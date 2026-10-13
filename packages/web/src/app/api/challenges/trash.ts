@@ -51,8 +51,15 @@ async function hideSubtree(
 export async function trashChallenge(deps: TrashDeps, admin: Viewer, number: string, reason: string): Promise<TrashResult> {
   if (!admin.roles.isPlatformAdmin) return { status: "not_found" };
   const outcome = await inTransaction(deps.pool, async (client): Promise<TrashResult & { sessions?: { objectKey: string; s3UploadId: string }[] }> => {
-    const { rows } = await client.query<{ id: string; number: string; status: string; namespace_id: string; trashed_at: Date | null }>(
-      `select id, number::text, status, namespace_id, trashed_at from challenges where number = $1 for update`,
+    const { rows } = await client.query<{
+      id: string;
+      number: string;
+      status: string;
+      namespace_id: string;
+      trashed_at: Date | null;
+      public_submission_id: string | null;
+    }>(
+      `select id, number::text, status, namespace_id, trashed_at, public_submission_id from challenges where number = $1 for update`,
       [number],
     );
     const challenge = rows[0];
@@ -68,6 +75,14 @@ export async function trashChallenge(deps: TrashDeps, admin: Viewer, number: str
       solutionIds: solutionRows.map((r) => r.id),
       linkScope: notificationLinkScope({ challengeNumber: challenge.number }),
     });
+    // §24.7: a trashed external challenge sends its submitter nothing — mail still queued for them
+    // is withdrawn (sent rows stay, until the §24.8 erasure or a purge removes them).
+    if (challenge.public_submission_id) {
+      await client.query(
+        `delete from notification_outbox where recipient_email is not null and payload->>'submissionId' = $1 and status <> 'sent'`,
+        [challenge.public_submission_id],
+      );
+    }
     await appendAudit(client, {
       actorUserId: admin.userId,
       action: "challenge.trashed",
@@ -218,10 +233,11 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
     title: string;
     namespace_slug: string;
     is_anonymous: boolean;
-    author_id: string;
-    author_display_name: string;
-    author_active: boolean;
-    author_scrubbed: boolean;
+    author_id: string | null;
+    author_display_name: string | null;
+    author_active: boolean | null;
+    author_scrubbed: boolean | null;
+    external_company: string | null;
     trashed_by: string | null;
     trashed_at: Date;
     reason: string;
@@ -230,17 +246,19 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
     `select * from (
        select 'challenge' as type, c.number::text as number, c.number::text as challenge_number, c.title, ns.slug as namespace_slug,
               c.is_anonymous, c.author_id, u.display_name as author_display_name, u.active as author_active,
-              u.scrubbed_at is not null as author_scrubbed, tu.display_name as trashed_by, c.trashed_at,
+              u.scrubbed_at is not null as author_scrubbed, ps.company as external_company, tu.display_name as trashed_by, c.trashed_at,
               c.trash_reason as reason, false as restore_blocked
          from challenges c
-         join users u on u.id = c.author_id
+         -- §24.6: an external challenge has no author; the masked projection labels it instead.
+         left join users u on u.id = c.author_id
+         left join public_submissions ps on ps.id = c.public_submission_id
          join namespaces ns on ns.id = c.namespace_id
          left join users tu on tu.id = c.trashed_by
         where c.trashed_at is not null
        union all
        select 'solution' as type, s.number::text as number, c.number::text as challenge_number, c.title, ns.slug as namespace_slug,
               s.is_anonymous, s.author_id, u.display_name as author_display_name, u.active as author_active,
-              u.scrubbed_at is not null as author_scrubbed, tu.display_name as trashed_by, s.trashed_at,
+              u.scrubbed_at is not null as author_scrubbed, null as external_company, tu.display_name as trashed_by, s.trashed_at,
               s.trash_reason as reason, c.trashed_at is not null as restore_blocked
          from solutions s
          join challenges c on c.id = s.challenge_id
@@ -268,6 +286,7 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
       authorDisplayName: r.author_display_name,
       authorActive: r.author_active,
       authorScrubbed: r.author_scrubbed,
+      externalCompany: r.external_company,
     }),
     trashedBy: r.trashed_by ?? "",
     trashedAt: r.trashed_at.toISOString(),

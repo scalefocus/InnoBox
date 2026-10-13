@@ -24,7 +24,7 @@ interface TrashRow {
   challengeNumber: string;
   title: string;
   namespaceSlug: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; external?: boolean; active?: boolean; scrubbed?: boolean };
   trashedBy: string;
   trashedAt: string;
   reason: string;
@@ -193,6 +193,7 @@ function TrashBrowser() {
                   userId={row.author.userId}
                   displayName={row.author.displayName}
                   anonymous={row.author.anonymous}
+                  external={row.author.external === true}
                   deactivated={row.author.active === false}
                   scrubbed={row.author.scrubbed === true}
                 />

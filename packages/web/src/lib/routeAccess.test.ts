@@ -26,6 +26,15 @@ test("the CSP report sink is the one public API route — exact path only", () =
   assert.equal(isPublicPath("/api/csp-reports"), false);
 });
 
+test("the §24 public submission form and its four API routes are public — exact paths only", () => {
+  for (const p of ["/submit", "/submit/confirm", "/api/public/settings", "/api/public/pow", "/api/public/submissions", "/api/public/confirm"]) {
+    assert.equal(isPublicPath(p), true, `${p} should be public`);
+  }
+  for (const p of ["/submit/", "/submit/other", "/submitx", "/api/public", "/api/public/", "/api/public/other", "/api/public/submissions/1"]) {
+    assert.equal(isPublicPath(p), false, `${p} should stay gated`);
+  }
+});
+
 test("static brand images under /brand/ are public (the sidebar logo shows on the signed-out landing)", () => {
   assert.equal(isPublicPath("/brand/innobox-light.png"), true);
   assert.equal(isPublicPath("/brand/innobox-dark.png"), true);

@@ -65,6 +65,14 @@ test("commentNotificationMessage: singular, then the coalesced count with the la
   assert.equal(commentNotificationMessage(3, "CH-412", "Warehouse pick-path", "Bob"), '3 new comments on CH-412 "Warehouse pick-path" — latest by Bob.');
 });
 
+test("commentNotificationMessage: replies to the recipient are counted only when non-zero (§10.2)", async () => {
+  const { commentNotificationMessage } = await import("./social.js");
+  assert.equal(commentNotificationMessage(3, "CH-412", "Pick-path", "Alice", 0), '3 new comments on CH-412 "Pick-path" — latest by Alice.');
+  assert.equal(commentNotificationMessage(3, "CH-412", "Pick-path", "Alice", 1), '3 new comments on CH-412 "Pick-path", 1 reply to you — latest by Alice.');
+  assert.equal(commentNotificationMessage(4, "CH-412", "Pick-path", "Alice", 2), '4 new comments on CH-412 "Pick-path", 2 replies to you — latest by Alice.');
+  assert.equal(commentNotificationMessage(1, "CH-412", "Pick-path", "Alice", 1), 'New reply to you on CH-412 "Pick-path" — by Alice.');
+});
+
 test("assignmentsTransferredMessage: singular, plural, and the 10-number cap with 'and K more'", async () => {
   const { assignmentsTransferredMessage, ASSIGNMENTS_TRANSFERRED_LIST_MAX } = await import("./social.js");
   assert.equal(assignmentsTransferredMessage(["CH-12"]), "1 challenge was reassigned to you from a removed account: CH-12.");

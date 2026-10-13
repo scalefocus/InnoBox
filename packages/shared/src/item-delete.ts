@@ -257,8 +257,8 @@ function purgeAuditAfter(request: PurgeRequest, counts: CascadeCounts, trashedAt
  * outbox row on the challenge or those solutions (§10.3). `number` is the bare digits.
  */
 export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage }, number: string, request: PurgeRequest): Promise<PurgeChallengeResult> {
-  const { rows } = await deps.pool.query<{ id: string; number: string; status: string; author_id: string; namespace_id: string }>(
-    `select id, number::text, status, author_id, namespace_id from challenges where number = $1`,
+  const { rows } = await deps.pool.query<{ id: string; number: string; status: string; author_id: string | null; namespace_id: string; public_submission_id: string | null }>(
+    `select id, number::text, status, author_id, namespace_id, public_submission_id from challenges where number = $1`,
     [number],
   );
   const challenge = rows[0];
@@ -282,6 +282,14 @@ export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage
     await unpinChallenge(client, request.actorUserId, challenge.id, "deleted");
     await client.query(`delete from solutions where challenge_id = $1`, [challenge.id]);
     await client.query(`delete from challenges where id = $1`, [challenge.id]);
+    // §24.8: a purged external challenge takes its submission row — and any mail addressed to the
+    // submitter, sent or not (a sent row would keep the address) — with it.
+    if (challenge.public_submission_id) {
+      await client.query(`delete from notification_outbox where recipient_email is not null and payload->>'submissionId' = $1`, [
+        challenge.public_submission_id,
+      ]);
+      await client.query(`delete from public_submissions where id = $1`, [challenge.public_submission_id]);
+    }
 
     const counts: CascadeCounts = { ...children.counts, solutions: solutionIds.length };
     await appendAudit(client, {

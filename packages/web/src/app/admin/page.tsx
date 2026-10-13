@@ -132,6 +132,7 @@ export default function AdminPage() {
             </Link>
           )}
           {gate === "platform_admin" && <SystemLogCard />}
+          {gate === "platform_admin" && <PublicSubmissionsLinkCard />}
           {gate === "platform_admin" && (
             <Link href="/admin/trash" className="card card-pad">
               <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Trash →</h3>
@@ -173,6 +174,37 @@ function SystemLogCard() {
         )}
       </h3>
       <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>The errors people hit — server failures and refused requests — kept for 90 days.</p>
+    </Link>
+  );
+}
+
+/** The §24.5 console card: links to the public submission review queue, with a 1–9+ bubble of
+ *  confirmed submissions waiting for a decision (hidden at zero). */
+function PublicSubmissionsLinkCard() {
+  const [pending, setPending] = useState(0);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/admin/public-submissions/count", { headers: { accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (live && json) setPending(json.pending ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <Link href="/admin/public-submissions" className="card card-pad">
+      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+        Public submissions →
+        {pending > 0 && (
+          <span className="nav-badge" style={{ marginLeft: 0 }} aria-label={`${pending} waiting for review`}>
+            {pending > 9 ? "9+" : pending}
+          </span>
+        )}
+      </h3>
+      <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Challenges sent from outside the organization, waiting for review.</p>
     </Link>
   );
 }

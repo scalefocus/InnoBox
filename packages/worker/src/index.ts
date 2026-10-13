@@ -18,6 +18,7 @@ import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
+import { runDigestSweep } from "./notifications/digest.js";
 import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps, type WorkerS3Client } from "./attachments/scan.js";
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
@@ -38,6 +39,7 @@ import { startWebhookSweeps } from "./webhooks/deliver.js";
 import { startTriageAssistSweeps } from "./ai/triage.js";
 import { runGamificationBackfill } from "./gamification/backfill.js";
 import { TRASH_PURGE_INTERVAL_MS, runTrashPurgeSweep } from "./trash/purge.js";
+import { runPublicIntakeRetention } from "./public-intake/retention.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -194,6 +196,16 @@ const leaderElection = startLeaderElection(dbUrl, {
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "ai usage prune failed", error: String(err) }));
       }
+      // §24.8 public submissions: unconfirmed rows go after 7 days, contact details 90 days after the
+      // decline or the challenge's close. Pure DB work — it runs whether or not the form is on.
+      try {
+        const summary = await runPublicIntakeRetention(pool);
+        if (summary.deletedUnconfirmed || summary.erased || summary.expiredConfirmMails) {
+          console.log(JSON.stringify({ level: "info", msg: "public submission retention", ...summary }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "public submission retention failed", error: String(err) }));
+      }
       // §11 upload-session GC: reaps chunked-upload sessions abandoned after 2h (backstop to the
       // on-initiate cleanup). The session rows are reaped regardless; the MinIO multipart abort
       // needs the object store and is skipped (logged) without it.
@@ -267,23 +279,31 @@ const leaderElection = startLeaderElection(dbUrl, {
       }),
     );
 
-    // Notification dispatch sweep (§12): frequent, since "delivery is immediate" — no digest in
-    // v1. Transport availability (Graph via the separate e-mail app registration, or SMTP) is
-    // re-checked every sweep, and neither depends on the OIDC/reconciliation credentials — SMTP
-    // e-mail keeps working with no Entra configuration at all.
+    // Notification dispatch sweep (§12): frequent, since delivery is immediate unless the
+    // recipient chose a digest. Transport availability (Graph via the separate e-mail app
+    // registration, or SMTP) is re-checked every sweep, and neither depends on the
+    // OIDC/reconciliation credentials — SMTP e-mail keeps working with no Entra configuration at
+    // all. The §12.1 digest job runs right after, in the same loop (so the two never overlap): it
+    // sends whatever held rows have reached their 06:00 UTC slot, one e-mail per recipient.
     const runSweep = async () => {
+      const transport = { graphEnv: buildGraphMailEnv(), smtpEnv: currentSmtpEnv(), baseUrl: publicBaseUrl() };
       try {
-        const summary = await runNotificationSweep(pool, {
-          graphEnv: buildGraphMailEnv(),
-          smtpEnv: currentSmtpEnv(),
-          baseUrl: publicBaseUrl(),
-        });
+        const summary = await runNotificationSweep(pool, transport);
         recordNotificationSweep(summary);
         if (summary.sent || summary.failed) {
           console.log(JSON.stringify({ level: "info", msg: "notification sweep", ...summary }));
         }
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "notification sweep failed", error: String(err) }));
+      }
+      try {
+        const summary = await runDigestSweep(pool, { ...transport, bootstrapAdminGroup: process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP });
+        recordNotificationSweep(summary);
+        if (summary.sent || summary.failed || summary.dropped || summary.discarded) {
+          console.log(JSON.stringify({ level: "info", msg: "digest sweep", ...summary }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "digest sweep failed", error: String(err) }));
       }
     };
     void runSweep();

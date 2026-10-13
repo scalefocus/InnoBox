@@ -11,10 +11,34 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "1.3.0",
+    version: "1.6.0",
     date: "2026-10-13",
     summary:
       "Platform admins can now move a challenge or solution to the trash instead of deleting it straight away. A trashed item is hidden from everyone at once and deleted for good after 30 days, unless you restore it from the new Trash page in Administration. Delete permanently is still there for content that must not wait.",
+  },
+  {
+    version: "1.5.0",
+    date: "2026-10-13",
+    summary:
+      "Customers and partners can now send a challenge through a public form, without an account. They confirm it by e-mail, and it waits in a new Public submissions queue for a platform admin to accept, decline or discard. Accepted ones join triage as External submission. To switch the form on, set PUBLIC_INTAKE_KEY and write a privacy notice in Platform settings.",
+  },
+  {
+    version: "1.4.0",
+    date: "2026-10-13",
+    summary:
+      "You can now reply to a comment: press Reply and your answer appears indented under it, keeping the conversation in one thread. Long threads show the first three replies with a button for the rest, and your comment notifications tell you when someone replied to you.",
+  },
+  {
+    version: "1.3.0",
+    date: "2026-10-13",
+    summary:
+      "Prefer fewer e-mails? Under E-mail delivery on your profile you can now get a daily or weekly digest of what you follow instead of one e-mail per update. Digests arrive at 06:00 UTC, every day or on Mondays, and skip anything you have already read. Rejections, assignments and admin alerts still arrive at once.",
+  },
+  {
+    version: "1.2.0",
+    date: "2026-10-13",
+    summary:
+      "On phones and tablets, press and hold anyone's profile picture to see their card: job title, department, office and a link to their profile. A quick tap still does what it always did, and scrolling past pictures never opens a card. Tap outside the card or scroll to close it.",
   },
   {
     version: "1.1.0",

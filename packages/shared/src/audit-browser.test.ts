@@ -35,6 +35,7 @@ test("the spec's prefixes are covered", () => {
   assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("ai.%"), "AI provider changes land under Admin");
   assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("survey.%"), "survey response deletes land under Admin");
   assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("gamification.%"), "the gamification backfill lands under Admin");
+  assert.ok(AUDIT_CATEGORY_PATTERNS.admin.includes("public_submission.%"), "public submission decisions land under Admin");
   assert.equal(AUDIT_PAGE_SIZE, 100);
   assert.equal(AUDIT_EXPORT_CAP, 50_000);
 });

@@ -2,12 +2,14 @@
 // service. Bearer-token-guarded (constant time) when METRICS_TOKEN is set; when it is unset the
 // route is open in local dev but disabled (404) in a production build. Emits
 // build/up/process gauges, innobox_csp_violations_total{directive} (§2.4, the CSP report sink) and
-// innobox_ai_calls_total{feature,outcome} (§22.6, this process's AI calls);
+// innobox_ai_calls_total{feature,outcome} (§22.6, this process's AI calls) and
+// innobox_public_submissions_total{outcome} (§24.4, the public form's traffic);
 // the worker exposes the queue/sweep counters (its /metrics handler).
 import { APP_VERSION } from "@innobox/shared/version";
 import { renderMetrics, metricsAccess, type MetricSample } from "@innobox/shared";
 import { aiMetricSamples } from "@innobox/shared/ai";
 import { cspViolationCounts } from "@/lib/csp-report";
+import { publicSubmissionCounts } from "@/lib/public-intake";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,10 @@ export function GET(req: Request): Response {
     samples.push({ name: "innobox_csp_violations_total", help: "CSP violations reported to /api/csp-report, by effective directive", type: "counter", value: count, labels: { directive } });
   }
   samples.push(...aiMetricSamples());
+  // §24.4: the public submission form — the only record of its unauthenticated traffic.
+  for (const { outcome, count } of publicSubmissionCounts()) {
+    samples.push({ name: "innobox_public_submissions_total", help: "Public submission form requests, by outcome", type: "counter", value: count, labels: { outcome } });
+  }
 
   return new Response(renderMetrics(samples), {
     status: 200,

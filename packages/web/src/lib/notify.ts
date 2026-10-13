@@ -6,12 +6,22 @@
 // solution has no title of its own; only the caller knows whether to reference the parent
 // challenge's). Messages must never leak an anonymous author's identity (§9) — callers pass
 // already-masked display names.
+//
+// §12.1 e-mail digests: a follower-type event's outbox row is HELD for a recipient on a daily or
+// weekly digest — written with `digest_due_at` = their next send slot and the facts the digest
+// needs (payload.digest), plus the id of its inbox row (payload.notificationId) so the digest job
+// can drop what was already read. The inbox row is written exactly as for everyone else.
 import type { Pool, PoolClient } from "pg";
 import {
   NOTIFICATION_PREFERENCE_COLUMN,
   applyPreferenceMute,
   commentNotificationMessage,
   finalizeRecipients,
+  isDigestableEvent,
+  nextDigestSlot,
+  type DigestCadence,
+  type DigestFacts,
+  type NotificationEventNumber,
   type NotificationPayload,
   type NotificationPreference,
   type NotificationTarget,
@@ -28,10 +38,49 @@ function withTarget(payload: NotificationPayload, target: NotificationTarget): N
   return payload.parentType && payload.parentId ? payload : { ...payload, parentType: target.parentType, parentId: target.parentId };
 }
 
-async function writeNotifications(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload): Promise<void> {
+/** §12.1 e-mail digests: which §12.1 event a dispatch is, who is on its admin route (an attention
+ *  event — never held), and what the digest says about it. Absent = never held. */
+export interface DigestHold {
+  event: NotificationEventNumber;
+  adminRoute?: string[];
+  facts: DigestFacts;
+}
+
+/** The send slot of every recipient whose copy of this event is held for a digest: the event is
+ *  digestable for them and they chose a daily or weekly digest. */
+async function digestSlots(db: Db, userIds: string[], hold: DigestHold | undefined): Promise<Map<string, Date>> {
+  if (!hold) return new Map();
+  const adminRoute = new Set(hold.adminRoute ?? []);
+  const eligible = userIds.filter((id) => isDigestableEvent(hold.event, adminRoute.has(id)));
+  if (eligible.length === 0) return new Map();
+  const { rows } = await db.query<{ id: string; email_delivery: DigestCadence }>(
+    `select id, email_delivery from users where id = any($1::uuid[]) and email_delivery <> 'immediate'`,
+    [eligible],
+  );
+  const now = new Date();
+  return new Map(rows.map((r) => [r.id, nextDigestSlot(r.email_delivery, now)]));
+}
+
+/** The outbox row for one recipient: immediate, or held until `slot` with the digest's facts. */
+async function writeOutbox(db: Db, userId: string, type: NotificationType, payload: NotificationPayload, notificationId: string, slot: Date | undefined, hold: DigestHold | undefined): Promise<void> {
+  const outboxPayload = { ...payload, notificationId, ...(slot && hold ? { digest: hold.facts } : {}) };
+  await db.query(`insert into notification_outbox (user_id, type, payload, digest_due_at) values ($1, $2, $3, $4)`, [
+    userId,
+    type,
+    JSON.stringify(outboxPayload),
+    slot ?? null,
+  ]);
+}
+
+async function writeNotifications(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload, hold?: DigestHold): Promise<void> {
+  const slots = await digestSlots(db, userIds, hold);
   for (const userId of userIds) {
-    await db.query(`insert into notifications (user_id, type, payload) values ($1, $2, $3)`, [userId, type, JSON.stringify(payload)]);
-    await db.query(`insert into notification_outbox (user_id, type, payload) values ($1, $2, $3)`, [userId, type, JSON.stringify(payload)]);
+    const { rows } = await db.query<{ id: string }>(`insert into notifications (user_id, type, payload) values ($1, $2, $3) returning id`, [
+      userId,
+      type,
+      JSON.stringify(payload),
+    ]);
+    await writeOutbox(db, userId, type, payload, rows[0]!.id, slots.get(userId), hold);
   }
 }
 
@@ -45,6 +94,27 @@ export async function getNamespaceAdminUserIds(db: Db, namespaceId: string): Pro
     [namespaceId],
   );
   return rows.map((r) => r.user_id);
+}
+
+/** Every active platform admin, resolved the only way roles ever are (invariant 1): SCIM-synced
+ *  group membership + role_mappings, plus the bootstrap group while it is configured. */
+export async function getPlatformAdminUserIds(db: Db, bootstrapAdminGroup: string | undefined = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP): Promise<string[]> {
+  const { rows } = await db.query<{ user_id: string }>(
+    `select distinct gm.user_id
+       from group_members gm
+       join groups g on g.id = gm.group_id
+       join users u on u.id = gm.user_id and u.active and u.scrubbed_at is null
+      where exists (select 1 from role_mappings rm where rm.group_external_id = g.external_id and rm.role = 'platform_admin')
+         or ($1::text is not null and g.external_id = $1)`,
+    [bootstrapAdminGroup || null],
+  );
+  return rows.map((r) => r.user_id);
+}
+
+/** An admin attention event about no single item (§12.1 event 14): the in-app row and the outbox
+ *  row for each recipient, deduplicated — never muted, no visibility scope to check. */
+export async function dispatchAdminAttention(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload): Promise<void> {
+  await writeNotifications(db, finalizeRecipients(userIds, null), type, payload);
 }
 
 export async function getNamespaceCommitteeUserIds(db: Db, namespaceId: string): Promise<string[]> {
@@ -103,19 +173,21 @@ async function optedOutOf(db: Db, preference: NotificationPreference, userIds: s
  * recipients deduplicated, recipients outside the item's visibility dropped) and write both
  * the in-app notification and the outbox row for each. `candidates` is whatever raw
  * author/admin/committee/assignee/follower ids the caller gathered for this event. The row's
- * target is the visibility scope unless the payload names its own (`withTarget`).
+ * target is the visibility scope unless the payload names its own (`withTarget`). `digest` makes
+ * a follower-type event holdable for recipients on a digest (§12.1).
  */
 export async function dispatchEvent(
   ctx: NotifyContext,
   visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
-  candidates: string[],
+  candidates: readonly (string | null)[],
   type: NotificationType,
   payload: NotificationPayload,
   mute?: PreferenceMute,
+  digest?: DigestHold,
 ): Promise<void> {
   const recipients = await finalRecipients(ctx, visibilityScope, candidates, mute);
   if (recipients.length === 0) return;
-  await writeNotifications(ctx.pool, recipients, type, withTarget(payload, visibilityScope));
+  await writeNotifications(ctx.pool, recipients, type, withTarget(payload, visibilityScope), digest);
 }
 
 /** Dedup + actor exclusion, then the visibility drop (invariant 2), then the §12.1 preference
@@ -124,7 +196,7 @@ export async function dispatchEvent(
 async function finalRecipients(
   ctx: NotifyContext,
   visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
-  candidates: string[],
+  candidates: readonly (string | null)[],
   mute?: PreferenceMute,
 ): Promise<string[]> {
   const deduped = finalizeRecipients(candidates, ctx.actorId);
@@ -152,31 +224,44 @@ export interface CommentNotification {
   /** The commenter's display name. Comments are never anonymous (§9). */
   latestBy: string;
   link: string;
+  /** §10.2: the author of the comment this one replies to (null on a top-level comment) — their
+   *  row counts it in `repliesToYou`. */
+  replyToAuthorId: string | null;
 }
 
 /** The refreshed message, rendered in SQL with the same text as `commentNotificationMessage` for
- *  count ≥ 2 (a dbtest pins the two together). `n` is the NEW count. */
-const COALESCED_MESSAGE_SQL = (n: string, p: string) =>
-  `format('%s new comments on %s "%s" — latest by %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'challengeTitle', ${p}->>'latestBy')`;
+ *  count ≥ 2 (a dbtest pins the two together). `n` is the NEW count, `r` the NEW `repliesToYou`. */
+const COALESCED_MESSAGE_SQL = (n: string, r: string, p: string) =>
+  `format('%s new comments on %s "%s"%s — latest by %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'challengeTitle',
+          case when ${r} > 0 then format(', %s %s to you', ${r}, case when ${r} = 1 then 'reply' else 'replies' end) else '' end,
+          ${p}->>'latestBy')`;
 
 /**
  * Event 6 delivery: one UNREAD inbox row per recipient per item. The first comment inserts the
  * row and its outbox row (one e-mail); every further comment on the same item while that row is
- * unread refreshes it IN PLACE — count + 1, latest commenter, created_at bumped so it re-sorts to
+ * unread refreshes it IN PLACE — count + 1, `repliesToYou` + 1 when the comment answers the
+ * recipient's own (§10.2), latest commenter, created_at bumped so it re-sorts to
  * the top — through a single atomic upsert against the migration-0024 partial unique index, and
  * writes no outbox row, so the recipient is e-mailed at most once per item until they read it.
- * Once read, the next comment starts a fresh row (and a fresh e-mail).
+ * Once read, the next comment starts a fresh row (and a fresh e-mail). For a recipient on a digest
+ * that outbox row is held (§12.1), and the digest reports the inbox row's count at send time.
  */
 export async function dispatchCoalescedComment(
   ctx: NotifyContext,
-  candidates: string[],
+  candidates: readonly (string | null)[],
   comment: CommentNotification,
   mute?: PreferenceMute,
 ): Promise<void> {
   const recipients = await finalRecipients(ctx, { parentType: comment.parentType, parentId: comment.parentId }, candidates, mute);
+  const hold: DigestHold = {
+    event: 6,
+    facts: { kind: "comment", challengeNumber: comment.challengeNumber.replace(/\D/g, ""), challengeTitle: comment.challengeTitle },
+  };
+  const slots = await digestSlots(ctx.pool, recipients, hold);
   for (const userId of recipients) {
+    const repliesToYou = userId === comment.replyToAuthorId ? 1 : 0;
     const payload = {
-      message: commentNotificationMessage(1, comment.challengeNumber, comment.challengeTitle, comment.latestBy),
+      message: commentNotificationMessage(1, comment.challengeNumber, comment.challengeTitle, comment.latestBy, repliesToYou),
       link: comment.link,
       parentType: comment.parentType,
       parentId: comment.parentId,
@@ -186,9 +271,12 @@ export async function dispatchCoalescedComment(
       latestBy: comment.latestBy,
       latestAt: new Date().toISOString(),
       count: 1,
+      repliesToYou,
     };
     const newCount = `(coalesce((notifications.payload->>'count')::int, 1) + 1)`;
-    const { rows } = await ctx.pool.query<{ inserted: boolean }>(
+    // Rows written before replies existed carry no repliesToYou: they count from 0.
+    const newReplies = `(coalesce((notifications.payload->>'repliesToYou')::int, 0) + (excluded.payload->>'repliesToYou')::int)`;
+    const { rows } = await ctx.pool.query<{ id: string; inserted: boolean }>(
       `insert into notifications (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb)
        on conflict (user_id, (payload->>'parentType'), (payload->>'parentId'))
          where read_at is null and type = 'comment_posted'
@@ -196,17 +284,18 @@ export async function dispatchCoalescedComment(
          payload = notifications.payload
            || jsonb_build_object(
                 'count', ${newCount},
+                'repliesToYou', ${newReplies},
                 'latestBy', excluded.payload->>'latestBy',
                 'latestAt', excluded.payload->>'latestAt',
                 'challengeTitle', excluded.payload->>'challengeTitle',
-                'message', ${COALESCED_MESSAGE_SQL(newCount, "excluded.payload")}),
+                'message', ${COALESCED_MESSAGE_SQL(newCount, newReplies, "excluded.payload")}),
          created_at = now()
-       returning (xmax = 0) as inserted`,
+       returning id, (xmax = 0) as inserted`,
       [userId, JSON.stringify(payload)],
     );
     // A refresh preserves the delivery bookkeeping: the e-mail went out with the first comment.
     if (rows[0]?.inserted) {
-      await ctx.pool.query(`insert into notification_outbox (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb)`, [userId, JSON.stringify(payload)]);
+      await writeOutbox(ctx.pool, userId, "comment_posted", payload, rows[0].id, slots.get(userId), hold);
     }
   }
 }

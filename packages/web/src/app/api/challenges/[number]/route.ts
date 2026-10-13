@@ -67,6 +67,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
       return Response.json({ error: "you must be an admin, committee member, or the assignee to change status" }, { status: 403 });
     case "illegal_transition":
       return Response.json({ error: "that status change is not a permitted transition from the current status" }, { status: 422 });
+    case "external_no_author":
+      return Response.json({ error: "An outside submission has no author who can improve it.", code: "external_no_author" }, { status: 422 });
     case "invalid_status":
       return Response.json({ error: "status must be a valid challenge status" }, { status: 400 });
   }

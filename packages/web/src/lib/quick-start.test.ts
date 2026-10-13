@@ -31,3 +31,8 @@ test("a path that merely starts with the same letters is not exempt", () => {
   assert.equal(isQuickStartExempt("/quick-starter"), false);
   assert.equal(isQuickStartExempt("/apiary"), false);
 });
+
+test("the public submission form is exempt: it answers a signed-in employee like anyone else", () => {
+  for (const path of ["/submit", "/submit/confirm"]) assert.equal(shouldRedirectToQuickStart(path, null), false, path);
+  assert.equal(isQuickStartExempt("/submitted"), false);
+});

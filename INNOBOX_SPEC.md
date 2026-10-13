@@ -1571,12 +1571,6 @@ reveal actions never apply to it.
 
 #### Replies (one level)
 
-> **⚠ GAP-75 · new feature:** comment replies do not exist. Build: a migration adding
-> `comments.thread_root_id` and `comments.reply_to_id` (§5; existing rows stay top-level);
-> the `replyTo` field on comment create and its validation; the grouped rendering in
-> `CommentThread`; the reply count in the coalesced comment notification (§12.1); the
-> audit payload field; and the tests below. Ships as one minor release.
-
 A comment can answer another comment. Threads are **one level deep**: a reply always
 hangs under a **top-level** comment, never under another reply.
 
@@ -1613,10 +1607,11 @@ hangs under a **top-level** comment, never under another reply.
   commenters" route, unless they wrote the reply themselves. The coalesced row's
   payload also counts **`repliesToYou`**: the number of the coalesced comments that
   answer one of the recipient's own comments. The copy adds it when it is non-zero:
-  *"3 new comments on CH-412, 1 reply to you — latest by Alice"*.
+  *"3 new comments on CH-412, 1 reply to you — latest by Alice"*. A row opened by a single
+  reply to the recipient reads *"New reply to you on CH-412 — by Alice"*.
 - **Discussion summary.** The §22.13 summary reads the comments in thread order and
   marks each reply as one, so the model sees who answered whom.
-- **Audit.** `comment.created` gains `replyTo` (the comment id answered), absent on a
+- **Audit.** `comment.posted` gains `replyTo` (the comment id answered), absent on a
   top-level comment.
 - **Tests.** Unit: root resolution (reply to a root, reply to a reply), the
   validation errors, the `repliesToYou` count and the copy. Integration: create a
@@ -2211,12 +2206,6 @@ In-app items are always immediate. The other batching mechanism is the per-item
 coalescing of comment notifications below.
 
 **E-mail digests.**
-
-> **⚠ GAP-76 · new feature:** digests do not exist; every e-mail is sent immediately.
-> Build: a migration adding `users.email_delivery` and `notification_outbox.digest_due_at`
-> (§5); the hold at insert time; the worker's digest job and the digest template; the
-> *E-mail delivery* choice on the profile (§13.5) and in `PATCH /api/profile`; and the
-> tests below. Ships as one minor release.
 
 A user may swap the per-event e-mails about what they follow for **one summary e-mail**
 a day or a week.
@@ -3043,10 +3032,11 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   existing **medium** bubble of that band; large (~96 px) on profile pages and in the
   **reveal dialog** (§9). Bubbles are circular, with initials sized proportionally.
 - **Hover card (§13.8):** a bubble that carries a real user id becomes the trigger for
-  the directory hover card. Two consequences land here: such a bubble becomes
-  **focusable**, and its native `title` tooltip is **dropped** (a browser tooltip
+  the directory hover card. Three consequences land here: such a bubble becomes
+  **focusable**; its native `title` tooltip is **dropped** (a browser tooltip
   would race and overlap the card on the very same element) — the `aria-label` stays,
-  and the card itself shows the name. Bubbles with **no** user id — anonymous authors,
+  and the card itself shows the name; and on touch/pen its native long-press callout
+  (*Save image*) is **suppressed**, because press-and-hold opens the card instead. Bubbles with **no** user id — anonymous authors,
   deleted/unknown actors — keep their `title`, gain no tab stop, and open no card.
 - **Level-progress ring (§23.6):** medium and large bubbles — profile pages, the hover
   card, leaderboard rows and the sidebar account bubble — carry a thin ring showing the
@@ -3090,7 +3080,8 @@ via the account menu (§2.2), positioned above **What's new**.
 
 ### §13.8 Directory hover card
 
-Hovering an **avatar bubble** (§13.6) opens a small floating card with that person's
+Hovering an **avatar bubble** (§13.6) with a mouse — or, on touch and pen,
+**pressing and holding** it — opens a small floating card with that person's
 Entra directory profile — **display name, job title, department, office location** —
 plus a link to their full profile. It is **read-only and display-only**: nothing it
 shows participates in authorization, and nothing it exposes changes state.
@@ -3166,10 +3157,11 @@ Top to bottom, in a fixed max-width (~280 px) card:
   viewer-independent figure per person that names no item, namespace or count of
   hidden items (§23.9).
 
-#### Interaction — pointer (mouse only)
+#### Interaction — mouse
 
 - **Opens** after **300 ms** of continuous hover, and only for a **mouse** pointer
-  (`pointerType === "mouse"`); **closes** ~150 ms after the pointer leaves **both** the
+  (`pointerType === "mouse"`) — touch and pen never hover-open; they use the
+  press-and-hold below. **Closes** ~150 ms after the pointer leaves **both** the
   bubble and the card, so the pointer can travel from one into the other.
 - **The card is hoverable and interactive** — that grace period exists precisely so the
   "View profile" link is clickable.
@@ -3181,15 +3173,44 @@ Top to bottom, in a fixed max-width (~280 px) card:
   fade-and-scale on open and an instant close — the same as every other popover in the
   app — and nothing at all under `prefers-reduced-motion: reduce`.
 
-#### Interaction — touch
+#### Interaction — touch and pen (press and hold)
 
-- **There is no card on touch or pen** — the pointer-type gate above is the whole
-  mechanism. No long-press affordance, and therefore **no** `-webkit-touch-callout` /
-  `contextmenu` suppression on avatars: they stay long-pressable ("Save image") on
-  mobile and right-clickable on desktop exactly as today, and a touch on an avatar
-  inside a clickable triage row still opens the row (§14.1).
-- On touch, the directory profile is reached through the **profile page** (§13.5) — the
-  same destination the card's link points at.
+- **Press and hold ~500 ms** on a card-bearing bubble opens the **same card** — same
+  contents, same portal, same viewport clamping and flipping, same one-card-at-a-time
+  rule, same open animation. **Pen** behaves exactly like touch
+  (`pointerType` `"touch"` or `"pen"`); the mouse keeps the 300 ms hover above.
+- **Movement cancels.** A press that moves more than **~10 px** from where it started,
+  or is lifted before the threshold, aborts without opening — scrolling or flicking a
+  list of avatars (the leaderboard, a long comment thread) must never pop a card.
+  `pointercancel` (the browser taking over for a scroll) aborts too.
+- **A hold never fires the bubble's enclosing control.** Many bubbles sit inside a link,
+  card or clickable row (challenge and solution cards, search results, triage rows);
+  once the hold threshold is crossed, the click that would otherwise fire on release is
+  **swallowed**, so opening the card never also navigates or opens the row.
+- **A short tap is unchanged.** Tapping an avatar does exactly what it does today —
+  follows the enclosing link, opens the triage row (§14.1), or nothing. The card is
+  strictly a press-and-hold affordance on touch; there is no tap-to-open.
+- **Native long-press interference is suppressed — on touch only, and only on
+  card-bearing bubbles.** Those bubbles carry `-webkit-touch-callout: none` and
+  `user-select: none`, and a `contextmenu` event is cancelled **only when it was
+  produced by a touch or pen press** (Android raises one at the long-press threshold).
+  **Accepted consequence:** a card-bearing avatar can no longer be long-pressed to
+  *Save / Copy image* on iOS or Android. **Unchanged, deliberately:** desktop
+  **right-click** on any avatar still opens the browser's context menu, and
+  **anonymous / no-id bubbles** keep their native touch behaviour entirely — they carry
+  no handlers at all, so (as above) nothing distinguishes one anonymous author from
+  another.
+- **Dismissal:** a **tap anywhere outside** the card, **scrolling** the page or any
+  scroll container (a hold-opened card **closes** on scroll, whereas a mouse- or
+  focus-opened one keeps re-anchoring to its bubble), or **pressing and holding the same bubble again**. There is **no
+  auto-timeout**. Pressing and holding a *different* bubble swaps to that person's card
+  (one card at a time). Tapping **"View profile"** inside the card navigates as usual.
+- **Data fetch** fires at the hold threshold — the same moment the card opens — so a
+  touch that scrolls past a hundred bubbles issues **zero** card requests.
+- **No haptics.** `navigator.vibrate` is not used (iOS Safari lacks it, and a buzz on
+  only some phones is inconsistent); the card appearing is the feedback.
+- The **profile page** (§13.5) remains the other route to the same information — the
+  destination the card's link points at.
 
 #### Keyboard & accessibility
 
@@ -3223,7 +3244,8 @@ Top to bottom, in a fixed max-width (~280 px) card:
   id (validated as a UUID before it reaches Postgres). Server-side this is a single
   indexed primary-key lookup — no aggregate, no new cache layer.
 - **Lazy, never on mount.** The fetch fires on the **same 300 ms hover-intent
-  threshold that opens the card** (or immediately on focus), so a leaderboard with 100
+  threshold that opens the card** (or at the ~500 ms press-and-hold threshold on
+  touch and pen, or immediately on focus), so a leaderboard with 100
   bubbles issues **zero** card requests until someone actually hovers one.
 - **Deduped and cached client-side** per user id for the page session: two bubbles for
   the same person share one request, and re-hovering is instant with no flicker.
@@ -5548,8 +5570,8 @@ transitions, assigns, rejects or notifies (invariant 6).
 - **Where.** A **"Summarize discussion"** control above a challenge's or solution's
   comment thread once it holds **at least 10** visible comments; on demand, for any
   viewer who can see the item.
-- **Egress:** the item's title, and the comments' **text only**, oldest first, each
-  labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
+- **Egress:** the item's title, and the comments' **text only**, in §10.2 thread order
+  (each reply marked with the participant it answers), each labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
   appearance — **never** marking which participant is the item's author, and never a
   name. Soft-deleted comments are excluded.
 - **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
@@ -5886,20 +5908,6 @@ next start.
   profile and the inbox row.
 
 ## §24 Public submissions (outside the organization)
-
-> **⚠ GAP-74 · new feature:** public submissions do not exist. Build: a migration
-> (`public_submissions`, `challenges.public_submission_id` and the nullable
-> `author_id` with its check constraint, `notification_outbox.recipient_email`, the
-> `public_submissions_enabled` and `public_privacy_notice` settings, grants — the app
-> role gets INSERT/SELECT/UPDATE/DELETE on `public_submissions`); the `/submit` and
-> `/submit/confirm` pages outside AppShell; the proof-of-work issue and verify
-> helpers; the four public API routes and their middleware allowlist; the per-IP and
-> per-address limits; the submitter e-mails; the `/admin/public-submissions`
-> review queue and its console card; the accept, decline, discard and erase actions;
-> the "External submission" author rendering everywhere an author is shown; the §14.3
-> settings card; event 14 (§12.1); the worker's retention job; the
-> `PUBLIC_INTAKE_KEY` wiring (§2.3); and the tests in §24.9. Ships as one minor
-> release.
 
 People outside the organization — customers, partners, suppliers — can send a
 challenge through a **public web form**, without an account and without signing in.
@@ -6374,7 +6382,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, author (masked), like and solution counts, `url`. |
 | `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, client name, author (masked), assignee, dates, like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
-| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; once §10.2 replies exist, each row carries its thread fields. Deleted comments appear as the web shows them. |
+| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
 | `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
@@ -6389,7 +6397,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `edit_challenge` | §10.1 author edit — title, description, impact area — inside the author's edit window only. |
 | `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
-| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with `replyTo` once replies exist). Never anonymous, as on the web. |
+| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
 | `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
 
 Errors are MCP tool errors carrying the same plain message the API returns (§21.9 — no

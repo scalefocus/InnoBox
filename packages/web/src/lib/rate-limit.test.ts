@@ -72,6 +72,10 @@ test("survey: its own 10-per-minute bucket (§13.10)", () => {
   resetRateLimits();
   const t0 = 1_800_000_000_000;
   assert.deepEqual(RATE_LIMITS.survey, { limit: 10, windowMs: 60_000 });
+  // §24.4: the public submission routes, per client IP.
+  assert.deepEqual(RATE_LIMITS["public-read"], { limit: 30, windowMs: 60_000 });
+  assert.deepEqual(RATE_LIMITS["public-submit"], { limit: 5, windowMs: 3_600_000 });
+  assert.deepEqual(RATE_LIMITS["public-confirm"], { limit: 20, windowMs: 3_600_000 });
   for (let i = 0; i < 10; i++) assert.equal(takeToken("u1", "survey", t0, 1).ok, true);
   assert.equal(takeToken("u1", "survey", t0, 1).ok, false);
   assert.equal(takeToken("u1", "mutation", t0, 1).ok, true, "the survey bucket does not drain mutation");

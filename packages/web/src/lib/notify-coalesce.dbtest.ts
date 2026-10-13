@@ -3,7 +3,8 @@
 // latest commenter, message, re-sorted) with no new outbox row; a separate item gets its own row;
 // reading (by id, or by opening the challenge, which also covers its solutions) ends the
 // coalescing and the next comment starts a fresh row with a fresh e-mail. The SQL-rendered message
-// matches the shared JS renderer. Self-skips when DATABASE_URL is unset.
+// matches the shared JS renderer, including the §10.2 "replies to you" count. Self-skips when
+// DATABASE_URL is unset.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -49,7 +50,7 @@ test(
       const solutionId = sol[0]!.id;
 
       const resolveRoles = async () => buildRoleSet([], { globalNamespaceId: globalId });
-      const post = (actorId: string, latestBy: string, parentType: "challenge" | "solution" = "challenge") =>
+      const post = (actorId: string, latestBy: string, parentType: "challenge" | "solution" = "challenge", replyToAuthorId: string | null = null) =>
         dispatchCoalescedComment({ pool, actorId, resolveRoles }, [reader], {
           parentType,
           parentId: parentType === "challenge" ? challengeId : solutionId,
@@ -58,10 +59,11 @@ test(
           challengeTitle: `Coalesce ${stamp}`,
           latestBy,
           link: `/challenges/${ch[0]!.number}`,
+          replyToAuthorId,
         });
       const unread = async () =>
         (
-          await pool.query<{ id: string; payload: { count: number; message: string; latestBy: string; parentType: string }; created_at: Date }>(
+          await pool.query<{ id: string; payload: { count: number; repliesToYou: number; message: string; latestBy: string; parentType: string }; created_at: Date }>(
             `select id, payload, created_at from notifications where user_id = $1 and type = 'comment_posted' and read_at is null order by created_at`,
             [reader],
           )
@@ -99,6 +101,18 @@ test(
       assert.equal(await outboxCount(), 2);
 
       // Reading by id ends coalescing for that item only.
+      // §10.2: replies to the reader's own comments are counted; a reply to someone else is not.
+      assert.equal(rows.find((r) => r.payload.parentType === "challenge")!.payload.repliesToYou, 0);
+      await post(bob, "Dbtest bob", "challenge", reader);
+      await post(alice, "Dbtest alice", "challenge", bob);
+      await post(alice, "Dbtest alice", "challenge", reader);
+      const replied = (await unread()).find((r) => r.payload.parentType === "challenge")!;
+      assert.equal(replied.id, firstId, "replies coalesce into the same row");
+      assert.equal(replied.payload.count, 6);
+      assert.equal(replied.payload.repliesToYou, 2);
+      assert.equal(replied.payload.message, commentNotificationMessage(6, challengeNumber, `Coalesce ${stamp}`, "Dbtest alice", 2), "the SQL renderer matches with replies");
+      assert.equal(await outboxCount(), 2, "still no new e-mail while unread");
+
       assert.equal(await markOneRead(pool, reader, firstId), true);
       await post(bob, "Dbtest bob");
       rows = await unread();
@@ -106,11 +120,19 @@ test(
       const fresh = rows.find((r) => r.payload.parentType === "challenge")!;
       assert.notEqual(fresh.id, firstId);
       assert.equal(fresh.payload.count, 1);
+      assert.equal(fresh.payload.repliesToYou, 0, "the count restarts with the row");
       assert.equal(await outboxCount(), 3, "a fresh row means a fresh e-mail");
 
       // Opening the challenge reads its own AND its solutions' rows.
       await markCommentNotificationsReadForChallenge(pool, reader, challengeId);
       assert.equal((await unread()).length, 0);
+
+      // A reply that opens a fresh row says so from the start (the e-mail carries this text).
+      await post(bob, "Dbtest bob", "challenge", reader);
+      const opened = (await unread())[0]!;
+      assert.equal(opened.payload.repliesToYou, 1);
+      assert.equal(opened.payload.message, commentNotificationMessage(1, challengeNumber, `Coalesce ${stamp}`, "Dbtest bob", 1));
+      await markCommentNotificationsReadForChallenge(pool, reader, challengeId);
 
       // The commenter is never notified about their own comment.
       await dispatchCoalescedComment({ pool, actorId: reader, resolveRoles }, [reader], {
@@ -121,6 +143,7 @@ test(
         challengeTitle: `Coalesce ${stamp}`,
         latestBy: "Dbtest reader",
         link: "/x",
+        replyToAuthorId: null,
       });
       assert.equal((await unread()).length, 0);
     } finally {

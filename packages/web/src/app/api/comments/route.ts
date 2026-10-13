@@ -2,7 +2,8 @@
 // Posting fires notification event 6 (§12.1) to the item author, other commenters, and
 // followers — never the commenter. Messages always reference the parent CHALLENGE's
 // number/title (solutions have no title of their own) but recipients are scoped to the
-// comment's actual parent (a solution's own commenters/followers).
+// comment's actual parent (a solution's own commenters/followers). A reply (§10.2, `replyTo`) is a
+// comment like any other; its row also counts it as a reply for the author of the comment answered.
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchCoalescedComment, getFollowerUserIds, getOtherCommenterUserIds } from "@/lib/notify";
@@ -40,19 +41,25 @@ async function handlePOST(req: Request): Promise<Response> {
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
   const viewer = { userId: gate.user.id, roles: gate.user.roles };
-  const result = await createComment(pool, viewer, parsed.value.parentType, parsed.value.parentId, parsed.value.body);
+  const result = await createComment(pool, viewer, parsed.value.parentType, parsed.value.parentId, parsed.value.body, undefined, parsed.value.replyTo);
 
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
   if (result.status === "trashed") return trashedResponse();
   if (result.status === "invalid") return Response.json({ error: result.error }, { status: 400 });
+  if (result.status === "unprocessable") return Response.json({ error: result.error }, { status: 422 });
 
-  await fireCommentNotification(parsed.value.parentType, parsed.value.parentId, result.comment.authorId).catch((err) =>
+  await fireCommentNotification(parsed.value.parentType, parsed.value.parentId, result.comment.authorId, result.replyToAuthorId).catch((err) =>
     console.error(JSON.stringify({ level: "error", msg: "comment notification failed", error: String(err) })),
   );
   return Response.json({ comment: result.comment }, { status: 201 });
 }
 
-async function fireCommentNotification(parentType: "challenge" | "solution", parentId: string, commenterId: string): Promise<void> {
+async function fireCommentNotification(
+  parentType: "challenge" | "solution",
+  parentId: string,
+  commenterId: string,
+  replyToAuthorId: string | null,
+): Promise<void> {
   const item =
     parentType === "challenge"
       ? await pool
@@ -94,6 +101,7 @@ async function fireCommentNotification(parentType: "challenge" | "solution", par
   // §12.1 event 6, coalesced: one unread row per recipient per item — at most one e-mail until read.
   await dispatchCoalescedComment(
     { pool, actorId: commenterId, resolveRoles: resolveRolesForUser },
+    // The author of a comment answered is always among the other commenters (§10.2).
     [item.authorId, ...otherCommenters, ...followers],
     {
       parentType,
@@ -103,6 +111,7 @@ async function fireCommentNotification(parentType: "challenge" | "solution", par
       challengeTitle: item.challengeTitle,
       latestBy: who[0]?.display_name ?? "Someone",
       link: itemHref(item.challengeNumber, item.solutionNumber),
+      replyToAuthorId,
     },
     // §12.1: mutable for every recipient route — an author who mutes it hears no comments on
     // their own item either.

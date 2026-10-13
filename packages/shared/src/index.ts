@@ -24,6 +24,9 @@ export * from "./challenges.js";
 
 // Phase 3 (INNOBOX_SPEC.md §10.2, §12, §7.3): comments, notifications, assignment.
 export * from "./social.js";
+// §10.2 replies: root resolution and thread grouping. Client-safe, also exposed at
+// `@innobox/shared/comment-threads`.
+export * from "./comment-threads.js";
 
 // §11 attachments: content-type allowlist, object-key builder, ClamAV INSTREAM protocol,
 // and the anonymity-safe client projection (invariant 3). Pure — storage/socket/DB live in
@@ -62,6 +65,10 @@ export * from "./system-banner.js";
 // PATCH parser. Client-safe, also exposed at `@innobox/shared/notification-preferences`.
 export * from "./notification-preferences.js";
 
+// §12.1 e-mail digests: the delivery choice, which events a digest holds, the fixed send slots and
+// the digest's copy. Client-safe, also exposed at `@innobox/shared/email-digest`.
+export * from "./email-digest.js";
+
 // §14.10 identity sync diagnostics: the SCIM last-request settings key + throttle, and the pure
 // explanation selection. Client-safe, also exposed at `@innobox/shared/identity-sync`.
 export * from "./identity-sync.js";
@@ -91,3 +98,9 @@ export * from "./survey-results.js";
 // `@innobox/shared/gamification`) and the server-only award writer web and worker share.
 export * from "./gamification.js";
 export * from "./gamification-awards.js";
+
+// §24 public submissions: the form's limits and validation, the abuse decisions, retention dates,
+// the privacy-notice links and the submitter e-mails (client-safe, also at
+// `@innobox/shared/public-intake`), and the server-only proof-of-work and confirmation token.
+export * from "./public-intake.js";
+export * from "./public-intake-pow.js";

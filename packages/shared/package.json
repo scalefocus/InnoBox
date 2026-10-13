@@ -46,6 +46,10 @@
       "types": "./dist/notification-preferences.d.ts",
       "default": "./dist/notification-preferences.js"
     },
+    "./email-digest": {
+      "types": "./dist/email-digest.d.ts",
+      "default": "./dist/email-digest.js"
+    },
     "./identity-sync": {
       "types": "./dist/identity-sync.d.ts",
       "default": "./dist/identity-sync.js"
@@ -81,6 +85,14 @@
     "./gamification": {
       "types": "./dist/gamification.d.ts",
       "default": "./dist/gamification.js"
+    },
+    "./public-intake": {
+      "types": "./dist/public-intake.d.ts",
+      "default": "./dist/public-intake.js"
+    },
+    "./comment-threads": {
+      "types": "./dist/comment-threads.d.ts",
+      "default": "./dist/comment-threads.js"
     }
   },
   "scripts": {

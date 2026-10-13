@@ -1,9 +1,10 @@
 // Data layer for /api/comments (INNOBOX_SPEC.md §10.2). Comments are never anonymous (§9) —
 // the real author always shows. Visibility mirrors the parent challenge/solution (§4.3).
 // Deleted comments (self or moderator) always render as "Comment removed by a moderator",
-// preserving thread continuity, per spec. Every write is audited atomically.
+// preserving thread continuity, per spec. Every write is audited atomically. Replies are one level
+// deep (§10.2 "Replies"): a reply files under its thread's top-level comment.
 import type { Pool } from "pg";
-import { canEditOwnComment, validateCommentBody } from "@innobox/shared";
+import { canEditOwnComment, resolveReplyTarget, validateCommentBody } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { awardCommentPosted } from "../../../lib/gamification";
@@ -24,6 +25,10 @@ export interface CommentRecord {
   /** §13.6: the author is GDPR-scrubbed — the bubble renders "Deleted User" from this flag. */
   authorScrubbed: boolean;
   body: string;
+  /** §10.2: the top-level comment this reply belongs to; null on a top-level comment. */
+  threadRootId: string | null;
+  /** §10.2: the comment this reply answers (the root, or another reply in the thread). */
+  replyToId: string | null;
   createdAt: string;
   editedAt: string | null;
   deleted: boolean;
@@ -43,6 +48,8 @@ interface CommentRow {
   author_active: boolean;
   author_scrubbed: boolean;
   body: string;
+  thread_root_id: string | null;
+  reply_to_id: string | null;
   created_at: Date;
   edited_at: Date | null;
   deleted_at: Date | null;
@@ -61,6 +68,8 @@ function toRecord(row: CommentRow, viewer: Viewer, isNamespaceAdmin: boolean, au
     authorActive: row.author_active,
     authorScrubbed: row.author_scrubbed,
     body: deleted ? MODERATION_PLACEHOLDER : row.body,
+    threadRootId: row.thread_root_id,
+    replyToId: row.reply_to_id,
     createdAt: row.created_at.toISOString(),
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
     deleted,
@@ -96,11 +105,11 @@ export async function listComments(
   const committee = namespaceId !== null ? await committeeMemberIds(pool, namespaceId) : new Set<string>();
   const { rows } = await pool.query<CommentRow>(
     `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-            c.body, c.created_at, c.edited_at, c.deleted_at
+            c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at
        from comments c
        join users u on u.id = c.author_id
       where c.parent_type = $1 and c.parent_id = $2
-      order by c.created_at asc`,
+      order by c.created_at asc, c.id asc`,
     [parentType, parentId],
   );
   const records = rows.map((r) => toRecord(r, viewer, isNamespaceAdmin, committee.has(r.author_id)));
@@ -108,7 +117,24 @@ export async function listComments(
   return access === "trashed" ? records.map((r) => ({ ...r, canEdit: false, canModerate: false })) : records;
 }
 
-export type CreateCommentResult = { status: "ok"; comment: CommentRecord } | { status: "not_found" } | { status: "trashed" } | { status: "invalid"; error: string };
+export type CreateCommentResult =
+  /** `replyToAuthorId` (§10.2): who wrote the comment answered — null on a top-level comment. */
+  | { status: "ok"; comment: CommentRecord; replyToAuthorId: string | null }
+  | { status: "not_found" }
+  /** §10.4: the item is in the trash (only a platform admin can see it there) — answered as 409. */
+  | { status: "trashed" }
+  | { status: "invalid"; error: string }
+  /** §10.2: the reply target is missing, on another item, or soft-deleted — answered as 422. */
+  | { status: "unprocessable"; error: string };
+
+interface ReplyTargetRow {
+  id: string;
+  parent_type: "challenge" | "solution";
+  parent_id: string;
+  author_id: string;
+  thread_root_id: string | null;
+  deleted_at: Date | null;
+}
 
 export async function createComment(
   pool: Pool,
@@ -117,16 +143,41 @@ export async function createComment(
   parentId: string,
   rawBody: unknown,
   onCreated?: (comment: CommentRecord) => Promise<void>,
+  replyTo: string | null = null,
 ): Promise<CreateCommentResult> {
+  // The parent's visibility decides first: a reply on an item the caller can't see is a 404. A
+  // trashed item takes no comment or reply (§10.4).
   const access = await getParentAccess(pool, viewer, parentType, parentId);
-  if (access !== "live") return { status: access }; // §10.4: a trashed item is read-only
+  if (access !== "live") return { status: access };
   const validated = validateCommentBody(rawBody);
   if (!validated.ok) return { status: "invalid", error: validated.error };
 
   return inTransaction(pool, async (client) => {
+    let thread: { threadRootId: string; replyToId: string; replyToAuthorId: string } | null = null;
+    if (replyTo !== null) {
+      // FOR SHARE: a soft delete of the target waits until this reply commits, so a reply never
+      // lands on a comment removed while it was being written. A non-uuid id names no comment.
+      const target = isUuid(replyTo)
+        ? (
+            await client.query<ReplyTargetRow>(
+              `select id, parent_type, parent_id, author_id, thread_root_id, deleted_at from comments where id = $1 for share`,
+              [replyTo],
+            )
+          ).rows[0]
+        : undefined;
+      const resolved = resolveReplyTarget(
+        target
+          ? { id: target.id, parentType: target.parent_type, parentId: target.parent_id, threadRootId: target.thread_root_id, deleted: target.deleted_at !== null }
+          : null,
+        { parentType, parentId },
+      );
+      if (!resolved.ok) return { status: "unprocessable", error: resolved.error };
+      thread = { threadRootId: resolved.threadRootId, replyToId: resolved.replyToId, replyToAuthorId: target!.author_id };
+    }
     const { rows } = await client.query<{ id: string; created_at: Date }>(
-      `insert into comments (parent_type, parent_id, author_id, body) values ($1, $2, $3, $4) returning id, created_at`,
-      [parentType, parentId, viewer.userId, validated.value],
+      `insert into comments (parent_type, parent_id, author_id, body, thread_root_id, reply_to_id)
+       values ($1, $2, $3, $4, $5, $6) returning id, created_at`,
+      [parentType, parentId, viewer.userId, validated.value, thread?.threadRootId ?? null, thread?.replyToId ?? null],
     );
     const inserted = rows[0]!;
     await appendAudit(client, {
@@ -134,7 +185,8 @@ export async function createComment(
       action: "comment.posted",
       targetType: "comment",
       targetId: inserted.id,
-      after: { parentType, parentId },
+      // §10.2: `replyTo` names the comment answered; absent on a top-level comment.
+      after: thread ? { parentType, parentId, replyTo: thread.replyToId } : { parentType, parentId },
     });
     // §23.2: comment_posted for the commenter (daily-capped; comments are never anonymous).
     await awardCommentPosted(client, { id: inserted.id, authorId: viewer.userId, parentType, parentId });
@@ -154,6 +206,8 @@ export async function createComment(
         author_active: userRows[0]?.active ?? true,
         author_scrubbed: userRows[0]?.scrubbed ?? false,
         body: validated.value,
+        thread_root_id: thread?.threadRootId ?? null,
+        reply_to_id: thread?.replyToId ?? null,
         created_at: inserted.created_at,
         edited_at: null,
         deleted_at: null,
@@ -163,7 +217,7 @@ export async function createComment(
       namespaceId !== null && viewer.roles.isCommittee(namespaceId),
     );
     if (onCreated) await onCreated(comment);
-    return { status: "ok", comment };
+    return { status: "ok", comment, replyToAuthorId: thread?.replyToAuthorId ?? null };
   });
 }
 
@@ -203,7 +257,7 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: full } = await client.query<CommentRow>(
       `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-              c.body, c.created_at, c.edited_at, c.deleted_at
+              c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at
          from comments c join users u on u.id = c.author_id where c.id = $1`,
       [commentId],
     );
