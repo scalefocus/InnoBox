@@ -3045,10 +3045,11 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
   existing **medium** bubble of that band; large (~96 px) on profile pages and in the
   **reveal dialog** (§9). Bubbles are circular, with initials sized proportionally.
 - **Hover card (§13.8):** a bubble that carries a real user id becomes the trigger for
-  the directory hover card. Two consequences land here: such a bubble becomes
-  **focusable**, and its native `title` tooltip is **dropped** (a browser tooltip
+  the directory hover card. Three consequences land here: such a bubble becomes
+  **focusable**; its native `title` tooltip is **dropped** (a browser tooltip
   would race and overlap the card on the very same element) — the `aria-label` stays,
-  and the card itself shows the name. Bubbles with **no** user id — anonymous authors,
+  and the card itself shows the name; and on touch/pen its native long-press callout
+  (*Save image*) is **suppressed**, because press-and-hold opens the card instead. Bubbles with **no** user id — anonymous authors,
   deleted/unknown actors — keep their `title`, gain no tab stop, and open no card.
 - **Level-progress ring (§23.6):** medium and large bubbles — profile pages, the hover
   card, leaderboard rows and the sidebar account bubble — carry a thin ring showing the
@@ -3092,7 +3093,8 @@ via the account menu (§2.2), positioned above **What's new**.
 
 ### §13.8 Directory hover card
 
-Hovering an **avatar bubble** (§13.6) opens a small floating card with that person's
+Hovering an **avatar bubble** (§13.6) with a mouse — or, on touch and pen,
+**pressing and holding** it — opens a small floating card with that person's
 Entra directory profile — **display name, job title, department, office location** —
 plus a link to their full profile. It is **read-only and display-only**: nothing it
 shows participates in authorization, and nothing it exposes changes state.
@@ -3168,10 +3170,11 @@ Top to bottom, in a fixed max-width (~280 px) card:
   viewer-independent figure per person that names no item, namespace or count of
   hidden items (§23.9).
 
-#### Interaction — pointer (mouse only)
+#### Interaction — mouse
 
 - **Opens** after **300 ms** of continuous hover, and only for a **mouse** pointer
-  (`pointerType === "mouse"`); **closes** ~150 ms after the pointer leaves **both** the
+  (`pointerType === "mouse"`) — touch and pen never hover-open; they use the
+  press-and-hold below. **Closes** ~150 ms after the pointer leaves **both** the
   bubble and the card, so the pointer can travel from one into the other.
 - **The card is hoverable and interactive** — that grace period exists precisely so the
   "View profile" link is clickable.
@@ -3183,15 +3186,44 @@ Top to bottom, in a fixed max-width (~280 px) card:
   fade-and-scale on open and an instant close — the same as every other popover in the
   app — and nothing at all under `prefers-reduced-motion: reduce`.
 
-#### Interaction — touch
+#### Interaction — touch and pen (press and hold)
 
-- **There is no card on touch or pen** — the pointer-type gate above is the whole
-  mechanism. No long-press affordance, and therefore **no** `-webkit-touch-callout` /
-  `contextmenu` suppression on avatars: they stay long-pressable ("Save image") on
-  mobile and right-clickable on desktop exactly as today, and a touch on an avatar
-  inside a clickable triage row still opens the row (§14.1).
-- On touch, the directory profile is reached through the **profile page** (§13.5) — the
-  same destination the card's link points at.
+- **Press and hold ~500 ms** on a card-bearing bubble opens the **same card** — same
+  contents, same portal, same viewport clamping and flipping, same one-card-at-a-time
+  rule, same open animation. **Pen** behaves exactly like touch
+  (`pointerType` `"touch"` or `"pen"`); the mouse keeps the 300 ms hover above.
+- **Movement cancels.** A press that moves more than **~10 px** from where it started,
+  or is lifted before the threshold, aborts without opening — scrolling or flicking a
+  list of avatars (the leaderboard, a long comment thread) must never pop a card.
+  `pointercancel` (the browser taking over for a scroll) aborts too.
+- **A hold never fires the bubble's enclosing control.** Many bubbles sit inside a link,
+  card or clickable row (challenge and solution cards, search results, triage rows);
+  once the hold threshold is crossed, the click that would otherwise fire on release is
+  **swallowed**, so opening the card never also navigates or opens the row.
+- **A short tap is unchanged.** Tapping an avatar does exactly what it does today —
+  follows the enclosing link, opens the triage row (§14.1), or nothing. The card is
+  strictly a press-and-hold affordance on touch; there is no tap-to-open.
+- **Native long-press interference is suppressed — on touch only, and only on
+  card-bearing bubbles.** Those bubbles carry `-webkit-touch-callout: none` and
+  `user-select: none`, and a `contextmenu` event is cancelled **only when it was
+  produced by a touch or pen press** (Android raises one at the long-press threshold).
+  **Accepted consequence:** a card-bearing avatar can no longer be long-pressed to
+  *Save / Copy image* on iOS or Android. **Unchanged, deliberately:** desktop
+  **right-click** on any avatar still opens the browser's context menu, and
+  **anonymous / no-id bubbles** keep their native touch behaviour entirely — they carry
+  no handlers at all, so (as above) nothing distinguishes one anonymous author from
+  another.
+- **Dismissal:** a **tap anywhere outside** the card, **scrolling** the page or any
+  scroll container (a hold-opened card **closes** on scroll, whereas a mouse- or
+  focus-opened one keeps re-anchoring to its bubble), or **pressing and holding the same bubble again**. There is **no
+  auto-timeout**. Pressing and holding a *different* bubble swaps to that person's card
+  (one card at a time). Tapping **"View profile"** inside the card navigates as usual.
+- **Data fetch** fires at the hold threshold — the same moment the card opens — so a
+  touch that scrolls past a hundred bubbles issues **zero** card requests.
+- **No haptics.** `navigator.vibrate` is not used (iOS Safari lacks it, and a buzz on
+  only some phones is inconsistent); the card appearing is the feedback.
+- The **profile page** (§13.5) remains the other route to the same information — the
+  destination the card's link points at.
 
 #### Keyboard & accessibility
 
@@ -3225,7 +3257,8 @@ Top to bottom, in a fixed max-width (~280 px) card:
   id (validated as a UUID before it reaches Postgres). Server-side this is a single
   indexed primary-key lookup — no aggregate, no new cache layer.
 - **Lazy, never on mount.** The fetch fires on the **same 300 ms hover-intent
-  threshold that opens the card** (or immediately on focus), so a leaderboard with 100
+  threshold that opens the card** (or at the ~500 ms press-and-hold threshold on
+  touch and pen, or immediately on focus), so a leaderboard with 100
   bubbles issues **zero** card requests until someone actually hovers one.
 - **Deduped and cached client-side** per user id for the page session: two bubbles for
   the same person share one request, and re-hovering is instant with no flicker.
