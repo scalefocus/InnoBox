@@ -199,6 +199,126 @@ test(
   },
 );
 
+test(
+  "§10.2 replies: root resolution, the 422 refusals, the 404 on an invisible item, the audit field",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool, randomUUID } = await importDeps();
+    const { buildRoleSet, REPLY_NOT_ON_ITEM, REPLY_TO_REMOVED } = await import("@innobox/shared");
+    const { createChallenge, setChallengeStatus } = await import("../challenges/store");
+    const { createComment, deleteComment, editComment, listComments } = await import("./store");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const globalId = (await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`)).rows[0]!.id;
+      const nsId = (
+        await pool.query<{ id: string }>(`insert into namespaces (slug, display_name) values ($1, 'Dbtest Replies NS') returning id`, [`dbtest-replies-${stamp}`])
+      ).rows[0]!.id;
+      const mkUser = async (label: string) =>
+        (
+          await pool.query<{ id: string }>(`insert into users (external_id, user_name, display_name) values ($1, $2, $3) returning id`, [
+            `dbtest-replies-${label}-${stamp}`,
+            `dbtest-replies-${label}-${stamp}@example.test`,
+            `Dbtest ${label}`,
+          ])
+        ).rows[0]!.id;
+      const member = (userId: string, role: "member" | "namespace_admin" = "member") => ({
+        userId,
+        roles: buildRoleSet([{ role, namespaceId: nsId }], { globalNamespaceId: globalId }),
+      });
+      const author = member(await mkUser("author"));
+      const admin = member(await mkUser("admin"), "namespace_admin");
+      const ann = member(await mkUser("ann"));
+      const ben = member(await mkUser("ben"));
+      const areaId = (await pool.query<{ id: string }>(`select id from impact_areas where name = 'Internal'`)).rows[0]!.id;
+
+      const mkChallenge = async (title: string, toValid: boolean) => {
+        const created = await createChallenge(pool, author, { impactAreaId: areaId, namespaceId: nsId, title, description: "d", clientName: null, visibility: "org", isAnonymous: false });
+        assert.equal(created.status, "ok");
+        if (created.status !== "ok") throw new Error("challenge");
+        if (toValid) assert.equal((await setChallengeStatus(pool, admin, created.challenge.number.replace("CH-", ""), "valid")).status, "ok");
+        return created.challenge.id;
+      };
+      const itemId = await mkChallenge(`Replies ${stamp}`, true);
+      const otherId = await mkChallenge(`Replies other ${stamp}`, true);
+      // Still awaiting triage: a plain member other than its author can't see it.
+      const hiddenId = await mkChallenge(`Replies hidden ${stamp}`, false);
+
+      const ok = async (viewer: typeof ann, parentId: string, body: string, replyTo: string | null = null) => {
+        const r = await createComment(pool, viewer, "challenge", parentId, body, undefined, replyTo);
+        assert.equal(r.status, "ok", body);
+        if (r.status !== "ok") throw new Error(body);
+        return r;
+      };
+
+      // A top-level comment has neither id; its audit row carries no replyTo.
+      const root = await ok(ann, itemId, "Root");
+      assert.equal(root.comment.threadRootId, null);
+      assert.equal(root.comment.replyToId, null);
+      assert.equal(root.replyToAuthorId, null);
+      const rootAudit = await pool.query<{ after: Record<string, unknown> }>(`select after from audit_log where action = 'comment.posted' and target_id = $1`, [root.comment.id]);
+      assert.equal("replyTo" in rootAudit.rows[0]!.after, false);
+
+      // Reply to the root: filed under it, answering it; the root's author is reported back.
+      const r1 = await ok(ben, itemId, "Reply one", root.comment.id);
+      assert.equal(r1.comment.threadRootId, root.comment.id);
+      assert.equal(r1.comment.replyToId, root.comment.id);
+      assert.equal(r1.replyToAuthorId, ann.userId);
+      const r1Audit = await pool.query<{ after: Record<string, unknown> }>(`select after from audit_log where action = 'comment.posted' and target_id = $1`, [r1.comment.id]);
+      assert.equal(r1Audit.rows[0]!.after.replyTo, root.comment.id);
+
+      // Reply to a reply: the SAME root, answering the reply.
+      const r2 = await ok(ann, itemId, "Reply two", r1.comment.id);
+      assert.equal(r2.comment.threadRootId, root.comment.id);
+      assert.equal(r2.comment.replyToId, r1.comment.id);
+      assert.equal(r2.replyToAuthorId, ben.userId);
+
+      // The list carries both ids.
+      const listed = (await listComments(pool, author, "challenge", itemId))!;
+      const byId = new Map(listed.map((c) => [c.id, c]));
+      assert.equal(byId.get(r2.comment.id)!.threadRootId, root.comment.id);
+      assert.equal(byId.get(r2.comment.id)!.replyToId, r1.comment.id);
+
+      // Editing never changes where a reply sits.
+      assert.equal((await editComment(pool, ann, r2.comment.id, "Reply two, edited")).status, "ok");
+      const afterEdit = (await pool.query<{ thread_root_id: string; reply_to_id: string }>(`select thread_root_id, reply_to_id from comments where id = $1`, [r2.comment.id])).rows[0]!;
+      assert.deepEqual(afterEdit, { thread_root_id: root.comment.id, reply_to_id: r1.comment.id });
+
+      // 422: a comment on another item, an id that names no comment, a non-uuid id.
+      const elsewhere = await ok(ann, otherId, "On the other item");
+      for (const replyTo of [elsewhere.comment.id, randomUUID(), "not-a-uuid"]) {
+        assert.deepEqual(await createComment(pool, ben, "challenge", itemId, "x", undefined, replyTo), { status: "unprocessable", error: REPLY_NOT_ON_ITEM }, replyTo);
+      }
+      // 422: a soft-deleted target — a root and a reply alike.
+      assert.equal((await deleteComment(pool, ben, r1.comment.id)).status, "ok");
+      assert.deepEqual(await createComment(pool, ann, "challenge", itemId, "x", undefined, r1.comment.id), { status: "unprocessable", error: REPLY_TO_REMOVED });
+      assert.equal((await deleteComment(pool, admin, root.comment.id)).status, "ok");
+      assert.deepEqual(await createComment(pool, ben, "challenge", itemId, "x", undefined, root.comment.id), { status: "unprocessable", error: REPLY_TO_REMOVED });
+      // The removed root keeps its replies underneath.
+      const afterDelete = (await listComments(pool, author, "challenge", itemId))!;
+      assert.equal(afterDelete.find((c) => c.id === root.comment.id)!.deleted, true);
+      assert.equal(afterDelete.filter((c) => c.threadRootId === root.comment.id).length, 2);
+
+      // 404: the item is invisible to the caller — decided before the target is even looked at.
+      const hiddenRoot = await ok(author, hiddenId, "Author's own note");
+      assert.deepEqual(await createComment(pool, ben, "challenge", hiddenId, "x", undefined, hiddenRoot.comment.id), { status: "not_found" });
+
+      // Refused replies wrote nothing.
+      const count = Number((await pool.query<{ c: string }>(`select count(*)::text as c from comments where parent_id = $1 and body = 'x'`, [itemId])).rows[0]!.c);
+      assert.equal(count, 0);
+
+      // The pair constraint: a half-set reply is refused by the database itself.
+      await assert.rejects(
+        pool.query(`insert into comments (parent_type, parent_id, author_id, body, thread_root_id) values ('challenge', $1, $2, 'half', $3)`, [itemId, ann.userId, r2.comment.id]),
+        /comments_reply_pair_chk/,
+      );
+    } finally {
+      await pool.end();
+    }
+  },
+);
+
 async function importDeps() {
   const { Pool } = await import("pg");
   const { randomUUID } = await import("node:crypto");

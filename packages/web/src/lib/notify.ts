@@ -151,17 +151,23 @@ export interface CommentNotification {
   /** The commenter's display name. Comments are never anonymous (§9). */
   latestBy: string;
   link: string;
+  /** §10.2: the author of the comment this one replies to (null on a top-level comment) — their
+   *  row counts it in `repliesToYou`. */
+  replyToAuthorId: string | null;
 }
 
 /** The refreshed message, rendered in SQL with the same text as `commentNotificationMessage` for
- *  count ≥ 2 (a dbtest pins the two together). `n` is the NEW count. */
-const COALESCED_MESSAGE_SQL = (n: string, p: string) =>
-  `format('%s new comments on %s "%s" — latest by %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'challengeTitle', ${p}->>'latestBy')`;
+ *  count ≥ 2 (a dbtest pins the two together). `n` is the NEW count, `r` the NEW `repliesToYou`. */
+const COALESCED_MESSAGE_SQL = (n: string, r: string, p: string) =>
+  `format('%s new comments on %s "%s"%s — latest by %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'challengeTitle',
+          case when ${r} > 0 then format(', %s %s to you', ${r}, case when ${r} = 1 then 'reply' else 'replies' end) else '' end,
+          ${p}->>'latestBy')`;
 
 /**
  * Event 6 delivery: one UNREAD inbox row per recipient per item. The first comment inserts the
  * row and its outbox row (one e-mail); every further comment on the same item while that row is
- * unread refreshes it IN PLACE — count + 1, latest commenter, created_at bumped so it re-sorts to
+ * unread refreshes it IN PLACE — count + 1, `repliesToYou` + 1 when the comment answers the
+ * recipient's own (§10.2), latest commenter, created_at bumped so it re-sorts to
  * the top — through a single atomic upsert against the migration-0024 partial unique index, and
  * writes no outbox row, so the recipient is e-mailed at most once per item until they read it.
  * Once read, the next comment starts a fresh row (and a fresh e-mail).
@@ -174,8 +180,9 @@ export async function dispatchCoalescedComment(
 ): Promise<void> {
   const recipients = await finalRecipients(ctx, { parentType: comment.parentType, parentId: comment.parentId }, candidates, mute);
   for (const userId of recipients) {
+    const repliesToYou = userId === comment.replyToAuthorId ? 1 : 0;
     const payload = {
-      message: commentNotificationMessage(1, comment.challengeNumber, comment.challengeTitle, comment.latestBy),
+      message: commentNotificationMessage(1, comment.challengeNumber, comment.challengeTitle, comment.latestBy, repliesToYou),
       link: comment.link,
       parentType: comment.parentType,
       parentId: comment.parentId,
@@ -185,8 +192,11 @@ export async function dispatchCoalescedComment(
       latestBy: comment.latestBy,
       latestAt: new Date().toISOString(),
       count: 1,
+      repliesToYou,
     };
     const newCount = `(coalesce((notifications.payload->>'count')::int, 1) + 1)`;
+    // Rows written before replies existed carry no repliesToYou: they count from 0.
+    const newReplies = `(coalesce((notifications.payload->>'repliesToYou')::int, 0) + (excluded.payload->>'repliesToYou')::int)`;
     const { rows } = await ctx.pool.query<{ inserted: boolean }>(
       `insert into notifications (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb)
        on conflict (user_id, (payload->>'parentType'), (payload->>'parentId'))
@@ -195,10 +205,11 @@ export async function dispatchCoalescedComment(
          payload = notifications.payload
            || jsonb_build_object(
                 'count', ${newCount},
+                'repliesToYou', ${newReplies},
                 'latestBy', excluded.payload->>'latestBy',
                 'latestAt', excluded.payload->>'latestAt',
                 'challengeTitle', excluded.payload->>'challengeTitle',
-                'message', ${COALESCED_MESSAGE_SQL(newCount, "excluded.payload")}),
+                'message', ${COALESCED_MESSAGE_SQL(newCount, newReplies, "excluded.payload")}),
          created_at = now()
        returning (xmax = 0) as inserted`,
       [userId, JSON.stringify(payload)],

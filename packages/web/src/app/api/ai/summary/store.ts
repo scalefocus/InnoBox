@@ -4,7 +4,8 @@
 // a new or edited comment makes it stale. The result inherits its item's visibility (only readers
 // of the item reach it) and lifecycle (the §10.3 cascade; a withdrawn item gets none).
 //
-// Egress: the item's title and the comments' TEXT only, oldest first, each commenter replaced by
+// Egress: the item's title and the comments' TEXT only, in §10.2 thread order (each reply marked
+// with the participant it answers), each commenter replaced by
 // "Participant A", "Participant B" … by first appearance — never a name, and never which one wrote
 // the item. Soft-deleted comments are excluded. retry: false; 10 a minute and 50 a rolling day
 // per person, counted from ai_usage. Serving a current cached summary costs nothing.
@@ -12,7 +13,7 @@
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { canSeeChallenge, canSeeSolution, type ChallengeStatus, type SolutionStatus } from "@innobox/shared";
+import { canSeeChallenge, canSeeSolution, threadOrder, type ChallengeStatus, type SolutionStatus } from "@innobox/shared";
 import {
   AI_SETTING_KEYS,
   DISCUSSION_LIMITS,
@@ -77,14 +78,20 @@ async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentTyp
   return { id: s.id, title: `A solution to: ${s.c_title}`, withdrawn: s.status === "withdrawn" || s.c_status === "withdrawn", restricted: s.c_visibility === "namespace" };
 }
 
-async function visibleComments(pool: Pool, parentType: SummaryParentType, parentId: string): Promise<{ id: string; authorId: string; body: string }[]> {
-  const { rows } = await pool.query<{ id: string; author_id: string; body: string }>(
-    `select id, author_id, body from comments
+/** The visible comments in §10.2 thread order: each top-level comment followed by its replies. */
+async function visibleComments(
+  pool: Pool,
+  parentType: SummaryParentType,
+  parentId: string,
+): Promise<{ id: string; authorId: string; body: string; replyToId: string | null }[]> {
+  const { rows } = await pool.query<{ id: string; author_id: string; body: string; thread_root_id: string | null; reply_to_id: string | null; created_at: Date }>(
+    `select id, author_id, body, thread_root_id, reply_to_id, created_at from comments
       where parent_type = $1 and parent_id = $2 and deleted_at is null
       order by created_at asc, id asc`,
     [parentType, parentId],
   );
-  return rows.map((r) => ({ id: r.id, authorId: r.author_id, body: r.body }));
+  const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.created_at.toISOString(), row })));
+  return threaded.map(({ row: r }) => ({ id: r.id, authorId: r.author_id, body: r.body, replyToId: r.reply_to_id }));
 }
 
 /** One thread state: the title plus each included comment's id and text (an edit changes it). */

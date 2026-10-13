@@ -34,12 +34,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-75"],
-    title: "Replies to comments",
-    teaser: "Reply directly to a comment and keep the conversation in one thread, and see when someone answers you.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-76"],
     title: "E-mail digests",
     teaser: "Prefer fewer e-mails? Get a daily or weekly summary of what you follow instead of one e-mail per update.",
