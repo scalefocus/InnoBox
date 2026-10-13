@@ -19,7 +19,14 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { createHoldGesture, focusNeighbor, profileHref, swallowNextClick, TABBABLE_SELECTOR } from "@/lib/directory-card";
+import {
+  createHoldGesture,
+  focusNeighbor,
+  profileHref,
+  swallowNextClick,
+  TABBABLE_SELECTOR,
+  type HoldGesture,
+} from "@/lib/directory-card";
 import { cachedGet } from "@/lib/ui";
 import type { LeaderBadge } from "@innobox/shared/gamification";
 import type { AvatarRing } from "./AvatarBubble";
@@ -130,7 +137,9 @@ export function useDirectoryCard(opts: {
   const openedBy = useRef<"pointer" | "hold" | null>(null);
   const isOpen = useRef(false);
   const onHold = useRef<() => void>(() => {});
-  const [hold] = useState(() => createHoldGesture({ onHold: () => onHold.current() }));
+  // Created on the first press, never during render — it is only ever touched from handlers.
+  const holdRef = useRef<HoldGesture | null>(null);
+  const hold = () => (holdRef.current ??= createHoldGesture({ onHold: () => onHold.current() }));
 
   const clearTimers = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
@@ -246,9 +255,9 @@ export function useDirectoryCard(opts: {
   useEffect(
     () => () => {
       clearTimers();
-      hold.cancel();
+      holdRef.current?.cancel();
     },
-    [hold],
+    [],
   );
 
   // Tab routing (§13.8). The card is portalled to the end of <body>, so the browser's own Tab
@@ -303,19 +312,19 @@ export function useDirectoryCard(opts: {
       if (open) scheduleClose();
     },
     // Press and hold on touch/pen (§13.8); a mouse press only records its type (contextmenu gate).
-    onPointerDown: (e) => hold.down(e.pointerType, e.clientX, e.clientY),
-    onPointerMove: (e) => hold.move(e.clientX, e.clientY),
+    onPointerDown: (e) => hold().down(e.pointerType, e.clientX, e.clientY),
+    onPointerMove: (e) => hold().move(e.clientX, e.clientY),
     onPointerUp: () => {
-      if (hold.up()) swallowNextClick(window); // the hold must never fire the enclosing control
+      if (hold().up()) swallowNextClick(window); // the hold must never fire the enclosing control
     },
-    onPointerCancel: () => hold.cancel(),
+    onPointerCancel: () => hold().cancel(),
     onContextMenu: (e) => {
-      if (hold.lastPressWasHold()) e.preventDefault(); // Android's long-press menu, not right-click
+      if (hold().lastPressWasHold()) e.preventDefault(); // Android's long-press menu, not right-click
     },
     // Focus opens with no delay — hover-intent is a pointer concept.
     onFocus: () => {
       if (suppressFocusOpen.current) return; // Escape returning focus — stay closed (§13.8)
-      if (hold.suppressFocus(Date.now())) return; // a tap focuses the bubble — a tap is unchanged
+      if (hold().suppressFocus(Date.now())) return; // a tap focuses the bubble — a tap is unchanged
       cancelClose();
       doOpen();
     },
