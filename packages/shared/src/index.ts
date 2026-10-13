@@ -24,6 +24,9 @@ export * from "./challenges.js";
 
 // Phase 3 (INNOBOX_SPEC.md §10.2, §12, §7.3): comments, notifications, assignment.
 export * from "./social.js";
+// §10.2 replies: root resolution and thread grouping. Client-safe, also exposed at
+// `@innobox/shared/comment-threads`.
+export * from "./comment-threads.js";
 
 // §11 attachments: content-type allowlist, object-key builder, ClamAV INSTREAM protocol,
 // and the anonymity-safe client projection (invariant 3). Pure — storage/socket/DB live in

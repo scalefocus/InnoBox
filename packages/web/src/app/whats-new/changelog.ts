@@ -11,10 +11,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "1.4.0",
+    version: "1.5.0",
     date: "2026-10-13",
     summary:
       "Customers and partners can now send a challenge through a public form, without an account. They confirm it by e-mail, and it waits in a new Public submissions queue for a platform admin to accept, decline or discard. Accepted ones join triage as External submission. To switch the form on, set PUBLIC_INTAKE_KEY and write a privacy notice in Platform settings.",
+  },
+  {
+    version: "1.4.0",
+    date: "2026-10-13",
+    summary:
+      "You can now reply to a comment: press Reply and your answer appears indented under it, keeping the conversation in one thread. Long threads show the first three replies with a button for the rest, and your comment notifications tell you when someone replied to you.",
   },
   {
     version: "1.3.0",

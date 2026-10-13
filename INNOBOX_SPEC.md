@@ -1571,12 +1571,6 @@ reveal actions never apply to it.
 
 #### Replies (one level)
 
-> **⚠ GAP-75 · new feature:** comment replies do not exist. Build: a migration adding
-> `comments.thread_root_id` and `comments.reply_to_id` (§5; existing rows stay top-level);
-> the `replyTo` field on comment create and its validation; the grouped rendering in
-> `CommentThread`; the reply count in the coalesced comment notification (§12.1); the
-> audit payload field; and the tests below. Ships as one minor release.
-
 A comment can answer another comment. Threads are **one level deep**: a reply always
 hangs under a **top-level** comment, never under another reply.
 
@@ -1613,10 +1607,11 @@ hangs under a **top-level** comment, never under another reply.
   commenters" route, unless they wrote the reply themselves. The coalesced row's
   payload also counts **`repliesToYou`**: the number of the coalesced comments that
   answer one of the recipient's own comments. The copy adds it when it is non-zero:
-  *"3 new comments on CH-412, 1 reply to you — latest by Alice"*.
+  *"3 new comments on CH-412, 1 reply to you — latest by Alice"*. A row opened by a single
+  reply to the recipient reads *"New reply to you on CH-412 — by Alice"*.
 - **Discussion summary.** The §22.13 summary reads the comments in thread order and
   marks each reply as one, so the model sees who answered whom.
-- **Audit.** `comment.created` gains `replyTo` (the comment id answered), absent on a
+- **Audit.** `comment.posted` gains `replyTo` (the comment id answered), absent on a
   top-level comment.
 - **Tests.** Unit: root resolution (reply to a root, reply to a reply), the
   validation errors, the `repliesToYou` count and the copy. Integration: create a
@@ -5583,8 +5578,8 @@ transitions, assigns, rejects or notifies (invariant 6).
 - **Where.** A **"Summarize discussion"** control above a challenge's or solution's
   comment thread once it holds **at least 10** visible comments; on demand, for any
   viewer who can see the item.
-- **Egress:** the item's title, and the comments' **text only**, oldest first, each
-  labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
+- **Egress:** the item's title, and the comments' **text only**, in §10.2 thread order
+  (each reply marked with the participant it answers), each labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
   appearance — **never** marking which participant is the item's author, and never a
   name. Soft-deleted comments are excluded.
 - **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
@@ -6395,7 +6390,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, author (masked), like and solution counts, `url`. |
 | `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, client name, author (masked), assignee, dates, like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
-| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; once §10.2 replies exist, each row carries its thread fields. Deleted comments appear as the web shows them. |
+| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
 | `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
@@ -6410,7 +6405,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `edit_challenge` | §10.1 author edit — title, description, impact area — inside the author's edit window only. |
 | `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
-| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with `replyTo` once replies exist). Never anonymous, as on the web. |
+| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
 | `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
 
 Errors are MCP tool errors carrying the same plain message the API returns (§21.9 — no

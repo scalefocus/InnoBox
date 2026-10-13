@@ -27,12 +27,6 @@ export interface UpcomingViewer {
 
 export const UPCOMING: UpcomingEntry[] = [
   {
-    ids: ["GAP-75"],
-    title: "Replies to comments",
-    teaser: "Reply directly to a comment and keep the conversation in one thread, and see when someone answers you.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-77"],
     title: "Trash and restore",
     teaser: "Deleted challenges and solutions will wait in a trash for 30 days, so a mistaken delete can be undone.",

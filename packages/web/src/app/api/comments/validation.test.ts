@@ -26,7 +26,20 @@ test("parseParentQuery: rejects a malformed parentId", () => {
 test("parseCommentCreate: accepts a well-formed body, passes body through unvalidated", () => {
   const result = parseCommentCreate({ parentType: "challenge", parentId: ID, body: "hello" });
   assert.equal(result.ok, true);
-  if (result.ok) assert.deepEqual(result.value, { parentType: "challenge", parentId: ID, body: "hello" });
+  if (result.ok) assert.deepEqual(result.value, { parentType: "challenge", parentId: ID, body: "hello", replyTo: null });
+});
+
+test("parseCommentCreate: replyTo is optional, passed through as a string, and refused when not one (§10.2)", () => {
+  const reply = parseCommentCreate({ parentType: "solution", parentId: ID, body: "hi", replyTo: ID });
+  assert.equal(reply.ok, true);
+  if (reply.ok) assert.equal(reply.value.replyTo, ID);
+  // Existence and "same item" are the store's 422, not a shape error.
+  const unknown = parseCommentCreate({ parentType: "solution", parentId: ID, body: "hi", replyTo: "not-a-uuid" });
+  assert.equal(unknown.ok, true);
+  const explicitNull = parseCommentCreate({ parentType: "solution", parentId: ID, body: "hi", replyTo: null });
+  assert.equal(explicitNull.ok && explicitNull.value.replyTo, null);
+  assert.equal(parseCommentCreate({ parentType: "solution", parentId: ID, body: "hi", replyTo: 42 }).ok, false);
+  assert.equal(parseCommentCreate({ parentType: "solution", parentId: ID, body: "hi", replyTo: { id: ID } }).ok, false);
 });
 
 test("parseCommentCreate: rejects a non-object body", () => {

@@ -112,11 +112,28 @@ export function finalizeRecipients(candidates: readonly (string | null | undefin
  * The inbox/e-mail line for a coalesced comment row. The write path renders the SAME text in SQL
  * when it refreshes an unread row (lib/notify.ts `COALESCED_MESSAGE_SQL`); a dbtest pins the two
  * together. Comments carry no anonymity option (§9), so naming the commenter is safe; the item's
- * own author is never named here.
+ * own author is never named here. `repliesToYou` (§10.2) counts the coalesced comments that answer
+ * one of the recipient's own comments.
  */
-export function commentNotificationMessage(count: number, challengeNumber: string, challengeTitle: string, latestBy: string): string {
-  if (count <= 1) return `New comment on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`;
-  return `${count} new comments on ${challengeNumber} "${challengeTitle}" — latest by ${latestBy}.`;
+export function commentNotificationMessage(
+  count: number,
+  challengeNumber: string,
+  challengeTitle: string,
+  latestBy: string,
+  repliesToYou = 0,
+): string {
+  if (count <= 1) {
+    return repliesToYou > 0
+      ? `New reply to you on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`
+      : `New comment on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`;
+  }
+  return `${count} new comments on ${challengeNumber} "${challengeTitle}"${repliesClause(repliesToYou)} — latest by ${latestBy}.`;
+}
+
+/** §10.2: the coalesced row adds how many of its comments answer one of the recipient's own. */
+function repliesClause(repliesToYou: number): string {
+  if (repliesToYou <= 0) return "";
+  return `, ${repliesToYou} ${repliesToYou === 1 ? "reply" : "replies"} to you`;
 }
 
 // ── Assignments transferred on erasure (§12.1 event 12) ──────────────────────────────────

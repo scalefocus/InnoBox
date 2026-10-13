@@ -85,6 +85,10 @@
     "./public-intake": {
       "types": "./dist/public-intake.d.ts",
       "default": "./dist/public-intake.js"
+    },
+    "./comment-threads": {
+      "types": "./dist/comment-threads.d.ts",
+      "default": "./dist/comment-threads.js"
     }
   },
   "scripts": {
