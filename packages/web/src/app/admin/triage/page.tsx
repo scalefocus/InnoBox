@@ -2,7 +2,8 @@
 // Namespace triage queue (INNOBOX_SPEC.md §14.1): filterable list of the namespace's
 // challenges, row-level assign, bulk assign/status-set, and CSV export. Namespace admins see
 // their own namespace(s); platform admins see everywhere. Gated in-page against /api/me,
-// same pattern as /admin's namespaces/mappings console.
+// same pattern as /admin's namespaces/mappings console. Rows created through an AI agent carry
+// the §25.8 "via agent" tag beside the author.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -14,6 +15,7 @@ import { UserResultButton } from "@/components/UserResultButton";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
 import { reportFeatureUse } from "@/lib/survey-client";
+import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 
 interface MeResponse {
   user: { id: string };
@@ -42,6 +44,8 @@ interface TriageRow {
   createdAt: string;
   /** §22.11 triage notes: ready / on the way / failed, or null when there are none. */
   aiNotes?: "ready" | "pending" | "failed" | null;
+  /** §25.8: set when submitted through an AI agent (client name masked on anonymous items). */
+  viaAgent?: ViaAgent;
 }
 
 type Tab = "challenges" | "solutions";
@@ -446,7 +450,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   )}
                 </div>
               </div>
-              <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <AvatarBubble
                   size="sm"
                   userId={r.authorId}
@@ -457,6 +461,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   scrubbed={r.authorScrubbed === true}
                 />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
+                <ViaAgentTag via={r.viaAgent} flush />
               </span>
               <span className={statusPillClass(r.status)}>{CHALLENGE_STATUS_LABEL[r.status] ?? r.status}</span>
               <InlineAssign
@@ -506,6 +511,8 @@ interface TriageSolutionRow {
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
+  /** §25.8: set when proposed through an AI agent (client name masked on anonymous items). */
+  viaAgent?: ViaAgent;
 }
 
 // Solutions tab (§14.1): `proposed` solutions awaiting review across the namespaces the admin
@@ -565,7 +572,7 @@ function SolutionsQueue() {
                   {r.number} · on {r.challengeNumber} · /{r.namespaceSlug}
                 </div>
               </div>
-              <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <AvatarBubble
                   size="sm"
                   userId={r.authorId}
@@ -575,6 +582,7 @@ function SolutionsQueue() {
                   scrubbed={r.authorScrubbed === true}
                 />
                 {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
+                <ViaAgentTag via={r.viaAgent} flush />
               </span>
               <span className="sub">{r.impactAreaName}</span>
               <span className="sub mono">{fmt.date(r.createdAt)}</span>

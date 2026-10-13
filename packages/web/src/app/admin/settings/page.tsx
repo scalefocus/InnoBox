@@ -1,7 +1,7 @@
 "use client";
 // Platform settings (INNOBOX_SPEC.md §14.3): attachment limits, impact areas (add/rename/
 // retire/delete), the date-display format, the notification sender (Graph consent, wrapper,
-// test-send), and the AI provider (§22.4, AiProviderCard). Namespace/role-mapping management stays on /admin (Phase 1). Platform-admin
+// test-send), the AI provider (§22.4, AiProviderCard), and AI agents — the MCP server (§25.10, McpCard). Namespace/role-mapping management stays on /admin (Phase 1). Platform-admin
 // only; every change is audited server-side.
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -12,6 +12,7 @@ import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
 import { GamificationSettingsCard } from "@/components/GamificationSettingsCard";
 import { PublicSubmissionsSettingsCard, type PublicSubmissionsSettings } from "@/components/PublicSubmissionsSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
+import { McpCard } from "./McpCard";
 
 interface MeResponse {
   roles: { platformAdmin: boolean };
@@ -39,7 +40,7 @@ export default function AdminSettingsPage() {
       <div className="page-head reveal">
         {gate === "ok" && <Breadcrumb items={adminCrumbs("Platform settings")} />}
         <h1 className="page-title">Platform settings</h1>
-        <p className="page-sub">Impact areas, attachment limits, date format, public submissions, the notification sender and the AI provider. Every change is audited.</p>
+        <p className="page-sub">Impact areas, attachment limits, date format, public submissions, the notification sender, the AI provider and AI agents. Every change is audited.</p>
       </div>
 
       {gate === "loading" && <p className="muted">Loading…</p>}
@@ -145,6 +146,7 @@ function SettingsConsole() {
       />
       <EmailSenderCard status={email} onChanged={refreshEmail} onError={notify} />
       <AiProviderCard onNotice={notify} />
+      <McpCard onNotice={notify} />
       {toast && <div className="toast">{toast}</div>}
     </>
   );

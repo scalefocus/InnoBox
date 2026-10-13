@@ -5,9 +5,9 @@
 // the SCIM error envelope, so a sync cycle is never quarantined by a single odd payload.
 import express from "express";
 import type { NextFunction, Request, Response, Router } from "express";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { appendAudit } from "@innobox/shared";
+import { appendAudit, revokeUserGrants } from "@innobox/shared";
 import { InvalidFilterError, parseFilter, requireAttr, type FilterAttr } from "./filter.js";
 import { normalizeGroupPatch, normalizeUserPatch } from "./patch.js";
 import {
@@ -131,7 +131,7 @@ async function insertUser(pool: Pool, data: ParsedUserWrite & { externalId: stri
   return rows[0]!;
 }
 
-async function updateUserFull(pool: Pool, id: string, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
+async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
   const userName = data.userName ?? data.email ?? data.externalId;
   const { rows } = await pool.query<UserRow>(
     `update users
@@ -159,7 +159,7 @@ interface UserPatchValues {
   jobTitle: string | null;
 }
 
-async function updateUserPatch(pool: Pool, id: string, v: UserPatchValues): Promise<UserRow> {
+async function updateUserPatch(pool: Pool | PoolClient, id: string, v: UserPatchValues): Promise<UserRow> {
   const { rows } = await pool.query<UserRow>(
     `update users
         set user_name = $2, email = $3, display_name = $4, department = $5, job_title = $6, active = $7,
@@ -176,7 +176,7 @@ async function updateUserPatch(pool: Pool, id: string, v: UserPatchValues): Prom
   return rows[0]!;
 }
 
-async function deactivateUser(pool: Pool, id: string): Promise<UserRow> {
+async function deactivateUser(pool: Pool | PoolClient, id: string): Promise<UserRow> {
   const { rows } = await pool.query<UserRow>(
     `update users
         set active = false, deactivated_at = coalesce(deactivated_at, now()),
@@ -189,10 +189,27 @@ async function deactivateUser(pool: Pool, id: string): Promise<UserRow> {
   return rows[0]!;
 }
 
+/** A users write, its audit row and — on deactivation — the §25.3 revocation of every AI agent grant
+ *  and token, committed together: a leaver never keeps a live grant past the deactivation. */
+async function atomically<T>(pool: Pool, fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** Compares before/after and files exactly the one most-specific audit event: an active
  *  flip wins over a plain attribute update (both being true at once doesn't happen in
  *  practice, but a flip is always the more meaningful fact to record). */
-async function auditUserTransition(pool: Pool, before: UserRow, after: UserRow): Promise<void> {
+async function auditUserTransition(pool: Pool | PoolClient, before: UserRow, after: UserRow): Promise<void> {
   if (before.active && !after.active) {
     await appendAudit(pool, {
       actorUserId: null,
@@ -202,6 +219,9 @@ async function auditUserTransition(pool: Pool, before: UserRow, after: UserRow):
       before: { active: true },
       after: { active: false, deactivatedAt: isoOrNull(after.deactivated_at) },
     });
+    // §25.3 leavers: every AI agent grant and token the person holds is revoked with them — the
+    // callers run this inside the deactivation's transaction.
+    await revokeUserGrants(pool, after.id, "deactivated");
     return;
   }
   if (!before.active && after.active) {
@@ -468,8 +488,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
           return;
         }
       }
-      const updated = await updateUserFull(pool, existing.id, { ...parsedBody, externalId });
-      await auditUserTransition(pool, existing, updated);
+      const updated = await atomically(pool, async (db) => {
+        const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+        await auditUserTransition(db, existing, row);
+        return row;
+      });
       res.status(200).json(toScimUser(updated));
       return;
     }
@@ -527,8 +550,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
         return;
       }
     }
-    const updated = await updateUserFull(pool, existing.id, { ...parsedBody, externalId });
-    await auditUserTransition(pool, existing, updated);
+    const updated = await atomically(pool, async (db) => {
+      const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+      await auditUserTransition(db, existing, row);
+      return row;
+    });
     res.status(200).json(toScimUser(updated));
   });
 
@@ -561,16 +587,19 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
         return;
       }
     }
-    const updated = await updateUserPatch(pool, existing.id, {
-      externalId: patch.externalId ?? existing.external_id,
-      active: patch.active ?? existing.active,
-      userName: newUserName,
-      email: patch.email ?? existing.email,
-      displayName: patch.displayName ?? existing.display_name,
-      department: patch.department ?? existing.department,
-      jobTitle: patch.jobTitle ?? existing.job_title,
+    const updated = await atomically(pool, async (db) => {
+      const row = await updateUserPatch(db, existing.id, {
+        externalId: patch.externalId ?? existing.external_id,
+        active: patch.active ?? existing.active,
+        userName: newUserName,
+        email: patch.email ?? existing.email,
+        displayName: patch.displayName ?? existing.display_name,
+        department: patch.department ?? existing.department,
+        jobTitle: patch.jobTitle ?? existing.job_title,
+      });
+      await auditUserTransition(db, existing, row);
+      return row;
     });
-    await auditUserTransition(pool, existing, updated);
     res.status(200).json(toScimUser(updated));
   });
 
@@ -591,14 +620,17 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       res.status(204).end();
       return;
     }
-    const deactivated = await deactivateUser(pool, existing.id);
-    await appendAudit(pool, {
-      actorUserId: null,
-      action: "scim.user_deleted_received",
-      targetType: "user",
-      targetId: existing.id,
-      before: { active: existing.active },
-      after: { active: deactivated.active, deactivatedAt: isoOrNull(deactivated.deactivated_at) },
+    await atomically(pool, async (db) => {
+      const deactivated = await deactivateUser(db, existing.id);
+      await appendAudit(db, {
+        actorUserId: null,
+        action: "scim.user_deleted_received",
+        targetType: "user",
+        targetId: existing.id,
+        before: { active: existing.active },
+        after: { active: deactivated.active, deactivatedAt: isoOrNull(deactivated.deactivated_at) },
+      });
+      await revokeUserGrants(db, existing.id, "deactivated"); // §25.3 leavers, same transaction
     });
     res.status(204).end();
   });

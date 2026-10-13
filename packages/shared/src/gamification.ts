@@ -16,6 +16,9 @@ export const GAMIFICATION_REASONS = [
   "solution_implemented",
   "like_received",
   "comment_posted",
+  // §25.12: 0 points, once per person, the first time they approve an AI agent connection. The
+  // only reason with no item.
+  "agent_connected",
 ] as const;
 export type GamificationReason = (typeof GAMIFICATION_REASONS)[number];
 
@@ -29,6 +32,7 @@ export const POINTS: Record<GamificationReason, number> = {
   solution_implemented: 50,
   like_received: 1,
   comment_posted: 1,
+  agent_connected: 0,
 };
 
 /** Per recipient, per UTC day of the event: only the first N awards of the reason earn points.
@@ -66,6 +70,8 @@ export const awardKey = {
   solutionImplemented: (solutionId: string) => `solution_implemented:${solutionId}`,
   likeReceived: (parentType: AwardItemType, parentId: string, likerId: string) => `like_received:${parentType}:${parentId}:${likerId}`,
   commentPosted: (commentId: string) => `comment_posted:${commentId}`,
+  /** §25.12: once per person, ever. */
+  agentConnected: () => "agent_connected",
 };
 
 // ── Levels (§23.3) ───────────────────────────────────────────────────────────────────────
@@ -135,19 +141,47 @@ export type BadgeKey =
   | "conversation_starter"
   | "icebreaker"
   | "first_idea"
-  | "full_circle";
+  | "full_circle"
+  | "plugged_in"
+  | "co_pilot"
+  | "agent_of_change"
+  | "human_in_the_loop";
+
+/** What a count-based badge counts: a ledger reason, or one of the §25.12 agent counters — rows
+ *  of the given reasons whose item was created through an AI agent (`via_mcp`). */
+export type BadgeCounter = GamificationReason | "challenge_submitted_via_mcp" | "solution_proposed_via_mcp" | "validated_via_mcp";
+
+/** The ledger rows each counter counts — the one definition the SQL counts are built from. */
+export const BADGE_COUNTERS: Record<BadgeCounter, { reasons: readonly GamificationReason[]; viaMcp: boolean | null }> = {
+  challenge_submitted: { reasons: ["challenge_submitted"], viaMcp: null },
+  challenge_validated: { reasons: ["challenge_validated"], viaMcp: null },
+  challenge_solved: { reasons: ["challenge_solved"], viaMcp: null },
+  assignment_solved: { reasons: ["assignment_solved"], viaMcp: null },
+  solution_proposed: { reasons: ["solution_proposed"], viaMcp: null },
+  solution_validated: { reasons: ["solution_validated"], viaMcp: null },
+  solution_implemented: { reasons: ["solution_implemented"], viaMcp: null },
+  like_received: { reasons: ["like_received"], viaMcp: null },
+  comment_posted: { reasons: ["comment_posted"], viaMcp: null },
+  agent_connected: { reasons: ["agent_connected"], viaMcp: null },
+  challenge_submitted_via_mcp: { reasons: ["challenge_submitted"], viaMcp: true },
+  solution_proposed_via_mcp: { reasons: ["solution_proposed"], viaMcp: true },
+  validated_via_mcp: { reasons: ["challenge_validated", "solution_validated"], viaMcp: true },
+};
 
 export interface BadgeDef {
   key: BadgeKey;
   name: string;
   /** The criterion, in user terms, shown on a locked badge and as the tooltip. */
   criterion: string;
-  /** The ledger reason the badge counts; null for Full Circle, which is a cross-item check. */
-  counts: GamificationReason | null;
+  /** What the badge counts (a ledger reason or a §25.12 agent counter); null for Full Circle,
+   *  which is a cross-item check. */
+  counts: BadgeCounter | null;
   /** Tier thresholds (Bronze, Silver, Gold) for a tiered badge; one entry for a one-off. */
   thresholds: readonly number[];
   /** The counted unit for the progress line ("3 of 5 challenges validated"). */
   unit: string;
+  /** §25.12: an agent badge — shown among the locked badges only while agent access is on. */
+  agent?: boolean;
 }
 
 export const BADGES: readonly BadgeDef[] = [
@@ -161,6 +195,10 @@ export const BADGES: readonly BadgeDef[] = [
   { key: "icebreaker", name: "Icebreaker", criterion: "Your first challenge submitted", counts: "challenge_submitted", thresholds: [1], unit: "challenges submitted" },
   { key: "first_idea", name: "First Idea", criterion: "Your first solution proposed", counts: "solution_proposed", thresholds: [1], unit: "solutions proposed" },
   { key: "full_circle", name: "Full Circle", criterion: "A solution you wrote was implemented on a challenge you also wrote", counts: null, thresholds: [1], unit: "" },
+  { key: "plugged_in", name: "Plugged In", criterion: "Your first AI agent connected", counts: "agent_connected", thresholds: [1], unit: "agents connected", agent: true },
+  { key: "co_pilot", name: "Co-Pilot", criterion: "Your first challenge submitted through an agent", counts: "challenge_submitted_via_mcp", thresholds: [1], unit: "challenges submitted through an agent", agent: true },
+  { key: "agent_of_change", name: "Agent of Change", criterion: "Your first solution proposed through an agent", counts: "solution_proposed_via_mcp", thresholds: [1], unit: "solutions proposed through an agent", agent: true },
+  { key: "human_in_the_loop", name: "Human in the Loop", criterion: "A challenge or solution you submitted through an agent was validated", counts: "validated_via_mcp", thresholds: [1], unit: "agent submissions validated", agent: true },
 ];
 
 export function badgeDef(key: string): BadgeDef | undefined {
@@ -180,7 +218,7 @@ export function badgeLabel(key: string, tier: number | null): string {
   return tier === 1 || tier === 2 || tier === 3 ? `${name} (${TIER_NAMES[tier]})` : name;
 }
 
-export type ReasonCounts = Partial<Record<GamificationReason, number>>;
+export type ReasonCounts = Partial<Record<BadgeCounter, number>>;
 
 /** Every (badge, tier) the counts reach — each tier separately, so a multi-tier jump inserts all
  *  of them (§23.4). Full Circle is not count-based and is evaluated by the caller. */

@@ -8,7 +8,7 @@
 // same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
 // through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
-import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeStatus, type RoleSet } from "@innobox/shared";
+import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type ViaAgent } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
 import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged } from "../../../../lib/notify-events";
@@ -38,6 +38,8 @@ export interface TriageRow {
   /** §13.6: the assignee is GDPR-scrubbed; null when unassigned. */
   assigneeScrubbed: boolean | null;
   createdAt: string;
+  /** §25.8 "via agent" tag (client name masked on an anonymous item). */
+  viaAgent: ViaAgent;
 }
 
 export interface TriageFilters {
@@ -110,6 +112,7 @@ interface TriageQueryRow {
   assignee_active: boolean | null;
   assignee_scrubbed: boolean | null;
   created_at: Date;
+  mcp_client_name: string | null;
 }
 
 function toTriageRow(row: TriageQueryRow): TriageRow {
@@ -140,6 +143,7 @@ function toTriageRow(row: TriageQueryRow): TriageRow {
     assigneeActive: row.assignee_id === null ? null : row.assignee_active,
     assigneeScrubbed: row.assignee_id === null ? null : row.assignee_scrubbed,
     createdAt: row.created_at.toISOString(),
+    viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
   };
 }
 
@@ -148,7 +152,7 @@ const TRIAGE_SELECT = `
          ps.company as external_company, c.is_anonymous, c.status,
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
          au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
-         c.created_at
+         c.created_at, c.mcp_client_name
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -372,6 +376,8 @@ export interface TriageSolutionRow {
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
+  /** §25.8 "via agent" tag (client name masked on an anonymous item). */
+  viaAgent: ViaAgent;
 }
 
 interface TriageSolutionQueryRow {
@@ -386,6 +392,7 @@ interface TriageSolutionQueryRow {
   impact_area_name: string;
   namespace_slug: string;
   created_at: Date;
+  mcp_client_name: string | null;
 }
 
 function toTriageSolutionRow(row: TriageSolutionQueryRow): TriageSolutionRow {
@@ -400,6 +407,7 @@ function toTriageSolutionRow(row: TriageSolutionQueryRow): TriageSolutionRow {
     impactAreaName: row.impact_area_name,
     namespaceSlug: row.namespace_slug,
     createdAt: row.created_at.toISOString(),
+    viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
   };
 }
 
@@ -433,7 +441,7 @@ export async function listTriageSolutions(
     `select *, count(*) over()::text as total_count from (
        select s.number::text as number, c.number::text as challenge_number, c.title as challenge_title,
               s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
-              ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at
+              ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at, s.mcp_client_name
          from solutions s
          join challenges c on c.id = s.challenge_id
          join users u on u.id = s.author_id

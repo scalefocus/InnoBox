@@ -18,8 +18,10 @@ import { isOriginAllowed } from "./lib/csrf";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER } from "./lib/presence-touch";
 import { isPublicPath } from "./lib/routeAccess";
 import { PATHNAME_HEADER } from "./lib/quick-start";
+import { consentFormActionSources } from "./lib/mcp/redirect-uris";
 import {
   ATTACHMENT_DOWNLOAD_CSP,
+  CONSENT_PAGE_PATH,
   buildContentSecurityPolicy,
   generateNonce,
   isAttachmentDownload,
@@ -105,7 +107,13 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
   // Minted and forwarded on the request side in EVERY mode, so the renderer keeps nonce-tagging
   // its inline scripts whatever the response header ends up being.
   const nonce = generateNonce();
-  const sec: Security = { nonce, csp: buildContentSecurityPolicy({ nonce, dev, report }) };
+  // §25.3: the consent page's approval is a form POST answered with a 303 to the agent's redirect
+  // URI, and browsers apply form-action across that redirect — so this one page widens it to the
+  // redirect shapes registration accepts. The route still checks the target against the client's
+  // registration; the CSP is only a filter.
+  const redirectUris = req.nextUrl.pathname === CONSENT_PAGE_PATH ? req.nextUrl.searchParams.getAll("redirect_uri") : [];
+  const formAction = req.nextUrl.pathname === CONSENT_PAGE_PATH ? consentFormActionSources(redirectUris.length === 1 ? redirectUris[0]! : null) : undefined;
+  const sec: Security = { nonce, csp: buildContentSecurityPolicy({ nonce, dev, report, formAction }) };
 
   const res = await route(req, sec);
   const baseUrl = configuredPublicBaseUrl({ PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL });

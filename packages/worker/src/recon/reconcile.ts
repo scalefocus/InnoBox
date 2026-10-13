@@ -5,7 +5,7 @@
 // (structured JSON) and audited as scim.anomaly, then the pass CONTINUES with the next
 // item — a partial pass must never abort. DB failures do propagate; the caller wraps
 // each scheduled run. Actor is null (system) on every audit entry, per spec §15.
-import { appendAudit, type DbClient } from "@innobox/shared";
+import { appendAudit, revokeUserGrants, type DbClient, type DbPool } from "@innobox/shared";
 import { computeMembershipDiff, computeUserHeal, type GraphUser, type UserFieldPatch } from "./diff.js";
 import { createGraphClient, GraphRequestError, type GraphClient, type GraphEnv, type GraphGroup } from "./graph.js";
 
@@ -39,6 +39,24 @@ interface GroupRow {
 
 function log(level: "info" | "warn" | "error", msg: string, extra?: Record<string, unknown>): void {
   console.log(JSON.stringify({ level, msg, ...extra }));
+}
+
+/** Runs `fn` in one transaction when `pool` can hand out a client; a bare client (a test's, or a
+ *  caller's own transaction) runs it as is. */
+async function atomically(pool: DbClient, fn: (db: DbClient) => Promise<void>): Promise<void> {
+  const connect = (pool as Partial<DbPool>).connect;
+  if (!connect) return fn(pool);
+  const client = await connect.call(pool);
+  try {
+    await client.query("BEGIN");
+    await fn(client);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function runReconciliation(
@@ -103,18 +121,23 @@ export async function runReconciliation(
     if (heal.action === "deactivate") {
       // §3.1: drop the cached photo on deactivation — the user renders as a greyed initials
       // bubble thereafter, and no stale face lingers in the avatar gateway.
-      await pool.query(
-        `update users set active = false, deactivated_at = now(), photo = null, photo_etag = null, updated_at = now()
-          where id = $1 and active = true`,
-        [u.id],
-      );
-      await appendAudit(pool, {
-        actorUserId: null,
-        action: "recon.user_deactivated",
-        targetType: "user",
-        targetId: u.id,
-        before: { active: true },
-        after: { active: false, reason: gu.exists ? "accountDisabled" : "missingInTenant" },
+      // §25.3 leavers: the deactivation, its audit row and the revocation of every AI agent grant
+      // and token commit together.
+      await atomically(pool, async (db) => {
+        await db.query(
+          `update users set active = false, deactivated_at = now(), photo = null, photo_etag = null, updated_at = now()
+            where id = $1 and active = true`,
+          [u.id],
+        );
+        await appendAudit(db, {
+          actorUserId: null,
+          action: "recon.user_deactivated",
+          targetType: "user",
+          targetId: u.id,
+          before: { active: true },
+          after: { active: false, reason: gu.exists ? "accountDisabled" : "missingInTenant" },
+        });
+        await revokeUserGrants(db, u.id, "deactivated");
       });
       summary.deactivated += 1;
       log("info", "reconciliation deactivated user", { userId: u.id });

@@ -10,10 +10,17 @@ import { CSP_REPORT_PATH } from "./security-headers";
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/** §25.3: the agent-access consent form's target. */
+export const CONSENT_PATH = "/oauth/consent";
+
 /** True for a request the Origin check applies to: a state-changing method under /api/*, outside
  *  the Auth.js routes. Safe methods (GET/HEAD/OPTIONS) never change state and are not checked. */
 export function requiresOriginCheck(method: string, pathname: string): boolean {
   if (!STATE_CHANGING_METHODS.has(method.toUpperCase())) return false;
+  // §25.3: the consent form's POST carries the person's session, so it keeps the check. The other
+  // agent-access routes (/mcp, /oauth/register, /oauth/token, /oauth/revoke) live outside /api and
+  // are exempt — called by programs, no cookie, never read a session.
+  if (pathname === CONSENT_PATH) return true;
   if (pathname !== "/api" && !pathname.startsWith("/api/")) return false;
   if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return false;
   // The public CSP report sink (exact path): browsers send reports with no reliable Origin, and

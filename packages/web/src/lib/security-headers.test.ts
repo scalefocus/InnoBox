@@ -7,6 +7,7 @@ import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
   CSP_REPORT_GROUP,
+  CONSENT_PAGE_PATH,
   CSP_REPORT_PATH,
   generateNonce,
   HSTS_VALUE,
@@ -120,4 +121,15 @@ test("attachment downloads get the sandbox CSP, nothing else does", () => {
   assert.equal(isAttachmentDownload("GET", "/api/attachments"), false);
   assert.equal(isAttachmentDownload("GET", "/api/attachments/uploads/x/complete"), false);
   assert.equal(isAttachmentDownload("GET", "/challenges/12"), false);
+});
+
+test("§25.3: only the consent page widens form-action, and only by what it is given", () => {
+  assert.equal(CONSENT_PAGE_PATH, "/oauth/authorize");
+  assert.deepEqual(directives(buildContentSecurityPolicy({ nonce: "n", dev: false })).get("form-action"), ["'self'", "https://login.microsoftonline.com"]);
+  assert.deepEqual(directives(buildContentSecurityPolicy({ nonce: "n", dev: false, formAction: ["http://127.0.0.1:*", "https:"] })).get("form-action"), [
+    "'self'",
+    "https://login.microsoftonline.com",
+    "http://127.0.0.1:*",
+    "https:",
+  ]);
 });

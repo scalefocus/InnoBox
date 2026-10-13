@@ -82,6 +82,10 @@
       "types": "./dist/gamification.d.ts",
       "default": "./dist/gamification.js"
     },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
     "./public-intake": {
       "types": "./dist/public-intake.d.ts",
       "default": "./dist/public-intake.js"

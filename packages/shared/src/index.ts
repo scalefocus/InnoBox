@@ -104,3 +104,9 @@ export * from "./gamification-awards.js";
 // `@innobox/shared/public-intake`), and the server-only proof-of-work and confirmation token.
 export * from "./public-intake.js";
 export * from "./public-intake-pow.js";
+
+// §25 agent access (MCP): the four settings with their bounds, the "via agent" projection (client-
+// safe, also at `@innobox/shared/mcp`) and the server-only grant revocation + hourly sweep web and
+// worker share.
+export * from "./mcp.js";
+export * from "./mcp-grants.js";

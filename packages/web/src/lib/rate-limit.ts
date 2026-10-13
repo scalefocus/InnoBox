@@ -15,7 +15,9 @@ export type RateLimitBucket =
   | "csp-report"
   | "public-read"
   | "public-submit"
-  | "public-confirm";
+  | "public-confirm"
+  | "mcp-register"
+  | "mcp-ip";
 
 /** §2.4 limits: `limit` requests per `windowMs`, refilled continuously. */
 export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: number }> = {
@@ -28,6 +30,10 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
   // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
   "csp-report": { limit: 120, windowMs: 60 * 1000 },
+  // §25.11 agent access, keyed per client IP: dynamic client registration, and /oauth/token plus
+  // unauthenticated /mcp calls. Taken via takeToken() directly by those routes.
+  "mcp-register": { limit: 10, windowMs: 60 * 60 * 1000 },
+  "mcp-ip": { limit: 60, windowMs: 60 * 1000 },
   // §24.4 the public submission routes — per client IP too, and taken via takeToken() directly:
   // their 429s are counted by innobox_public_submissions_total, not logged or system-logged.
   "public-read": { limit: 30, windowMs: 60 * 1000 }, // GET /api/public/pow and /api/public/settings
@@ -105,6 +111,21 @@ export function rateLimit(userId: string, bucket: RateLimitBucket, opts: { anony
     { error: "Too many requests — try again shortly." },
     { status: 429, headers: { "Retry-After": String(decision.retryAfterSeconds) } },
   );
+}
+
+/** §25.11: the per-(person, client) bucket allows this share of the person's own limit, so one
+ *  runaway agent cannot use up the person's allowance on its own. */
+export const MCP_CLIENT_SHARE = 0.5;
+
+/**
+ * §25.11: an MCP tool call takes a token from the person's bucket — the same one their browser
+ * requests draw on, so an agent gets no more throughput than the person — AND from the
+ * (person, client) bucket. The first refusal wins.
+ */
+export function takeMcpToken(userId: string, clientRowId: string, bucket: RateLimitBucket, now: number = Date.now()): RateLimitDecision {
+  const person = takeToken(userId, bucket, now);
+  if (!person.ok) return person;
+  return takeToken(`${userId}:mcp:${clientRowId}`, bucket, now, MULTIPLIER * MCP_CLIENT_SHARE);
 }
 
 /** Test hook. */

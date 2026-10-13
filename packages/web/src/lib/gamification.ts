@@ -106,11 +106,28 @@ export async function awardLikeReceived(client: PoolClient, parentType: AwardIte
   ]);
 }
 
-/** `comment_posted` for the commenter — comments are never anonymous (§9). */
-export async function awardCommentPosted(client: PoolClient, comment: { id: string; authorId: string; parentType: AwardItemType; parentId: string }): Promise<void> {
+/** `comment_posted` for the commenter — comments are never anonymous (§9). `viaMcp` describes the
+ *  comment itself (§25.12), not the item it was posted on. */
+export async function awardCommentPosted(
+  client: PoolClient,
+  comment: { id: string; authorId: string; parentType: AwardItemType; parentId: string; viaMcp?: boolean },
+): Promise<void> {
   await write(client, [
-    { userId: comment.authorId, reason: "comment_posted", itemType: comment.parentType, itemId: comment.parentId, awardKey: awardKey.commentPosted(comment.id) },
+    {
+      userId: comment.authorId,
+      reason: "comment_posted",
+      itemType: comment.parentType,
+      itemId: comment.parentId,
+      awardKey: awardKey.commentPosted(comment.id),
+      viaMcp: comment.viaMcp ?? false,
+    },
   ]);
+}
+
+/** §25.12 `agent_connected` — 0 points, once per person ever (the award key), the first time they
+ *  approve an AI agent connection; it is what earns Plugged In. */
+export async function awardAgentConnected(client: PoolClient, userId: string): Promise<void> {
+  await write(client, [{ userId, reason: "agent_connected", itemType: null, itemId: null, awardKey: awardKey.agentConnected(), viaMcp: true }]);
 }
 
 /** §9 self-reveal: replays every award the item already earned for its author, backdated to the

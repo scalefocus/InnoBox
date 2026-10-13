@@ -77,6 +77,17 @@ test("gamification backfill: replays history silently and once", { skip: url ? f
     }
     await pool.query(`insert into comments (parent_type, parent_id, author_id, body, deleted_at) values ('challenge', $1, $2, 'gone', now())`, [named, fan]);
 
+    // §25.12: a comment made through an agent, and the assignee's two grants (one revoked).
+    await pool.query(`insert into comments (parent_type, parent_id, author_id, body, mcp_client_name) values ('challenge', $1, $2, 'via agent', 'BF Agent')`, [named, assignee]);
+    const { rows: bfClient } = await pool.query<{ id: string }>(
+      `insert into oauth_clients (client_id, client_name, redirect_uris) values ($1, 'BF Agent', array['http://127.0.0.1:1/cb']) returning id`,
+      [`bf-${stamp}`],
+    );
+    await pool.query(
+      `insert into oauth_grants (user_id, client_id, created_at, revoked_at) values ($1, $2, now() - interval '4 days', now() - interval '3 days'), ($1, $2, now() - interval '1 day', null)`,
+      [assignee, bfClient[0]!.id],
+    );
+
     const summary = await runGamificationBackfill(pool);
     assert.equal(summary.ran, true);
     assert.ok(summary.awards > 0);
@@ -97,7 +108,25 @@ test("gamification backfill: replays history silently and once", { skip: url ? f
     assert.ok(Math.abs(Date.now() - 86400_000 - solved.occurred_at.getTime()) < 60_000, "dated by resolved_at");
 
     assert.deepEqual((await ledger(solver)).map((r) => r.reason).sort(), ["like_received", "solution_implemented", "solution_proposed"]);
-    assert.deepEqual((await ledger(assignee)).map((r) => r.reason), ["assignment_solved"]);
+    const assigneeRows = (
+      await pool.query<{ reason: string; points: number; via_mcp: boolean; item_id: string | null; occurred_at: Date }>(
+        `select reason, points, via_mcp, item_id, occurred_at from gamification_ledger where user_id = $1 order by occurred_at, id`,
+        [assignee],
+      )
+    ).rows;
+    assert.deepEqual(
+      assigneeRows.map((r) => [r.reason, r.points, r.via_mcp]),
+      [
+        ["agent_connected", 0, true],
+        ["assignment_solved", 15, false],
+        ["comment_posted", 1, true],
+      ],
+      "agent_connected from the earliest grant; via_mcp copied from the comment",
+    );
+    assert.equal(assigneeRows[0]!.item_id, null);
+    assert.ok(Math.abs(Date.now() - 4 * 86400_000 - assigneeRows[0]!.occurred_at.getTime()) < 60_000, "dated by the earliest grant, revoked or not");
+    const { rows: plugged } = await pool.query(`select 1 from user_badges where user_id = $1 and badge_key = 'plugged_in'`, [assignee]);
+    assert.equal(plugged.length, 1);
     const fanComments = (await ledger(fan)).filter((r) => r.reason === "comment_posted");
     assert.deepEqual(
       fanComments.map((r) => r.points),

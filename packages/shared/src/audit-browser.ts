@@ -41,6 +41,9 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     "survey.%",
     // §23.11 the one-time gamification backfill (the switch itself is a settings.* row).
     "gamification.%",
+    // §25.13 agent access: grants created/revoked and clients blocked/unblocked (the settings
+    // themselves are a settings.* row).
+    "mcp.%",
     // §24.9 the public submission review queue: accept, decline, discard and contact erasure.
     "public_submission.%",
     "%.exported",
