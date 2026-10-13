@@ -19,8 +19,23 @@ import { isPublicFormPath, isPublicIntakeApiPath } from "./public-intake-paths";
 
 const PUBLIC_EXACT = new Set(["/", "/healthz", "/readyz", "/metrics", "/icon.svg", "/favicon.ico", "/api/csp-report"]);
 
+// §25.2 agent access: these routes authenticate themselves — the metadata documents, registration,
+// token and revocation take no credential and read no application data; /mcp takes a bearer token
+// ONLY (a session cookie is never consulted there). /oauth/authorize and /oauth/consent are NOT
+// here: they need a session, so a signed-out visitor goes through sign-in and back. Exact paths.
+export const AGENT_ACCESS_PUBLIC_PATHS: ReadonlySet<string> = new Set([
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-protected-resource/mcp",
+  "/.well-known/oauth-authorization-server",
+  "/oauth/register",
+  "/oauth/token",
+  "/oauth/revoke",
+  "/mcp",
+]);
+
 export function isPublicPath(pathname: string): boolean {
   if (PUBLIC_EXACT.has(pathname)) return true;
+  if (AGENT_ACCESS_PUBLIC_PATHS.has(pathname)) return true;
   if (isPublicFormPath(pathname) || isPublicIntakeApiPath(pathname)) return true;
   if (pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return true;
   if (pathname.startsWith("/_next/")) return true;

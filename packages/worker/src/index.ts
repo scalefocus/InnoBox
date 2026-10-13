@@ -10,7 +10,7 @@
 import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
-import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, type GraphMailEnv } from "@innobox/shared";
+import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, sweepOauth, type GraphMailEnv } from "@innobox/shared";
 import { aiAllowedPrivateHosts, aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage, warnAiAllowedPrivateHosts } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
@@ -165,7 +165,7 @@ const leaderElection = startLeaderElection(dbUrl, {
       .catch((err) => console.error(JSON.stringify({ level: "error", msg: "gamification backfill failed", error: String(err) })));
 
     // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.7 system-log
-    // trim, §22.3 AI usage prune, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what
+    // trim, §22.3 AI usage prune, §25.13 expired OAuth rows, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what
     // keeps per-person presence detail from accumulating past its 3-day floor — skipping it
     // because a mail or storage integration is unconfigured would silently turn presence into an
     // unbounded attendance record. (The §12.4 webhook-delivery trim runs on the same hourly
@@ -203,6 +203,16 @@ const leaderElection = startLeaderElection(dbUrl, {
         }
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "public submission retention failed", error: String(err) }));
+      }
+      // §25.13 agent access: expired codes/tokens, consumed or expired pending authorizations,
+      // refresh lineage past its idle lifetime, and clients never granted within 7 days.
+      try {
+        const summary = await sweepOauth(pool);
+        if (summary.tokens || summary.pending || summary.clients) {
+          console.log(JSON.stringify({ level: "info", msg: "oauth sweep", ...summary }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "oauth sweep failed", error: String(err) }));
       }
       // §11 upload-session GC: reaps chunked-upload sessions abandoned after 2h (backstop to the
       // on-initiate cleanup). The session rows are reaped regardless; the MinIO multipart abort

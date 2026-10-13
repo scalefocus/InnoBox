@@ -1732,3 +1732,44 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .public-done { text-align: center; padding: 18px 6px 6px; }
 .public-foot { margin-top: 22px; font-size: 13.5px; color: var(--muted); }
 .public-foot a { color: var(--muted); }
+
+/* ── AI agents (INNOBOX_SPEC.md §25.8–§25.10) ─────────────────────────────────────────────────
+   The "via agent" tag: small, muted, inline beside an author line — quieter than a .chip so it
+   reads as provenance, not as a status. Theme-safe: tokens only. */
+.via-agent-tag {
+  display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 400; letter-spacing: 0.02em;
+  line-height: 1.5; white-space: nowrap; vertical-align: middle; cursor: help;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+/* Inside a flex row with its own gap (comments, triage rows), the margin would double the spacing. */
+.via-agent-tag.is-flush { margin-left: 0; }
+/* /agents — the server URL line and the copyable snippets. */
+.agent-url { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.agent-url-label { font-size: 13px; font-weight: 500; }
+.agent-url-value,
+.mcp-server-url {
+  flex: 1 1 240px; min-width: 0; font-size: 12.5px; padding: 7px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); overflow-wrap: anywhere;
+}
+.mcp-server-url { display: block; }
+.agent-snippets { display: grid; gap: 12px; }
+.agent-snippet { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.agent-snippet-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.agent-snippet-head .grow { flex: 1; min-width: 0; }
+.agent-snippet-head .ttl { font-weight: 500; font-size: 14px; }
+.agent-snippet-head .sub { color: var(--muted); font-size: 12.5px; }
+.agent-snippet-code {
+  margin: 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--ink);
+  background: var(--surface-2); border-top: 1px solid var(--line); overflow-x: auto; white-space: pre;
+}
+.agent-copy { flex-shrink: 0; min-width: 72px; justify-content: center; }
+.agents-off { border-color: var(--warn); }
+.agent-can-list { margin: 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 6px; }
+@media (max-width: 560px) {
+  .agent-conn-row,
+  .mcp-client-row { flex-wrap: wrap; gap: 8px 12px; padding: 12px 14px; }
+  .agent-conn-row .grow,
+  .mcp-client-row .grow { flex-basis: 100%; }
+}

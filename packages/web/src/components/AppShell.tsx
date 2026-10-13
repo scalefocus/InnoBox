@@ -45,6 +45,9 @@ interface MeResponse {
   /** §23.12: the sidebar ring's level (null while gamification is off) and the toast queue. */
   gamification?: { points: number; level: number; levelName: string; progress: number } | null;
   newAchievements?: Achievement[];
+  /** §25.9: true while agent access is on, or while the user still holds a live connection —
+   *  shows the account menu's AI agents item. */
+  agentsMenu?: boolean;
 }
 
 /** The mobile layout's breakpoint — where the nav becomes a drawer and the bell a full sheet. */
@@ -567,7 +570,7 @@ function AccountMenu({
   canGiveFeedback,
   onGiveFeedback,
 }: {
-  me: Pick<MeResponse, "user" | "gamification"> | null;
+  me: Pick<MeResponse, "user" | "gamification" | "agentsMenu"> | null;
   /** §13.10: while an offer is open, "Take the survey" leads the menu. */
   survey: SurveyOfferPayload | null;
   onTakeSurvey: () => void;
@@ -625,6 +628,14 @@ function AccountMenu({
             <CompassIcon />
             Quick start
           </Link>
+          {/* §25.9: AI agents sits directly above What's new while the server is on or the person
+              still holds a connection (so a leftover connection can always be revoked). */}
+          {me?.agentsMenu === true && (
+            <Link className="user-menu-item" role="menuitem" href="/agents" data-testid="menu-ai-agents" onClick={() => setOpen(false)}>
+              <AgentIcon />
+              AI agents
+            </Link>
+          )}
           <Link className="user-menu-item" role="menuitem" href="/whats-new" onClick={() => setOpen(false)}>
             <SparkIcon />
             What&apos;s new
@@ -808,6 +819,15 @@ function CompassIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
       <path d="M14.8 9.2 13 13l-3.8 1.8L11 11l3.8-1.8Z" />
+    </svg>
+  );
+}
+
+function AgentIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="8" width="14" height="11" rx="2.5" />
+      <path d="M12 4v4M9.5 13h.01M14.5 13h.01M9.5 16.5h5M3 12.5v2.5M21 12.5v2.5" />
     </svg>
   );
 }

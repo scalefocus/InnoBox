@@ -3,7 +3,7 @@
 // authenticated user may search (enforced in route.ts); this module only returns the
 // minimal id/displayName/email projection, never roles or namespace membership.
 import type { Pool } from "pg";
-import type { ChallengeVisibilityInput } from "@innobox/shared";
+import { eraseUserGrants, type ChallengeVisibilityInput } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { scrubSystemEventsForUser } from "../admin/system-log/store";
@@ -219,6 +219,9 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §23.9: the user's points ledger and badges go — the only DELETE the app role holds on them.
     await client.query(`delete from gamification_ledger where user_id = $1`, [userId]);
     await client.query(`delete from user_badges where user_id = $1`, [userId]);
+    // §25.13: the person's AI agent grants are revoked (audited, reason "erased") and deleted —
+    // their tokens and pending authorizations cascade. mcp_client_name is not personal data.
+    await eraseUserGrants(client, userId, adminUserId);
     // §3 optional successor: hand over the open assignments the successor can see, same transaction.
     const reassignment = handover ? await handOverOpenAssignments(client, adminUserId, userId, handover) : null;
     await appendAudit(client, {

@@ -4759,7 +4759,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `me/agents` (`GET` the server URL, the on/off state and the caller's connections;
   `me/agents/:grantId` `DELETE` revokes one — §25.9); challenge and solution detail
   payloads and comment rows carry `viaAgent` (§25.8)
-- **Agent access (§25)** — outside `/api`: `/.well-known/oauth-protected-resource`,
+- **Agent access (§25)** — outside `/api`: `/.well-known/oauth-protected-resource` (and its
+  `/mcp`-suffixed alias),
   `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/token`,
   `/oauth/revoke` (no session; read no application data), `/oauth/authorize` and
   `/oauth/consent` (session), and `POST /mcp` (bearer token only) — all **503** while
@@ -6192,19 +6193,6 @@ user.
 
 ## §25 Agent access (MCP server)
 
-> **⚠ GAP-78 · new feature:** agent access does not exist. Build: a migration
-> (`oauth_clients`, `oauth_grants`, `oauth_tokens`, `oauth_pending_authorizations`;
-> `mcp_client_name` on `challenges`, `solutions` and `comments`; `via_mcp` and the
-> nullable item on `gamification_ledger`, the `agent_connected` reason; the four
-> `mcp_*` settings; grants — the app role gets SELECT/INSERT/UPDATE/DELETE on the four
-> `oauth_*` tables); the OAuth endpoints, the consent page and its CSP; the `/mcp`
-> Streamable HTTP endpoint and its 15 tools; the middleware allowlist and the `Origin`
-> exemptions; the per-person and per-client rate limits; the "via agent" tag on every
-> surface in §25.8; the `/agents` page and its account-menu entry; the §14.3 card with
-> the client list and block control; the leaver revocation; the worker's sweep of
-> expired OAuth rows; the four §23 badges; the metrics; the invariant 2 wording in
-> `CLAUDE.md`; and the tests in §25.13. Ships as one minor release.
-
 InnoBox exposes a **Model Context Protocol (MCP) server**, so a person's AI agent —
 Claude Code, Claude Desktop, VS Code, or any MCP client — can search and read the
 challenges that person can see, and help them **submit challenges, propose solutions
@@ -6241,7 +6229,7 @@ expired rows (§25.13).
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /.well-known/oauth-protected-resource` | none | RFC 9728 resource metadata for `<PUBLIC_BASE_URL>/mcp` |
+| `GET /.well-known/oauth-protected-resource` | none | RFC 9728 resource metadata for `<PUBLIC_BASE_URL>/mcp` — also served at the path-suffixed `/.well-known/oauth-protected-resource/mcp` (RFC 9728 §3.1), where MCP clients look first |
 | `GET /.well-known/oauth-authorization-server` | none | RFC 8414 server metadata |
 | `POST /oauth/register` | none | RFC 7591 dynamic client registration |
 | `GET /oauth/authorize` | session | Validates the request, then shows the consent page (signed out → Entra sign-in, then back) |
@@ -6281,9 +6269,10 @@ expired rows (§25.13).
 - **Public clients only** (`token_endpoint_auth_method = none`): desktop and CLI
   clients cannot keep a secret; PKCE is the compensating control.
 - **Redirect URIs are exact-match**, registered up front. Loopback
-  (`http://127.0.0.1:<port>` and `http://[::1]:<port>`) matches **on any port**, as
-  MCP desktop and CLI clients require; every other URI must be `https` or a custom
-  app scheme. No wildcards. `client_name` is required, 1–80 printable characters.
+  (`http://127.0.0.1:<port>`, `http://[::1]:<port>` and `http://localhost:<port>` — the
+  form Claude Code and the MCP SDKs register) matches **on any port**, with the same
+  host, path and query, as MCP desktop and CLI clients require; every other URI must be
+  `https` or a custom app scheme. No wildcards. `client_name` is required, 1–80 printable characters.
 - **A parameter supplied twice is rejected** on `/oauth/authorize`, before
   `client_id` or `redirect_uri` is read, with the non-redirecting error page — a
   duplicated `redirect_uri` can never be resolved to the registered one.
@@ -6496,8 +6485,11 @@ A **platform-admin** card on `/admin/settings` — **AI agents (MCP)** (§14.3):
 
 - **Rate limits** (per instance, like the rest of §2.4), **429** with `Retry-After`:
   per person **and** per (person, client), so one runaway agent cannot use up the
-  person's allowance. Read tools take the `search` bucket's limits; write tools the
-  `mutation` bucket's — an agent gets no more throughput than a person. Registration:
+  person's allowance: the person's bucket is the very one their browser requests draw
+  on, and each (person, client) bucket allows **half** of it. Read tools take the
+  `search` bucket's limits; write tools the bucket of their `/api` route — `create` for
+  `submit_challenge` and `propose_solution`, `comment` for `post_comment`, `mutation`
+  for the rest — so an agent gets no more throughput than a person. Registration:
   10 per IP per hour; `/oauth/token` and unauthenticated `/mcp` calls: 60 per IP per
   minute.
 - **Body cap:** the §2.4 JSON limit (1 MB) on `/mcp` and every OAuth route.

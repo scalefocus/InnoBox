@@ -1,7 +1,7 @@
 // Unit tests for the §2.4 per-user token buckets (INNOBOX_SPEC.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { RATE_LIMITS, effectiveLimit, rateLimit, rateLimitWarning, resetRateLimits, takeToken } from "./rate-limit";
+import { MCP_CLIENT_SHARE, RATE_LIMITS, effectiveLimit, rateLimit, rateLimitWarning, resetRateLimits, takeMcpToken, takeToken } from "./rate-limit";
 
 test("a bucket allows exactly its limit, then refuses with a Retry-After", () => {
   resetRateLimits();
@@ -95,4 +95,24 @@ test("the survey routes' rate-limit warning omits the user id (§13.10)", () => 
   } finally {
     console.warn = original;
   }
+});
+
+test("§25.11: an MCP call takes the person's bucket and a smaller (person, client) bucket", () => {
+  resetRateLimits();
+  const now = 1_000_000;
+  const clientLimit = Math.ceil(RATE_LIMITS.mutation.limit * MCP_CLIENT_SHARE);
+  for (let i = 0; i < clientLimit; i++) assert.equal(takeMcpToken("u-mcp", "client-a", "mutation", now).ok, true, `call ${i}`);
+  const refused = takeMcpToken("u-mcp", "client-a", "mutation", now);
+  assert.equal(refused.ok, false, "one runaway agent stops at its own share");
+  assert.equal(takeMcpToken("u-mcp", "client-b", "mutation", now).ok, true, "another client of the same person still works");
+  // The person's own bucket was drawn on by every call — an agent gets no more than the person.
+  let personLeft = 0;
+  while (takeToken("u-mcp", "mutation", now).ok) personLeft++;
+  assert.equal(personLeft, RATE_LIMITS.mutation.limit - clientLimit - 2);
+  resetRateLimits();
+});
+
+test("§25.11 per-IP buckets: registration 10/hour, token + unauthenticated /mcp 60/minute", () => {
+  assert.deepEqual(RATE_LIMITS["mcp-register"], { limit: 10, windowMs: 60 * 60 * 1000 });
+  assert.deepEqual(RATE_LIMITS["mcp-ip"], { limit: 60, windowMs: 60 * 1000 });
 });

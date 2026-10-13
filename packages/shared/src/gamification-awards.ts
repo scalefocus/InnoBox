@@ -16,6 +16,7 @@
 import type { DbClient } from "./email-graph.js";
 import {
   BADGES,
+  BADGE_COUNTERS,
   achievementMessage,
   awardKey,
   badgeTiersReached,
@@ -25,6 +26,7 @@ import {
   DAILY_CAPS,
   type Achievement,
   type AwardItemType,
+  type BadgeCounter,
   type BadgeKey,
   type GamificationReason,
   type ReasonCounts,
@@ -33,9 +35,14 @@ import {
 export interface AwardInput {
   userId: string;
   reason: GamificationReason;
-  itemType: AwardItemType;
-  itemId: string;
+  /** Null exactly for the item-less `agent_connected` reason (§25.12). */
+  itemType: AwardItemType | null;
+  itemId: string | null;
   awardKey: string;
+  /** §25.12 `via_mcp`: whether the item (or comment) the award is about was created through an AI
+   *  agent. When omitted it is read from the item's `mcp_client_name` — so a replay or a later
+   *  milestone copies it from the item. A comment award passes it from the comment itself. */
+  viaMcp?: boolean;
   /** The event time — drives the daily cap day and the 30-day window. Defaults to now. */
   occurredAt?: Date;
 }
@@ -116,22 +123,32 @@ async function insertAward(db: DbClient, award: AwardInput): Promise<boolean> {
     sameDay = rows[0]?.n ?? 0;
   }
   const result = await db.query(
-    `insert into gamification_ledger (user_id, reason, points, award_key, item_type, item_id, occurred_at)
-     values ($1, $2, $3, $4, $5, $6, $7)
+    `insert into gamification_ledger (user_id, reason, points, award_key, item_type, item_id, occurred_at, via_mcp)
+     values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::boolean,
+       case $5::text
+         when 'challenge' then (select mcp_client_name is not null from challenges where id = $6::uuid)
+         when 'solution' then (select mcp_client_name is not null from solutions where id = $6::uuid)
+       end, false))
      on conflict (user_id, award_key) do nothing`,
-    [award.userId, award.reason, pointsFor(award.reason, sameDay), award.awardKey, award.itemType, award.itemId, at],
+    [award.userId, award.reason, pointsFor(award.reason, sameDay), award.awardKey, award.itemType, award.itemId, at, award.viaMcp ?? null],
   );
   return (result.rowCount ?? 0) > 0;
 }
 
-/** The ledger counts per reason that badges evaluate (capped 0-point rows included). */
+/** The ledger counts per reason — and per §25.12 agent counter — that badges evaluate (capped
+ *  0-point rows included). */
 export async function reasonCounts(db: DbClient, userId: string): Promise<ReasonCounts> {
-  const { rows } = await db.query<{ reason: GamificationReason; n: number }>(
-    `select reason, count(*)::int as n from gamification_ledger where user_id = $1 group by reason`,
+  const { rows } = await db.query<{ reason: GamificationReason; via_mcp: boolean; n: number }>(
+    `select reason, via_mcp, count(*)::int as n from gamification_ledger where user_id = $1 group by reason, via_mcp`,
     [userId],
   );
   const counts: ReasonCounts = {};
-  for (const r of rows) counts[r.reason] = r.n;
+  for (const [counter, def] of Object.entries(BADGE_COUNTERS) as [BadgeCounter, (typeof BADGE_COUNTERS)[BadgeCounter]][]) {
+    const n = rows
+      .filter((r) => def.reasons.includes(r.reason) && (def.viaMcp === null || r.via_mcp === def.viaMcp))
+      .reduce((sum, r) => sum + r.n, 0);
+    if (n > 0) counts[counter] = n;
+  }
   return counts;
 }
 
@@ -152,12 +169,14 @@ async function fullCircleAt(db: DbClient, userId: string): Promise<Date | null> 
   return rows[0]?.at ?? null;
 }
 
-/** The event time of the Nth award of a reason — when a count-based tier was reached. */
-async function nthAwardAt(db: DbClient, userId: string, reason: GamificationReason, n: number): Promise<Date | null> {
+/** The event time of the Nth row a counter counts — when a count-based tier was reached. */
+async function nthAwardAt(db: DbClient, userId: string, counter: BadgeCounter, n: number): Promise<Date | null> {
+  const def = BADGE_COUNTERS[counter];
   const { rows } = await db.query<{ occurred_at: Date }>(
-    `select occurred_at from gamification_ledger where user_id = $1 and reason = $2
-      order by occurred_at, id offset $3 limit 1`,
-    [userId, reason, n - 1],
+    `select occurred_at from gamification_ledger
+      where user_id = $1 and reason = any($2::text[]) and ($3::boolean is null or via_mcp = $3)
+      order by occurred_at, id offset $4 limit 1`,
+    [userId, def.reasons, def.viaMcp, n - 1],
   );
   return rows[0]?.occurred_at ?? null;
 }

@@ -143,6 +143,10 @@ export function isStatusRefusedForExternal(status: string): boolean {
 export interface ViewerContext {
   userId: string;
   roles: RoleSet;
+  /** §25.5: an AI agent's view while restricted content is not shared over MCP — every
+   *  namespace-restricted challenge (and so its solutions and comments) behaves as if it did not
+   *  exist, whatever the person may see in the browser. Never set for a browser request. */
+  orgVisibleOnly?: boolean;
 }
 
 export interface ChallengeVisibilityInput {
@@ -157,6 +161,7 @@ export interface ChallengeVisibilityInput {
  *  namespace's admins (platform admins included, via isNamespaceAdmin); otherwise
  *  org-visibility is open to everyone and namespace-visibility is member-only. */
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
+  if (viewer.orgVisibleOnly && challenge.visibility === "namespace") return false;
   const isAuthor = viewer.userId === challenge.authorId;
   const isNamespaceAdminHere = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   if (challenge.status === "awaiting_triage" || challenge.status === "withdrawn") {
@@ -329,9 +334,9 @@ export function canAuthorWithdrawSolution(status: SolutionStatus): boolean {
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
-const TITLE_MAX = 120;
-const DESCRIPTION_MAX = 10_000;
-const COST_VS_BENEFITS_MAX = 5_000;
+export const TITLE_MAX = 120;
+export const DESCRIPTION_MAX = 10_000;
+export const COST_VS_BENEFITS_MAX = 5_000;
 /** §2.4/§6.1: every free-text field has a ceiling; the challenge client name is capped at 200. */
 export const CLIENT_NAME_MAX = 200;
 

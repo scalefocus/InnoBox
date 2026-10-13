@@ -2,7 +2,8 @@
 // Comment thread (INNOBOX_SPEC.md §10.2): post, owner edit/delete within 15 minutes,
 // admin moderation delete anytime. Comments are never anonymous (§9) — always the real
 // name. Deleted comments render as "Comment removed by a moderator". Above the thread, the §22.13
-// discussion summary control (when the item's number is known and summaries are available).
+// discussion summary control (when the item's number is known and summaries are available). A
+// comment posted through an AI agent carries the §25.8 "via agent" tag beside its author.
 //
 // Replies (§10.2): one level deep. Top-level comments stay oldest first; each one's replies follow
 // it, indented, also oldest first — the first REPLIES_SHOWN, then "Show N more replies". Every
@@ -15,6 +16,7 @@ import { AvatarBubble } from "@/components/AvatarBubble";
 import { DiscussionSummary } from "@/components/DiscussionSummary";
 import { useDateFmt } from "@/components/DateFormat";
 import { reportFeatureUse } from "@/lib/survey-client";
+import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 
 interface CommentRecord {
   id: string;
@@ -32,6 +34,8 @@ interface CommentRecord {
   canEdit: boolean;
   canModerate: boolean;
   authorIsCommittee: boolean;
+  /** §25.8: set when posted through an AI agent (absent/null = posted in the browser). */
+  viaAgent?: ViaAgent;
 }
 
 /** The open reply composer: the thread it files under and the comment it answers. */
@@ -214,6 +218,7 @@ export function CommentThread({
             {c.deleted ? <span className="muted">—</span> : c.authorDisplayName}
           </span>
           {c.authorIsCommittee && !c.deleted && <span className="chip chip-accent">Committee</span>}
+          {!c.deleted && <ViaAgentTag via={c.viaAgent} flush />}
           <span className="sub mono">{fmt.dateTime(c.createdAt)}</span>
           {c.editedAt && !c.deleted && <span className="chip">edited</span>}
         </div>

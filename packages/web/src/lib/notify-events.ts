@@ -5,15 +5,17 @@
 // mute) live in ./notify; this module only decides WHO the candidates are and WHAT the message
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
-import type { NotificationEventNumber } from "@innobox/shared";
+import { formatChallengeNumber, formatSolutionNumber, type NotificationEventNumber } from "@innobox/shared";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
 import {
+  dispatchCoalescedComment,
   dispatchEvent,
   dispatchToUser,
   getFollowerUserIds,
   getNamespaceAdminUserIds,
   getNamespaceCommitteeUserIds,
+  getOtherCommenterUserIds,
   type NotifyContext,
 } from "./notify";
 
@@ -242,6 +244,133 @@ export async function notifySolutionProposed(
     { preference: "followedSolutions", exempt: [...admins, ...committee] },
     // Held for the author and followers only — to admins and the committee it is an attention event.
     { event: 2, adminRoute: [...admins, ...committee], facts: { kind: "solution", challengeNumber: number, challengeTitle: challenge.title } },
+  );
+}
+
+/**
+ * §12.1 event 1 (challenge submitted): the namespace's admins, to triage it. Shared by the submit
+ * route and the §25 `submit_challenge` tool, so both fire the same event.
+ */
+export async function notifyChallengeSubmitted(
+  ctx: NotifyContext,
+  challenge: { id: string; number: string; title: string; namespaceId: string },
+): Promise<void> {
+  await dispatchEvent(
+    ctx,
+    { parentType: "challenge", parentId: challenge.id },
+    await getNamespaceAdminUserIds(ctx.pool, challenge.namespaceId),
+    "challenge_submitted",
+    {
+      message: `New challenge ${formatChallengeNumber(challenge.number)} "${challenge.title}" needs triage.`,
+      link: `/challenges/${digitsOf(challenge.number)}`,
+    },
+  );
+}
+
+/** §12.1 event 9 (challenge resubmitted, §10.1): the namespace's admins + committee, the assignee
+ *  and the challenge's followers. Shared by the resubmit route and the §25 `resubmit` tool. */
+export async function notifyChallengeResubmitted(
+  ctx: NotifyContext,
+  number: string,
+  result: { challengeId: string; namespaceId: string; title: string; assigneeId: string | null },
+): Promise<void> {
+  const [admins, committee, followers] = await Promise.all([
+    getNamespaceAdminUserIds(ctx.pool, result.namespaceId),
+    getNamespaceCommitteeUserIds(ctx.pool, result.namespaceId),
+    getFollowerUserIds(ctx.pool, "challenge", result.challengeId),
+  ]);
+  const candidates = [...admins, ...committee, ...(result.assigneeId ? [result.assigneeId] : []), ...followers];
+  await dispatchEvent(ctx, { parentType: "challenge", parentId: result.challengeId }, candidates, "status_changed", {
+    message: `${formatChallengeNumber(number)} "${result.title}" was resubmitted for review.`,
+    link: `/challenges/${digitsOf(number)}`,
+  });
+}
+
+/** §12.1 event 9 for a solution: the parent namespace's admins + committee, the parent
+ *  challenge's assignee and the solution's followers. */
+export async function notifySolutionResubmitted(
+  ctx: NotifyContext,
+  number: string,
+  result: { solutionId: string; namespaceId: string; challengeNumber: string; challengeTitle: string; assigneeId: string | null },
+): Promise<void> {
+  const [admins, committee, followers] = await Promise.all([
+    getNamespaceAdminUserIds(ctx.pool, result.namespaceId),
+    getNamespaceCommitteeUserIds(ctx.pool, result.namespaceId),
+    getFollowerUserIds(ctx.pool, "solution", result.solutionId),
+  ]);
+  const candidates = [...admins, ...committee, ...(result.assigneeId ? [result.assigneeId] : []), ...followers];
+  await dispatchEvent(ctx, { parentType: "solution", parentId: result.solutionId }, candidates, "status_changed", {
+    message: `${formatSolutionNumber(number)} on ${result.challengeNumber} "${result.challengeTitle}" was resubmitted for review.`,
+    link: `/challenges/${digitsOf(result.challengeNumber)}#SOL-${digitsOf(number)}`,
+  });
+}
+
+/**
+ * §12.1 event 6 (comment posted), coalesced: the item author, its other commenters and followers —
+ * never the commenter. Messages reference the parent CHALLENGE (solutions have no title); the
+ * recipients are scoped to the comment's actual parent. A reply (§10.2) also counts as a reply for
+ * the author of the comment it answers (`replyToAuthorId`). Shared by the comments route and the
+ * §25 `post_comment` tool.
+ */
+export async function notifyCommentPosted(
+  ctx: NotifyContext,
+  parentType: "challenge" | "solution",
+  parentId: string,
+  commenterId: string,
+  replyToAuthorId: string | null = null,
+): Promise<void> {
+  const item =
+    parentType === "challenge"
+      ? await ctx.pool
+          .query<{ id: string; number: string; title: string; author_id: string }>(`select id, number::text, title, author_id from challenges where id = $1`, [parentId])
+          .then((r) =>
+            r.rows[0]
+              ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeId: r.rows[0].id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title, solutionNumber: null }
+              : null,
+          )
+      : await ctx.pool
+          .query<{ id: string; number: string; author_id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+            `select s.id, s.number::text as number, s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title
+               from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+            [parentId],
+          )
+          .then((r) =>
+            r.rows[0]
+              ? {
+                  id: r.rows[0].id,
+                  authorId: r.rows[0].author_id,
+                  challengeId: r.rows[0].challenge_id,
+                  challengeNumber: r.rows[0].challenge_number,
+                  challengeTitle: r.rows[0].challenge_title,
+                  // §12.1 deep link: a solution resolves to its parent challenge page, scrolled to it.
+                  solutionNumber: r.rows[0].number,
+                }
+              : null,
+          );
+  if (!item) return;
+  const { rows: who } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [commenterId]);
+
+  const [otherCommenters, followers] = await Promise.all([
+    getOtherCommenterUserIds(ctx.pool, parentType, item.id),
+    getFollowerUserIds(ctx.pool, parentType, item.id),
+  ]);
+  await dispatchCoalescedComment(
+    ctx,
+    // The author of a comment answered is always among the other commenters (§10.2).
+    [item.authorId, ...otherCommenters, ...followers],
+    {
+      parentType,
+      parentId: item.id,
+      challengeId: item.challengeId,
+      challengeNumber: formatChallengeNumber(item.challengeNumber),
+      challengeTitle: item.challengeTitle,
+      latestBy: who[0]?.display_name ?? "Someone",
+      link: itemHref(item.challengeNumber, item.solutionNumber),
+      replyToAuthorId,
+    },
+    // §12.1: mutable for every recipient route — an author who mutes it hears no comments on
+    // their own item either.
+    { preference: "followedComments" },
   );
 }
 

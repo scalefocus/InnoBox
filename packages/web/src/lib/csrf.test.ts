@@ -86,3 +86,12 @@ test("the server's own origin stands in only in dev with nothing configured; pro
   // Configured URL in dev: the request's own origin is NOT additionally accepted.
   assert.equal(check({ env: { PUBLIC_BASE_URL: "http://localhost:3000" }, dev: true, origin: "http://127.0.0.1:3000", requestOrigin: "http://127.0.0.1:3000" }), false);
 });
+
+test("§25.3: POST /oauth/consent keeps the Origin check; the programmatic agent routes are exempt", () => {
+  assert.equal(requiresOriginCheck("POST", "/oauth/consent"), true);
+  assert.equal(check({ pathname: "/oauth/consent", origin: "https://evil.example.com" }), false);
+  assert.equal(check({ pathname: "/oauth/consent" }), true);
+  for (const p of ["/mcp", "/oauth/register", "/oauth/token", "/oauth/revoke"]) {
+    assert.equal(requiresOriginCheck("POST", p), false, p);
+  }
+});

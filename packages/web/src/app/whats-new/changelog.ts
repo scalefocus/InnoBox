@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.0",
+    date: "2026-10-13",
+    summary:
+      "You can now connect an AI agent such as Claude Code, Claude Desktop or VS Code to InnoBox: it searches and reads what you can see and, after you approve it in your browser, submits challenges, proposes solutions and comments as you, marked \"via agent\". Set it up and revoke it on AI agents in your account menu, once an administrator turns agent access on in Platform settings. Four new badges reward your first steps.",
+  },
+  {
     version: "1.5.0",
     date: "2026-10-13",
     summary:

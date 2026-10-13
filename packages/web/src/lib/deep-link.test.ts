@@ -28,6 +28,7 @@ test("solution rows in the topbar autocomplete and the search page keep the #SOL
 });
 
 test("comment notifications on a solution link with the #SOL anchor", () => {
-  const source = readFileSync(path.join(here, "../app/api/comments/route.ts"), "utf8");
+  // The event 6 builder, shared by the comments route and the MCP post_comment tool.
+  const source = readFileSync(path.join(here, "notify-events.ts"), "utf8");
   assert.match(source, /link: itemHref\(item\.challengeNumber, item\.solutionNumber\)/);
 });

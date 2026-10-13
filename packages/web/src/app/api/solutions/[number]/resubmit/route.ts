@@ -2,10 +2,9 @@
 // `needs_improvement` solution back to `in_review`; the reviewers are notified (§12.1 event 9 —
 // the parent namespace's admins + committee, the parent challenge's assignee, and the solution's
 // followers).
-import { formatSolutionNumber } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds, getNamespaceAdminUserIds, getNamespaceCommitteeUserIds } from "@/lib/notify";
+import { logNotifyFailure, notifySolutionResubmitted } from "@/lib/notify-events";
 import { resubmitSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
@@ -24,23 +23,9 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
   const result = await resubmitSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {
     case "ok": {
-      const [admins, committee, followers] = await Promise.all([
-        getNamespaceAdminUserIds(pool, result.namespaceId),
-        getNamespaceCommitteeUserIds(pool, result.namespaceId),
-        getFollowerUserIds(pool, "solution", result.solutionId),
-      ]);
-      const candidates = [...admins, ...committee, ...(result.assigneeId ? [result.assigneeId] : []), ...followers];
-      const label = formatSolutionNumber(number);
-      await dispatchEvent(
-        { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-        { parentType: "solution", parentId: result.solutionId },
-        candidates,
-        "status_changed",
-        {
-          message: `${label} on ${result.challengeNumber} "${result.challengeTitle}" was resubmitted for review.`,
-          link: `/challenges/${result.challengeNumber.replace("CH-", "")}#SOL-${number}`,
-        },
-      ).catch((err) => console.error(JSON.stringify({ level: "error", msg: "solution resubmit notification failed", error: String(err) })));
+      await notifySolutionResubmitted({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, number, result).catch(
+        logNotifyFailure("solution resubmit notification failed"),
+      );
       return Response.json({ ok: true });
     }
     case "not_found":

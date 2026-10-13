@@ -2,10 +2,9 @@
 // `needs_improvement` challenge back to `in_review` and the reviewers are notified (§12.1
 // event 9 — namespace admins + committee, the assignee, and followers). The item is visible
 // again at in_review, so the standard visibility-filtered dispatch applies.
-import { formatChallengeNumber } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getFollowerUserIds, getNamespaceAdminUserIds, getNamespaceCommitteeUserIds } from "@/lib/notify";
+import { logNotifyFailure, notifyChallengeResubmitted } from "@/lib/notify-events";
 import { resubmitChallenge } from "../../store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../validation";
@@ -24,20 +23,9 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
   const result = await resubmitChallenge(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {
     case "ok": {
-      const [admins, committee, followers] = await Promise.all([
-        getNamespaceAdminUserIds(pool, result.namespaceId),
-        getNamespaceCommitteeUserIds(pool, result.namespaceId),
-        getFollowerUserIds(pool, "challenge", result.challengeId),
-      ]);
-      const candidates = [...admins, ...committee, ...(result.assigneeId ? [result.assigneeId] : []), ...followers];
-      const label = formatChallengeNumber(number);
-      await dispatchEvent(
-        { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-        { parentType: "challenge", parentId: result.challengeId },
-        candidates,
-        "status_changed",
-        { message: `${label} "${result.title}" was resubmitted for review.`, link: `/challenges/${number}` },
-      ).catch((err) => console.error(JSON.stringify({ level: "error", msg: "challenge resubmit notification failed", error: String(err) })));
+      await notifyChallengeResubmitted({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, number, result).catch(
+        logNotifyFailure("challenge resubmit notification failed"),
+      );
       return Response.json({ ok: true });
     }
     case "not_found":

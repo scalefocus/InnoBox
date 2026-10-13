@@ -68,3 +68,21 @@ test("public matching is exact — a route that only shares the '/' prefix is NO
   // A path that merely starts with "/api/auth" but is a different segment is not auth-public.
   assert.equal(isPublicPath("/api/authz"), false);
 });
+
+test("§25.2 agent access: the self-authenticating routes are public, the consent routes are not", () => {
+  for (const p of [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+    "/.well-known/oauth-authorization-server",
+    "/oauth/register",
+    "/oauth/token",
+    "/oauth/revoke",
+    "/mcp",
+  ]) {
+    assert.equal(isPublicPath(p), true, p);
+  }
+  // /oauth/authorize and /oauth/consent need a session (sign-in, then back).
+  for (const p of ["/oauth/authorize", "/oauth/consent", "/oauth", "/mcp/x", "/agents", "/.well-known/other"]) {
+    assert.equal(isPublicPath(p), false, p);
+  }
+});
