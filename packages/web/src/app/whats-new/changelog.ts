@@ -17,6 +17,18 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Customers and partners can now send a challenge through a public form, without an account. They confirm it by e-mail, and it waits in a new Public submissions queue for a platform admin to accept, decline or discard. Accepted ones join triage as External submission. To switch the form on, set PUBLIC_INTAKE_KEY and write a privacy notice in Platform settings.",
   },
   {
+    version: "1.1.0",
+    date: "2026-10-13",
+    summary:
+      "Platform admins can now see why an AI provider connection failed: a failed test, model list or save on the AI provider card is written to the System log with the provider's host, the addresses it resolved to and the underlying cause. An AI provider on your internal network can be allowed by your operator with the new AI_ALLOWED_PRIVATE_HOSTS setting.",
+  },
+  {
+    version: "1.0.4",
+    date: "2026-10-13",
+    summary:
+      "The Coming soon list at the top of this page has a new plan: connecting your AI assistant, such as Claude, to InnoBox so it can search challenges and submit challenges, solutions and comments as you, after you approve it in your browser. Firsts with an agent will earn new badges. Nothing changes yet, and plans can change.",
+  },
+  {
     version: "1.0.3",
     date: "2026-10-13",
     summary:

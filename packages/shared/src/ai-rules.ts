@@ -100,14 +100,21 @@ export class AiError extends Error {
   readonly retryable: boolean;
   /** Internal: a 429's Retry-After, in ms. */
   readonly retryAfterMs: number | null;
+  /** The §22.6 diagnostic detail — the provider host, its addresses, the failing stage and the
+   *  low-level cause. SYSTEM LOG ONLY: never the card, an API response or last_*_error. */
+  detail: string | null;
 
-  constructor(code: AiErrorCode, opts: { message?: string; httpStatus?: number | null; retryable?: boolean; retryAfterMs?: number | null } = {}) {
+  constructor(
+    code: AiErrorCode,
+    opts: { message?: string; httpStatus?: number | null; retryable?: boolean; retryAfterMs?: number | null; detail?: string | null } = {},
+  ) {
     super(opts.message ?? AI_ERROR_MESSAGES[code]);
     this.name = "AiError";
     this.code = code;
     this.httpStatus = opts.httpStatus ?? null;
     this.retryable = opts.retryable ?? false;
     this.retryAfterMs = opts.retryAfterMs ?? null;
+    this.detail = opts.detail ?? null;
   }
 }
 
@@ -132,7 +139,7 @@ export function sanitizeAiErrorText(raw: unknown, token?: string | null): string
 
 // ── Base URL (§22.2) ─────────────────────────────────────────────────────────────────────
 
-export type AiBaseUrlReason = "required" | "invalid_url" | "scheme" | "userinfo" | "query" | "too_long" | "blocked_address";
+export type AiBaseUrlReason = "required" | "invalid_url" | "scheme" | "userinfo" | "query" | "too_long" | "blocked_address" | "refused_address";
 
 export const AI_BASE_URL_MESSAGES: Record<AiBaseUrlReason, string> = {
   required: "Enter the Open WebUI base URL",
@@ -141,7 +148,8 @@ export const AI_BASE_URL_MESSAGES: Record<AiBaseUrlReason, string> = {
   userinfo: "The base URL must not contain a user name or password",
   query: "The base URL must not contain a query string or fragment",
   too_long: `The base URL must be at most ${AI_BASE_URL_MAX} characters`,
-  blocked_address: "This address is on a private or internal network",
+  blocked_address: "This address is on a private or internal network. An operator can allow this host with AI_ALLOWED_PRIVATE_HOSTS",
+  refused_address: "This is a loopback, link-local or reserved address, which is never allowed",
 };
 
 export type AiBaseUrlResult =
@@ -153,9 +161,8 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 
 /** Strict IPv4 / bracket-free IPv6 literal test without importing the address module — the
  *  public-address decision is the transport's (./ai.ts), this only catches obvious literals. */
-function looksPrivateLiteral(hostname: string, isPublic: (address: string) => boolean): boolean {
-  const literal = /^[0-9.]+$/.test(hostname) || hostname.includes(":");
-  return literal && !isPublic(hostname);
+function looksLiteral(hostname: string): boolean {
+  return /^[0-9.]+$/.test(hostname) || hostname.includes(":");
 }
 
 /**
@@ -166,12 +173,18 @@ function looksPrivateLiteral(hostname: string, isPublic: (address: string) => bo
  *  - Open WebUI: required, a trailing `/api` segment stripped (`https://host/api` → `https://host`);
  *  - OpenAI: blank → the default; a pasted trailing `/chat/completions` stripped.
  * `allowLocalhost` (never in production) admits `http://localhost` / `http://127.0.0.1` on any port.
- * `isPublicAddress` judges IP literals (injected so this module stays dependency-free).
+ * `isPublicAddress` judges IP literals (injected so this module stays dependency-free); a literal
+ * listed in `allowedPrivateHosts` may be private, though never one `isAlwaysRefusedAddress` names.
  */
 export function normalizeAiBaseUrl(
   provider: AiProvider,
   raw: unknown,
-  opts: { allowLocalhost: boolean; isPublicAddress: (address: string) => boolean },
+  opts: {
+    allowLocalhost: boolean;
+    isPublicAddress: (address: string) => boolean;
+    isAlwaysRefusedAddress?: (address: string) => boolean;
+    allowedPrivateHosts?: ReadonlySet<string>;
+  },
 ): AiBaseUrlResult {
   const fail = (reason: AiBaseUrlReason): AiBaseUrlResult => ({ ok: false, reason, message: AI_BASE_URL_MESSAGES[reason] });
   let text = typeof raw === "string" ? raw.trim() : "";
@@ -196,7 +209,10 @@ export function normalizeAiBaseUrl(
   }
   if (url.username !== "" || url.password !== "") return fail("userinfo");
   if (text.includes("?") || text.includes("#")) return fail("query");
-  if (!local && looksPrivateLiteral(hostname, opts.isPublicAddress)) return fail("blocked_address");
+  if (!local && looksLiteral(hostname) && !opts.isPublicAddress(hostname)) {
+    if (opts.isAlwaysRefusedAddress?.(hostname)) return fail("refused_address");
+    if (!opts.allowedPrivateHosts?.has(hostname.toLowerCase())) return fail("blocked_address");
+  }
 
   let path = stripTrailingSlashes(url.pathname);
   if (provider === "openwebui") path = path.replace(/\/api$/i, "");
@@ -649,4 +665,72 @@ export const AI_SYSTEM_LOG_STATUS: Partial<Record<AiErrorCode, number>> = {
 
 export function aiSystemLogRoute(featureKey: string): string {
   return `/ai/${featureKey}`;
+}
+
+/** The status of a failed admin test or model list's system-log row (§22.5). */
+export function aiAdminFailureLogStatus(code: AiErrorCode): number {
+  return code === "ai_timeout" ? 504 : 502;
+}
+
+/** The §22.6 diagnostic: the fixed card error, then ` — ` and the detail when there is one, with
+ *  the token redacted. The caller's system-log insert applies the 500-character cap. */
+export function aiFailureDiagnostic(err: AiError, token?: string | null): string {
+  let text = err.detail ? `${err.message} — ${err.detail}` : err.message;
+  if (token && token.length >= 4) text = text.split(token).join("[redacted]");
+  return text.replace(/bearer\s+\S+/gi, "Bearer [redacted]").replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]");
+}
+
+/** A Node error's `code` when it is a plain upper-case identifier (ECONNREFUSED,
+ *  CERT_HAS_EXPIRED, ERR_TLS_CERT_ALTNAME_INVALID); anything else is dropped — never
+ *  `err.message`, which can echo the URL (§22.6). */
+export function aiErrnoCode(err: unknown): string | null {
+  const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(code) ? code : null;
+}
+
+/** At most this many resolved addresses are named in a diagnostic, then "+N more". */
+export const AI_DIAGNOSTIC_MAX_ADDRESSES = 8;
+
+export function formatAiAddresses(addresses: readonly string[]): string {
+  const shown = addresses.slice(0, AI_DIAGNOSTIC_MAX_ADDRESSES).join(", ");
+  const more = addresses.length - AI_DIAGNOSTIC_MAX_ADDRESSES;
+  return more > 0 ? `${shown} +${more} more` : shown;
+}
+
+// ── Private-network providers (§2.3, §22.2) ──────────────────────────────────────────────
+
+export const AI_ALLOWED_PRIVATE_HOSTS_ENV = "AI_ALLOWED_PRIVATE_HOSTS";
+
+const HOST_NAME_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+
+/**
+ * AI_ALLOWED_PRIVATE_HOSTS → the exact host names / IP literals an AI provider may use on a
+ * private address. Comma-separated; trimmed and lower-cased; `[…]` around an IPv6 literal is
+ * dropped. No wildcards, CIDR or ports: anything else lands in `invalid` (the caller warns once).
+ * `isIpLiteral` is injected so this module stays dependency-free.
+ */
+export function parseAiAllowedPrivateHosts(
+  raw: string | undefined,
+  isIpLiteral: (text: string) => boolean,
+): { hosts: Set<string>; invalid: string[] } {
+  const hosts = new Set<string>();
+  const invalid: string[] = [];
+  for (const part of (raw ?? "").split(",")) {
+    let entry = part.trim().toLowerCase();
+    if (entry === "") continue;
+    if (entry.startsWith("[") && entry.endsWith("]")) entry = entry.slice(1, -1);
+    if (isIpLiteral(entry) || HOST_NAME_RE.test(entry)) hosts.add(entry);
+    else invalid.push(part.trim());
+  }
+  return { hosts, invalid };
+}
+
+/** The one stdout warning for ignored entries, or null when there are none. */
+export function aiAllowedPrivateHostsWarning(invalid: readonly string[]): string | null {
+  if (invalid.length === 0) return null;
+  return JSON.stringify({
+    level: "warn",
+    msg: `${AI_ALLOWED_PRIVATE_HOSTS_ENV} entries ignored (not a host name or IP address)`,
+    entries: invalid.slice(0, 20),
+  });
 }

@@ -1,8 +1,9 @@
 // Shared response mapping for the §22 AI provider routes (INNOBOX_SPEC.md §22.4, §22.5, §22.9):
 // one place for the deps, the machine codes and the plain-language messages (never a spec
 // reference, never the token).
-import { AI_ERROR_MESSAGES } from "@innobox/shared/ai";
+import { AI_ERROR_MESSAGES, aiAdminFailureLogStatus, type AiFailure } from "@innobox/shared/ai";
 import { aiKey, aiTransport } from "@/lib/ai";
+import { noteSystemEvent } from "@/lib/system-log";
 import type { AiAdminDeps } from "./store";
 
 export function aiAdminDeps(): AiAdminDeps {
@@ -27,6 +28,22 @@ export function connectionRefusal(r: { status: "key_missing" } | { status: "inva
     case "token_required":
       return aiError(422, "ai_token_required", r.error);
   }
+}
+
+/**
+ * Records a failed provider test or model list in the system log with its diagnostic (§22.5):
+ * 504 for a timeout, else 502, as the admin. The diagnostic rides on a side note to the route
+ * wrapper — never in the response the browser gets.
+ */
+export function noteAiFailure(res: Response, what: "test" | "model list", failure: AiFailure | null): Response {
+  if (!failure) return res;
+  return noteSystemEvent(res, { status: aiAdminFailureLogStatus(failure.code), errorCode: failure.code, message: `AI ${what} failed: ${failure.diagnostic}` });
+}
+
+/** A failed save's one 422 row carries the diagnostic instead of the generic text (§22.5). */
+export function noteAiSaveFailure(res: Response, failure: AiFailure | null): Response {
+  if (!failure) return res;
+  return noteSystemEvent(res, { errorCode: "ai_test_failed", message: `AI save test failed: ${failure.diagnostic}` });
 }
 
 export const AI_ENABLE_REFUSALS = {

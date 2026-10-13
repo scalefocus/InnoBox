@@ -23,6 +23,7 @@ import {
   resetAiMetrics,
   runAiTest,
   vetAiUrl,
+  type AiFailure,
   type AiFeature,
   type AiRequestFn,
 } from "./ai.js";
@@ -81,6 +82,54 @@ test("guard: https on 443 only, private addresses refused, localhost only with t
   assert.equal(aiLocalhostAllowed("production"), false);
   assert.equal(aiLocalhostAllowed("development"), true);
   assert.equal(aiLocalhostAllowed(undefined), true);
+});
+
+test("guard: AI_ALLOWED_PRIVATE_HOSTS admits private addresses for a listed host only, never loopback or link-local", async () => {
+  const vet = async (raw: string, deps: Parameters<typeof vetAiUrl>[1]) => {
+    try {
+      await vetAiUrl(raw, deps);
+      return { ok: true as const };
+    } catch (e) {
+      assert.ok(e instanceof AiError);
+      return { ok: false as const, message: e.message, detail: e.detail };
+    }
+  };
+  const allowed = new Set(["ai.corp.example", "10.9.8.7"]);
+  const priv = async () => [{ address: "10.20.0.5", family: 4 as const }, { address: "fd00::5", family: 6 as const }];
+  assert.deepEqual(await vet("https://ai.corp.example/api", { resolve: priv, allowedPrivateHosts: allowed }), { ok: true });
+  assert.deepEqual(await vet("https://10.9.8.7/api", { allowedPrivateHosts: allowed }), { ok: true }, "a listed IP literal");
+
+  const unlisted = await vet("https://ai.other.example/api", { resolve: async () => [PUBLIC, { address: "10.20.0.5", family: 4 }], allowedPrivateHosts: allowed });
+  assert.equal(unlisted.ok, false);
+  assert.match(!unlisted.ok ? unlisted.message : "", /private or internal network\. An operator can allow this host with AI_ALLOWED_PRIVATE_HOSTS/);
+  assert.equal(!unlisted.ok && unlisted.detail, "ai.other.example resolved to 20.50.2.3, 10.20.0.5 (private or internal; not in AI_ALLOWED_PRIVATE_HOSTS)");
+
+  const loop = await vet("https://ai.corp.example/api", { resolve: async () => [{ address: "127.0.0.1", family: 4 }], allowedPrivateHosts: allowed });
+  assert.equal(!loop.ok && loop.detail, "ai.corp.example resolved to 127.0.0.1 (loopback or link-local; refused even for an allowed host)");
+  const meta = await vet("https://ai.corp.example/api", { resolve: async () => [{ address: "10.0.0.1", family: 4 }, { address: "169.254.169.254", family: 4 }], allowedPrivateHosts: allowed });
+  assert.equal(meta.ok, false, "one link-local address refuses the host");
+
+  const dns = await vet("https://ai.corp.example/api", { resolve: async () => { throw Object.assign(new Error("getaddrinfo ENOTFOUND ai.corp.example"), { code: "ENOTFOUND" }); } });
+  assert.equal(!dns.ok && dns.detail, "ai.corp.example did not resolve (ENOTFOUND)");
+  const form = await vet("https://ai.corp.example:8443/api", {});
+  assert.equal(!form.ok && form.detail, null, "URL-form refusals carry the card error only");
+});
+
+test("transport: failures carry the host, address and errno code for the system log", async () => {
+  // A port nothing listens on: ECONNREFUSED.
+  const probe = http.createServer();
+  await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise<void>((r) => probe.close(() => r()));
+  await assert.rejects(aiHttp({ url: `http://127.0.0.1:${port}/x`, method: "GET", token: "t", timeoutMs: 5_000 }, local), (e: unknown) => {
+    assert.ok(e instanceof AiError);
+    assert.equal(e.message, "The connection to the AI provider failed.", "the card keeps the fixed text");
+    assert.equal(e.detail, "connecting to 127.0.0.1 failed: ECONNREFUSED");
+    return true;
+  });
+  await withServer((_req, _b, res) => setTimeout(() => json(res, 200, answer()), 1_000), async (base) => {
+    await assert.rejects(aiHttp({ url: `${base}/slow`, method: "GET", token: "t", timeoutMs: 100 }, local), (e: unknown) => e instanceof AiError && e.detail === "no response from 127.0.0.1 within 0.1 s");
+  });
 });
 
 test("transport: pinned to the vetted address on 443 with a dedicated agent; bearer never in the URL", async () => {
@@ -149,6 +198,17 @@ test("connectivity test: pass on any parseable 2xx; fail carries status and a sa
     assert.equal(fail.ok, false);
     assert.equal(fail.httpStatus, 401);
     assert.ok(fail.error && !fail.error.includes("LEAKEDTOKEN"), "never the token");
+
+    const failures: AiFailure[] = [];
+    const again = await runAiTest({ provider: "openwebui", baseUrl: base, token: "sk-LEAKEDTOKEN99", model: "bad" }, { transport: local, onFailure: (f) => failures.push(f) });
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.code, "ai_provider_error");
+    assert.equal(failures[0]!.httpStatus, 401);
+    assert.match(failures[0]!.diagnostic, / — HTTP 401 from 127\.0\.0\.1$/);
+    assert.ok(!failures[0]!.diagnostic.includes("LEAKEDTOKEN"), "never the token");
+    assert.ok(!JSON.stringify(again).includes("HTTP 401 from"), "the diagnostic never rides on the result");
+    await runAiTest({ provider: "openwebui", baseUrl: base, token: "sk-LEAKEDTOKEN99", model: "llama3" }, { transport: local, onFailure: (f) => failures.push(f) });
+    assert.equal(failures.length, 1, "a pass reports nothing");
   });
 });
 
@@ -162,6 +222,11 @@ test("model list: OpenAI path and filter; failures reported, never thrown", asyn
     const bad = await listAiModels({ provider: "openai", baseUrl: `${base}/v1`, token: "wrong" }, { transport: local });
     assert.equal(bad.ok, false);
     assert.equal(!bad.ok && bad.httpStatus, 401);
+    const failures: AiFailure[] = [];
+    const again = await listAiModels({ provider: "openai", baseUrl: `${base}/v1`, token: "wrong" }, { transport: local, onFailure: (f) => failures.push(f) });
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.diagnostic, "HTTP 401: Incorrect API key provided — HTTP 401 from 127.0.0.1");
+    assert.ok(!JSON.stringify(again).includes("from 127.0.0.1"));
   });
 });
 
@@ -354,6 +419,8 @@ test("helper: one retry on 5xx and rate-limit 429 (Retry-After capped), one usag
     assert.equal(state.lastCall?.ok, false);
     assert.equal(state.events.length, 1);
     assert.deepEqual({ ...state.events[0], message: "" }, { status: 502, route: "/ai/submit_draft", path: "/api/chat/completions", error_code: "ai_provider_error", message: "", source: "web" });
+    assert.equal(state.events[0]!.message, "AI submit_draft call failed: HTTP 500: down — HTTP 500 from 127.0.0.1", "the diagnostic, with the host");
+    assert.equal(state.lastCall?.error, "HTTP 500: down", "last_call_error keeps the card text");
 
     // The throttle slot is taken: the next failure is not logged again.
     await rejectsWith(client.complete({ feature: "submit_draft", messages: msg, retry: false }), "ai_provider_error");
