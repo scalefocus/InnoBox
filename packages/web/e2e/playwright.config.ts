@@ -25,7 +25,7 @@ const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 // uniquely-named fixtures. The rest are dealt out greedily by test count so the slices come out
 // roughly equal (shard 1 gets no more once its pinned specs exceed a fair share). Every spec
 // lands in exactly one shard. E2E_SHARD unset → the whole suite, as before. (Jenkins' quick run,
-// RUN_E2E_QUICK, is shard 1 of 1 narrowed by test-location arguments — see scripts/e2e-specs.mjs.)
+// E2E_MODE=QUICK_E2E_TESTS, is shard 1 of 1 narrowed by test-location arguments — see scripts/e2e-specs.mjs.)
 // A NEW spec that changes platform-wide state must be added here.
 const PLATFORM_STATE_SPECS = [
   "admin-ai.spec.ts",

@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "The Coming soon list at the top of this page has a new plan: connecting your AI assistant, such as Claude, to InnoBox so it can search challenges and submit challenges, solutions and comments as you, after you approve it in your browser. Firsts with an agent will earn new badges. Nothing changes yet, and plans can change.",
   },
   {
+    version: "1.0.3",
+    date: "2026-10-13",
+    summary:
+      "The Platform settings, Audit log and System log pages now fit phone screens: forms stack neatly, buttons stay inside their cards and the filter tabs scroll sideways instead of stretching the page. On wide screens the AI provider's Load models button no longer spills past the card edge.",
+  },
+  {
     version: "1.0.2",
     date: "2026-10-12",
     summary:

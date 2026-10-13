@@ -247,30 +247,30 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
 
   return (
     <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="ai-provider-card">
-      <div className="row" style={{ border: 0, padding: 0, marginBottom: 6, flexWrap: "wrap" }}>
-        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, margin: 0, whiteSpace: "nowrap" }} className="grow">
-          AI provider
-        </h3>
-        <span className={pill.cls} data-testid="ai-status-pill">
-          {pill.label}
-        </span>
-        <div className="toggle-field" title={switchBlocked ? (view.keyPresent ? (view.enableBlocker ?? undefined) : KEY_HINT) : undefined}>
-          <span className={`toggle-state${enabled ? " is-on" : ""}`} aria-hidden="true">
-            {enabled ? "On" : "Off"}
+      <div className="settings-head">
+        <h3>AI provider</h3>
+        <div className="settings-head-meta">
+          <span className={pill.cls} data-testid="ai-status-pill">
+            {pill.label}
           </span>
-          <button
-            type="button"
-            className="toggle toggle-pref"
-            role="switch"
-            aria-checked={enabled}
-            aria-label="AI enabled"
-            disabled={switchBlocked || busy !== null}
-            onClick={toggleEnabled}
-          >
-            <span className="toggle-knob" aria-hidden="true">
-              {enabled ? "✨" : "·"}
+          <div className="toggle-field" title={switchBlocked ? (view.keyPresent ? (view.enableBlocker ?? undefined) : KEY_HINT) : undefined}>
+            <span className={`toggle-state${enabled ? " is-on" : ""}`} aria-hidden="true">
+              {enabled ? "On" : "Off"}
             </span>
-          </button>
+            <button
+              type="button"
+              className="toggle toggle-pref"
+              role="switch"
+              aria-checked={enabled}
+              aria-label="AI enabled"
+              disabled={switchBlocked || busy !== null}
+              onClick={toggleEnabled}
+            >
+              <span className="toggle-knob" aria-hidden="true">
+                {enabled ? "✨" : "·"}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
       {status.state === "failing" && (
@@ -289,8 +289,8 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
         </p>
       )}
 
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", alignItems: "end" }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+      <div className="settings-grid">
+        <label>
           Provider
           <select className="field" value={provider} disabled={formDisabled} onChange={(e) => changeProvider(e.target.value as Provider)} aria-label="Provider">
             {(Object.keys(PROVIDER_LABEL) as Provider[]).map((p) => (
@@ -300,7 +300,7 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
             ))}
           </select>
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        <label>
           Base URL
           <input
             className="field"
@@ -315,10 +315,10 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
             required={provider === "openwebui"}
           />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        <label>
           API key
           {storedKeyApplies && config ? (
-            <span style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 38 }}>
+            <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", minHeight: 38 }}>
               <span className="sub mono" data-testid="ai-key-set">
                 Set · ends …{config.tokenLast4}
               </span>
@@ -330,11 +330,11 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
             <input className="field" type="password" autoComplete="off" aria-label="API key" value={token} disabled={formDisabled} onChange={(e) => setToken(e.target.value)} />
           )}
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        <label>
           Model
-          <span style={{ display: "flex", gap: 8 }}>
+          <span className="field-with-btn">
             {models && models.length > 0 ? (
-              <select className="field grow" value={models.includes(model) ? model : ""} disabled={formDisabled} onChange={(e) => setModel(e.target.value)} aria-label="Model">
+              <select className="field" value={models.includes(model) ? model : ""} disabled={formDisabled} onChange={(e) => setModel(e.target.value)} aria-label="Model">
                 <option value="">Choose a model…</option>
                 {models.map((m) => (
                   <option key={m} value={m}>
@@ -343,9 +343,9 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
                 ))}
               </select>
             ) : (
-              <input className="field grow" value={model} disabled={formDisabled} onChange={(e) => setModel(e.target.value)} aria-label="Model" />
+              <input className="field" value={model} disabled={formDisabled} onChange={(e) => setModel(e.target.value)} aria-label="Model" />
             )}
-            <button type="button" className="btn btn-sm" style={{ whiteSpace: "nowrap" }} disabled={formDisabled || loadingModels} onClick={loadFormModels}>
+            <button type="button" className="btn btn-sm" disabled={formDisabled || loadingModels} onClick={loadFormModels}>
               {models ? "Refresh" : "Load models"}
             </button>
           </span>
@@ -362,7 +362,7 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+      <div className="settings-actions" style={{ marginTop: 14 }}>
         <button type="button" className="btn btn-sm" disabled={formDisabled || !model.trim()} onClick={runTest}>
           {busy === "test" ? "Testing…" : "Test"}
         </button>
@@ -388,7 +388,7 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
         </p>
       )}
 
-      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", marginTop: 18 }}>
+      <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))", marginTop: 18 }}>
         <section>
           <h4 style={{ fontSize: 13.5, margin: "0 0 6px" }}>Last test</h4>
           {view.lastTest ? (
@@ -411,28 +411,30 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
               No calls yet.
             </p>
           ) : (
-            <table style={{ fontSize: 12.5, width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr className="muted" style={{ textAlign: "left" }}>
-                  <th style={{ fontWeight: 500 }}>Feature</th>
-                  <th style={{ fontWeight: 500, textAlign: "right" }}>Calls</th>
-                  <th style={{ fontWeight: 500, textAlign: "right" }}>Failures</th>
-                  <th style={{ fontWeight: 500, textAlign: "right" }}>Tokens in / out</th>
-                </tr>
-              </thead>
-              <tbody>
-                {view.usage.byFeature.map((f) => (
-                  <tr key={f.feature}>
-                    <td>{f.label}</td>
-                    <td style={{ textAlign: "right" }}>{n(f.calls)}</td>
-                    <td style={{ textAlign: "right" }}>{n(f.failures)}</td>
-                    <td style={{ textAlign: "right" }} className="mono">
-                      {n(f.inputTokens)} / {n(f.outputTokens)}
-                    </td>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ fontSize: 12.5, width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr className="muted" style={{ textAlign: "left" }}>
+                    <th style={{ fontWeight: 500 }}>Feature</th>
+                    <th style={{ fontWeight: 500, textAlign: "right" }}>Calls</th>
+                    <th style={{ fontWeight: 500, textAlign: "right" }}>Failures</th>
+                    <th style={{ fontWeight: 500, textAlign: "right" }}>Tokens in / out</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {view.usage.byFeature.map((f) => (
+                    <tr key={f.feature}>
+                      <td>{f.label}</td>
+                      <td style={{ textAlign: "right" }}>{n(f.calls)}</td>
+                      <td style={{ textAlign: "right" }}>{n(f.failures)}</td>
+                      <td style={{ textAlign: "right" }} className="mono">
+                        {n(f.inputTokens)} / {n(f.outputTokens)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       </div>
@@ -500,8 +502,8 @@ function AiIndependentRows({ view, onSaved, onNotice }: { view: AiView; onSaved:
 
   return (
     <section style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-      <div className="row" style={{ padding: "8px 0", border: 0, flexWrap: "wrap" }}>
-        <div className="grow" style={{ minWidth: 220 }}>
+      <div className="row" style={{ padding: "8px 0", border: 0 }}>
+        <div className="grow">
           <div className="ttl">Allow namespace-restricted content to be sent to the AI provider</div>
           <div className="sub">Off by default. While off, features skip or refuse restricted challenges and their solutions.</div>
         </div>
@@ -530,8 +532,8 @@ function AiIndependentRows({ view, onSaved, onNotice }: { view: AiView; onSaved:
         .map((f) => {
           const on = !!view.switches.features[f.key];
           return (
-            <div className="row" key={f.key} style={{ padding: "8px 0", border: 0, flexWrap: "wrap" }}>
-              <div className="grow" style={{ minWidth: 220 }}>
+            <div className="row" key={f.key} style={{ padding: "8px 0", border: 0 }}>
+              <div className="grow">
                 <div className="ttl">{f.label}</div>
                 <div className="sub">Off by default — it sends other people&apos;s text.</div>
               </div>
@@ -562,9 +564,9 @@ function AiIndependentRows({ view, onSaved, onNotice }: { view: AiView; onSaved:
         {view.features.length === 0 ? (
           <div className="sub">No features use AI yet, so there is nothing to tune.</div>
         ) : (
-          <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap", marginTop: 6 }}>
+          <div className="settings-grid" style={{ marginTop: 6 }}>
             {view.features.map((f) => (
-              <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+              <label key={f.key}>
                 {f.label} (seconds)
                 <input
                   className="field"
@@ -577,7 +579,7 @@ function AiIndependentRows({ view, onSaved, onNotice }: { view: AiView; onSaved:
                 />
               </label>
             ))}
-            <button type="button" className="btn btn-sm btn-primary" disabled={busy !== null} onClick={saveTimeouts}>
+            <button type="button" className="btn btn-sm btn-primary" style={{ justifySelf: "start" }} disabled={busy !== null} onClick={saveTimeouts}>
               Save
             </button>
           </div>
@@ -585,11 +587,11 @@ function AiIndependentRows({ view, onSaved, onNotice }: { view: AiView; onSaved:
       </div>
 
       <div style={{ padding: "8px 0" }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, maxWidth: 360 }}>
+        <label className="settings-field" style={{ maxWidth: 360 }}>
           <span className="ttl">Display name</span>
           <span className="sub">What people see on AI features — for example “Improve with …”. Up to 24 characters; empty means “AI”.</span>
-          <span style={{ display: "flex", gap: 8 }}>
-            <input className="field grow" value={displayName} placeholder="AI" maxLength={24} onChange={(e) => setDisplayName(e.target.value)} aria-label="AI display name" />
+          <span className="field-with-btn">
+            <input className="field" value={displayName} placeholder="AI" maxLength={24} onChange={(e) => setDisplayName(e.target.value)} aria-label="AI display name" />
             <button
               type="button"
               className="btn btn-sm btn-primary"

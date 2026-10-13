@@ -1,5 +1,5 @@
 // The e2e suite's test index (INNOBOX_SPEC.md §17), shared by e2e/playwright.config.ts (it balances
-// the Jenkins shards by test count) and the quick run (Jenkins' RUN_E2E_QUICK parameter).
+// the Jenkins shards by test count) and the quick run (Jenkins' E2E_MODE=QUICK_E2E_TESTS).
 //
 // A quick run executes a random 20% of the suite's tests in a single shard — a smoke signal in a
 // fraction of the time, not a substitute for the full run. Picking individual tests (not whole
