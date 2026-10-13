@@ -161,3 +161,65 @@ test(
     }
   },
 );
+
+// Regression: comments written within the same millisecond keep their real order. A JS Date only
+// holds milliseconds, so sorting on it tied them and fell back to their random ids, which
+// reordered the thread and the participant letters (a flaky CI failure). Here the times differ
+// by microseconds and the ids run the other way, so an id tie-break would reverse the thread.
+test(
+  "discussion summary: comments within one millisecond keep their microsecond order",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool } = await import("pg");
+    const { randomUUID, randomBytes } = await import("node:crypto");
+    const { buildRoleSet } = await import("@innobox/shared");
+    const support = await import("../dbtest-support");
+    const { summarize } = await import("./store");
+
+    const pool = new Pool({ connectionString: url });
+    const stub = await support.startProviderStub();
+    try {
+      const key = randomBytes(32);
+      const ai = support.testAiClient(pool, key);
+      await support.configureAi(pool, key, stub.baseUrl);
+      await support.setSwitch(pool, "ai_discussion_summary_enabled", true);
+      stub.reply(() => ({ text: JSON.stringify({ summary: "Ordered.", openQuestions: [] }) }));
+
+      const stamp = randomUUID().slice(0, 8);
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const globalId = g[0]!.id;
+      const mkUser = async (name: string) =>
+        (await pool.query<{ id: string }>(`insert into users (external_id, user_name, display_name) values ($1, $2, $3) returning id`, [`dbtest-sumus-${name}-${stamp}`, `dbtest-sumus-${name}-${stamp}@example.test`, `Dbtest SumUs ${name}`])).rows[0]!.id;
+      const users = [await mkUser("a"), await mkUser("b"), await mkUser("c")];
+      const reader = { userId: users[0]!, roles: buildRoleSet([], { globalNamespaceId: globalId }) };
+      const { rows: ia } = await pool.query<{ id: string }>(`select id from impact_areas where name = 'Internal'`);
+      const { rows: ch } = await pool.query<{ id: string; number: string }>(
+        `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
+         values ($1, 'org', $2, 'text', $3, $4, 'valid') returning id, number::text`,
+        [globalId, `Same millisecond ${stamp}`, ia[0]!.id, users[0]],
+      );
+      // One random prefix per run, then ids that DESCEND while the times ascend by 1 µs each: the
+      // earliest comment has the largest id, all ten within the same millisecond.
+      const prefix = randomUUID().slice(0, 8);
+      for (let i = 0; i < 10; i++) {
+        await pool.query(
+          `insert into comments (id, parent_type, parent_id, author_id, body, created_at)
+           values ($1, 'challenge', $2, $3, $4, '2026-10-13T10:00:00.000100Z'::timestamptz + make_interval(secs => $5::double precision / 1000000))`,
+          [`${prefix}-0000-4000-8000-${String(999 - i).padStart(12, "0")}`, ch[0]!.id, users[i % 3], `comment ${i}`, i],
+        );
+      }
+
+      const out = await summarize(pool, ai, reader, "challenge", ch[0]!.number);
+      assert.equal(out.status, "ok");
+      const sent = stub.calls.at(-1)!.user;
+      const positions = Array.from({ length: 10 }, (_, i) => sent.indexOf(`comment ${i}`));
+      assert.ok(positions.every((p, i) => p >= 0 && (i === 0 || p > positions[i - 1]!)), "the thread keeps its microsecond order");
+      assert.ok(sent.includes("Participant A: comment 0") && sent.includes("Participant B: comment 1") && sent.includes("Participant C: comment 2"));
+    } finally {
+      await pool.query(`delete from ai_integration`).catch(() => {});
+      await support.setSwitch(pool, "ai_discussion_summary_enabled", false).catch(() => {});
+      await stub.close();
+      await pool.end();
+    }
+  },
+);

@@ -90,13 +90,18 @@ async function visibleComments(
   parentType: SummaryParentType,
   parentId: string,
 ): Promise<{ id: string; authorId: string; body: string; replyToId: string | null }[]> {
-  const { rows } = await pool.query<{ id: string; author_id: string; body: string; thread_root_id: string | null; reply_to_id: string | null; created_at: Date }>(
-    `select id, author_id, body, thread_root_id, reply_to_id, created_at from comments
+  // The sort key keeps Postgres's full microsecond precision: a JS Date keeps only milliseconds,
+  // so comments written within the same millisecond would otherwise tie and fall back to their
+  // (random) ids, reordering the thread — and with it the order participants are lettered in.
+  const { rows } = await pool.query<{ id: string; author_id: string; body: string; thread_root_id: string | null; reply_to_id: string | null; sort_key: string }>(
+    `select id, author_id, body, thread_root_id, reply_to_id,
+            to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') as sort_key
+       from comments
       where parent_type = $1 and parent_id = $2 and deleted_at is null
       order by created_at asc, id asc`,
     [parentType, parentId],
   );
-  const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.created_at.toISOString(), row })));
+  const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.sort_key, row })));
   return threaded.map(({ row: r }) => ({ id: r.id, authorId: r.author_id, body: r.body, replyToId: r.reply_to_id }));
 }
 
