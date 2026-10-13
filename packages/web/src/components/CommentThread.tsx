@@ -2,7 +2,8 @@
 // Comment thread (INNOBOX_SPEC.md §10.2): post, owner edit/delete within 15 minutes,
 // admin moderation delete anytime. Comments are never anonymous (§9) — always the real
 // name. Deleted comments render as "Comment removed by a moderator". Above the thread, the §22.13
-// discussion summary control (when the item's number is known and summaries are available).
+// discussion summary control (when the item's number is known and summaries are available). A
+// `readOnly` thread (an item in the §10.4 trash) shows the comments and nothing else.
 import { useEffect, useState } from "react";
 import { readJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
@@ -31,6 +32,7 @@ export function CommentThread({
   parentId,
   parentNumber,
   authoredAnonymously = false,
+  readOnly = false,
 }: {
   parentType: "challenge" | "solution";
   parentId: string;
@@ -39,6 +41,8 @@ export function CommentThread({
   /** True when the viewer is the ANONYMOUS author of this item — §9 warns them that commenting
    *  shows their real name (comments are never anonymous), without revealing them as the author. */
   authoredAnonymously?: boolean;
+  /** §10.4: the item is in the trash — no composer, no edit or delete, no AI summary. */
+  readOnly?: boolean;
 }) {
   const fmt = useDateFmt();
   const [comments, setComments] = useState<CommentRecord[] | null>(null);
@@ -104,7 +108,7 @@ export function CommentThread({
 
   return (
     <div style={{ marginTop: 8 }}>
-      {parentNumber && comments !== null && <DiscussionSummary parentType={parentType} parentNumber={parentNumber} version={threadVersion} />}
+      {parentNumber && comments !== null && !readOnly && <DiscussionSummary parentType={parentType} parentNumber={parentNumber} version={threadVersion} />}
       {comments === null && <p className="muted">Loading comments…</p>}
       {comments !== null && comments.length === 0 && <p className="muted">No comments yet.</p>}
       {comments !== null && comments.length > 0 && (
@@ -145,7 +149,7 @@ export function CommentThread({
                   {c.body}
                 </p>
               )}
-              {!c.deleted && editingId !== c.id && (
+              {!c.deleted && !readOnly && editingId !== c.id && (
                 <div style={{ display: "flex", gap: 8 }}>
                   {c.canEdit && (
                     <button
@@ -170,11 +174,12 @@ export function CommentThread({
           ))}
         </div>
       )}
-      {authoredAnonymously && (
+      {authoredAnonymously && !readOnly && (
         <p className="sub" style={{ margin: "0 0 8px", color: "var(--warn, var(--faint))" }}>
           You submitted this anonymously. Commenting won&apos;t reveal you as the author, but your name is shown on the comment itself (comments are never anonymous).
         </p>
       )}
+      {!readOnly && (
       <form onSubmit={post} style={{ display: "flex", gap: 8 }}>
         <input
           className="field"
@@ -188,6 +193,7 @@ export function CommentThread({
           Post
         </button>
       </form>
+      )}
     </div>
   );
 }

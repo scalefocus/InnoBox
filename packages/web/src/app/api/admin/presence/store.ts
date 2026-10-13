@@ -88,7 +88,7 @@ async function resolveLocations(pool: Pool, routes: string[]): Promise<Map<strin
   if (challengeNumbers.length > 0) {
     const { rows } = await pool.query<{ number: number; title: string }>(
       `select number, title from challenges
-        where number = any($1::int[]) and not is_anonymous`,
+        where number = any($1::int[]) and not is_anonymous and trashed_at is null`,
       [challengeNumbers],
     );
     for (const r of rows) resolved.set(`challenge:${r.number}`, `Challenge: CH-${r.number} — ${r.title}`);
@@ -101,7 +101,8 @@ async function resolveLocations(pool: Pool, routes: string[]): Promise<Map<strin
       `select s.number, c.number as challenge_number, c.title
          from solutions s
          join challenges c on c.id = s.challenge_id
-        where s.number = any($1::int[]) and not s.is_anonymous and not c.is_anonymous`,
+        where s.number = any($1::int[]) and not s.is_anonymous and not c.is_anonymous
+          and s.trashed_at is null and c.trashed_at is null`,
       [solutionNumbers],
     );
     for (const r of rows) {

@@ -4,7 +4,7 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { setChallengeVisibility } from "../../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../validation";
 import { withSystemLog } from "@/lib/system-log";
@@ -31,6 +31,8 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
       return Response.json({ challenge: result.challenge });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be a namespace or platform admin to change visibility" }, { status: 403 });
     case "invalid":

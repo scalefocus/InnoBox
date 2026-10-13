@@ -12,7 +12,7 @@ import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
 import { editChallenge, getChallengeByNumber, setChallengeStatus } from "../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -27,8 +27,9 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
   const challenge = await getChallengeByNumber(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   if (!challenge) return Response.json({ error: "challenge not found" }, { status: 404 });
   // §12.1: opening the item's page is a read action for its coalesced comment rows (the
-  // challenge's and its solutions'). Best-effort — never fails the page.
-  await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
+  // challenge's and its solutions'). Best-effort — never fails the page. The §10.4 trashed view
+  // stamps nothing: its inbox rows stay hidden, untouched, until a restore brings them back.
+  if (!challenge.trashed) await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
   return Response.json({ challenge });
 }
 
@@ -60,6 +61,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
     }
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be an admin, committee member, or the assignee to change status" }, { status: 403 });
     case "illegal_transition":
@@ -95,6 +98,8 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
       return Response.json({ challenge: result.challenge });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "only the author can edit this challenge" }, { status: 403 });
     case "not_editable":

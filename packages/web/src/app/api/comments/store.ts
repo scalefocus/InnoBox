@@ -7,7 +7,7 @@ import { canEditOwnComment, validateCommentBody } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { awardCommentPosted } from "../../../lib/gamification";
-import { getParentNamespaceId, isParentVisible, type Viewer } from "../challenges/store";
+import { getParentAccess, getParentNamespaceId, type Viewer } from "../challenges/store";
 import { isUuid } from "./validation";
 
 const MODERATION_PLACEHOLDER = "Comment removed by a moderator";
@@ -89,7 +89,8 @@ export async function listComments(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<CommentRecord[] | null> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return null;
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access === "not_found") return null;
   const namespaceId = await getParentNamespaceId(pool, parentType, parentId);
   const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
   const committee = namespaceId !== null ? await committeeMemberIds(pool, namespaceId) : new Set<string>();
@@ -102,10 +103,12 @@ export async function listComments(
       order by c.created_at asc`,
     [parentType, parentId],
   );
-  return rows.map((r) => toRecord(r, viewer, isNamespaceAdmin, committee.has(r.author_id)));
+  const records = rows.map((r) => toRecord(r, viewer, isNamespaceAdmin, committee.has(r.author_id)));
+  // §10.4: the thread of a trashed item is read-only — nobody edits or removes a comment there.
+  return access === "trashed" ? records.map((r) => ({ ...r, canEdit: false, canModerate: false })) : records;
 }
 
-export type CreateCommentResult = { status: "ok"; comment: CommentRecord } | { status: "not_found" } | { status: "invalid"; error: string };
+export type CreateCommentResult = { status: "ok"; comment: CommentRecord } | { status: "not_found" } | { status: "trashed" } | { status: "invalid"; error: string };
 
 export async function createComment(
   pool: Pool,
@@ -115,7 +118,8 @@ export async function createComment(
   rawBody: unknown,
   onCreated?: (comment: CommentRecord) => Promise<void>,
 ): Promise<CreateCommentResult> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access !== "live") return { status: access }; // §10.4: a trashed item is read-only
   const validated = validateCommentBody(rawBody);
   if (!validated.ok) return { status: "invalid", error: validated.error };
 
@@ -163,7 +167,12 @@ export async function createComment(
   });
 }
 
-export type EditCommentResult = { status: "ok"; comment: CommentRecord } | { status: "not_found" } | { status: "forbidden" } | { status: "invalid"; error: string };
+export type EditCommentResult =
+  | { status: "ok"; comment: CommentRecord }
+  | { status: "not_found" }
+  | { status: "trashed" }
+  | { status: "forbidden" }
+  | { status: "invalid"; error: string };
 
 export async function editComment(pool: Pool, viewer: Viewer, commentId: string, rawBody: unknown): Promise<EditCommentResult> {
   if (!isUuid(commentId)) return { status: "not_found" };
@@ -174,7 +183,8 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
   const row = rows[0];
   if (!row || row.deleted_at !== null) return { status: "not_found" };
   // §2.4: a comment on a challenge/solution the viewer cannot see is "not found", never "forbidden".
-  if (!(await isParentVisible(pool, viewer, row.parent_type, row.parent_id))) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, row.parent_type, row.parent_id);
+  if (access !== "live") return { status: access };
   if (!canEditOwnComment({ authorId: row.author_id, createdAt: row.created_at }, viewer.userId, new Date())) {
     return { status: "forbidden" };
   }
@@ -201,7 +211,7 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
   });
 }
 
-export type DeleteCommentResult = { status: "ok" } | { status: "not_found" } | { status: "forbidden" };
+export type DeleteCommentResult = { status: "ok" } | { status: "not_found" } | { status: "trashed" } | { status: "forbidden" };
 
 export async function deleteComment(pool: Pool, viewer: Viewer, commentId: string): Promise<DeleteCommentResult> {
   if (!isUuid(commentId)) return { status: "not_found" };
@@ -211,7 +221,8 @@ export async function deleteComment(pool: Pool, viewer: Viewer, commentId: strin
   );
   const row = rows[0];
   if (!row || row.deleted_at !== null) return { status: "not_found" };
-  if (!(await isParentVisible(pool, viewer, row.parent_type, row.parent_id))) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, row.parent_type, row.parent_id);
+  if (access !== "live") return { status: access };
 
   const namespaceId = await getParentNamespaceId(pool, row.parent_type, row.parent_id);
   const isModerator = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);

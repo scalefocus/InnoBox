@@ -10,7 +10,7 @@ import { formatChallengeNumber } from "@innobox/shared";
 import { itemHref } from "@/lib/deep-link";
 import { parseCommentCreate, parseParentQuery } from "./validation";
 import { createComment, listComments } from "./store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -43,6 +43,7 @@ async function handlePOST(req: Request): Promise<Response> {
   const result = await createComment(pool, viewer, parsed.value.parentType, parsed.value.parentId, parsed.value.body);
 
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
+  if (result.status === "trashed") return trashedResponse();
   if (result.status === "invalid") return Response.json({ error: result.error }, { status: 400 });
 
   await fireCommentNotification(parsed.value.parentType, parsed.value.parentId, result.comment.authorId).catch((err) =>

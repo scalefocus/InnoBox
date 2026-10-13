@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.3.0",
+    date: "2026-10-13",
+    summary:
+      "Platform admins can now move a challenge or solution to the trash instead of deleting it straight away. A trashed item is hidden from everyone at once and deleted for good after 30 days, unless you restore it from the new Trash page in Administration. Delete permanently is still there for content that must not wait.",
+  },
+  {
     version: "1.1.0",
     date: "2026-10-13",
     summary:

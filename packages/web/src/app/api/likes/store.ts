@@ -7,9 +7,9 @@
 import type { Pool } from "pg";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
-import { isParentVisible, lockLikeParent, type Viewer } from "../challenges/store";
+import { getParentAccess, lockLikeParent, type Viewer } from "../challenges/store";
 
-export type RemoveLikeResult = { status: "ok"; liked: false; count: number } | { status: "not_found" } | { status: "frozen" };
+export type RemoveLikeResult = { status: "ok"; liked: false; count: number } | { status: "not_found" } | { status: "trashed" } | { status: "frozen" };
 
 export async function removeLike(
   pool: Pool,
@@ -17,7 +17,8 @@ export async function removeLike(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<RemoveLikeResult> {
-  if (!(await isParentVisible(pool, viewer, parentType, parentId))) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access !== "live") return { status: access }; // §10.4: no unlike on a trashed item
 
   return inTransaction(pool, async (client) => {
     // §8.3: likes are frozen on a closed challenge (solved, rejected, withdrawn) and its solutions — an unlike is refused too.

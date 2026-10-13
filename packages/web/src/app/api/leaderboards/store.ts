@@ -8,6 +8,8 @@
 //   - a challenge counts only if it is `org`-visible and not `awaiting_triage` / `withdrawn`;
 //   - a solution counts only if it is not `proposed` / `withdrawn` AND its parent challenge
 //     passes the challenge test (it inherits the parent's visibility, §4.3).
+// A trashed item (§10.4) is not org-visible to anyone, so it drops out of every board while it
+// waits in the trash and comes back on restore.
 // On top of that every metric excludes anonymous items unconditionally (after a self-reveal,
 // is_anonymous flips false and they start counting) and `rejected` contributions.
 //
@@ -36,9 +38,9 @@ export interface LeaderboardEntry {
 export const LEADERBOARD_SIZE = 10;
 
 /** §4.3 org-visible challenge test (alias `c`) — what every authenticated viewer can see. */
-const CHALLENGE_ORG_VISIBLE = `c.visibility = 'org' and c.status not in ('awaiting_triage', 'withdrawn')`;
+const CHALLENGE_ORG_VISIBLE = `c.visibility = 'org' and c.status not in ('awaiting_triage', 'withdrawn') and c.trashed_at is null`;
 /** §4.3 org-visible solution test (alias `s`) — always paired with CHALLENGE_ORG_VISIBLE on its parent. */
-const SOLUTION_ORG_VISIBLE = `s.status not in ('proposed', 'withdrawn')`;
+const SOLUTION_ORG_VISIBLE = `s.status not in ('proposed', 'withdrawn') and s.trashed_at is null`;
 
 function windowStart(window: LeaderboardWindow): Date | null {
   if (window === "all") return null;
@@ -99,7 +101,7 @@ export async function getLeaderboard(
            and (
              (gl.item_type = 'challenge' and ${CHALLENGE_ORG_VISIBLE})
              or (gl.item_type = 'solution' and ${SOLUTION_ORG_VISIBLE}
-                 and sc.visibility = 'org' and sc.status not in ('awaiting_triage', 'withdrawn'))
+                 and sc.visibility = 'org' and sc.status not in ('awaiting_triage', 'withdrawn') and sc.trashed_at is null)
            )
          group by gl.user_id
         having sum(gl.points) > 0`;

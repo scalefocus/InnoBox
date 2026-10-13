@@ -83,19 +83,21 @@ function log(level: "info" | "warn" | "error", msg: string, extra?: Record<strin
   console.log(JSON.stringify({ level, msg, ...extra }));
 }
 
+/** The item as of now — null when it is gone or in the trash (§10.4), so the delivery is skipped
+ *  like one about an item that is no longer visible. */
 async function loadItem(pool: Pool, row: DueRow): Promise<ItemRow | null> {
   const { rows } =
     row.entity_type === "challenge"
       ? await pool.query<ItemRow>(
           `select namespace_id, visibility, status, title, number::text as challenge_number, null as solution_number, null as solution_status
-             from challenges where id = $1`,
+             from challenges where id = $1 and trashed_at is null`,
           [row.entity_id],
         )
       : await pool.query<ItemRow>(
           `select c.namespace_id, c.visibility, c.status, c.title, c.number::text as challenge_number,
                   s.number::text as solution_number, s.status as solution_status
              from solutions s join challenges c on c.id = s.challenge_id
-            where s.id = $1`,
+            where s.id = $1 and s.trashed_at is null and c.trashed_at is null`,
           [row.entity_id],
         );
   return rows[0] ?? null;

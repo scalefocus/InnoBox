@@ -132,6 +132,12 @@ export default function AdminPage() {
             </Link>
           )}
           {gate === "platform_admin" && <SystemLogCard />}
+          {gate === "platform_admin" && (
+            <Link href="/admin/trash" className="card card-pad">
+              <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Trash →</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Challenges and solutions moved to the trash. Restore them within 30 days, or they are deleted for good.</p>
+            </Link>
+          )}
         </div>
       )}
 

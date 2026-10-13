@@ -468,6 +468,16 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 
 .content { padding: 38px 34px 80px; max-width: 1180px; width: 100%; }
 
+/* The §10.4 trash banner: over a trashed challenge's read-only view, and on a trashed solution. */
+.trash-banner {
+  padding: 14px 16px; margin-bottom: 18px; border-radius: var(--radius-sm);
+  background: var(--warn-soft); color: var(--ink); font-size: 14px;
+  border: 1px solid color-mix(in oklab, var(--warn) 35%, transparent);
+}
+.trash-banner .sub { color: inherit; opacity: 0.85; overflow-wrap: anywhere; }
+/* Restore waits for a trashed challenge: it must read as unavailable, not just ignore clicks. */
+.trash-restore:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* ── Pill switches: theme toggle, e-mail preference ────────────────────── */
 .toggle {
   position: relative; width: 58px; height: 30px; border-radius: 999px; cursor: pointer;

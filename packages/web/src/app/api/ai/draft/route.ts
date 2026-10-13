@@ -6,7 +6,7 @@
 import { AI_DRAFT_ERROR, aiDisplayName } from "@innobox/shared/ai";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { webAi } from "@/lib/ai";
 import { withSystemLog } from "@/lib/system-log";
 import { getAiDisplayNameSetting } from "../../admin/ai/store";
@@ -44,6 +44,8 @@ async function handlePOST(req: Request): Promise<Response> {
       return Response.json({ error: DRAFT_MESSAGES[outcome.status], code: "ai_limit" }, { status: 429 });
     case "not_found":
       return Response.json({ error: DRAFT_MESSAGES.notFound }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "failed":
       return Response.json({ ok: false, error: AI_DRAFT_ERROR });
   }

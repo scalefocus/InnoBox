@@ -188,6 +188,7 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
         visibility: row.visibility,
         status: row.status as ChallengeStatus,
         authorId: row.author_id,
+        trashed: false, // §10.4: the SQL predicate already dropped trashed rows
       }),
     )
     .slice(0, RESULT_LIMIT)
@@ -214,12 +215,13 @@ function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionS
         visibility: row.visibility,
         status: row.challenge_status as ChallengeStatus,
         authorId: row.challenge_author_id,
+        trashed: false, // §10.4: dropped in SQL
       });
       if (!challengeVisible) return false;
       return canSeeSolution(
         viewer,
         { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-        { status: row.status as SolutionStatus, authorId: row.author_id },
+        { status: row.status as SolutionStatus, authorId: row.author_id, trashed: false },
       );
     })
     .slice(0, RESULT_LIMIT)

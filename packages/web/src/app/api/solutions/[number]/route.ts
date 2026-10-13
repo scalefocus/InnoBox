@@ -14,7 +14,7 @@ import { isEntityNumber, parseStatusOverride } from "../../challenges/validation
 import { deleteSolution } from "../../challenges/delete";
 import { editSolution, setSolutionStatus } from "../../challenges/store";
 import { getSolutionByNumber } from "../store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -60,6 +60,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
     }
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be an admin, committee member, or the assignee to change status" }, { status: 403 });
     case "illegal_transition":
@@ -95,6 +97,8 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
       return Response.json({ solution: result.solution });
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "only the author can edit this solution" }, { status: 403 });
     case "not_editable":

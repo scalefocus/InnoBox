@@ -27,6 +27,7 @@ import {
   maskAuthor,
   siblingsToAutoClose,
   solutionEnforcedTargets,
+  trashPurgesOn,
   validateChallengeFields,
   validateSolutionFields,
   type AttachmentView,
@@ -59,6 +60,16 @@ import { unpinOnStatusChange } from "./featured-unpin";
 export interface Viewer {
   userId: string;
   roles: RoleSet;
+}
+
+/** §10.4: where a trashed item stands — sent to platform admins only (the trashed detail view). */
+export interface TrashInfo {
+  at: string;
+  /** The display name of the platform admin who trashed it. */
+  by: string;
+  reason: string;
+  /** `at + 30 days`: when the worker purges it unless it is restored first. */
+  purgesOn: string;
 }
 
 export interface ChallengeListItem {
@@ -102,8 +113,17 @@ export interface SolutionListItem {
   canEdit: boolean;
   canWithdraw: boolean;
   canResubmit: boolean;
-  /** §10.3 permanent delete — platform admins only, on any status. */
+  /** §10.3 permanent delete — platform admins only, on any status, in the trash or not. */
   canDelete: boolean;
+  /** §10.4 Move to trash — platform admins only, while neither it nor its challenge is trashed. */
+  canTrash: boolean;
+  /** §10.4 Restore — platform admins only, on a trashed solution (refused while its challenge is
+   *  trashed too: `restoreBlocked`). */
+  canRestore: boolean;
+  /** §10.4: its challenge is in the trash, so Restore must wait for the challenge's. */
+  restoreBlocked: boolean;
+  /** §10.4: present for platform admins only — null unless this solution itself is trashed. */
+  trashed?: TrashInfo | null;
   /** §11 attachments visible to this viewer (anonymity-safe; never carries uploaded_by). */
   attachments: AttachmentView[];
 }
@@ -145,8 +165,15 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   canEdit: boolean;
   canWithdraw: boolean;
   canResubmit: boolean;
-  /** §10.3 permanent delete — platform admins only, on any status. */
+  /** §10.3 permanent delete — platform admins only, on any status, in the trash or not. */
   canDelete: boolean;
+  /** §10.4 Move to trash — platform admins only, while it is not already trashed. */
+  canTrash: boolean;
+  /** §10.4 Restore — platform admins only, on a trashed challenge. */
+  canRestore: boolean;
+  /** §10.4: present for platform admins only — null unless the challenge is in the trash, in
+   *  which case every other control above is off (the read-only trashed view). */
+  trashed?: TrashInfo | null;
   solutions: SolutionListItem[];
   /** §11 attachments on the challenge itself, visible to this viewer (anonymity-safe). */
   attachments: AttachmentView[];
@@ -186,6 +213,10 @@ export interface ChallengeRow {
   /** §13.2 Home pin (curation; never bumps updated_at). */
   featured_at: Date | null;
   featured_by_name: string | null;
+  /** §10.4 trash (curation; never bumps updated_at). */
+  trashed_at: Date | null;
+  trashed_by_name: string | null;
+  trash_reason: string | null;
 }
 
 interface SolutionRow {
@@ -206,6 +237,9 @@ interface SolutionRow {
   like_count: string;
   liked_by_viewer: boolean;
   followed_by_viewer: boolean;
+  trashed_at: Date | null;
+  trashed_by_name: string | null;
+  trash_reason: string | null;
 }
 
 export const CHALLENGE_SELECT = `
@@ -218,10 +252,11 @@ export const CHALLENGE_SELECT = `
          (select count(*) from likes l where l.parent_type = 'challenge' and l.parent_id = c.id) as like_count,
          exists(select 1 from likes lv where lv.parent_type = 'challenge' and lv.parent_id = c.id and lv.user_id = $viewer) as liked_by_viewer,
          exists(select 1 from follows fv where fv.parent_type = 'challenge' and fv.parent_id = c.id and fv.user_id = $viewer) as followed_by_viewer,
-         (select count(*) from solutions s where s.challenge_id = c.id
+         (select count(*) from solutions s where s.challenge_id = c.id and s.trashed_at is null
             and s.status not in ('rejected','not_selected','withdrawn','proposed')) as solution_count,
          (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new,
-         c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name
+         c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name,
+         c.trashed_at, c.trash_reason, (select tu.display_name from users tu where tu.id = c.trashed_by) as trashed_by_name
     from challenges c
     join users u on u.id = c.author_id
     left join users au on au.id = c.assignee_id
@@ -262,16 +297,24 @@ function isEnforcer(viewer: Viewer, namespaceId: string, assigneeId: string | nu
 /** §2.4 existence-not-disclosed: the visibility gate every by-number write path runs BEFORE any
  *  permission (403) or state (409) check, so an item the caller cannot see answers exactly like
  *  one that does not exist. Takes the raw challenge columns the write paths already select. */
-function isChallengeRowVisible(
-  viewer: Viewer,
-  row: { namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string },
-): boolean {
+function isChallengeRowVisible(viewer: Viewer, row: ChallengeVisibilityColumns): boolean {
   return canSeeChallenge(viewer, {
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.status as ChallengeStatus,
     authorId: row.author_id,
+    trashed: row.trashed,
   });
+}
+
+/** The raw challenge columns the by-number write paths select for the visibility gate. */
+interface ChallengeVisibilityColumns {
+  namespace_id: string;
+  visibility: "org" | "namespace";
+  status: string;
+  author_id: string;
+  /** §10.4: `trashed_at is not null`. */
+  trashed: boolean;
 }
 
 /** The columns isSolutionRowVisible needs, as the `solutions s join challenges c` reads name them. */
@@ -283,10 +326,15 @@ interface SolutionVisibilityColumns {
   challenge_status: string;
   challenge_author_id: string;
   assignee_id: string | null;
+  /** §10.4: the solution itself is trashed. */
+  trashed: boolean;
+  /** §10.4: its challenge is trashed. */
+  challenge_trashed: boolean;
 }
 
 const SOLUTION_VISIBILITY_SELECT = `s.status, s.author_id, c.namespace_id, c.visibility, c.status as challenge_status,
-            c.author_id as challenge_author_id, c.assignee_id`;
+            c.author_id as challenge_author_id, c.assignee_id,
+            s.trashed_at is not null as trashed, c.trashed_at is not null as challenge_trashed`;
 
 /** The solution counterpart: the parent challenge must be visible AND the solution itself (a
  *  `proposed` solution is narrower still, §4.3). */
@@ -296,18 +344,42 @@ function isSolutionRowVisible(viewer: Viewer, row: SolutionVisibilityColumns): b
     visibility: row.visibility,
     status: row.challenge_status as ChallengeStatus,
     authorId: row.challenge_author_id,
+    trashed: row.challenge_trashed,
   });
   if (!challengeVisible) return false;
   return canSeeSolution(
     viewer,
     { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-    { status: row.status as SolutionStatus, authorId: row.author_id },
+    { status: row.status as SolutionStatus, authorId: row.author_id, trashed: row.trashed },
   );
 }
 
+/** §10.4: true when a by-number write must be refused because the item (or, for a solution, its
+ *  challenge) is in the trash. Runs AFTER the visibility gate, so only a platform admin ever gets
+ *  this answer (409); everyone else was already told "not found". */
+function isRowTrashed(row: { trashed: boolean; challenge_trashed?: boolean }): boolean {
+  return row.trashed || row.challenge_trashed === true;
+}
+
+/** §10.4: the trash state a platform admin sees on the detail payload. */
+function toTrashInfo(row: { trashed_at: Date | null; trashed_by_name: string | null; trash_reason: string | null }): TrashInfo | null {
+  if (row.trashed_at === null) return null;
+  return {
+    at: row.trashed_at.toISOString(),
+    by: row.trashed_by_name ?? "",
+    reason: row.trash_reason ?? "",
+    purgesOn: trashPurgesOn(row.trashed_at).toISOString(),
+  };
+}
+
 function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem[], attachments: AttachmentView[] = []): ChallengeDetail {
-  const isAdmin = viewer.roles.isNamespaceAdmin(row.namespace_id);
+  // §10.4: a trashed challenge (seen by platform admins only) is read-only — every control is off
+  // except Restore and Delete permanently.
+  const live = row.trashed_at === null;
+  const isAdmin = live && viewer.roles.isNamespaceAdmin(row.namespace_id);
   const isMine = viewer.userId === row.author_id;
+  const isLiveMine = live && isMine;
+  const isPlatformAdmin = viewer.roles.isPlatformAdmin;
   const status = row.status as ChallengeStatus;
   return {
     ...toListItem(row),
@@ -324,25 +396,28 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     editedAt: row.edited_at ? row.edited_at.toISOString() : null,
     resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
     isMine,
-    canPropose: row.status === "valid" && !row.namespace_archived,
+    canPropose: live && row.status === "valid" && !row.namespace_archived,
     namespaceArchived: row.namespace_archived,
     likesFrozen: areLikesFrozen(status),
     canReveal: isAdmin && row.is_anonymous,
-    canSelfReveal: isMine && row.is_anonymous,
+    canSelfReveal: isLiveMine && row.is_anonymous,
     canAssign: isAdmin && canAssignAtStatus(status),
     canOverrideStatus: isAdmin,
     allowedTransitions:
-      !isAdmin && isEnforcer(viewer, row.namespace_id, row.assignee_id)
+      live && !isAdmin && isEnforcer(viewer, row.namespace_id, row.assignee_id)
         ? challengeEnforcedTargets(status)
         : [],
-    canEdit: isMine && canAuthorEditChallenge(status),
-    canWithdraw: isMine && canAuthorWithdrawChallenge(status),
-    canResubmit: isMine && canAuthorResubmit(status),
-    canDelete: viewer.roles.isPlatformAdmin,
+    canEdit: isLiveMine && canAuthorEditChallenge(status),
+    canWithdraw: isLiveMine && canAuthorWithdrawChallenge(status),
+    canResubmit: isLiveMine && canAuthorResubmit(status),
+    canDelete: isPlatformAdmin,
+    canTrash: isPlatformAdmin && live,
+    canRestore: isPlatformAdmin && !live,
+    ...(isPlatformAdmin ? { trashed: toTrashInfo(row) } : {}),
     solutions,
     attachments,
     ...featuredDetailFields({
-      isPlatformAdmin: viewer.roles.isPlatformAdmin,
+      isPlatformAdmin: isPlatformAdmin && live,
       status: row.status,
       featuredAt: row.featured_at,
       featuredByName: row.featured_by_name,
@@ -350,14 +425,31 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
   };
 }
 
+/** The parent challenge as toSolutionItem needs it. `trashed` is the challenge's own trash flag. */
+interface SolutionParentContext {
+  namespaceId: string;
+  assigneeId: string | null;
+  trashed: boolean;
+}
+
+function solutionParentContext(row: { namespace_id: string; assignee_id: string | null; trashed_at: Date | null }): SolutionParentContext {
+  return { namespaceId: row.namespace_id, assigneeId: row.assignee_id, trashed: row.trashed_at !== null };
+}
+
 function toSolutionItem(
   row: SolutionRow,
   viewer: Viewer,
-  challenge: { namespaceId: string; assigneeId: string | null },
+  challenge: SolutionParentContext,
   attachments: AttachmentView[] = [],
 ): SolutionListItem {
-  const isAdmin = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
+  // §10.4: a solution in the trash, or under a trashed challenge, is read-only (platform admins
+  // are the only ones who see either).
+  const selfTrashed = row.trashed_at !== null;
+  const live = !selfTrashed && !challenge.trashed;
+  const isPlatformAdmin = viewer.roles.isPlatformAdmin;
+  const isAdmin = live && viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   const isMine = viewer.userId === row.author_id;
+  const isLiveMine = live && isMine;
   const status = row.status as SolutionStatus;
   return {
     id: row.id,
@@ -379,15 +471,19 @@ function toSolutionItem(
     followedByViewer: row.followed_by_viewer,
     canOverrideStatus: isAdmin,
     canReveal: isAdmin && row.is_anonymous,
-    canSelfReveal: isMine && row.is_anonymous,
+    canSelfReveal: isLiveMine && row.is_anonymous,
     allowedTransitions:
-      !isAdmin && isEnforcer(viewer, challenge.namespaceId, challenge.assigneeId)
+      live && !isAdmin && isEnforcer(viewer, challenge.namespaceId, challenge.assigneeId)
         ? solutionEnforcedTargets(status)
         : [],
-    canEdit: isMine && canAuthorEditSolution(status),
-    canWithdraw: isMine && canAuthorWithdrawSolution(status),
-    canResubmit: isMine && canAuthorResubmit(status),
-    canDelete: viewer.roles.isPlatformAdmin,
+    canEdit: isLiveMine && canAuthorEditSolution(status),
+    canWithdraw: isLiveMine && canAuthorWithdrawSolution(status),
+    canResubmit: isLiveMine && canAuthorResubmit(status),
+    canDelete: isPlatformAdmin,
+    canTrash: isPlatformAdmin && live,
+    canRestore: isPlatformAdmin && selfTrashed,
+    restoreBlocked: selfTrashed && challenge.trashed,
+    ...(isPlatformAdmin ? { trashed: toTrashInfo(row) } : {}),
     attachments,
   };
 }
@@ -398,10 +494,10 @@ function toSolutionItem(
  *  without attachments (the client re-fetches immediately after a mutation). */
 async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer, row: ChallengeRow): Promise<ChallengeDetail> {
   const solutionRows = await fetchSolutionRows(db, row.id, viewer.userId);
-  const challengeCtx = { namespaceId: row.namespace_id, assigneeId: row.assignee_id };
+  const challengeCtx = solutionParentContext(row);
   const solutions: SolutionListItem[] = [];
   for (const s of solutionRows) {
-    if (!canSeeSolution(viewer, challengeCtx, { status: s.status as SolutionStatus, authorId: s.author_id })) continue;
+    if (!isSolutionListed(viewer, challengeCtx, s)) continue;
     const solutionAttachments = await listAttachmentsForParent(db, viewer, "solution", s.id);
     solutions.push(toSolutionItem(s, viewer, challengeCtx, solutionAttachments));
   }
@@ -409,11 +505,18 @@ async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer,
   return toDetail(row, viewer, solutions, challengeAttachments);
 }
 
+/** The §4.3 solution gate as the detail builders apply it — a trashed solution (§10.4) is listed
+ *  for platform admins only, read-only. */
+function isSolutionListed(viewer: Viewer, challenge: SolutionParentContext, s: SolutionRow): boolean {
+  return canSeeSolution(viewer, challenge, { status: s.status as SolutionStatus, authorId: s.author_id, trashed: s.trashed_at !== null });
+}
+
 async function fetchSolutionRows(db: Pool | PoolClient, challengeId: string, viewerId: string): Promise<SolutionRow[]> {
   const { rows } = await db.query<SolutionRow>(
     `select s.id, s.number::text, s.challenge_id, s.description, s.cost_vs_benefits, s.status,
             s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
             s.created_at, s.updated_at, s.edited_at,
+            s.trashed_at, s.trash_reason, (select tu.display_name from users tu where tu.id = s.trashed_by) as trashed_by_name,
             (select count(*) from likes l where l.parent_type = 'solution' and l.parent_id = s.id) as like_count,
             exists(select 1 from likes lv where lv.parent_type = 'solution' and lv.parent_id = s.id and lv.user_id = $2) as liked_by_viewer,
             exists(select 1 from follows fv where fv.parent_type = 'solution' and fv.parent_id = s.id and fv.user_id = $2) as followed_by_viewer
@@ -454,8 +557,11 @@ function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] 
  *  viewer may see. awaiting_triage/withdrawn are visible to the author and the namespace's admins
  *  — the state rule REPLACES the namespace rule, so an author who has lost membership of a
  *  restricted namespace still finds their own item; every other status is org-visible or
- *  member-only. Platform admins see everything. */
+ *  member-only. Platform admins see everything — except the trash (§10.4): a trashed challenge
+ *  is gone from every list for everyone, platform admins included (they reach it through the
+ *  trash page instead). */
 export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
+  conditions.push(`c.trashed_at is null`);
   if (viewer.roles.isPlatformAdmin) return;
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
@@ -470,8 +576,10 @@ export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unkn
  *  solution is visible only to its author, the challenge's assignee, and the namespace's
  *  committee/admins. It narrows only — pair it with pushChallengeVisibilityConditions for the
  *  parent, exactly as the JS gate is paired with canSeeChallenge. Running it inside the query
- *  keeps hidden rows from filling a `limit` ahead of visible ones. Platform admins see all. */
+ *  keeps hidden rows from filling a `limit` ahead of visible ones. Platform admins see all but
+ *  the trash (§10.4): a trashed solution is gone from every list for everyone. */
 export function pushSolutionVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
+  conditions.push(`s.trashed_at is null`);
   if (viewer.roles.isPlatformAdmin) return;
   const viewerParam = push(viewer.userId);
   const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
@@ -677,6 +785,7 @@ export async function getChallengeByNumber(pool: Pool, viewer: Viewer, number: s
     visibility: row.visibility,
     status: row.status as ChallengeStatus,
     authorId: row.author_id,
+    trashed: row.trashed_at !== null,
   });
   if (!visible) return null;
 
@@ -799,6 +908,7 @@ export async function createChallenge(
 export type CreateSolutionResult =
   | { status: "ok"; solution: SolutionListItem }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "namespace_archived" }
   | { status: "not_valid_status" }
   | { status: "attachments_not_clean" }
@@ -812,29 +922,16 @@ export async function createSolution(
   input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown },
 ): Promise<CreateSolutionResult> {
   if (!isEntityNumber(challengeNumber)) return { status: "not_found" };
-  const { rows } = await pool.query<{
-    id: string;
-    namespace_id: string;
-    visibility: "org" | "namespace";
-    status: string;
-    author_id: string;
-    assignee_id: string | null;
-    namespace_archived: boolean;
-  }>(
-    `select c.id, c.namespace_id, c.visibility, c.status, c.author_id, c.assignee_id, n.archived_at is not null as namespace_archived
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; assignee_id: string | null; namespace_archived: boolean }>(
+    `select c.id, c.namespace_id, c.visibility, c.status, c.author_id, c.assignee_id, n.archived_at is not null as namespace_archived,
+            c.trashed_at is not null as trashed
        from challenges c join namespaces n on n.id = c.namespace_id
       where c.number = $1`,
     [challengeNumber],
   );
   const challenge = rows[0];
-  if (!challenge) return { status: "not_found" };
-  const visible = canSeeChallenge(author, {
-    namespaceId: challenge.namespace_id,
-    visibility: challenge.visibility,
-    status: challenge.status as ChallengeStatus,
-    authorId: challenge.author_id,
-  });
-  if (!visible) return { status: "not_found" };
+  if (!challenge || !isChallengeRowVisible(author, challenge)) return { status: "not_found" };
+  if (challenge.trashed) return { status: "trashed" }; // §10.4
   // §4.1: an archived namespace takes no new solution on any of its challenges.
   if (challenge.namespace_archived) return { status: "namespace_archived" };
   // §6.2: proposing is allowed ONLY while the challenge is `valid`.
@@ -871,7 +968,7 @@ export async function createSolution(
     if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
     const solutionRows = await fetchSolutionRows(client, challenge.id, author.userId);
     const row = solutionRows.find((s) => s.id === id)!;
-    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: challenge.namespace_id, assigneeId: challenge.assignee_id }) };
+    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: challenge.namespace_id, assigneeId: challenge.assignee_id, trashed: false }) };
   });
 }
 
@@ -880,6 +977,7 @@ export async function createSolution(
 export type SetChallengeStatusResult =
   | { status: "ok"; challenge: ChallengeDetail; changed: boolean; previousStatus: string }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" };
@@ -927,21 +1025,18 @@ async function loadChallengeForStatusChange(
   newStatus: string,
 ): Promise<
   | { status: "ok"; current: { id: string; namespace_id: string; status: string }; mode: TransitionMode }
-  | { status: "not_found" | "forbidden" | "illegal_transition" | "invalid_status" }
+  | { status: "not_found" | "trashed" | "forbidden" | "illegal_transition" | "invalid_status" }
 > {
   if (!isChallengeStatus(newStatus)) return { status: "invalid_status" };
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{
-    id: string;
-    namespace_id: string;
-    visibility: "org" | "namespace";
-    status: string;
-    author_id: string;
-    assignee_id: string | null;
-  }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; assignee_id: string | null }>(
+    `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
+    [number],
+  );
   const current = rows[0];
   // §2.4: a challenge the actor cannot see is "not found", never "forbidden".
   if (!current || !isChallengeRowVisible(actor, current)) return { status: "not_found" };
+  if (current.trashed) return { status: "trashed" }; // §10.4: read-only until restored
   const decision = decideTransition({
     from: current.status,
     to: newStatus,
@@ -970,16 +1065,9 @@ export async function setChallengeStatus(
       actor.userId,
     ]);
     const row = full[0]!;
+    const ctx = solutionParentContext(row);
     const solutionRows = await fetchSolutionRows(client, row.id, actor.userId);
-    const solutions = solutionRows
-      .filter((s) =>
-        canSeeSolution(
-          actor,
-          { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-          { status: s.status as SolutionStatus, authorId: s.author_id },
-        ),
-      )
-      .map((s) => toSolutionItem(s, actor, { namespaceId: row.namespace_id, assigneeId: row.assignee_id }));
+    const solutions = solutionRows.filter((s) => isSolutionListed(actor, ctx, s)).map((s) => toSolutionItem(s, actor, ctx));
     return {
       status: "ok",
       challenge: toDetail(row, actor, solutions),
@@ -992,6 +1080,7 @@ export async function setChallengeStatus(
 export type SetChallengeStatusLeanResult =
   | { status: "ok"; changed: boolean; previousStatus: string }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" };
@@ -1020,6 +1109,7 @@ export type SetSolutionStatusResult =
       autoClose?: { challengeId: string; challengeNumber: string; challengeTitle: string; notSelectedAuthorIds: string[]; solutionIds: string[] };
     }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" }
@@ -1047,6 +1137,7 @@ export async function setSolutionStatus(
   );
   const current = rows[0];
   if (!current || !isSolutionRowVisible(actor, current)) return { status: "not_found" };
+  if (isRowTrashed(current)) return { status: "trashed" }; // §10.4
   // Enforcer of a solution = committee of the parent's namespace, or the parent challenge's
   // assignee (§8.2). Admins free-set (override); anyone else is refused.
   const decision = decideTransition({
@@ -1059,8 +1150,10 @@ export async function setSolutionStatus(
   if (!decision.allowed) return { status: decision.reason };
   const mode = decision.mode;
 
-  const { rows: siblingRows } = await pool.query<{ id: string; status: string; author_id: string }>(
-    `select id, status, author_id from solutions where challenge_id = $1 and id <> $2`,
+  // §10.4: trashed siblings count too — a trashed solution past `valid` still holds the §8.3
+  // single-winner slot, which is what makes its restore safe.
+  const { rows: siblingRows } = await pool.query<{ id: string; status: string; author_id: string; trashed: boolean }>(
+    `select id, status, author_id, trashed_at is not null as trashed from solutions where challenge_id = $1 and id <> $2`,
     [current.challenge_id, current.id],
   );
 
@@ -1131,14 +1224,17 @@ export async function setSolutionStatus(
               after: { status: "not_selected", override: mode === "override", trigger: "auto_close", implementedSolutionId: current.id },
             });
           }
+          // §10.4: a trashed sibling is closed like any other (its restore then matches §8.3), but
+          // nobody is told about it — a trashed item sends no notification.
+          const notifiable = toClose.filter((id) => !siblingRows.find((s) => s.id === id)!.trashed);
           autoClose = {
             challengeId: current.challenge_id,
             challengeNumber: current.challenge_number,
             challengeTitle: current.challenge_title,
-            notSelectedAuthorIds: toClose.map((id) => siblingRows.find((s) => s.id === id)!.author_id),
+            notSelectedAuthorIds: notifiable.map((id) => siblingRows.find((s) => s.id === id)!.author_id),
             // §12.1 event 8: "followers of the challenge AND its solutions" — the implemented
             // solution plus every sibling just closed as not_selected.
-            solutionIds: [current.id, ...toClose],
+            solutionIds: [current.id, ...notifiable],
           };
           // §12.4: solution.implemented, then challenge.solved (when the parent really transitioned).
           await onSolutionImplemented(client, current.id, current.challenge_id, current.challenge_status === "solved");
@@ -1150,7 +1246,7 @@ export async function setSolutionStatus(
       const row = solutionRows.find((s) => s.id === current.id)!;
       return {
         status: "ok",
-        solution: toSolutionItem(row, actor, { namespaceId: current.namespace_id, assigneeId: current.assignee_id }),
+        solution: toSolutionItem(row, actor, { namespaceId: current.namespace_id, assigneeId: current.assignee_id, trashed: false }),
         changed: current.status !== newStatus,
         previousStatus: current.status,
         autoClose,
@@ -1164,7 +1260,7 @@ export async function setSolutionStatus(
 
 // ── Likes (minimal slice pulled forward from Phase 3) ───────────────────────────────────
 
-export type ToggleLikeResult = { status: "ok"; liked: boolean; count: number } | { status: "not_found" } | { status: "frozen" };
+export type ToggleLikeResult = { status: "ok"; liked: boolean; count: number } | { status: "not_found" } | { status: "trashed" } | { status: "frozen" };
 
 /** §8.3: a solved challenge freezes likes on itself and its solutions — neither a like nor an
  *  unlike lands. Reads the parent challenge's status under FOR SHARE so a concurrent auto-close
@@ -1191,8 +1287,8 @@ export async function toggleLike(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<ToggleLikeResult> {
-  const visible = await isParentVisible(pool, viewer, parentType, parentId);
-  if (!visible) return { status: "not_found" };
+  const access = await getParentAccess(pool, viewer, parentType, parentId);
+  if (access !== "live") return { status: access };
 
   return inTransaction(pool, async (client) => {
     const gate = await lockLikeParent(client, parentType, parentId);
@@ -1239,53 +1335,46 @@ export async function toggleLike(
   });
 }
 
-/** Exported for reuse by comments/follows/likes stores — any parent-scoped feature needs
- *  the same "can this viewer see the challenge/solution at all" gate (§4.3). */
-export async function isParentVisible(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
+/** What a viewer may do with a challenge/solution parent: `live` (visible, writable per the
+ *  caller's own rules), `trashed` (in the trash, or under a trashed challenge — reached only by a
+ *  platform admin, who may read it but not write to it, §10.4) or `not_found` (missing or
+ *  invisible — the two are never told apart, invariant 2). */
+export type ParentAccess = "live" | "trashed" | "not_found";
+
+/** Exported for reuse by the comments/follows/likes/attachments stores and the notification
+ *  fan-out — any parent-scoped feature needs the same §4.3 gate. Writes require `live`. */
+export async function getParentAccess(
+  db: Pool | PoolClient,
+  viewer: Viewer,
+  parentType: "challenge" | "solution",
+  parentId: string,
+): Promise<ParentAccess> {
+  if (!isUuid(parentId)) return "not_found";
   if (parentType === "challenge") {
-    const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
-      `select namespace_id, visibility, status, author_id from challenges where id = $1`,
+    const { rows } = await db.query<ChallengeVisibilityColumns>(
+      `select namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where id = $1`,
       [parentId],
     );
     const row = rows[0];
-    if (!row) return false;
-    return canSeeChallenge(viewer, {
-      namespaceId: row.namespace_id,
-      visibility: row.visibility,
-      status: row.status as ChallengeStatus,
-      authorId: row.author_id,
-    });
+    if (!row || !isChallengeRowVisible(viewer, row)) return "not_found";
+    return isRowTrashed(row) ? "trashed" : "live";
   }
-  const { rows } = await pool.query<{
-    status: string;
-    author_id: string;
-    namespace_id: string;
-    visibility: "org" | "namespace";
-    challenge_status: string;
-    challenge_author_id: string;
-    assignee_id: string | null;
-  }>(
-    `select s.status, s.author_id, c.namespace_id, c.visibility,
-            c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id
+  const { rows } = await db.query<SolutionVisibilityColumns>(
+    `select ${SOLUTION_VISIBILITY_SELECT}
        from solutions s
        join challenges c on c.id = s.challenge_id
       where s.id = $1`,
     [parentId],
   );
   const row = rows[0];
-  if (!row) return false;
-  const challengeVisible = canSeeChallenge(viewer, {
-    namespaceId: row.namespace_id,
-    visibility: row.visibility,
-    status: row.challenge_status as ChallengeStatus,
-    authorId: row.challenge_author_id,
-  });
-  if (!challengeVisible) return false;
-  return canSeeSolution(
-    viewer,
-    { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-    { status: row.status as SolutionStatus, authorId: row.author_id },
-  );
+  if (!row || !isSolutionRowVisible(viewer, row)) return "not_found";
+  return isRowTrashed(row) ? "trashed" : "live";
+}
+
+/** The read gate: true when the viewer may SEE the parent — a platform admin sees a trashed one
+ *  (the read-only trashed view and its attachments, §10.4). Writes use getParentAccess. */
+export async function isParentVisible(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
+  return (await getParentAccess(pool, viewer, parentType, parentId)) !== "not_found";
 }
 
 /** The namespace a challenge or solution belongs to (via its parent challenge for
@@ -1314,6 +1403,7 @@ export async function getParentNamespaceId(
 export type AssignResult =
   | { status: "ok"; challenge: ChallengeDetail; assigned: boolean; previousAssigneeId: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "unknown_user" }
   | { status: "assignee_cannot_see" }
@@ -1329,13 +1419,14 @@ export type ResolveAssigneeRoles = (userId: string) => Promise<RoleSet>;
  *  admin roles there, so only those who may assign (the assign endpoint's own gate) get it. */
 export async function getAssignmentAudience(pool: Pool, viewer: Viewer, number: string): Promise<ChallengeVisibilityInput | null> {
   if (!isEntityNumber(number)) return null;
-  const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
-    `select namespace_id, visibility, status, author_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns>(
+    `select namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
-  if (!row || !isChallengeRowVisible(viewer, row) || !viewer.roles.isNamespaceAdmin(row.namespace_id)) return null;
-  return { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id };
+  // §10.4: a trashed challenge takes no assignee, so its picker offers nobody.
+  if (!row || row.trashed || !isChallengeRowVisible(viewer, row) || !viewer.roles.isNamespaceAdmin(row.namespace_id)) return null;
+  return { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false };
 }
 
 /** Exported for the GDPR erasure hand-over (§3), whose every move is an ordinary §7.3 change. */
@@ -1368,19 +1459,16 @@ async function loadChallengeForAssignment(
   resolveRoles: ResolveAssigneeRoles,
 ): Promise<
   | { status: "ok"; current: { id: string; namespace_id: string; status: string; assignee_id: string | null } }
-  | { status: "not_found" | "forbidden" | "terminal_status" | "unknown_user" | "assignee_cannot_see" }
+  | { status: "not_found" | "trashed" | "forbidden" | "terminal_status" | "unknown_user" | "assignee_cannot_see" }
 > {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{
-    id: string;
-    namespace_id: string;
-    visibility: "org" | "namespace";
-    status: string;
-    author_id: string;
-    assignee_id: string | null;
-  }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; assignee_id: string | null }>(
+    `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
+    [number],
+  );
   const current = rows[0];
   if (!current || !isChallengeRowVisible(admin, current)) return { status: "not_found" };
+  if (current.trashed) return { status: "trashed" }; // §10.4
   if (!admin.roles.isNamespaceAdmin(current.namespace_id)) return { status: "forbidden" };
   if (!canAssignAtStatus(current.status as ChallengeStatus)) return { status: "terminal_status" };
 
@@ -1418,12 +1506,9 @@ export async function setChallengeAssignee(
       admin.userId,
     ]);
     const row = full[0]!;
+    const ctx = solutionParentContext(row);
     const solutionRows = await fetchSolutionRows(client, row.id, admin.userId);
-    const solutions = solutionRows
-      .filter((s) =>
-        canSeeSolution(admin, { namespaceId: row.namespace_id, assigneeId: row.assignee_id }, { status: s.status as SolutionStatus, authorId: s.author_id }),
-      )
-      .map((s) => toSolutionItem(s, admin, { namespaceId: row.namespace_id, assigneeId: row.assignee_id }));
+    const solutions = solutionRows.filter((s) => isSolutionListed(admin, ctx, s)).map((s) => toSolutionItem(s, admin, ctx));
     return { status: "ok", challenge: toDetail(row, admin, solutions), assigned: assigneeUserId !== null, previousAssigneeId: current.assignee_id };
   });
 }
@@ -1431,6 +1516,7 @@ export async function setChallengeAssignee(
 export type AssignLeanResult =
   | { status: "ok"; assigned: boolean }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "unknown_user" }
   | { status: "assignee_cannot_see" }
@@ -1460,6 +1546,7 @@ export async function setChallengeAssigneeLean(
 export type SetVisibilityResult =
   | { status: "ok"; challenge: ChallengeDetail }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "invalid" };
 
@@ -1468,12 +1555,13 @@ export type SetVisibilityResult =
 export async function setChallengeVisibility(pool: Pool, admin: Viewer, number: string, visibility: string): Promise<SetVisibilityResult> {
   if (visibility !== "org" && visibility !== "namespace") return { status: "invalid" };
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
-    `select id, namespace_id, visibility, status, author_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string }>(
+    `select id, namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
   if (!cur || !isChallengeRowVisible(admin, cur)) return { status: "not_found" };
+  if (cur.trashed) return { status: "trashed" }; // §10.4
   if (!admin.roles.isNamespaceAdmin(cur.namespace_id)) return { status: "forbidden" };
   if (cur.visibility === visibility) return { status: "ok", challenge: await reloadChallengeDetail(pool, admin, cur.id) };
 
@@ -1517,6 +1605,7 @@ function diffFields(pairs: { key: string; before: unknown; after: unknown }[]): 
 export type EditChallengeResult =
   | { status: "ok"; challenge: ChallengeDetail }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   | { status: "unknown_impact_area" }
@@ -1544,13 +1633,16 @@ export async function editChallenge(
     client_name: string | null;
     visibility: "org" | "namespace";
     is_anonymous: boolean;
+    trashed: boolean;
   }>(
-    `select id, namespace_id, status, author_id, impact_area_id, title, description, client_name, visibility, is_anonymous
+    `select id, namespace_id, status, author_id, impact_area_id, title, description, client_name, visibility, is_anonymous,
+            trashed_at is not null as trashed
        from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
   if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
+  if (cur.trashed) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorEditChallenge(cur.status as ChallengeStatus)) return { status: "not_editable" };
 
@@ -1591,6 +1683,7 @@ export async function editChallenge(
 export type EditSolutionResult =
   | { status: "ok"; solution: SolutionListItem }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   | { status: "invalid"; error: string };
@@ -1609,6 +1702,7 @@ export async function editSolution(
   );
   const cur = rows[0];
   if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
+  if (isRowTrashed(cur)) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorEditSolution(cur.status as SolutionStatus)) return { status: "not_editable" };
 
@@ -1633,25 +1727,27 @@ export async function editSolution(
     }
     const solutionRows = await fetchSolutionRows(client, cur.challenge_id, author.userId);
     const row = solutionRows.find((s) => s.id === cur.id)!;
-    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: cur.namespace_id, assigneeId: cur.assignee_id }) };
+    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: cur.namespace_id, assigneeId: cur.assignee_id, trashed: false }) };
   });
 }
 
 export type WithdrawChallengeResult =
   | { status: "ok"; challengeId: string; namespaceId: string; title: string; previousStatus: string; assigneeId: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_withdrawable" };
 
 /** Author withdraws their own challenge from any non-terminal status → withdrawn (§10.1). */
 export async function withdrawChallenge(pool: Pool, author: Viewer, number: string): Promise<WithdrawChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
-    `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; title: string; assignee_id: string | null }>(
+    `select id, status, author_id, namespace_id, visibility, title, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
   if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
+  if (cur.trashed) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorWithdrawChallenge(cur.status as ChallengeStatus)) return { status: "not_withdrawable" };
 
@@ -1680,6 +1776,7 @@ export async function withdrawChallenge(pool: Pool, author: Viewer, number: stri
 export type WithdrawSolutionResult =
   | { status: "ok"; solutionId: string; challengeId: string; namespaceId: string; challengeNumber: string; challengeTitle: string; previousStatus: string; assigneeId: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_withdrawable" };
 
@@ -1692,6 +1789,7 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
   );
   const cur = rows[0];
   if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
+  if (isRowTrashed(cur)) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorWithdrawSolution(cur.status as SolutionStatus)) return { status: "not_withdrawable" };
 
@@ -1713,6 +1811,7 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
 export type ResubmitChallengeResult =
   | { status: "ok"; challengeId: string; namespaceId: string; title: string; assigneeId: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_resubmittable" };
 
@@ -1720,12 +1819,13 @@ export type ResubmitChallengeResult =
  *  reviewers (route). Audited as an enforced status change (`override:false`). */
 export async function resubmitChallenge(pool: Pool, author: Viewer, number: string): Promise<ResubmitChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
-    `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; title: string; assignee_id: string | null }>(
+    `select id, status, author_id, namespace_id, visibility, title, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
   if (!cur || !isChallengeRowVisible(author, cur)) return { status: "not_found" };
+  if (cur.trashed) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorResubmit(cur.status as ChallengeStatus)) return { status: "not_resubmittable" };
 
@@ -1746,6 +1846,7 @@ export async function resubmitChallenge(pool: Pool, author: Viewer, number: stri
 export type ResubmitSolutionResult =
   | { status: "ok"; solutionId: string; namespaceId: string; challengeNumber: string; challengeTitle: string; assigneeId: string | null }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_resubmittable" };
 
@@ -1758,6 +1859,7 @@ export async function resubmitSolution(pool: Pool, author: Viewer, number: strin
   );
   const cur = rows[0];
   if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
+  if (isRowTrashed(cur)) return { status: "trashed" }; // §10.4
   if (cur.author_id !== author.userId) return { status: "forbidden" };
   if (!canAuthorResubmit(cur.status as SolutionStatus)) return { status: "not_resubmittable" };
 
@@ -1788,6 +1890,7 @@ export type RevealResult =
       realScrubbed: boolean;
     }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_anonymous" };
 
@@ -1816,13 +1919,14 @@ function toRevealResult(user: RevealUserRow | undefined, authorId: string): Reve
  *  assignees cannot reveal. */
 export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string }>(
-    `select id, namespace_id, visibility, status, is_anonymous, author_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; is_anonymous: boolean }>(
+    `select id, namespace_id, visibility, status, is_anonymous, author_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
   // §2.4: visibility first — a non-admin probing a hidden challenge gets 404, never 403.
   if (!row || !isChallengeRowVisible(admin, row)) return { status: "not_found" };
+  if (row.trashed) return { status: "trashed" }; // §10.4: the trash is not a reveal path
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1846,6 +1950,7 @@ export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: st
   );
   const row = rows[0];
   if (!row || !isSolutionRowVisible(admin, row)) return { status: "not_found" };
+  if (isRowTrashed(row)) return { status: "trashed" }; // §10.4
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1860,17 +1965,23 @@ export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: st
   return toRevealResult(userRows[0], row.author_id);
 }
 
-export type SelfRevealResult = { status: "ok"; challenge?: ChallengeDetail } | { status: "not_found" } | { status: "forbidden" } | { status: "not_anonymous" };
+export type SelfRevealResult =
+  | { status: "ok"; challenge?: ChallengeDetail }
+  | { status: "not_found" }
+  | { status: "trashed" }
+  | { status: "forbidden" }
+  | { status: "not_anonymous" };
 
 /** Self-reveal: the author permanently removes their own anonymity (one-way, §9). */
 export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: string): Promise<SelfRevealResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string }>(
-    `select id, namespace_id, visibility, status, is_anonymous, author_id from challenges where number = $1`,
+  const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; is_anonymous: boolean }>(
+    `select id, namespace_id, visibility, status, is_anonymous, author_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
   if (!row || !isChallengeRowVisible(viewer, row)) return { status: "not_found" };
+  if (row.trashed) return { status: "trashed" }; // §10.4
   if (row.author_id !== viewer.userId) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 
@@ -1888,12 +1999,9 @@ export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: st
       row.id,
       viewer.userId,
     ]);
+    const ctx = solutionParentContext(full[0]!);
     const solutionRows = await fetchSolutionRows(client, row.id, viewer.userId);
-    const solutions = solutionRows
-      .filter((s) =>
-        canSeeSolution(viewer, { namespaceId: full[0]!.namespace_id, assigneeId: full[0]!.assignee_id }, { status: s.status as SolutionStatus, authorId: s.author_id }),
-      )
-      .map((s) => toSolutionItem(s, viewer, { namespaceId: full[0]!.namespace_id, assigneeId: full[0]!.assignee_id }));
+    const solutions = solutionRows.filter((s) => isSolutionListed(viewer, ctx, s)).map((s) => toSolutionItem(s, viewer, ctx));
     return { status: "ok", challenge: toDetail(full[0]!, viewer, solutions) };
   });
 }
@@ -1907,6 +2015,7 @@ export async function selfRevealSolution(pool: Pool, viewer: Viewer, number: str
   );
   const row = rows[0];
   if (!row || !isSolutionRowVisible(viewer, row)) return { status: "not_found" };
+  if (isRowTrashed(row)) return { status: "trashed" }; // §10.4
   if (row.author_id !== viewer.userId) return { status: "forbidden" };
   if (!row.is_anonymous) return { status: "not_anonymous" };
 

@@ -125,12 +125,19 @@ export interface ChallengeVisibilityInput {
   visibility: "org" | "namespace";
   status: ChallengeStatus;
   authorId: string;
+  /** §10.4: the challenge is in the trash (`trashed_at` is set). Required, so no read path can
+   *  forget to say. */
+  trashed: boolean;
 }
 
 /** §4.3: awaiting_triage/withdrawn are visible only to their author and the
  *  namespace's admins (platform admins included, via isNamespaceAdmin); otherwise
- *  org-visibility is open to everyone and namespace-visibility is member-only. */
+ *  org-visibility is open to everyone and namespace-visibility is member-only. A trashed
+ *  challenge (§10.4) is visible to platform admins only — the read-only trashed detail view;
+ *  to everyone else it does not exist (invariant 2). Lists never show it to anyone: the SQL
+ *  twin drops trashed rows for platform admins too. */
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
+  if (challenge.trashed) return viewer.roles.isPlatformAdmin;
   const isAuthor = viewer.userId === challenge.authorId;
   const isNamespaceAdminHere = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   if (challenge.status === "awaiting_triage" || challenge.status === "withdrawn") {
@@ -145,17 +152,21 @@ export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisib
 export interface SolutionVisibilityInput {
   status: SolutionStatus;
   authorId: string;
+  /** §10.4: the solution itself is in the trash (its challenge's flag is the parent's gate). */
+  trashed: boolean;
 }
 
 /** §4.3: a solution inherits its parent challenge's visibility gate, and while
  *  `proposed` is additionally hidden except to its author, the challenge's assignee,
  *  and the namespace's committee/admins. Callers must have already resolved
- *  `canSeeChallenge` for the parent — this only applies the solution-specific narrowing. */
+ *  `canSeeChallenge` for the parent — this only applies the solution-specific narrowing. A
+ *  trashed solution (§10.4) is visible to platform admins only. */
 export function canSeeSolution(
   viewer: ViewerContext,
   challenge: { namespaceId: string; assigneeId: string | null },
   solution: SolutionVisibilityInput,
 ): boolean {
+  if (solution.trashed) return viewer.roles.isPlatformAdmin;
   if (solution.status !== "proposed") return true;
   const isAuthor = viewer.userId === solution.authorId;
   const isAssignee = challenge.assigneeId !== null && viewer.userId === challenge.assigneeId;
@@ -431,6 +442,51 @@ export function parentStatusAfterSolutionDelete(input: {
   if (input.challengeStatus !== "solved") return null;
   return "valid";
 }
+
+// ── §10.4 Trash & restore (platform admin) ───────────────────────────────────────────────
+
+/** Days a trashed item waits before the worker purges it (§10.4). Not configurable (§19). */
+export const TRASH_RETENTION_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The moment a trashed item becomes due for the automatic purge: `trashed_at + 30 days`. The
+ *  trash page and the trashed detail banner show its date as "purges on". */
+export function trashPurgesOn(trashedAt: Date): Date {
+  return new Date(trashedAt.getTime() + TRASH_RETENTION_DAYS * DAY_MS);
+}
+
+/** True once the item has waited out the full window — the purge job's test. */
+export function isTrashPurgeDue(trashedAt: Date, now: Date): boolean {
+  return now.getTime() >= trashPurgesOn(trashedAt).getTime();
+}
+
+/** Whole days an item spent in the trash, for the restore audit row. */
+export function daysInTrash(trashedAt: Date, now: Date): number {
+  return Math.max(0, Math.floor((now.getTime() - trashedAt.getTime()) / DAY_MS));
+}
+
+/** The reason a platform admin gives when moving an item to the trash. Required and capped
+ *  like the delete reason, because the eventual purge records this same text (§10.3). */
+export function validateTrashReason(reason: unknown): Result<string> {
+  if (typeof reason !== "string" || reason.trim() === "") return fail("a reason is required to move this item to the trash");
+  const trimmed = reason.trim();
+  if (trimmed.length > DELETE_REASON_MAX) return fail(`the reason must be at most ${DELETE_REASON_MAX} characters`);
+  return { ok: true, value: trimmed };
+}
+
+/** §10.4 nested trash: a solution cannot come back while its challenge is still in the trash —
+ *  the challenge must be restored first (the route answers 409). */
+export function solutionRestoreBlocked(input: { challengeTrashed: boolean }): boolean {
+  return input.challengeTrashed;
+}
+
+/** The user-facing refusal for a restore blocked by a trashed parent (also the trash page's
+ *  tooltip on the disabled Restore). */
+export const RESTORE_CHALLENGE_FIRST = "Restore the challenge first.";
+
+/** The user-facing refusal for any write to an item that is in the trash. */
+export const ITEM_IN_TRASH = "This item is in the trash. Restore it first.";
 
 /** Notification/outbox links belonging to a deleted subtree (§10.3 cascade). Every §12.1
  *  link is `/challenges/<n>` for a challenge and `/challenges/<n>#SOL-<m>` for a solution,

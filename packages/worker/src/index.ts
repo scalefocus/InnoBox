@@ -37,6 +37,7 @@ import { runSystemLogAlertSweep } from "./system-log/alert.js";
 import { startWebhookSweeps } from "./webhooks/deliver.js";
 import { startTriageAssistSweeps } from "./ai/triage.js";
 import { runGamificationBackfill } from "./gamification/backfill.js";
+import { TRASH_PURGE_INTERVAL_MS, runTrashPurgeSweep } from "./trash/purge.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -138,6 +139,7 @@ let notificationInterval: NodeJS.Timeout | null = null;
 let scanInterval: NodeJS.Timeout | null = null;
 let housekeepingInterval: NodeJS.Timeout | null = null;
 let systemLogAlertInterval: NodeJS.Timeout | null = null;
+let trashPurgeInterval: NodeJS.Timeout | null = null;
 let stopWebhookSweeps: (() => void) | null = null;
 let stopTriageAssistSweeps: (() => void) | null = null;
 
@@ -231,6 +233,20 @@ const leaderElection = startLeaderElection(dbUrl, {
     };
     void runSystemLogAlert();
     systemLogAlertInterval = setInterval(runSystemLogAlert, 5 * 60 * 1000); // every 5 minutes
+
+    // §10.4 trash purge (daily): permanently deletes items 30 days after they were trashed, through
+    // the §10.3 cascade. Pure DB work plus best-effort object deletes — it runs without an object
+    // store too (each unreachable object is logged), so the trash never outlives its window.
+    const runTrashPurge = async () => {
+      try {
+        const summary = await runTrashPurgeSweep(pool, { storage: scanDeps?.s3 ?? null });
+        if (summary.purged || summary.failed) console.log(JSON.stringify({ level: "info", msg: "trash purge sweep", ...summary }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "trash purge sweep failed", error: String(err) }));
+      }
+    };
+    void runTrashPurge();
+    trashPurgeInterval = setInterval(runTrashPurge, TRASH_PURGE_INTERVAL_MS);
 
     // §12.4 channel-webhook delivery sweep (30 s) + 30-day trim (hourly). Pure DB + outbound HTTPS.
     stopWebhookSweeps = startWebhookSweeps(pool, { onSweep: recordWebhookSweep });
@@ -358,6 +374,10 @@ const leaderElection = startLeaderElection(dbUrl, {
       clearInterval(housekeepingInterval);
       housekeepingInterval = null;
     }
+    if (trashPurgeInterval) {
+      clearInterval(trashPurgeInterval);
+      trashPurgeInterval = null;
+    }
     if (systemLogAlertInterval) {
       clearInterval(systemLogAlertInterval);
       systemLogAlertInterval = null;
@@ -378,6 +398,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     if (scanInterval) clearInterval(scanInterval);
     if (housekeepingInterval) clearInterval(housekeepingInterval);
     if (systemLogAlertInterval) clearInterval(systemLogAlertInterval);
+    if (trashPurgeInterval) clearInterval(trashPurgeInterval);
     stopWebhookSweeps?.();
     stopTriageAssistSweeps?.();
     await leaderElection.stop();

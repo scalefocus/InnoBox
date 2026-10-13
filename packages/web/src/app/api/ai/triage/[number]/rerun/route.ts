@@ -3,6 +3,7 @@
 // task effective. Advisory — nothing about the challenge changes.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { trashedResponse } from "@/lib/http";
 import { webAi } from "@/lib/ai";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -24,6 +25,8 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
       return Response.json({ ok: true });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "Only namespace admins can re-run triage notes" }, { status: 403 });
     case "unavailable":

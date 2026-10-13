@@ -17,7 +17,7 @@ import {
   type NotificationTarget,
   type NotificationType,
 } from "@innobox/shared";
-import { isParentVisible, type Viewer } from "../app/api/challenges/store";
+import { getParentAccess, type Viewer } from "../app/api/challenges/store";
 
 type Db = Pool | PoolClient;
 
@@ -131,7 +131,8 @@ async function finalRecipients(
   const visible: string[] = [];
   for (const userId of deduped) {
     const roles = await ctx.resolveRoles(userId);
-    if (await isParentVisible(ctx.pool, { userId, roles }, visibilityScope.parentType, visibilityScope.parentId)) {
+    // `live` only: a trashed item (§10.4) notifies nobody, platform admins included.
+    if ((await getParentAccess(ctx.pool, { userId, roles }, visibilityScope.parentType, visibilityScope.parentId)) === "live") {
       visible.push(userId);
     }
   }
