@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.3.0",
+    date: "2026-10-13",
+    summary:
+      "Prefer fewer e-mails? Under E-mail delivery on your profile you can now get a daily or weekly digest of what you follow instead of one e-mail per update. Digests arrive at 06:00 UTC, every day or on Mondays, and skip anything you have already read. Rejections, assignments and admin alerts still arrive at once.",
+  },
+  {
     version: "1.2.0",
     date: "2026-10-13",
     summary:

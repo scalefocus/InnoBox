@@ -2220,12 +2220,6 @@ coalescing of comment notifications below.
 
 **E-mail digests.**
 
-> **⚠ GAP-76 · new feature:** digests do not exist; every e-mail is sent immediately.
-> Build: a migration adding `users.email_delivery` and `notification_outbox.digest_due_at`
-> (§5); the hold at insert time; the worker's digest job and the digest template; the
-> *E-mail delivery* choice on the profile (§13.5) and in `PATCH /api/profile`; and the
-> tests below. Ships as one minor release.
-
 A user may swap the per-event e-mails about what they follow for **one summary e-mail**
 a day or a week.
 
