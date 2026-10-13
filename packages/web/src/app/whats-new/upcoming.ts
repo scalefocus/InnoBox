@@ -26,13 +26,6 @@ export interface UpcomingViewer {
 }
 
 export const UPCOMING: UpcomingEntry[] = [
-  {
-    ids: ["GAP-78"],
-    title: "Connect your AI agent",
-    teaser:
-      "Once an administrator turns it on, you can connect an AI assistant such as Claude to search challenges and submit challenges, solutions and comments as you, after you approve it in your browser. Your first steps with an agent earn new badges.",
-    audience: "everyone",
-  },
 ];
 
 /** True when an entry applies to a viewer with these roles. */

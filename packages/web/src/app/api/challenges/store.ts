@@ -31,6 +31,7 @@ import {
   trashPurgesOn,
   validateChallengeFields,
   validateSolutionFields,
+  viaAgentOf,
   type AttachmentView,
   type ChallengeStatus,
   type ChallengeVisibilityInput,
@@ -38,6 +39,7 @@ import {
   type RoleSet,
   type SolutionStatus,
   type TransitionMode,
+  type ViaAgent,
 } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -62,6 +64,25 @@ import { onExternalChallengeClosed } from "./external";
 export interface Viewer {
   userId: string;
   roles: RoleSet;
+  /** §25.5: set for an AI agent's call while restricted content is not shared over MCP — every
+   *  namespace-restricted challenge then behaves as if it did not exist (canSeeChallenge and
+   *  pushChallengeVisibilityConditions both honour it). Never set for a browser request. */
+  orgVisibleOnly?: boolean;
+  /** §25: the call comes from an AI agent over MCP. An agent never sees an item in the §10.4
+   *  trash — not even a platform admin's: the read-only trashed view is for the person in the
+   *  browser, and trash, restore and delete are never done through an agent. */
+  viaAgent?: boolean;
+}
+
+/** §25.8/§25.13: a write made through MCP — the client's registered name at that moment. Stored
+ *  on what it creates (`mcp_client_name`) and added to the audit payload of every write. */
+export interface AgentSource {
+  clientName: string;
+}
+
+/** The audit-payload fields a write made through MCP adds (§25.13); nothing for the browser. */
+export function agentAuditFields(via: AgentSource | undefined): { source?: "mcp"; client?: string } {
+  return via ? { source: "mcp", client: via.clientName } : {};
 }
 
 /** §10.4: where a trashed item stands — sent to platform admins only (the trashed detail view). */
@@ -128,6 +149,8 @@ export interface SolutionListItem {
   trashed?: TrashInfo | null;
   /** §11 attachments visible to this viewer (anonymity-safe; never carries uploaded_by). */
   attachments: AttachmentView[];
+  /** §25.8 "via agent": null for the browser; the client name is masked on an anonymous item. */
+  viaAgent: ViaAgent;
 }
 
 /** `FeaturedDetailFields`: the §13.2 `featured` / `canFeature` (+ admin-only provenance). */
@@ -184,6 +207,8 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   solutions: SolutionListItem[];
   /** §11 attachments on the challenge itself, visible to this viewer (anonymity-safe). */
   attachments: AttachmentView[];
+  /** §25.8 "via agent": null for the browser; the client name is masked on an anonymous item. */
+  viaAgent: ViaAgent;
 }
 
 /** §24.6 "Submitted from outside": name and e-mail are null once erased (§24.8). */
@@ -242,6 +267,8 @@ export interface ChallengeRow {
   trashed_at: Date | null;
   trashed_by_name: string | null;
   trash_reason: string | null;
+  /** §25.8: the MCP client name at creation, null for the browser. */
+  mcp_client_name: string | null;
 }
 
 interface SolutionRow {
@@ -265,6 +292,7 @@ interface SolutionRow {
   trashed_at: Date | null;
   trashed_by_name: string | null;
   trash_reason: string | null;
+  mcp_client_name: string | null;
 }
 
 export const CHALLENGE_SELECT = `
@@ -283,6 +311,7 @@ export const CHALLENGE_SELECT = `
             and s.status not in ('rejected','not_selected','withdrawn','proposed')) as solution_count,
          (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new,
          c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name,
+         c.mcp_client_name,
          c.trashed_at, c.trash_reason, (select tu.display_name from users tu where tu.id = c.trashed_by) as trashed_by_name
     from challenges c
     left join users u on u.id = c.author_id
@@ -462,6 +491,7 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     externalContact: externalContactFor(row, viewer.roles.isNamespaceAdmin(row.namespace_id)),
     solutions,
     attachments,
+    viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
     ...featuredDetailFields({
       isPlatformAdmin: isPlatformAdmin && live,
       status: row.status,
@@ -531,6 +561,7 @@ function toSolutionItem(
     restoreBlocked: selfTrashed && challenge.trashed,
     ...(isPlatformAdmin ? { trashed: toTrashInfo(row) } : {}),
     attachments,
+    viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
   };
 }
 
@@ -561,7 +592,7 @@ async function fetchSolutionRows(db: Pool | PoolClient, challengeId: string, vie
   const { rows } = await db.query<SolutionRow>(
     `select s.id, s.number::text, s.challenge_id, s.description, s.cost_vs_benefits, s.status,
             s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
-            s.created_at, s.updated_at, s.edited_at,
+            s.created_at, s.updated_at, s.edited_at, s.mcp_client_name,
             s.trashed_at, s.trash_reason, (select tu.display_name from users tu where tu.id = s.trashed_by) as trashed_by_name,
             (select count(*) from likes l where l.parent_type = 'solution' and l.parent_id = s.id) as like_count,
             exists(select 1 from likes lv where lv.parent_type = 'solution' and lv.parent_id = s.id and lv.user_id = $2) as liked_by_viewer,
@@ -608,6 +639,9 @@ function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] 
  *  trash page instead). */
 export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
   conditions.push(`c.trashed_at is null`);
+  // §25.5: an agent's view while restricted content is not shared — before the platform-admin
+  // shortcut, since the switch governs what leaves through MCP whoever the person is.
+  if (viewer.orgVisibleOnly) conditions.push(`c.visibility = 'org'`);
   if (viewer.roles.isPlatformAdmin) return;
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
@@ -870,6 +904,7 @@ export async function createChallenge(
     /** §6.1: the similar challenges the submitter saw and submitted past (already parsed). */
     similarAcknowledged?: string[];
   },
+  via?: AgentSource,
 ): Promise<CreateChallengeResult> {
   const { rows: nsRows } = await pool.query<{ id: string; archived: boolean }>(
     `select id, archived_at is not null as archived from namespaces where id = $1`,
@@ -914,8 +949,8 @@ export async function createChallenge(
     const staged = draftKey ? await claimStagedAttachments(client, author, "challenge", draftKey, { maxPerItem, requireClean }) : null;
     if (staged && staged.status !== "ok") return staged;
     const { rows } = await client.query<{ id: string }>(
-      `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+      `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id, mcp_client_name)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        returning id`,
       [
         input.namespaceId,
@@ -926,6 +961,7 @@ export async function createChallenge(
         validated.value.clientName,
         validated.value.isAnonymous,
         author.userId,
+        via?.clientName ?? null,
       ],
     );
     const id = rows[0]!.id;
@@ -941,6 +977,7 @@ export async function createChallenge(
         isAnonymous: validated.value.isAnonymous,
         // §6.1: present only when the author submitted past a duplicate warning.
         ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
+        ...agentAuditFields(via),
       },
     });
     // §23.2: challenge_submitted (none while anonymous).
@@ -970,6 +1007,7 @@ export async function createSolution(
   author: Viewer,
   challengeNumber: string,
   input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown },
+  via?: AgentSource,
 ): Promise<CreateSolutionResult> {
   if (!isEntityNumber(challengeNumber)) return { status: "not_found" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; assignee_id: string | null; namespace_archived: boolean }>(
@@ -1001,10 +1039,10 @@ export async function createSolution(
     const staged = draftKey ? await claimStagedAttachments(client, author, "solution", draftKey, { maxPerItem, requireClean }) : null;
     if (staged && staged.status !== "ok") return staged;
     const { rows: inserted } = await client.query<{ id: string }>(
-      `insert into solutions (challenge_id, description, cost_vs_benefits, is_anonymous, author_id)
-       values ($1, $2, $3, $4, $5)
+      `insert into solutions (challenge_id, description, cost_vs_benefits, is_anonymous, author_id, mcp_client_name)
+       values ($1, $2, $3, $4, $5, $6)
        returning id`,
-      [challenge.id, validated.value.description, validated.value.costVsBenefits, validated.value.isAnonymous, author.userId],
+      [challenge.id, validated.value.description, validated.value.costVsBenefits, validated.value.isAnonymous, author.userId, via?.clientName ?? null],
     );
     const id = inserted[0]!.id;
     await appendAudit(client, {
@@ -1012,7 +1050,7 @@ export async function createSolution(
       action: "solution.created",
       targetType: "solution",
       targetId: id,
-      after: { challengeId: challenge.id, isAnonymous: validated.value.isAnonymous },
+      after: { challengeId: challenge.id, isAnonymous: validated.value.isAnonymous, ...agentAuditFields(via) },
     });
     await awardSolutionCreated(client, { id, authorId: author.userId, isAnonymous: validated.value.isAnonymous }); // §23.2
     if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
@@ -1460,6 +1498,60 @@ export async function getParentNamespaceId(
   return rows[0]?.namespace_id ?? null;
 }
 
+/** The id of the challenge or solution with this number, when the viewer can see it (§4.3 and, on
+ *  an agent's viewer, §25.5) — else null, whether missing or hidden (no existence oracle). */
+export async function resolveVisibleParent(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", number: string): Promise<string | null> {
+  if (!isEntityNumber(number)) return null;
+  const { rows } = await pool.query<{ id: string }>(
+    parentType === "challenge" ? `select id from challenges where number = $1` : `select id from solutions where number = $1`,
+    [number],
+  );
+  const id = rows[0]?.id;
+  if (!id || !(await isParentVisible(pool, viewer, parentType, id))) return null;
+  return id;
+}
+
+export interface OwnSolutionItem {
+  number: string;
+  status: SolutionStatus;
+  challengeNumber: string;
+  challengeTitle: string;
+  createdAt: string;
+  canEdit: boolean;
+  canResubmit: boolean;
+}
+
+/** §25.6 list_my_items: the viewer's own solutions, newest first, whose parent challenge they can
+ *  still see (the same §4.3 predicate; §25.5 on an agent's viewer). */
+export async function listOwnSolutions(pool: Pool, viewer: Viewer, limit = 100): Promise<OwnSolutionItem[]> {
+  const params: unknown[] = [viewer.userId];
+  const push = (v: unknown): string => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const conditions = [`s.author_id = $1`];
+  pushChallengeVisibilityConditions(viewer, push, conditions);
+  const { rows } = await pool.query<{ number: string; status: string; challenge_number: string; challenge_title: string; created_at: Date }>(
+    `select s.number::text, s.status, c.number::text as challenge_number, c.title as challenge_title, s.created_at
+       from solutions s join challenges c on c.id = s.challenge_id
+      where ${conditions.join(" and ")}
+      order by s.created_at desc limit ${limit}`,
+    params,
+  );
+  return rows.map((r) => {
+    const status = r.status as SolutionStatus;
+    return {
+      number: formatSolutionNumber(r.number),
+      status,
+      challengeNumber: formatChallengeNumber(r.challenge_number),
+      challengeTitle: r.challenge_title,
+      createdAt: r.created_at.toISOString(),
+      canEdit: canAuthorEditSolution(status),
+      canResubmit: canAuthorResubmit(status),
+    };
+  });
+}
+
 // ── Assignment (§7.3) ────────────────────────────────────────────────────────────────────
 
 export type AssignResult =
@@ -1682,6 +1774,7 @@ export async function editChallenge(
   author: Viewer,
   number: string,
   input: { title: unknown; description: unknown; clientName: unknown; impactAreaId: string },
+  via?: AgentSource,
 ): Promise<EditChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<{
@@ -1736,7 +1829,14 @@ export async function editChallenge(
         `update challenges set title = $2, description = $3, client_name = $4, impact_area_id = $5, edited_at = now(), updated_at = now() where id = $1`,
         [cur.id, validated.value.title, validated.value.description, validated.value.clientName, input.impactAreaId],
       );
-      await appendAudit(client, { actorUserId: author.userId, action: "challenge.edited", targetType: "challenge", targetId: cur.id, before: diff.before, after: diff.after });
+      await appendAudit(client, {
+        actorUserId: author.userId,
+        action: "challenge.edited",
+        targetType: "challenge",
+        targetId: cur.id,
+        before: diff.before,
+        after: { ...diff.after, ...agentAuditFields(via) },
+      });
     }
     return { status: "ok", challenge: await reloadChallengeDetail(client, author, cur.id) };
   });
@@ -1755,6 +1855,7 @@ export async function editSolution(
   author: Viewer,
   number: string,
   input: { description: unknown; costVsBenefits: unknown },
+  via?: AgentSource,
 ): Promise<EditSolutionResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; description: string; cost_vs_benefits: string | null }>(
@@ -1785,7 +1886,14 @@ export async function editSolution(
         validated.value.description,
         validated.value.costVsBenefits,
       ]);
-      await appendAudit(client, { actorUserId: author.userId, action: "solution.edited", targetType: "solution", targetId: cur.id, before: diff.before, after: diff.after });
+      await appendAudit(client, {
+        actorUserId: author.userId,
+        action: "solution.edited",
+        targetType: "solution",
+        targetId: cur.id,
+        before: diff.before,
+        after: { ...diff.after, ...agentAuditFields(via) },
+      });
     }
     const solutionRows = await fetchSolutionRows(client, cur.challenge_id, author.userId);
     const row = solutionRows.find((s) => s.id === cur.id)!;
@@ -1879,7 +1987,7 @@ export type ResubmitChallengeResult =
 
 /** Author resubmits their own needs_improvement challenge → in_review (§10.1); notifies
  *  reviewers (route). Audited as an enforced status change (`override:false`). */
-export async function resubmitChallenge(pool: Pool, author: Viewer, number: string): Promise<ResubmitChallengeResult> {
+export async function resubmitChallenge(pool: Pool, author: Viewer, number: string, via?: AgentSource): Promise<ResubmitChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; title: string; assignee_id: string | null }>(
     `select id, status, author_id, namespace_id, visibility, title, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
@@ -1899,7 +2007,7 @@ export async function resubmitChallenge(pool: Pool, author: Viewer, number: stri
       targetType: "challenge",
       targetId: cur.id,
       before: { status: cur.status },
-      after: { status: "in_review", override: false, trigger: "author_resubmit" },
+      after: { status: "in_review", override: false, trigger: "author_resubmit", ...agentAuditFields(via) },
     });
     return { status: "ok", challengeId: cur.id, namespaceId: cur.namespace_id, title: cur.title, assigneeId: cur.assignee_id };
   });
@@ -1912,7 +2020,7 @@ export type ResubmitSolutionResult =
   | { status: "forbidden" }
   | { status: "not_resubmittable" };
 
-export async function resubmitSolution(pool: Pool, author: Viewer, number: string): Promise<ResubmitSolutionResult> {
+export async function resubmitSolution(pool: Pool, author: Viewer, number: string, via?: AgentSource): Promise<ResubmitSolutionResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_number: string; challenge_title: string }>(
     `select s.id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
@@ -1933,7 +2041,7 @@ export async function resubmitSolution(pool: Pool, author: Viewer, number: strin
       targetType: "solution",
       targetId: cur.id,
       before: { status: cur.status },
-      after: { status: "in_review", override: false, trigger: "author_resubmit" },
+      after: { status: "in_review", override: false, trigger: "author_resubmit", ...agentAuditFields(via) },
     });
     return { status: "ok", solutionId: cur.id, namespaceId: cur.namespace_id, challengeNumber: cur.challenge_number, challengeTitle: cur.challenge_title, assigneeId: cur.assignee_id };
   });

@@ -4,11 +4,11 @@
 // preserving thread continuity, per spec. Every write is audited atomically. Replies are one level
 // deep (§10.2 "Replies"): a reply files under its thread's top-level comment.
 import type { Pool } from "pg";
-import { canEditOwnComment, resolveReplyTarget, validateCommentBody } from "@innobox/shared";
+import { canEditOwnComment, resolveReplyTarget, validateCommentBody, viaAgentOf, type ViaAgent } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { awardCommentPosted } from "../../../lib/gamification";
-import { getParentAccess, getParentNamespaceId, type Viewer } from "../challenges/store";
+import { agentAuditFields, getParentAccess, getParentNamespaceId, type AgentSource, type Viewer } from "../challenges/store";
 import { isUuid } from "./validation";
 
 const MODERATION_PLACEHOLDER = "Comment removed by a moderator";
@@ -37,6 +37,8 @@ export interface CommentRecord {
   canModerate: boolean;
   /** §4.2: the comment's author is a committee member of the item's namespace → show a badge. */
   authorIsCommittee: boolean;
+  /** §25.8 "via agent": comments are never anonymous, so the client name always shows. */
+  viaAgent: ViaAgent;
 }
 
 interface CommentRow {
@@ -53,6 +55,7 @@ interface CommentRow {
   created_at: Date;
   edited_at: Date | null;
   deleted_at: Date | null;
+  mcp_client_name: string | null;
 }
 
 function toRecord(row: CommentRow, viewer: Viewer, isNamespaceAdmin: boolean, authorIsCommittee: boolean): CommentRecord {
@@ -76,6 +79,7 @@ function toRecord(row: CommentRow, viewer: Viewer, isNamespaceAdmin: boolean, au
     isMine: viewer.userId === row.author_id,
     canEdit: !deleted && canEditOwnComment({ authorId: row.author_id, createdAt: row.created_at }, viewer.userId, now),
     canModerate: !deleted && (isNamespaceAdmin || (viewer.userId === row.author_id && canEditOwnComment({ authorId: row.author_id, createdAt: row.created_at }, viewer.userId, now))),
+    viaAgent: viaAgentOf(row.mcp_client_name, false),
   };
 }
 
@@ -105,7 +109,7 @@ export async function listComments(
   const committee = namespaceId !== null ? await committeeMemberIds(pool, namespaceId) : new Set<string>();
   const { rows } = await pool.query<CommentRow>(
     `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-            c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at
+            c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at, c.mcp_client_name
        from comments c
        join users u on u.id = c.author_id
       where c.parent_type = $1 and c.parent_id = $2
@@ -144,6 +148,7 @@ export async function createComment(
   rawBody: unknown,
   onCreated?: (comment: CommentRecord) => Promise<void>,
   replyTo: string | null = null,
+  via?: AgentSource,
 ): Promise<CreateCommentResult> {
   // The parent's visibility decides first: a reply on an item the caller can't see is a 404. A
   // trashed item takes no comment or reply (§10.4).
@@ -175,9 +180,9 @@ export async function createComment(
       thread = { threadRootId: resolved.threadRootId, replyToId: resolved.replyToId, replyToAuthorId: target!.author_id };
     }
     const { rows } = await client.query<{ id: string; created_at: Date }>(
-      `insert into comments (parent_type, parent_id, author_id, body, thread_root_id, reply_to_id)
-       values ($1, $2, $3, $4, $5, $6) returning id, created_at`,
-      [parentType, parentId, viewer.userId, validated.value, thread?.threadRootId ?? null, thread?.replyToId ?? null],
+      `insert into comments (parent_type, parent_id, author_id, body, thread_root_id, reply_to_id, mcp_client_name)
+       values ($1, $2, $3, $4, $5, $6, $7) returning id, created_at`,
+      [parentType, parentId, viewer.userId, validated.value, thread?.threadRootId ?? null, thread?.replyToId ?? null, via?.clientName ?? null],
     );
     const inserted = rows[0]!;
     await appendAudit(client, {
@@ -185,11 +190,12 @@ export async function createComment(
       action: "comment.posted",
       targetType: "comment",
       targetId: inserted.id,
-      // §10.2: `replyTo` names the comment answered; absent on a top-level comment.
-      after: thread ? { parentType, parentId, replyTo: thread.replyToId } : { parentType, parentId },
+      // §10.2: `replyTo` names the comment answered; absent on a top-level comment. §25.13: a
+      // comment made through MCP adds its source and client.
+      after: thread ? { parentType, parentId, replyTo: thread.replyToId, ...agentAuditFields(via) } : { parentType, parentId, ...agentAuditFields(via) },
     });
     // §23.2: comment_posted for the commenter (daily-capped; comments are never anonymous).
-    await awardCommentPosted(client, { id: inserted.id, authorId: viewer.userId, parentType, parentId });
+    await awardCommentPosted(client, { id: inserted.id, authorId: viewer.userId, parentType, parentId, viaMcp: via !== undefined });
     const namespaceId = await getParentNamespaceId(client, parentType, parentId);
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: userRows } = await client.query<{ display_name: string; active: boolean; scrubbed: boolean }>(
@@ -211,6 +217,7 @@ export async function createComment(
         created_at: inserted.created_at,
         edited_at: null,
         deleted_at: null,
+        mcp_client_name: via?.clientName ?? null,
       },
       viewer,
       isNamespaceAdmin,
@@ -257,7 +264,7 @@ export async function editComment(pool: Pool, viewer: Viewer, commentId: string,
     const isNamespaceAdmin = namespaceId !== null && viewer.roles.isNamespaceAdmin(namespaceId);
     const { rows: full } = await client.query<CommentRow>(
       `select c.id, c.parent_type, c.parent_id, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-              c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at
+              c.body, c.thread_root_id, c.reply_to_id, c.created_at, c.edited_at, c.deleted_at, c.mcp_client_name
          from comments c join users u on u.id = c.author_id where c.id = $1`,
       [commentId],
     );

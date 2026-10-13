@@ -38,7 +38,7 @@ export const CSP_REPORT_GROUP = "csp";
  *  and the HMR websocket) and must never be true in a production build. `report` (the
  *  `enforce` and `report-only` modes, §2.4) appends `report-uri` + `report-to` naming the
  *  report sink. */
-export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean; report?: boolean }): string {
+export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean; report?: boolean; formAction?: readonly string[] }): string {
   const scriptSrc = ["'self'"];
   if (opts.nonce) scriptSrc.push(`'nonce-${opts.nonce}'`, "'strict-dynamic'");
   if (opts.dev) scriptSrc.push("'unsafe-eval'");
@@ -56,7 +56,8 @@ export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean;
     ["object-src", ["'none'"]],
     ["base-uri", ["'none'"]],
     ["frame-ancestors", ["'none'"]],
-    ["form-action", ["'self'", OIDC_AUTHORITY_ORIGIN]],
+    // §25.3: the agent-access consent page alone widens this to the client redirect shapes.
+    ["form-action", ["'self'", OIDC_AUTHORITY_ORIGIN, ...(opts.formAction ?? [])]],
   ];
   if (opts.report) {
     // Both, because browsers differ: report-to (the Reporting API) delivers only to https
@@ -65,6 +66,9 @@ export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean;
   }
   return directives.map(([name, sources]) => `${name} ${sources.join(" ")}`).join("; ");
 }
+
+/** §25.3: the consent page (GET /oauth/authorize) — the one response whose form-action is widened. */
+export const CONSENT_PAGE_PATH = "/oauth/authorize";
 
 /** §11 download gateway: a served attachment can never run as script or style in our origin. */
 export const ATTACHMENT_DOWNLOAD_CSP = "sandbox; default-src 'none'";

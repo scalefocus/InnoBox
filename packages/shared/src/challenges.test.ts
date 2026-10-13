@@ -535,3 +535,13 @@ test("validateTrashReason: required, trimmed, at most 500 characters", () => {
   assert.equal(validateTrashReason("x".repeat(500)).ok, true);
   assert.equal(validateTrashReason("x".repeat(501)).ok, false);
 });
+
+test("an AI agent never sees a trashed item, not even a platform admin's (§10.4, §25)", () => {
+  const pa = viewer(OTHER, [{ role: "platform_admin", namespaceId: null }]);
+  const agent = { ...pa, viaAgent: true };
+  const challenge = { namespaceId: NS_A, visibility: "org" as const, status: "valid" as const, authorId: AUTHOR, trashed: true };
+  assert.equal(canSeeChallenge(pa, challenge), true, "the person in the browser gets the read-only view");
+  assert.equal(canSeeChallenge(agent, challenge), false);
+  assert.equal(canSeeSolution(agent, { namespaceId: NS_A, assigneeId: null }, { status: "valid", authorId: AUTHOR, trashed: true }), false);
+  assert.equal(canSeeChallenge(agent, { ...challenge, trashed: false }), true, "a live item is unaffected");
+});

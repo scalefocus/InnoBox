@@ -143,6 +143,14 @@ export function isStatusRefusedForExternal(status: string): boolean {
 export interface ViewerContext {
   userId: string;
   roles: RoleSet;
+  /** §25.5: an AI agent's view while restricted content is not shared over MCP — every
+   *  namespace-restricted challenge (and so its solutions and comments) behaves as if it did not
+   *  exist, whatever the person may see in the browser. Never set for a browser request. */
+  orgVisibleOnly?: boolean;
+  /** §25: the call comes from an AI agent over MCP. An agent never sees an item in the §10.4
+   *  trash — not even a platform admin's: the read-only trashed view is for the person in the
+   *  browser, and trash, restore and delete are never done through an agent. */
+  viaAgent?: boolean;
 }
 
 export interface ChallengeVisibilityInput {
@@ -163,7 +171,8 @@ export interface ChallengeVisibilityInput {
  *  to everyone else it does not exist (invariant 2). Lists never show it to anyone: the SQL
  *  twin drops trashed rows for platform admins too. */
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
-  if (challenge.trashed) return viewer.roles.isPlatformAdmin;
+  if (viewer.orgVisibleOnly && challenge.visibility === "namespace") return false;
+  if (challenge.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
   const isAuthor = viewer.userId === challenge.authorId;
   const isNamespaceAdminHere = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   if (challenge.status === "awaiting_triage" || challenge.status === "withdrawn") {
@@ -192,7 +201,7 @@ export function canSeeSolution(
   challenge: { namespaceId: string; assigneeId: string | null },
   solution: SolutionVisibilityInput,
 ): boolean {
-  if (solution.trashed) return viewer.roles.isPlatformAdmin;
+  if (solution.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
   if (solution.status !== "proposed") return true;
   const isAuthor = viewer.userId === solution.authorId;
   const isAssignee = challenge.assigneeId !== null && viewer.userId === challenge.assigneeId;
@@ -340,9 +349,9 @@ export function canAuthorWithdrawSolution(status: SolutionStatus): boolean {
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
-const TITLE_MAX = 120;
-const DESCRIPTION_MAX = 10_000;
-const COST_VS_BENEFITS_MAX = 5_000;
+export const TITLE_MAX = 120;
+export const DESCRIPTION_MAX = 10_000;
+export const COST_VS_BENEFITS_MAX = 5_000;
 /** §2.4/§6.1: every free-text field has a ceiling; the challenge client name is capped at 200. */
 export const CLIENT_NAME_MAX = 200;
 

@@ -15,6 +15,7 @@ import { APP_VERSION } from "@innobox/shared/version";
 import { markQuickStartSeen, markWhatsNewSeen } from "./store";
 import { readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { meGamification, newAchievements } from "@/lib/gamification-read";
+import { getMcpSettings, hasLiveConnection } from "@/lib/mcp/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -23,13 +24,15 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, gamification, achievements] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, gamification, achievements, mcp, connected] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
     readSelfSurvey(pool, user.id),
     meGamification(pool, user.id),
     newAchievements(pool, user.id),
+    getMcpSettings(pool),
+    hasLiveConnection(pool, user.id),
   ]);
 
   const byRole = (role: "namespace_admin" | "committee"): string[] => [
@@ -64,6 +67,9 @@ async function handleGET(): Promise<Response> {
     // §23.12: the sidebar ring's level (null while the feature is off) and the §23.7 toast queue.
     gamification,
     newAchievements: achievements,
+    // §25.9: the account menu's AI agents item — while agent access is on, or while the person
+    // still holds a connection (so they can revoke it).
+    agentsMenu: mcp.enabled || connected,
   });
 }
 

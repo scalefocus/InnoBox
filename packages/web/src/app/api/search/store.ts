@@ -25,7 +25,15 @@ import {
   type MaskedAuthor,
   type SolutionStatus,
 } from "@innobox/shared";
-import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, type Viewer } from "../challenges/store";
+import {
+  CHALLENGE_SELECT,
+  pushChallengeVisibilityConditions,
+  pushSolutionVisibilityConditions,
+  toListItem,
+  type ChallengeListItem,
+  type ChallengeRow,
+  type Viewer,
+} from "../challenges/store";
 import { isEntityNumber, type GalleryFilters } from "../challenges/validation";
 
 export interface ChallengeSearchResult {
@@ -270,4 +278,67 @@ export async function search(pool: Pool, viewer: Viewer, rawQuery: string, filte
     solutionCandidates(pool, viewer, match, filters),
   ]);
   return { challenges: toChallengeResults(viewer, challengeRows), solutions: toSolutionResults(viewer, solutionRows) };
+}
+
+// ── §25.6 search_challenges: paginated, challenges only ─────────────────────────────────
+
+export interface ChallengeSearchPageInput {
+  /** Free text (§13.4 full-text) or an exact `CH-<n>`; empty browses everything visible. */
+  query: string;
+  filters: GalleryFilters;
+  /** The caller's own challenges only. */
+  mine?: boolean;
+  /** Only challenges the caller follows. */
+  following?: boolean;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * The §13.4 search over challenges with the §13.1 filters, a page at a time and with the gallery's
+ * list-item shape (counts included) — what the §25 `search_challenges` tool returns. Same
+ * visibility predicate (and so the §25.5 restricted filter on an agent's viewer), same
+ * anonymity-safe author filter, same masking. One extra row is read to say whether more exist.
+ */
+export async function searchChallengePage(pool: Pool, viewer: Viewer, input: ChallengeSearchPageInput): Promise<{ items: ChallengeListItem[]; hasMore: boolean }> {
+  const params: unknown[] = [];
+  const push: Push = (v) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const viewerParam = push(viewer.userId);
+  const conditions: string[] = [];
+  let orderBy = "c.created_at desc";
+  const query = input.query.trim();
+  const numberMatch = query.match(CHALLENGE_NUMBER_RE);
+  if (numberMatch) {
+    if (!isEntityNumber(numberMatch[1]!)) return { items: [], hasMore: false };
+    conditions.push(`c.number = ${push(numberMatch[1])}`);
+  } else if (query !== "") {
+    const q = push(query);
+    conditions.push(`c.search_vector @@ plainto_tsquery('english', ${q})`);
+    orderBy = `ts_rank(c.search_vector, plainto_tsquery('english', ${q})) desc, c.created_at desc`;
+  }
+  pushChallengeVisibilityConditions(viewer, push, conditions);
+  pushChallengeFilterConditions(input.filters, push, conditions);
+  pushAuthorCondition(input.filters, "c", push, conditions);
+  if (input.mine) conditions.push(`c.author_id = ${push(viewer.userId)}`);
+  if (input.following) {
+    conditions.push(`exists (select 1 from follows ff where ff.parent_type = 'challenge' and ff.parent_id = c.id and ff.user_id = ${push(viewer.userId)})`);
+  }
+  const where = conditions.length ? `where ${conditions.join(" and ")}` : "";
+  const { rows } = await pool.query<ChallengeRow>(
+    `${CHALLENGE_SELECT.replaceAll("$viewer", viewerParam)} ${where} order by ${orderBy} limit ${input.limit + 1} offset ${input.offset}`,
+    params,
+  );
+  const visible = rows.filter((row) =>
+    canSeeChallenge(viewer, {
+      namespaceId: row.namespace_id,
+      visibility: row.visibility,
+      status: row.status as ChallengeStatus,
+      authorId: row.author_id,
+      trashed: row.trashed_at !== null,
+    }),
+  );
+  return { items: visible.slice(0, input.limit).map(toListItem), hasMore: rows.length > input.limit };
 }

@@ -4,7 +4,7 @@
 // Submission auto-follows the author (§12.3) and notifies namespace admins (§12.1 event 1).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchEvent, getNamespaceAdminUserIds } from "@/lib/notify";
+import { logNotifyFailure, notifyChallengeSubmitted } from "@/lib/notify-events";
 import { autoFollow } from "../follows/store";
 import { parseChallengeCreateIds, parseChallengeListFilters, parseSimilarAcknowledged } from "./validation";
 import { createChallenge, listChallenges } from "./store";
@@ -58,16 +58,10 @@ async function handlePOST(req: Request): Promise<Response> {
   switch (result.status) {
     case "ok": {
       await autoFollow(pool, gate.user.id, "challenge", result.challenge.id);
-      await dispatchEvent(
+      await notifyChallengeSubmitted(
         { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-        { parentType: "challenge", parentId: result.challenge.id },
-        await getNamespaceAdminUserIds(pool, ids.value.namespaceId),
-        "challenge_submitted",
-        {
-          message: `New challenge ${result.challenge.number} "${result.challenge.title}" needs triage.`,
-          link: `/challenges/${result.challenge.number.replace("CH-", "")}`,
-        },
-      ).catch((err) => console.error(JSON.stringify({ level: "error", msg: "challenge.submitted notification failed", error: String(err) })));
+        { id: result.challenge.id, number: result.challenge.number, title: result.challenge.title, namespaceId: ids.value.namespaceId },
+      ).catch(logNotifyFailure("challenge.submitted notification failed"));
       return Response.json({ challenge: result.challenge }, { status: 201 });
     }
     case "unknown_namespace":

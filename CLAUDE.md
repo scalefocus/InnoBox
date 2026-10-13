@@ -88,9 +88,13 @@ touched.**
    counts, KPIs, leaderboards, or notifications (§4.3). The only unauthenticated
    surfaces are the signed-out Home (`/`) and, while a platform admin has it switched
    on, the public submission form (`/submit`, §24). The form writes to its own intake
-   table and reads no application data.
+   table and reads no application data. The agent-access protocol routes (§25) are not
+   a third surface: the credential-free ones (OAuth metadata, client registration,
+   token exchange, revocation) read no application data, and `/mcp` takes only a bearer
+   token bound to a person — never a session cookie — and applies this same filter,
+   with namespace-restricted content withheld unless a platform admin allows it.
 3. **Anonymity is enforced at the API layer, everywhere** — lists, details, search,
-   exports, e-mails, notifications. True identity is exposed only through the
+   exports, e-mails, notifications, MCP tool results. True identity is exposed only through the
    audited admin **reveal** action (§9).
 4. **Attachments are served only through the authenticated fetch gateway** — no
    direct object-store URLs — and only after a clean ClamAV scan (§11). Attachment rows

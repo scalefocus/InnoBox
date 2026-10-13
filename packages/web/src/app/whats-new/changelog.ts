@@ -11,10 +11,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "1.6.0",
+    version: "1.7.0",
     date: "2026-10-13",
     summary:
       "Platform admins can now move a challenge or solution to the trash instead of deleting it straight away. A trashed item is hidden from everyone at once and deleted for good after 30 days, unless you restore it from the new Trash page in Administration. Delete permanently is still there for content that must not wait.",
+  },
+  {
+    version: "1.6.0",
+    date: "2026-10-13",
+    summary:
+      "You can now connect an AI agent such as Claude Code, Claude Desktop or VS Code to InnoBox: it searches and reads what you can see and, after you approve it in your browser, submits challenges, proposes solutions and comments as you, marked \"via agent\". Set it up and revoke it on AI agents in your account menu, once an administrator turns agent access on in Platform settings. Four new badges reward your first steps.",
   },
   {
     version: "1.5.0",

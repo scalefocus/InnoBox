@@ -6,9 +6,7 @@
 // comment like any other; its row also counts it as a reply for the author of the comment answered.
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { dispatchCoalescedComment, getFollowerUserIds, getOtherCommenterUserIds } from "@/lib/notify";
-import { formatChallengeNumber } from "@innobox/shared";
-import { itemHref } from "@/lib/deep-link";
+import { logNotifyFailure, notifyCommentPosted } from "@/lib/notify-events";
 import { parseCommentCreate, parseParentQuery } from "./validation";
 import { createComment, listComments } from "./store";
 import { readJsonObject, trashedResponse } from "@/lib/http";
@@ -48,75 +46,14 @@ async function handlePOST(req: Request): Promise<Response> {
   if (result.status === "invalid") return Response.json({ error: result.error }, { status: 400 });
   if (result.status === "unprocessable") return Response.json({ error: result.error }, { status: 422 });
 
-  await fireCommentNotification(parsed.value.parentType, parsed.value.parentId, result.comment.authorId, result.replyToAuthorId).catch((err) =>
-    console.error(JSON.stringify({ level: "error", msg: "comment notification failed", error: String(err) })),
-  );
+  await notifyCommentPosted(
+    { pool, actorId: result.comment.authorId, resolveRoles: resolveRolesForUser },
+    parsed.value.parentType,
+    parsed.value.parentId,
+    result.comment.authorId,
+    result.replyToAuthorId,
+  ).catch(logNotifyFailure("comment notification failed"));
   return Response.json({ comment: result.comment }, { status: 201 });
-}
-
-async function fireCommentNotification(
-  parentType: "challenge" | "solution",
-  parentId: string,
-  commenterId: string,
-  replyToAuthorId: string | null,
-): Promise<void> {
-  const item =
-    parentType === "challenge"
-      ? await pool
-          .query<{ id: string; number: string; title: string; author_id: string }>(
-            `select id, number::text, title, author_id from challenges where id = $1`,
-            [parentId],
-          )
-          .then((r) =>
-            r.rows[0]
-              ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeId: r.rows[0].id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title, solutionNumber: null }
-              : null,
-          )
-      : await pool
-          .query<{ id: string; number: string; author_id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
-            `select s.id, s.number::text as number, s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title
-               from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
-            [parentId],
-          )
-          .then((r) =>
-            r.rows[0]
-              ? {
-                  id: r.rows[0].id,
-                  authorId: r.rows[0].author_id,
-                  challengeId: r.rows[0].challenge_id,
-                  challengeNumber: r.rows[0].challenge_number,
-                  challengeTitle: r.rows[0].challenge_title,
-                  // §12.1 deep link: a solution resolves to its parent challenge page, scrolled to it.
-                  solutionNumber: r.rows[0].number,
-                }
-              : null,
-          );
-  if (!item) return;
-  const { rows: who } = await pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [commenterId]);
-
-  const [otherCommenters, followers] = await Promise.all([
-    getOtherCommenterUserIds(pool, parentType, item.id),
-    getFollowerUserIds(pool, parentType, item.id),
-  ]);
-  // §12.1 event 6, coalesced: one unread row per recipient per item — at most one e-mail until read.
-  await dispatchCoalescedComment(
-    { pool, actorId: commenterId, resolveRoles: resolveRolesForUser },
-    // The author of a comment answered is always among the other commenters (§10.2).
-    [item.authorId, ...otherCommenters, ...followers],
-    {
-      parentType,
-      parentId: item.id,
-      challengeId: item.challengeId,
-      challengeNumber: formatChallengeNumber(item.challengeNumber),
-      challengeTitle: item.challengeTitle,
-      latestBy: who[0]?.display_name ?? "Someone",
-      link: itemHref(item.challengeNumber, item.solutionNumber),
-      replyToAuthorId,
-    },
-    // §12.1: mutable for every recipient route — an author who mutes it hears no comments on
-    // their own item either.
-    { preference: "followedComments" },
-  );
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

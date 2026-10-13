@@ -3,9 +3,10 @@
 // list, propose-a-solution (§6.2), like/follow toggles, comments (§10.2), the admin
 // status-override control (§7.2/§8.2), assignment + unassignment (§7.3), anonymity reveal (§9,
 // admin transient in a dialog + author self-reveal, on the challenge and on each solution), the
-// §11 attachment control, the §8.3 like freeze, and the platform-admin danger zone (§10.3, §10.4:
-// Move to trash / Delete permanently). A platform admin who opens an item in the trash sees it
-// read-only under a banner with Restore and Delete permanently; every other control is absent.
+// §11 attachment control, the §8.3 like freeze, the platform-admin danger zone (§10.3, §10.4:
+// Move to trash / Delete permanently), and the §25.8 "via agent" tag on the author line and on
+// each solution card. A platform admin who opens an item in the trash sees it read-only under a
+// banner with Restore and Delete permanently; every other control is absent.
 import { useParams, useRouter } from "next/navigation";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useEffect, useRef, useState } from "react";
@@ -23,6 +24,7 @@ import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { TriageNotesPanel } from "@/components/TriageNotesPanel";
 import { DangerZone, TrashedBanner, type TrashInfo } from "@/components/TrashControls";
+import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -79,6 +81,8 @@ interface SolutionItem {
   /** Platform admins only: set while this solution itself is in the trash. */
   trashed?: TrashInfo | null;
   attachments: AttachmentItem[];
+  /** §25.8: set when proposed through an AI agent (client name masked on anonymous items). */
+  viaAgent?: ViaAgent;
 }
 
 interface ChallengeDetail {
@@ -133,6 +137,8 @@ interface ChallengeDetail {
   externalContact: ExternalContact | null;
   solutions: SolutionItem[];
   attachments: AttachmentItem[];
+  /** §25.8: set when submitted through an AI agent (client name masked on anonymous items). */
+  viaAgent?: ViaAgent;
 }
 
 export default function ChallengeDetailPage() {
@@ -528,6 +534,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} scrubbed={s.author.scrubbed === true} />
         <span className="sub" style={{ flex: 1 }}>
           {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
+          <ViaAgentTag via={s.viaAgent} />
         </span>
         {solutionReadOnly ? (
           <span className="sub mono">♡ {s.likeCount}</span>
@@ -694,7 +701,10 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             scrubbed={challenge.author.scrubbed === true}
           />
           <div className="grow">
-            <div className="ttl">{challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}</div>
+            <div className="ttl">
+              {challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}
+              <ViaAgentTag via={challenge.viaAgent} />
+            </div>
             <div className="sub mono">
               {fmt.dateTime(challenge.createdAt)}
               {challenge.editedAt && ` · edited ${fmt.dateTime(challenge.editedAt)}`}

@@ -50,6 +50,20 @@ export async function unfollow(
   return { status: "ok", following: false };
 }
 
+/** The idempotent follow — the counterpart of `unfollow`, for the §25 `set_follow` tool, which takes
+ *  the wanted state so a retried call is harmless. Same visibility gate. */
+export async function follow(
+  pool: Pool,
+  viewer: Viewer,
+  parentType: "challenge" | "solution",
+  parentId: string,
+): Promise<{ status: "ok"; following: true } | { status: "not_found" }> {
+  // §10.4: a trashed item takes no follow (an agent's viewer never sees it, so it is "not found").
+  if ((await getParentAccess(pool, viewer, parentType, parentId)) !== "live") return { status: "not_found" };
+  await pool.query(`insert into follows (user_id, parent_type, parent_id) values ($1, $2, $3) on conflict do nothing`, [viewer.userId, parentType, parentId]);
+  return { status: "ok", following: true };
+}
+
 export async function isFollowing(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
   const { rows } = await pool.query(`select 1 from follows where user_id = $1 and parent_type = $2 and parent_id = $3`, [
     viewer.userId,

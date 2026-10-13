@@ -21,6 +21,7 @@ import {
   type LevelInfo,
 } from "@innobox/shared";
 import { getCachedLeaderboard } from "../app/api/leaderboards/store";
+import { getMcpSettings } from "./mcp/store";
 
 export async function isGamificationOn(pool: Pool): Promise<boolean> {
   return (await getGamificationSettings(pool)).enabled;
@@ -140,13 +141,21 @@ async function earnedBadges(pool: Pool, userId: string): Promise<EarnedBadge[]> 
 /** The owner's full block: level, leading, earned (with progress) and locked badges. */
 export async function ownGamification(pool: Pool, userId: string): Promise<OwnGamification | null> {
   if (!(await isGamificationOn(pool))) return null;
-  const [level, leading, earned, counts] = await Promise.all([levelBlock(pool, userId), leadingFor(pool, userId), earnedBadges(pool, userId), reasonCounts(pool, userId)]);
+  const [level, leading, earned, counts, mcp] = await Promise.all([
+    levelBlock(pool, userId),
+    leadingFor(pool, userId),
+    earnedBadges(pool, userId),
+    reasonCounts(pool, userId),
+    getMcpSettings(pool),
+  ]);
   const earnedKeys = new Set(earned.map((b) => b.badgeKey));
   for (const badge of earned) {
     const def = BADGES.find((b) => b.key === badge.badgeKey)!;
     badge.progress = badgeProgress(def, counts)?.label ?? null;
   }
-  const locked = BADGES.filter((b) => !earnedKeys.has(b.key)).map((b) => ({
+  // §25.12: the four agent badges appear among the locked ones only while agent access is on;
+  // earned ones always show.
+  const locked = BADGES.filter((b) => !earnedKeys.has(b.key) && (!b.agent || mcp.enabled)).map((b) => ({
     badgeKey: b.key,
     name: b.name,
     criterion: b.criterion,

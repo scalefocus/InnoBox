@@ -32,6 +32,7 @@ test("weights are fixed: outcomes dominate, social activity earns 1", () => {
     solution_implemented: 50,
     like_received: 1,
     comment_posted: 1,
+    agent_connected: 0, // §25.12: a marker for Plugged In, never points
   });
 });
 
@@ -100,7 +101,7 @@ test("badge thresholds match the catalogue", () => {
   assert.deepEqual(t.implementer, [1, 3, 10]);
   assert.deepEqual(t.crowd_favorite, [10, 50, 200]);
   assert.deepEqual(t.conversation_starter, [10, 50, 200]);
-  assert.equal(BADGES.length, 10);
+  assert.equal(BADGES.length, 14, "the ten §23.4 badges plus the four §25.12 agent badges");
 });
 
 test("badgeProgress names the next step and stops once fully earned", () => {
@@ -145,4 +146,19 @@ test("parseGamificationPreferences accepts the two booleans and refuses other ty
   assert.deepEqual(parseGamificationPreferences({ gamificationPublic: false, other: 1 }), { ok: true, value: { gamificationPublic: false } });
   assert.deepEqual(parseGamificationPreferences({}), { ok: true, value: {} });
   assert.equal(parseGamificationPreferences({ notifyAchievements: "yes" }).ok, false);
+});
+
+test("§25.12: agent_connected is worth 0, and the four agent badges count via_mcp rows", () => {
+  assert.equal(POINTS.agent_connected, 0);
+  assert.equal(awardKey.agentConnected(), "agent_connected");
+  const agentBadges = BADGES.filter((b) => b.agent).map((b) => b.key);
+  assert.deepEqual(agentBadges, ["plugged_in", "co_pilot", "agent_of_change", "human_in_the_loop"]);
+  for (const b of BADGES.filter((x) => x.agent)) assert.deepEqual(b.thresholds, [1], `${b.key} is one-off`);
+  const keys = (counts: Parameters<typeof badgeTiersReached>[0]) => badgeTiersReached(counts).map((r) => r.badgeKey);
+  assert.deepEqual(keys({ agent_connected: 1 }), ["plugged_in"]);
+  // A challenge submitted in the browser earns Icebreaker only; through an agent, Co-Pilot as well.
+  assert.deepEqual(keys({ challenge_submitted: 1 }), ["icebreaker"]);
+  assert.deepEqual(keys({ challenge_submitted: 1, challenge_submitted_via_mcp: 1 }), ["icebreaker", "co_pilot"]);
+  assert.deepEqual(keys({ solution_proposed: 1, solution_proposed_via_mcp: 1 }), ["first_idea", "agent_of_change"]);
+  assert.ok(keys({ challenge_validated: 1, validated_via_mcp: 1 }).includes("human_in_the_loop"));
 });

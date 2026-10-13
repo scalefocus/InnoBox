@@ -65,6 +65,47 @@ export async function getInbox(pool: Pool, userId: string): Promise<Inbox> {
   };
 }
 
+/**
+ * §25.6 list_my_notifications: a page of the caller's inbox, newest first. With `orgVisibleOnly`
+ * (§25.5) a row about a namespace-restricted challenge — or a solution on one — is left out, so the
+ * agent's view behaves as if those items did not exist. Read-only: nothing is marked read.
+ */
+export async function listInboxPage(
+  pool: Pool,
+  userId: string,
+  opts: { limit: number; offset: number; unreadOnly?: boolean; orgVisibleOnly?: boolean },
+): Promise<{ notifications: NotificationItem[]; hasMore: boolean }> {
+  // §10.4: rows about the trash stay hidden here too.
+  const conditions = [`n.user_id = $1`, NOT_ABOUT_TRASH];
+  if (opts.unreadOnly) conditions.push(`n.read_at is null`);
+  if (opts.orgVisibleOnly) {
+    conditions.push(`not exists (
+      select 1 from challenges c
+       where c.visibility = 'namespace'
+         and (c.id::text = n.payload->>'challengeId'
+              or (n.payload->>'parentType' = 'challenge' and c.id::text = n.payload->>'parentId')
+              or (n.payload->>'parentType' = 'solution'
+                  and c.id = (select s.challenge_id from solutions s where s.id::text = n.payload->>'parentId'))))`);
+  }
+  const { rows } = await pool.query<{ id: string; type: string; payload: { message: string; link: string }; read_at: Date | null; created_at: Date }>(
+    `select n.id, n.type, n.payload, n.read_at, n.created_at from notifications n
+      where ${conditions.join(" and ")}
+      order by n.created_at desc limit ${opts.limit + 1} offset ${opts.offset}`,
+    [userId],
+  );
+  return {
+    notifications: rows.slice(0, opts.limit).map((r) => ({
+      id: r.id,
+      type: r.type,
+      message: r.payload.message,
+      link: r.payload.link,
+      read: r.read_at !== null,
+      createdAt: r.created_at.toISOString(),
+    })),
+    hasMore: rows.length > opts.limit,
+  };
+}
+
 export async function markAllRead(pool: Pool, userId: string): Promise<void> {
   await pool.query(`update notifications n set read_at = now() where n.user_id = $1 and n.read_at is null and ${NOT_ABOUT_TRASH}`, [userId]);
 }
