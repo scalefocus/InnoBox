@@ -1,4 +1,4 @@
--- 0041_public_submissions.sql — challenges from outside the organization (INNOBOX_SPEC.md §24, §5).
+-- 0042_public_submissions.sql — challenges from outside the organization (INNOBOX_SPEC.md §24, §5).
 --
 --   public_submissions — the §24 intake queue. A row is NOT a challenge: no number, namespace or
 --     visibility, and it is read by nothing but the platform-admin review queue (§24.5). Status

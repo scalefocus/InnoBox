@@ -2,6 +2,7 @@
 // exposed at `@innobox/shared/notification-preferences` for the profile page). Three toggles,
 // default on, that remove a recipient from a follower-derived event before any row is written.
 // The admin attention events and the actionable author/assignee events are never mutable.
+import { EMAIL_DELIVERY_MODES, isEmailDelivery, type EmailDelivery } from "./email-digest.js";
 
 export const NOTIFICATION_PREFERENCES = ["followedComments", "followedStatus", "followedSolutions"] as const;
 export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
@@ -43,21 +44,32 @@ export function applyPreferenceMute(recipients: readonly string[], optedOut: Rea
   return recipients.filter((id) => exempt.has(id) || !optedOut.has(id));
 }
 
-/** Parses a PATCH body: any subset of the three toggles plus the e-mail switch, each a boolean.
- *  Unknown keys are ignored; at least one recognised key is required. */
+/** The non-toggle keys a preference PATCH may carry: the e-mail switch and the digest choice. */
+export interface EmailPreferencePatch {
+  emailNotificationsEnabled?: boolean;
+  /** §12.1 e-mail digests. */
+  emailDelivery?: EmailDelivery;
+}
+
+/** Parses a PATCH body: any subset of the three toggles plus the e-mail switch, each a boolean,
+ *  and the digest choice. Unknown keys are ignored; at least one recognised key is required. */
 export function parsePreferencePatch(
   body: unknown,
-): { ok: true; value: Partial<NotificationPreferences> & { emailNotificationsEnabled?: boolean } } | { ok: false; error: string } {
+): { ok: true; value: Partial<NotificationPreferences> & EmailPreferencePatch } | { ok: false; error: string } {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "request body must be a JSON object" };
   const rec = body as Record<string, unknown>;
-  const value: Partial<NotificationPreferences> & { emailNotificationsEnabled?: boolean } = {};
+  const value: Partial<NotificationPreferences> & EmailPreferencePatch = {};
   for (const key of ["emailNotificationsEnabled", ...NOTIFICATION_PREFERENCES] as const) {
     if (rec[key] === undefined) continue;
     if (typeof rec[key] !== "boolean") return { ok: false, error: `${key} must be a boolean` };
     value[key] = rec[key] as boolean;
   }
+  if (rec.emailDelivery !== undefined) {
+    if (!isEmailDelivery(rec.emailDelivery)) return { ok: false, error: `emailDelivery must be one of ${EMAIL_DELIVERY_MODES.join(", ")}` };
+    value.emailDelivery = rec.emailDelivery;
+  }
   if (Object.keys(value).length === 0) {
-    return { ok: false, error: `one of emailNotificationsEnabled, ${NOTIFICATION_PREFERENCES.join(", ")} is required` };
+    return { ok: false, error: `one of emailNotificationsEnabled, emailDelivery, ${NOTIFICATION_PREFERENCES.join(", ")} is required` };
   }
   return { ok: true, value };
 }

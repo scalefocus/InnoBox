@@ -18,6 +18,7 @@ import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
+import { runDigestSweep } from "./notifications/digest.js";
 import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps, type WorkerS3Client } from "./attachments/scan.js";
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
@@ -262,23 +263,31 @@ const leaderElection = startLeaderElection(dbUrl, {
       }),
     );
 
-    // Notification dispatch sweep (§12): frequent, since "delivery is immediate" — no digest in
-    // v1. Transport availability (Graph via the separate e-mail app registration, or SMTP) is
-    // re-checked every sweep, and neither depends on the OIDC/reconciliation credentials — SMTP
-    // e-mail keeps working with no Entra configuration at all.
+    // Notification dispatch sweep (§12): frequent, since delivery is immediate unless the
+    // recipient chose a digest. Transport availability (Graph via the separate e-mail app
+    // registration, or SMTP) is re-checked every sweep, and neither depends on the
+    // OIDC/reconciliation credentials — SMTP e-mail keeps working with no Entra configuration at
+    // all. The §12.1 digest job runs right after, in the same loop (so the two never overlap): it
+    // sends whatever held rows have reached their 06:00 UTC slot, one e-mail per recipient.
     const runSweep = async () => {
+      const transport = { graphEnv: buildGraphMailEnv(), smtpEnv: currentSmtpEnv(), baseUrl: publicBaseUrl() };
       try {
-        const summary = await runNotificationSweep(pool, {
-          graphEnv: buildGraphMailEnv(),
-          smtpEnv: currentSmtpEnv(),
-          baseUrl: publicBaseUrl(),
-        });
+        const summary = await runNotificationSweep(pool, transport);
         recordNotificationSweep(summary);
         if (summary.sent || summary.failed) {
           console.log(JSON.stringify({ level: "info", msg: "notification sweep", ...summary }));
         }
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "notification sweep failed", error: String(err) }));
+      }
+      try {
+        const summary = await runDigestSweep(pool, { ...transport, bootstrapAdminGroup: process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP });
+        recordNotificationSweep(summary);
+        if (summary.sent || summary.failed || summary.dropped || summary.discarded) {
+          console.log(JSON.stringify({ level: "info", msg: "digest sweep", ...summary }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "digest sweep failed", error: String(err) }));
       }
     };
     void runSweep();

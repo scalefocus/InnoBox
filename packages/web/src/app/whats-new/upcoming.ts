@@ -33,12 +33,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-76"],
-    title: "E-mail digests",
-    teaser: "Prefer fewer e-mails? Get a daily or weekly summary of what you follow instead of one e-mail per update.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-77"],
     title: "Trash and restore",
     teaser: "Deleted challenges and solutions will wait in a trash for 30 days, so a mistaken delete can be undone.",

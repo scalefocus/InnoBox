@@ -5,6 +5,8 @@
 // mute) live in ./notify; this module only decides WHO the candidates are and WHAT the message
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
+import type { NotificationEventNumber } from "@innobox/shared";
+import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
 import {
   dispatchEvent,
@@ -24,6 +26,13 @@ function statusEventType(newStatus: string): "status_changed" | "rejected" | "ne
   if (newStatus === "needs_improvement") return "needs_improvement";
   return "status_changed";
 }
+
+/** The §12.1 event-matrix number of a status-event flavour — only event 3 can be held for a digest. */
+const STATUS_EVENT_NUMBER: Record<ReturnType<typeof statusEventType>, NotificationEventNumber> = {
+  status_changed: 3,
+  rejected: 4,
+  needs_improvement: 5,
+};
 
 /**
  * §12.1 events 3/4/5 for a CHALLENGE transition. Event 3 (plain status change) reaches the item
@@ -60,6 +69,10 @@ export async function notifyChallengeStatusChanged(
     type,
     { message, link: itemHref(row.number) },
     type === "status_changed" ? { preference: "followedStatus", exempt: assignee } : undefined,
+    {
+      event: STATUS_EVENT_NUMBER[type],
+      facts: { kind: "status", challengeNumber: row.number, challengeTitle: row.title, statusLabel: CHALLENGE_STATUS_LABEL[newStatus] ?? humanStatus(newStatus) },
+    },
   );
 }
 
@@ -118,9 +131,19 @@ export async function notifySolutionStatusChanged(
     type,
     { message, link: itemHref(row.challenge_number, row.number) },
     type === "status_changed" ? { preference: "followedStatus", exempt: assignee } : undefined,
+    {
+      event: STATUS_EVENT_NUMBER[type],
+      facts: {
+        kind: "status",
+        challengeNumber: row.challenge_number,
+        challengeTitle: row.challenge_title,
+        solutionNumber: row.number,
+        statusLabel: SOLUTION_STATUS_LABEL[newStatus] ?? humanStatus(newStatus),
+      },
+    },
   );
 
-  if (autoClose) await notifyAutoClose(ctx, { ...autoClose, challengeAuthorId: row.challenge_author_id });
+  if (autoClose) await notifyAutoClose(ctx, { ...autoClose, challengeAuthorId: row.challenge_author_id, implementedSolutionNumber: row.number });
 }
 
 /**
@@ -129,7 +152,7 @@ export async function notifySolutionStatusChanged(
  * (the implemented one and every closed sibling). Non-mutable. Deduplicated and visibility-
  * filtered against the challenge by dispatchEvent.
  */
-async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorId: string | null }): Promise<void> {
+async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorId: string | null; implementedSolutionNumber: string }): Promise<void> {
   const [challengeFollowers, ...solutionFollowers] = await Promise.all([
     getFollowerUserIds(ctx.pool, "challenge", info.challengeId),
     ...info.solutionIds.map((sid) => getFollowerUserIds(ctx.pool, "solution", sid)),
@@ -143,6 +166,11 @@ async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { chall
     {
       message: `CH-${number} "${info.challengeTitle}" was solved — a solution was implemented.`,
       link: itemHref(number),
+    },
+    undefined,
+    {
+      event: 8,
+      facts: { kind: "implemented", challengeNumber: number, challengeTitle: info.challengeTitle, solutionNumber: info.implementedSolutionNumber },
     },
   );
 }
@@ -212,6 +240,8 @@ export async function notifySolutionProposed(
       parentId: solution.id,
     },
     { preference: "followedSolutions", exempt: [...admins, ...committee] },
+    // Held for the author and followers only — to admins and the committee it is an attention event.
+    { event: 2, adminRoute: [...admins, ...committee], facts: { kind: "solution", challengeNumber: number, challengeTitle: challenge.title } },
   );
 }
 

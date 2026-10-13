@@ -11,10 +11,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "1.3.0",
+    version: "1.4.0",
     date: "2026-10-13",
     summary:
       "Customers and partners can now send a challenge through a public form, without an account. They confirm it by e-mail, and it waits in a new Public submissions queue for a platform admin to accept, decline or discard. Accepted ones join triage as External submission. To switch the form on, set PUBLIC_INTAKE_KEY and write a privacy notice in Platform settings.",
+  },
+  {
+    version: "1.3.0",
+    date: "2026-10-13",
+    summary:
+      "Prefer fewer e-mails? Under E-mail delivery on your profile you can now get a daily or weekly digest of what you follow instead of one e-mail per update. Digests arrive at 06:00 UTC, every day or on Mondays, and skip anything you have already read. Rejections, assignments and admin alerts still arrive at once.",
   },
   {
     version: "1.2.0",

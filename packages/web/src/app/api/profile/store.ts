@@ -11,7 +11,9 @@ import {
   NOTIFICATION_PREFERENCES,
   formatChallengeNumber,
   formatSolutionNumber,
+  nextDigestSlot,
   type ChallengeStatus,
+  type EmailDelivery,
   type GamificationPreferences,
   type NotificationPreferences,
   type SolutionStatus,
@@ -21,6 +23,8 @@ import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, ty
 export interface OwnProfile {
   user: { id: string; displayName: string; email: string | null; department: string | null; jobTitle: string | null; officeLocation: string | null };
   emailNotificationsEnabled: boolean;
+  /** §12.1 e-mail digests: immediate delivery, or a daily or weekly digest. */
+  emailDelivery: EmailDelivery;
   /** §12.1 per-event preferences. */
   notificationPreferences: NotificationPreferences;
   /** §13.10 the random feedback-survey opt-out ("Ask me for feedback"). */
@@ -82,12 +86,13 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
     job_title: string | null;
     office_location: string | null;
     email_notifications_enabled: boolean;
+    email_delivery: EmailDelivery;
     notify_followed_comments: boolean;
     notify_followed_status: boolean;
     notify_followed_solutions: boolean;
     surveys_enabled: boolean;
   }>(
-    `select id, display_name, email, department, job_title, office_location, email_notifications_enabled,
+    `select id, display_name, email, department, job_title, office_location, email_notifications_enabled, email_delivery,
             notify_followed_comments, notify_followed_status, notify_followed_solutions, surveys_enabled
        from users where id = $1`,
     [userId],
@@ -164,6 +169,7 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
       officeLocation: userRow.office_location,
     },
     emailNotificationsEnabled: userRow.email_notifications_enabled,
+    emailDelivery: userRow.email_delivery,
     notificationPreferences: {
       followedComments: userRow.notify_followed_comments,
       followedStatus: userRow.notify_followed_status,
@@ -188,6 +194,32 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
 
 export async function setEmailNotificationsEnabled(pool: Pool, userId: string, enabled: boolean): Promise<void> {
   await pool.query(`update users set email_notifications_enabled = $2, updated_at = now() where id = $1`, [userId, enabled]);
+}
+
+/**
+ * §12.1 e-mail digests: the delivery choice. Silent (not audited), like the other preferences, and
+ * it applies to events written from now on. Rows ALREADY held move to the new choice's next slot;
+ * a switch to immediate makes them due now, so the digest job releases them as one digest —
+ * nothing held is lost or sent twice. One transaction, so a concurrent write cannot see the new
+ * choice with the old slots.
+ */
+export async function setEmailDelivery(pool: Pool, userId: string, delivery: EmailDelivery): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(`update users set email_delivery = $2, updated_at = now() where id = $1`, [userId, delivery]);
+    await client.query(
+      `update notification_outbox set digest_due_at = coalesce($2::timestamptz, now())
+        where user_id = $1 and digest_due_at is not null and status <> 'sent'`,
+      [userId, delivery === "immediate" ? null : nextDigestSlot(delivery, new Date())],
+    );
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** §12.1: writes any subset of the three per-event toggles. Silent (not audited, like the e-mail
