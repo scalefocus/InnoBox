@@ -193,20 +193,19 @@ function AuditBrowser() {
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div className="log-filters">
           <input
             className="field"
-            style={{ flex: 1, minWidth: 220 }}
             placeholder="Search action, target, number, actor…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             aria-label="Search"
           />
-          <label className="sub" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label className="sub">
             From
             <input type="date" className="field" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} aria-label="From date" />
           </label>
-          <label className="sub" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label className="sub">
             To
             <input type="date" className="field" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} aria-label="To date" />
           </label>

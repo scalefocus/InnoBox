@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.3",
+    date: "2026-10-13",
+    summary:
+      "The Platform settings, Audit log and System log pages now fit phone screens: forms stack neatly, buttons stay inside their cards and the filter tabs scroll sideways instead of stretching the page. On wide screens the AI provider's Load models button no longer spills past the card edge.",
+  },
+  {
     version: "1.0.2",
     date: "2026-10-12",
     summary:
