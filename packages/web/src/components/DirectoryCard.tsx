@@ -11,13 +11,15 @@
 // gate lives at the call site so that an anonymous bubble has no handlers, no tab stop and issues
 // no request: nothing in the DOM or the network log distinguishes two anonymous authors.
 //
-// Touch: the card is mouse-only (`pointerType === "mouse"`). There is no long-press affordance, so
-// avatars keep their native touch/context behavior and a tap inside a clickable triage row still
-// opens the row (§14.1). On touch the directory profile is reached through the profile page.
+// Touch and pen: press and hold (~500 ms) opens the same card; the mouse keeps hover-intent. A short
+// tap is unchanged (it still follows the enclosing link or opens the triage row, §14.1), a press
+// that drifts is a scroll, and a completed hold swallows its release's click. The native long-press
+// callout is suppressed on card-bearing bubbles only (CSS), and `contextmenu` is cancelled only
+// when a touch/pen press raised it — a desktop right-click keeps the browser's menu.
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { focusNeighbor, profileHref, TABBABLE_SELECTOR } from "@/lib/directory-card";
+import { createHoldGesture, focusNeighbor, profileHref, swallowNextClick, TABBABLE_SELECTOR } from "@/lib/directory-card";
 import { cachedGet } from "@/lib/ui";
 import type { LeaderBadge } from "@innobox/shared/gamification";
 import type { AvatarRing } from "./AvatarBubble";
@@ -76,7 +78,12 @@ interface TriggerProps {
   tabIndex: 0;
   role: "button";
   onPointerEnter: (e: React.PointerEvent) => void;
-  onPointerLeave: () => void;
+  onPointerLeave: (e: React.PointerEvent) => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
   onFocus: () => void;
   onBlur: () => void;
   onKeyDown: (e: React.KeyboardEvent) => void;
@@ -118,6 +125,12 @@ export function useDirectoryCard(opts: {
   // Set while Escape hands focus back to the bubble, so that focus event doesn't reopen the card
   // it just closed (a hover-opened card's bubble isn't focused yet, so focus() does fire one).
   const suppressFocusOpen = useRef(false);
+  // How the open card was opened: a hold-opened card closes on scroll and on a repeat hold, where a
+  // hover- or focus-opened one re-anchors to its bubble.
+  const openedBy = useRef<"pointer" | "hold" | null>(null);
+  const isOpen = useRef(false);
+  const onHold = useRef<() => void>(() => {});
+  const [hold] = useState(() => createHoldGesture({ onHold: () => onHold.current() }));
 
   const clearTimers = () => {
     if (openTimer.current) clearTimeout(openTimer.current);
@@ -128,6 +141,8 @@ export function useDirectoryCard(opts: {
 
   const close = useCallback(() => {
     clearTimers();
+    openedBy.current = null;
+    isOpen.current = false;
     setOpen(false);
     setPos(null);
     if (closeOpenCard) closeOpenCard = null;
@@ -135,10 +150,12 @@ export function useDirectoryCard(opts: {
 
   // Open (and only then fetch — never on mount, so a page of a hundred bubbles issues zero
   // requests until someone actually hovers one).
-  const doOpen = useCallback(() => {
+  const doOpen = useCallback((via: "pointer" | "hold" = "pointer") => {
     if (!userId) return;
     if (closeOpenCard) closeOpenCard();
     closeOpenCard = close;
+    openedBy.current = via;
+    isOpen.current = true;
     const r = triggerRef.current?.getBoundingClientRect();
     if (r) setPos({ left: r.left, top: r.bottom + GAP_PX }); // refined once the card is measured
     setOpen(true);
@@ -187,7 +204,8 @@ export function useDirectoryCard(opts: {
 
   useEffect(() => {
     if (!open) return;
-    const onScroll = () => place();
+    // A hold-opened card closes on scroll; a hover- or focus-opened one follows its bubble.
+    const onScroll = () => (openedBy.current === "hold" ? close() : place());
     // Capture phase so scrolling an inner container repositions too.
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onScroll);
@@ -195,7 +213,7 @@ export function useDirectoryCard(opts: {
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);
     };
-  }, [open, place]);
+  }, [open, place, close]);
 
   // Escape closes from anywhere (including focus inside the card) and leaves focus on the bubble;
   // a pointer press outside both closes too (matters for a card opened by keyboard focus).
@@ -225,7 +243,13 @@ export function useDirectoryCard(opts: {
     };
   }, [open, close]);
 
-  useEffect(() => clearTimers, []);
+  useEffect(
+    () => () => {
+      clearTimers();
+      hold.cancel();
+    },
+    [hold],
+  );
 
   // Tab routing (§13.8). The card is portalled to the end of <body>, so the browser's own Tab
   // order never reaches it from the bubble, and leaving it would land at the end of the page.
@@ -252,6 +276,11 @@ export function useDirectoryCard(opts: {
     target.focus();
   };
 
+  // A completed hold toggles: it opens the card, or closes it when this bubble's card is open.
+  useEffect(() => {
+    onHold.current = () => (isOpen.current ? close() : doOpen("hold"));
+  }, [close, doOpen]);
+
   if (!enabled || !userId) return { triggerProps: null, card: null };
 
   const triggerProps: TriggerProps = {
@@ -264,16 +293,29 @@ export function useDirectoryCard(opts: {
       if (e.pointerType !== "mouse") return; // mouse-only: no card on touch or pen (§13.8)
       cancelClose();
       if (openTimer.current) clearTimeout(openTimer.current);
-      openTimer.current = setTimeout(doOpen, OPEN_DELAY_MS);
+      openTimer.current = setTimeout(() => doOpen(), OPEN_DELAY_MS);
     },
-    onPointerLeave: () => {
+    onPointerLeave: (e) => {
+      // Touch "leaves" on every lift — only a mouse leaving means anything here.
+      if (e.pointerType !== "mouse") return;
       if (openTimer.current) clearTimeout(openTimer.current);
       openTimer.current = null;
       if (open) scheduleClose();
     },
+    // Press and hold on touch/pen (§13.8); a mouse press only records its type (contextmenu gate).
+    onPointerDown: (e) => hold.down(e.pointerType, e.clientX, e.clientY),
+    onPointerMove: (e) => hold.move(e.clientX, e.clientY),
+    onPointerUp: () => {
+      if (hold.up()) swallowNextClick(window); // the hold must never fire the enclosing control
+    },
+    onPointerCancel: () => hold.cancel(),
+    onContextMenu: (e) => {
+      if (hold.lastPressWasHold()) e.preventDefault(); // Android's long-press menu, not right-click
+    },
     // Focus opens with no delay — hover-intent is a pointer concept.
     onFocus: () => {
       if (suppressFocusOpen.current) return; // Escape returning focus — stay closed (§13.8)
+      if (hold.suppressFocus(Date.now())) return; // a tap focuses the bubble — a tap is unchanged
       cancelClose();
       doOpen();
     },
@@ -290,8 +332,8 @@ export function useDirectoryCard(opts: {
             role="dialog"
             aria-label={displayName}
             style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? "visible" : "hidden" }}
-            onPointerEnter={cancelClose}
-            onPointerLeave={scheduleClose}
+            onPointerEnter={(e) => e.pointerType === "mouse" && cancelClose()}
+            onPointerLeave={(e) => e.pointerType === "mouse" && scheduleClose()}
             onFocusCapture={cancelClose}
             onBlurCapture={scheduleClose}
             onKeyDown={onCardKeyDown}

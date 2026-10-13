@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.2.0",
+    date: "2026-10-13",
+    summary:
+      "On phones and tablets, press and hold anyone's profile picture to see their card: job title, department, office and a link to their profile. A quick tap still does what it always did, and scrolling past pictures never opens a card. Tap outside the card or scroll to close it.",
+  },
+  {
     version: "1.1.0",
     date: "2026-10-13",
     summary:
