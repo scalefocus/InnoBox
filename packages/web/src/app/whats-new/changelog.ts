@@ -11,10 +11,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    version: "1.2.0",
+    version: "1.3.0",
     date: "2026-10-13",
     summary:
       "Customers and partners can now send a challenge through a public form, without an account. They confirm it by e-mail, and it waits in a new Public submissions queue for a platform admin to accept, decline or discard. Accepted ones join triage as External submission. To switch the form on, set PUBLIC_INTAKE_KEY and write a privacy notice in Platform settings.",
+  },
+  {
+    version: "1.2.0",
+    date: "2026-10-13",
+    summary:
+      "On phones and tablets, press and hold anyone's profile picture to see their card: job title, department, office and a link to their profile. A quick tap still does what it always did, and scrolling past pictures never opens a card. Tap outside the card or scroll to close it.",
   },
   {
     version: "1.1.0",
