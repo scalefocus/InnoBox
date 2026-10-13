@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.14 — draft for review** (2026-10-12; v0.2 added the UI and CI/CD
+> Status: **v0.15 — draft for review** (2026-10-13; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -42,7 +42,9 @@
 > specified four more features, each a new-feature gap: public submissions from people
 > outside the organization (§24), one-level replies to comments (§10.2), daily and weekly
 > e-mail digests (§12.1), and a 30-day trash with restore for deleted challenges and
-> solutions (§10.4), lifting the matching §19 non-goals).
+> solutions (§10.4), lifting the matching §19 non-goals; v0.15 (2026-10-13) specified
+> agent access through an MCP server — OAuth sign-in, 15 read-and-contribute tools,
+> "via agent" attribution and four agent badges — as a new-feature gap (§25)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -167,9 +169,13 @@ Cross-cutting requirements:
    §24), present only while a platform admin has switched it on: it **writes** a
    submission into a separate intake table and **reads nothing** — no challenge,
    solution, user, namespace, impact area, count or setting other than its own privacy
-   notice ever reaches it.
+   notice ever reaches it. The agent-access protocol endpoints (§25.2) are not a third
+   surface: the ones that take no credential — OAuth metadata, client registration,
+   token exchange and revocation — read no application data, and the MCP endpoint
+   itself requires a bearer token bound to a person and applies this same filter.
 3. **Anonymity is enforced at the API layer, everywhere** — lists, details, search,
-   exports, e-mails, in-app notifications, and webhook payloads (§12.4). The true
+   exports, e-mails, in-app notifications, webhook payloads (§12.4) and MCP tool
+   results (§25). The true
    identity is stored but is exposed
    only through the audited admin **reveal** action (§9).
 4. **Attachments are served only through the authenticated fetch gateway** — no
@@ -266,7 +272,8 @@ including theme-aware scrollbars and form controls. Pinned values:
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
-    Sign out — plus the §13.10 **Take the survey** as the first item while a survey
+    Sign out — plus the §25.9 **AI agents** item above What's new while agent access is
+    on or the user still holds a connection, plus the §13.10 **Take the survey** as the first item while a survey
     offer is open, and **Give feedback** above Sign out when an on-demand survey can
     start) in the sidebar foot, and the topbar search + notification bell +
     theme toggle — plus the §14.6 **system banner** pill between search and bell
@@ -623,7 +630,11 @@ these rules close the generic web-platform paths by which it could.
   a JSON body additionally require `Content-Type: application/json` (**415** otherwise),
   so a plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
   The JSON `Content-Type` rule likewise does not apply to the report sink, which takes
-  the two CSP report media types instead (above).
+  the two CSP report media types instead (above). The §25 agent-access routes sit
+  outside `/api/*`: `POST /oauth/consent` carries this same `Origin` check, while
+  `/mcp`, `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt — they are
+  called by programs, carry no cookie and never read a session (§25.3). The consent
+  page alone widens `form-action` to the client redirect shapes (§25.3).
 - **Request body limits** — enforced **before** a body is read into memory (from
   `Content-Length`, and by a running byte count when it is absent), answering **413**:
   - JSON bodies: **1 MB**.
@@ -3990,6 +4001,11 @@ delegated per namespace.**
   (**off** by default; it can be turned on only with `PUBLIC_INTAKE_KEY` set, a privacy
   notice entered and an e-mail transport available), the privacy notice, and the
   read-only public address. Audited as `settings.public_submissions_changed`.
+- **AI agents (MCP)** — the §25.10 card: *Allow AI agents to connect* (**off** by
+  default), *Allow namespace-restricted content over MCP* (**off** by default), the
+  access- and refresh-token lifetimes, the read-only server URL, and the registered
+  clients with Block / Unblock. Audited as `settings.mcp_changed`,
+  `mcp.client_blocked` and `mcp.client_unblocked`.
 
 All settings changes are audited.
 
@@ -4427,7 +4443,12 @@ anomalies. Since v0.10 also:
   `ai.enabled`, `ai.disabled`, `ai.config_cleared`, and `settings.ai_*_changed` for the
   display name, timeouts and switches (§22.9);
 - **gamification** — `settings.gamification_enabled_changed` and the one-time
-  `gamification.backfilled` (actor system, counts only, §23.11).
+  `gamification.backfilled` (actor system, counts only, §23.11);
+- **agent access** — `mcp.grant_created`, `mcp.grant_revoked` (with its reason),
+  `mcp.client_blocked`, `mcp.client_unblocked` and `settings.mcp_changed`; and every
+  write made through MCP keeps its usual action name with `source: "mcp"` and the
+  client name in the payload (§25.13). Reads, client registrations and token issue and
+  rotation are not audited.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -4694,8 +4715,18 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `PATCH`/`DELETE`), **`admin/ai/models`**, **`admin/ai/test`**,
   **`admin/ai/display-name`**, **`admin/ai/timeouts`**, **`admin/ai/switches`** (§22.9);
   **`admin/trash`** (`GET`, §10.4); **`admin/public-submissions`** with its `:id`,
-  `accept`, `decline`, `discard`, `erase-contact` and `count` routes (§24.9)
+  `accept`, `decline`, `discard`, `erase-contact` and `count` routes (§24.9);
+  **`admin/mcp`** (`GET`/`PATCH`), **`admin/mcp/clients`** (`GET`) and
+  **`admin/mcp/clients/:id/block`** / **`…/unblock`** (`POST`) (§25.13)
   — all platform admin only)
+- `me/agents` (`GET` the server URL, the on/off state and the caller's connections;
+  `me/agents/:grantId` `DELETE` revokes one — §25.9); challenge and solution detail
+  payloads and comment rows carry `viaAgent` (§25.8)
+- **Agent access (§25)** — outside `/api`: `/.well-known/oauth-protected-resource`,
+  `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/token`,
+  `/oauth/revoke` (no session; read no application data), `/oauth/authorize` and
+  `/oauth/consent` (session), and `POST /mcp` (bearer token only) — all **503** while
+  agent access is off (§25.2, §25.10)
 - `ai/draft` (`GET` availability, `POST` a draft — §22.10), `ai/summary/:parentType/:number`
   (`GET` the cached summary, `POST` to make or refresh it — §22.13); triage notes ride on
   the challenge detail and triage-queue payloads for the roles that may see them (§22.11)
@@ -4779,7 +4810,12 @@ no namespace-admin trash, no configurable retention window, and no trash for com
 attachments; for public submissions (§24): no accounts, sign-in or status page for
 outside submitters, no attachments on the public form, no public listing or search of
 challenges, no third-party CAPTCHA service, and no comments or messages exchanged with the
-submitter inside InnoBox; no i18n;
+submitter inside InnoBox; for agent access (§25): no MCP resources or prompts, no likes,
+status changes other than the author's resubmit, assignment, triage, reveal, withdraw,
+delete or administration through an agent, no attachment bytes or uploads, no
+client-credentials or other machine path, no confidential clients, no capability scopes,
+no server-sent stream, no organization-wide "revoke all", no per-namespace switch, and no
+notification when a new agent connects; no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
 audit chain (timestamping service, transparency log — recording the reported head
@@ -5545,6 +5581,11 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   or the like's `created_at`). The daily caps apply per original UTC day. Badges and
   levels reached by the replay notify normally (§23.7).
 - **Restricted namespaces** count in full (decision 5).
+- **Agent access (§25.12)** adds one reason, `agent_connected` — **0 points**, once per
+  user, written when they first approve an AI agent connection — and marks every award
+  row whose item was created through an agent (`via_mcp`). Points themselves are
+  unchanged: an item created through an agent earns exactly what it would in the
+  browser.
 - **The level total is the user's points over all their ledger rows, all time.**
 
 ### §23.3 Levels
@@ -5588,6 +5629,10 @@ and count capped (0-point) rows too.
 | **Icebreaker** (`icebreaker`) | one-off | your first challenge submitted | — |
 | **First Idea** (`first_idea`) | one-off | your first solution proposed | — |
 | **Full Circle** (`full_circle`) | one-off | a solution you wrote is implemented on a challenge you also wrote | — |
+| **Plugged In** (`plugged_in`) | one-off | your first AI agent connected (§25.12) | — |
+| **Co-Pilot** (`co_pilot`) | one-off | your first challenge submitted through an agent | — |
+| **Agent of Change** (`agent_of_change`) | one-off | your first solution proposed through an agent | — |
+| **Human in the Loop** (`human_in_the_loop`) | one-off | a challenge or solution you submitted through an agent reached `valid` | — |
 
 - **Evaluation.** After writing award rows, the same transaction re-counts the affected
   user's relevant reasons and inserts any newly reached `(badge, tier)` rows
@@ -5597,6 +5642,9 @@ and count capped (0-point) rows too.
   solution's author also wrote the parent challenge and has an award row for it. While
   either item is anonymous no award exists, so the badge waits for both reveals; the
   replay of the second reveal earns it.
+- The four **agent badges** count ledger rows with `via_mcp = true` (and, for Plugged
+  In, the 0-point `agent_connected` row); they appear among the locked badges only while
+  agent access is on (§25.12).
 - The **catalogue is fixed in code**. There is no manual grant or revocation (§19).
 
 ### §23.5 Leader badges
@@ -5683,7 +5731,9 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   **Append-only:** the app role has INSERT/SELECT only, plus DELETE solely for the §3
   erasure; no UPDATE. `item_id` carries no FK on purpose: the §10.3 delete cascade does
   **not** touch the ledger (decision 3), and the id is never returned by any API — it
-  exists only so the Points ranking can apply the live org-visible test.
+  exists only so the Points ranking can apply the live org-visible test. With §25 the
+  ledger also gains `via_mcp` (boolean) and the 0-point, item-less `agent_connected`
+  reason (§25.12, §25.13).
 - **`user_badges`** — user_id (FK), badge_key, tier (`1 | 2 | 3`, null for a one-off),
   earned_at. Unique `(user_id, badge_key, coalesce(tier, 0))`. Same grants as the
   ledger.
@@ -6067,3 +6117,423 @@ user.
   name or e-mail; the retention job deletes and erases on schedule; the outcome mail is
   sent once. E2e: submit on `/submit`, confirm through the link, accept in the queue,
   and find the challenge in the triage queue labelled "External submission".
+
+## §25 Agent access (MCP server)
+
+> **⚠ GAP-78 · new feature:** agent access does not exist. Build: a migration
+> (`oauth_clients`, `oauth_grants`, `oauth_tokens`, `oauth_pending_authorizations`;
+> `mcp_client_name` on `challenges`, `solutions` and `comments`; `via_mcp` and the
+> nullable item on `gamification_ledger`, the `agent_connected` reason; the four
+> `mcp_*` settings; grants — the app role gets SELECT/INSERT/UPDATE/DELETE on the four
+> `oauth_*` tables); the OAuth endpoints, the consent page and its CSP; the `/mcp`
+> Streamable HTTP endpoint and its 15 tools; the middleware allowlist and the `Origin`
+> exemptions; the per-person and per-client rate limits; the "via agent" tag on every
+> surface in §25.8; the `/agents` page and its account-menu entry; the §14.3 card with
+> the client list and block control; the leaver revocation; the worker's sweep of
+> expired OAuth rows; the four §23 badges; the metrics; the invariant 2 wording in
+> `CLAUDE.md`; and the tests in §25.13. Ships as one minor release.
+
+InnoBox exposes a **Model Context Protocol (MCP) server**, so a person's AI agent —
+Claude Code, Claude Desktop, VS Code, or any MCP client — can search and read the
+challenges that person can see, and help them **submit challenges, propose solutions
+and comment, as themselves**. The person connects once, approves the connection in
+the browser, and can revoke it at any time.
+
+It is **not** a second API with its own rules: every tool runs the same domain code,
+visibility filter and anonymity masking as the matching `/api` route (§25.4). It is
+**not** a review channel: an agent authors; a human decides. No status transition
+(other than the author's own resubmit), assignment, triage, reveal, like or
+administration is reachable through it (§25.6).
+
+### §25.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Read + contribute.** Agents search and read; they submit challenges, propose solutions, edit and resubmit the person's own items, comment and follow. Nothing else. | The useful work is drafting and finding; deciding stays with people. |
+| 2 | **No status transitions, assignment, triage, reveal, withdraw, delete or administration** — for any role, including committee members, assignees and admins. | Closes agent-speed triage and the self-approval path where one identity authors and validates. |
+| 3 | **InnoBox is its own OAuth 2.1 authorization server**; the person signs in with Entra and consents in the browser. PKCE, open dynamic client registration, short-lived rotating tokens. | No secret in any client config; every connection is visible and revocable. |
+| 4 | **Off by default.** A platform admin switches it on in Platform settings. | Sending InnoBox content to agents is a per-deployment choice. |
+| 5 | **Namespace-restricted content is invisible through MCP** unless a platform admin turns on *"Allow namespace-restricted content over MCP"* (off by default). | The agent's model is outside InnoBox's control — the same rule as the AI provider (§22.7). |
+| 6 | **Any active user** may connect once it is on. | Consumption is universal (§4.2); per-connection revoke and per-client block cover incidents. |
+| 7 | **Anonymity works exactly as on the web.** An agent may submit anonymously; every read is masked; reveal and self-reveal stay in the browser. | Anonymity is the person's choice wherever they submit; reveal is one-way. |
+| 8 | **No likes through MCP.** | A like is a human signal that drives ranking, spotlights and points. |
+| 9 | **Attachments: metadata only.** No bytes, no uploads. | The gateway (invariant 4) stays the only byte path. |
+| 10 | **Visible attribution.** Items and comments created through MCP carry a **"via agent"** tag wherever people read them. | Reviewers and readers should know how a contribution arrived. The person is still the author. |
+| 11 | **Points as normal, plus four "first" badges.** MCP contributions earn §23 points like any other; four one-off badges mark a person's first agent milestones. | The person is responsible for what their agent submits; the badges encourage trying it. |
+| 12 | **Tools only.** No MCP resources and no prompts in v1. | Tools cover the use cases; resources would be a second read path to keep masked. |
+
+### §25.2 Shape and placement
+
+Everything runs in **`packages/web`**, beside the API it reuses. The worker only sweeps
+expired rows (§25.13).
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /.well-known/oauth-protected-resource` | none | RFC 9728 resource metadata for `<PUBLIC_BASE_URL>/mcp` |
+| `GET /.well-known/oauth-authorization-server` | none | RFC 8414 server metadata |
+| `POST /oauth/register` | none | RFC 7591 dynamic client registration |
+| `GET /oauth/authorize` | session | Validates the request, then shows the consent page (signed out → Entra sign-in, then back) |
+| `POST /oauth/consent` | session | Approve or deny; answers **303** to the client's `redirect_uri` |
+| `POST /oauth/token` | none (PKCE) | Code exchange and refresh-token rotation |
+| `POST /oauth/revoke` | none | RFC 7009 token revocation |
+| `POST /mcp` | bearer | The MCP endpoint (Streamable HTTP) |
+
+- **Streamable HTTP only, stateless.** Each `POST /mcp` is a self-contained JSON-RPC
+  request answered with `application/json`; no server-held session beyond the OAuth
+  token, so web replicas need no sticky routing. `GET /mcp` (the optional server-sent
+  stream) answers **405**; the deprecated HTTP+SSE transport is not implemented.
+- **The server's `instructions`** tell the agent, in plain words, that it acts as the
+  signed-in person, that it should call `find_similar_challenges` before
+  `submit_challenge`, that everything it creates is shown as "via agent", and that
+  triage and decisions happen in the browser.
+- **Middleware.** The paths above join the auth-free allowlist; each route
+  authenticates itself. **`/mcp` accepts only the bearer token — a session cookie is
+  ignored, never honored**, so a browser cannot be made to call it with the person's
+  session.
+- **The bundled proxy** needs no change: all of these paths already reach `web`.
+- **Invariant 2 still holds.** The endpoints that need no credential (the two metadata
+  documents, register, token and revoke) read no challenge, solution, user, namespace,
+  count or setting other than the `mcp_enabled` switch; `/mcp` is authenticated;
+  `/oauth/authorize` and `/oauth/consent` need a session.
+
+### §25.3 Authorization
+
+- **Grant: authorization code with PKCE**, `S256` only. No implicit, password or
+  client-credentials grant. **Resource indicators (RFC 8707)** are required: the
+  `resource` must be exactly `<PUBLIC_BASE_URL>/mcp`, and a token minted for it is
+  accepted nowhere else.
+- **Open dynamic client registration.** Any MCP client may register and receives a
+  `client_id`. Registration alone grants nothing — a person still has to sign in and
+  consent. Limited to **10 registrations per IP per hour**; a client with **no grant
+  after 7 days** is deleted by the worker's hourly housekeeping sweep (§2).
+- **Public clients only** (`token_endpoint_auth_method = none`): desktop and CLI
+  clients cannot keep a secret; PKCE is the compensating control.
+- **Redirect URIs are exact-match**, registered up front. Loopback
+  (`http://127.0.0.1:<port>` and `http://[::1]:<port>`) matches **on any port**, as
+  MCP desktop and CLI clients require; every other URI must be `https` or a custom
+  app scheme. No wildcards. `client_name` is required, 1–80 printable characters.
+- **A parameter supplied twice is rejected** on `/oauth/authorize`, before
+  `client_id` or `redirect_uri` is read, with the non-redirecting error page — a
+  duplicated `redirect_uri` can never be resolved to the registered one.
+- **The consent page** (outside AppShell, §2.2 tokens) names the **client** and its
+  redirect host, the **signed-in person**, and what is granted, in plain words: *"Read
+  the challenges, solutions and comments you can see. Submit challenges, propose
+  solutions, edit and resubmit your own items, comment and follow — as you, marked
+  'via agent'. It cannot like, change a status, assign, triage or administer."* —
+  plus, while §25.5 hides restricted content, *"Namespace-restricted challenges are not
+  shared with agents."* It says the connection can be revoked on **AI agents**
+  (§25.9). **Approve** writes or refreshes the `oauth_grants` row; **Deny** redirects
+  with `access_denied`.
+- **The validated request travels through the database, not the form.** Rendering
+  `/oauth/authorize` stores the validated request in `oauth_pending_authorizations`
+  and the form carries only that row's id and the approve/deny choice. The consent
+  handler reads nothing else from the form. The row is **single-use**, expires after
+  **10 minutes** and is bound to the person it was stored for; it is consumed in the
+  same statement that reads it (`UPDATE … WHERE id = $1 AND user_id = $2 AND
+  consumed_at IS NULL AND created_at > now() - interval '10 minutes' RETURNING …`), so
+  a double submit cannot mint two codes. Anything else fails closed with **400**. (Not
+  in memory: the render and the submit are separate entry points and need not share a
+  process.)
+- **The consent page's CSP** widens `form-action` for that page only, to the shapes
+  registration accepts (loopback on any port, `https:`, and the client's registered
+  custom scheme): approving is a form POST answered with a 303 to another origin, and
+  browsers apply `form-action` across redirects. The redirect target is still checked
+  against the client's registration — the CSP is a filter, not the control.
+- **`POST /oauth/consent` keeps the §2.4 `Origin` check.** `/mcp`,
+  `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt from it, like the
+  CSP report sink: they are called by programs, carry no cookie and never read a
+  session.
+- **One scope, `mcp`.** The boundary is the person's role, re-resolved on every call
+  from SCIM-synced groups and `role_mappings` (invariant 1). A token carries only
+  `user_id`, `client_id` and `grant_id` — never a role or a namespace.
+- **Tokens are opaque random strings, stored as SHA-256 hashes**, sent only in
+  `Authorization: Bearer` — never in a URL.
+  - **Authorization code:** single use, 60 seconds.
+  - **Access token:** `mcp_access_token_ttl_minutes` (**5–1440, default 60**).
+  - **Refresh token:** rotates on every use. Presenting an already-rotated refresh
+    token **revokes the whole grant** and writes a system-log row (§25.11). Idle
+    lifetime `mcp_refresh_token_ttl_days` (**1–365, default 90**), sliding on each
+    rotation.
+- **Failures.** `401` with `WWW-Authenticate: Bearer resource_metadata="<url>"`, so a
+  client can discover how to sign in; the response never says why a token failed.
+  `403` for an authenticated call the person's role does not allow. `503` while the
+  server is off (§25.10).
+- **Leavers.** When a person is deactivated (SCIM `active = false`, §3) or erased (§3),
+  **every grant and token they hold is revoked** in the same transaction. A
+  reactivated person connects again.
+- **Blocked clients.** A client a platform admin has blocked (§25.10) cannot obtain a
+  new grant, exchange a code, refresh or call `/mcp`; its grants stay, so unblocking
+  restores them.
+
+### §25.4 One code path
+
+Every tool calls **the same service function as the matching `/api` route** — the
+same visibility predicate (invariant 2), the same anonymity masking (invariant 3), the
+same validation, state-machine checks, notifications, audit and §23 awards. Where a
+route's logic still lives inside its handler, the implementation extracts it into a
+shared function first; a tool never re-implements a query. The only things a tool
+adds are the restricted-content filter (§25.5), the client name on writes (§25.8), and
+the response shaping.
+
+- **Person data is minimal.** Tool results name people by **display name** only — no
+  e-mail, UPN, user id, department, photo or presence. An anonymous author is
+  *"Anonymous"*, exactly as in the API; the caller's own anonymous items are marked
+  `isMine: true`, as the web shows them to their author.
+- **Links back.** Every challenge and solution in a result carries `url` — its page
+  under `PUBLIC_BASE_URL` — so the agent can send the person to the browser for
+  anything it cannot do.
+- **Not presence.** MCP calls do not count as being online (§14.5) and do not advance
+  `last_seen_at`.
+- **Content is data.** Challenge, solution and comment text is returned in plain
+  fields, never merged into tool descriptions or the server instructions. A text that
+  tries to instruct a reader's agent can at most reach the write tools, which the
+  client asks the person to approve (§25.6), which are rate-limited (§25.11) and which
+  show "via agent" (§25.8).
+
+### §25.5 Restricted content
+
+- While **`mcp_restricted_content_enabled`** is **off** (the default), every tool
+  behaves as if namespace-restricted challenges (`visibility = namespace`), their
+  solutions and their comments **do not exist**: they never appear in search, similar
+  matches, the caller's own items or notifications, and a detail request for one
+  answers *not found*. `submit_challenge` refuses `visibility: "namespace"` with
+  *"Namespace-restricted challenges can't be created through an agent here — use the
+  browser."*
+- While it is **on**, a tool returns exactly what the person can see in the browser.
+- The switch governs what leaves through MCP, not what the person may see: it never
+  changes the web.
+
+### §25.6 Tools — 15, no escape hatch
+
+Every tool: bearer-authenticated, roles re-resolved, visibility- and §25.5-filtered,
+anonymity-masked, rate-limited (§25.11), and for writes audited (§25.13). Tools are
+named `innobox_*` on the wire; the names below drop the prefix. Read tools carry the
+MCP `readOnlyHint` annotation, so clients may run them without asking; write tools
+carry `readOnlyHint: false`, so clients ask the person before running them.
+
+**Read (8)**
+
+| Tool | Behavior |
+|---|---|
+| `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, author (masked), like and solution counts, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, client name, author (masked), assignee, dates, like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
+| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; once §10.2 replies exist, each row carries its thread fields. Deleted comments appear as the web shows them. |
+| `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
+| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items. |
+| `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
+| `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
+
+**Contribute (7)**
+
+| Tool | Behavior |
+|---|---|
+| `submit_challenge` | §6.1: title, description, impact area, client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
+| `propose_solution` | §6.2: challenge number, description, cost vs benefits, `anonymous`. Only while the challenge is `valid`. Created `proposed`; event 2 fires. |
+| `edit_challenge` | §10.1 author edit — title, description, impact area — inside the author's edit window only. |
+| `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. |
+| `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
+| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with `replyTo` once replies exist). Never anonymous, as on the web. |
+| `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
+
+Errors are MCP tool errors carrying the same plain message the API returns (§21.9 — no
+`§` references): a refused transition, a closed edit window, a challenge that is not
+`valid`, a validation failure.
+
+**Not reachable through MCP — these tools do not exist:**
+- **Likes** (decision 8).
+- **Every status change other than the author's resubmit** — enforced transitions by a
+  committee member or assignee, admin overrides, and **withdraw**.
+- **Assignment, triage, the triage queue, bulk actions and CSV exports.**
+- **Reveal and self-reveal** (§9), **visibility changes**, **featuring**.
+- **Delete, trash and restore** (§10.3, §10.4); comment edit and delete.
+- **Attachment bytes and uploads** (§25.7).
+- **Everything under `/api/admin/*`** — settings, namespaces, role mappings, the audit
+  log, the system log, presence, webhooks, the AI card, public submissions.
+- **AI tasks** (§22) — drafting, triage assist, summaries.
+- **Profiles, leaderboards and gamification.**
+
+**15 is the ceiling.** A sixteenth tool is a spec change, and the first answer to
+pressure for more is to fold a capability into an existing tool.
+
+### §25.7 Attachments
+
+Detail tools list each **clean** attachment as file name, size, content type and
+upload date — never its bytes, a download link or who uploaded it. Files still
+scanning, infected or unscannable are not listed. There is no upload tool: a person
+adds files in the browser. The gateway (invariant 4) remains the only path to bytes.
+
+### §25.8 Attribution — "via agent"
+
+- **What is stored.** A challenge, solution or comment created through MCP stores the
+  client's registered `client_name` at that moment in **`mcp_client_name`** (null for
+  everything created in the browser). The person remains the author: same name,
+  avatar and authority. Edits and resubmits made through MCP are recorded in the audit
+  only (§25.13) and change no tag.
+- **What people see.** A small muted **"via agent · <client name>"** tag beside the
+  author line on the challenge detail header, on a solution card, on a comment, and in
+  the §14.1 triage queue row. Not on list cards, search results or e-mails. Tooltip:
+  *"Submitted through an AI agent its author connected."*
+- **Anonymous items show "via agent" without the client name.** A client name is
+  chosen by whoever registered the client and could point to one person; the plain tag
+  reveals nothing.
+- The API's detail payloads carry `viaAgent: { client: string | null } | null`, masked
+  the same way.
+
+### §25.9 The AI agents page — `/agents`
+
+Linked from the **account menu** as **AI agents**, above **What's new** (§2.2), while
+the server is on or while the person still holds a connection. Any authenticated user.
+
+- **Connect.** The server URL (`<PUBLIC_BASE_URL>/mcp`) and ready-to-copy
+  configuration for **Claude Code** (`claude mcp add --transport http innobox <url>`),
+  **Claude Desktop** and **VS Code** (JSON). No snippet contains a credential — the
+  client registers itself and the person approves it in the browser. Each snippet is
+  one copy target with a *"Copied"* confirmation, and none renders before the URL has
+  loaded.
+- **Connections.** One row per live grant: client name, when it was authorized, last
+  used (through the shared formatter), and **Revoke** — immediate, ends the grant and
+  every token under it, audited `mcp.grant_revoked`.
+- **What agents can do** — the §25.6 summary in plain words, the "via agent" tag, and
+  whether restricted content is shared.
+- **While off,** the page shows *"An administrator has turned agent access off."* and
+  still lists the person's connections so they can revoke them.
+
+### §25.10 The Platform settings card
+
+A **platform-admin** card on `/admin/settings` — **AI agents (MCP)** (§14.3):
+
+- **Allow AI agents to connect** — the `mcp_enabled` switch, **off** by default.
+- **Allow namespace-restricted content over MCP** — `mcp_restricted_content_enabled`,
+  **off** by default, with the note: *"Agents send what they read to the AI model their
+  user runs. InnoBox does not control that model."*
+- **Access token lifetime** (minutes, 5–1440, default 60) and **refresh token
+  lifetime** (days, 1–365, default 90), validated server-side.
+- The read-only **server URL**, the number of live connections and of registered
+  clients, and the **registered clients** list — name, registration date, last used,
+  live connections — with **Block** / **Unblock** per client.
+- **Off means dormant, not revoked.** Clients, grants and refresh tokens survive; every
+  `/mcp`, `/oauth/*` and `/.well-known/oauth-*` request answers **503** *"Agent access
+  is turned off."*; turning it back on resumes every connection with no new consent.
+- **No "revoke everything" button.** Per-client block and per-person revoke cover an
+  incident at the right size; an organization-wide purge only forces everyone to
+  reconnect.
+- Every change is audited (§25.13).
+
+### §25.11 Rate limits, system log, metrics
+
+- **Rate limits** (per instance, like the rest of §2.4), **429** with `Retry-After`:
+  per person **and** per (person, client), so one runaway agent cannot use up the
+  person's allowance. Read tools take the `search` bucket's limits; write tools the
+  `mutation` bucket's — an agent gets no more throughput than a person. Registration:
+  10 per IP per hour; `/oauth/token` and unauthenticated `/mcp` calls: 60 per IP per
+  minute.
+- **Body cap:** the §2.4 JSON limit (1 MB) on `/mcp` and every OAuth route.
+- **System log (§14.7).** Tool calls follow its rules — a 403, 409, 422 or 429 from a
+  tool is recorded with `route = /mcp`, the tool name in the message and the person.
+  Two carve-outs beyond its usual set: `mcp_refresh_reuse_detected` (the grant was
+  revoked) and `mcp_client_blocked` (a blocked client tried again), both naming the
+  client. Ordinary 401s are not recorded.
+- **Never logged anywhere:** access tokens, refresh tokens, authorization codes,
+  `code_verifier`, or any `Authorization` header value.
+- **Metrics (§2):** `innobox_mcp_tool_calls_total{tool,outcome}`,
+  `innobox_mcp_tokens_total{event="issued|refreshed|revoked|reuse"}` and
+  `innobox_mcp_registrations_total`.
+
+### §25.12 Gamification — points and the agent badges
+
+- **Points as normal.** An item or comment created through MCP earns its §23.2 points
+  under the same rules — anonymity, caps and first-entry keys included.
+- **`via_mcp` on the ledger.** Each award row records whether the item or comment it is
+  about was **created through MCP** (`mcp_client_name` is not null). It describes the
+  item, not the event: a challenge submitted through an agent and later validated in
+  the browser writes `challenge_validated` with `via_mcp = true`.
+- **`agent_connected`** — a new ledger reason, **0 points**, written once per person
+  (award key `agent_connected`) when they first approve a connection, `via_mcp = true`.
+  It has no item: `item_type` and `item_id` are null for this reason only.
+- **Four one-off badges**, part of the §23.4 catalogue:
+
+  | Badge (`badge_key`) | Earned for |
+  |---|---|
+  | **Plugged In** (`plugged_in`) | your first AI agent connected |
+  | **Co-Pilot** (`co_pilot`) | your first challenge submitted through an agent |
+  | **Agent of Change** (`agent_of_change`) | your first solution proposed through an agent |
+  | **Human in the Loop** (`human_in_the_loop`) | a challenge or solution you submitted through an agent reached `valid` |
+
+- **Same rules as every badge.** Counted from the ledger in the awarding transaction;
+  permanent; anonymous items earn nothing until self-reveal, whose replay copies
+  `via_mcp` from the item and may then earn Co-Pilot, Agent of Change or Human in the
+  Loop; restricted work counts; the earned badge names no item and no client. They
+  notify through §12.1 event 13 and the achievement toast.
+- **Locked badges.** On the owner's profile the four appear among the locked badges
+  only while the server is on; earned ones always show.
+- **Backfill (§23.11).** When it runs after this ships, it copies `via_mcp` from each
+  item and writes `agent_connected` from each person's earliest grant.
+
+### §25.13 Data model, API, audit, tests
+
+**Data model** (one migration):
+- **`oauth_clients`** — id (uuid PK), `client_id` (opaque, unique), `client_name`,
+  `client_uri`, `logo_uri` (stored, never fetched or shown), `redirect_uris` (text[]),
+  `software_id`, `software_version`, `registered_ip`, `created_at`, `last_used_at`,
+  `blocked_at` (nullable).
+- **`oauth_grants`** — id, `user_id` (FK `users`, cascade), `client_id` (FK
+  `oauth_clients`, cascade), `scope`, `created_at`, `last_used_at`, `revoked_at`,
+  `revoked_by` (nullable FK `users`, set null). **One live grant per (person, client)**
+  — a partial unique index where `revoked_at is null`; consenting again refreshes it.
+- **`oauth_tokens`** — id, `grant_id` (FK, cascade), `kind` (`code | access |
+  refresh`), `token_hash`, `expires_at`, `used_at`, `rotated_from_id` (nullable
+  self-FK, for reuse detection), `code_challenge`, `redirect_uri`, `resource` (the
+  last three for codes only), `created_at`.
+- **`oauth_pending_authorizations`** — id (the opaque consent handle), `user_id`,
+  `client_id`, `request` (jsonb — the validated `redirect_uri`, `code_challenge`,
+  `state`, `resource`), `created_at`, `consumed_at`.
+- **`challenges`, `solutions`, `comments`** gain `mcp_client_name` (nullable text).
+- **`gamification_ledger`** gains `via_mcp` (boolean, not null, default false); the
+  reason enum gains `agent_connected`; `item_type` / `item_id` become nullable, with a
+  check that they are null exactly when the reason is `agent_connected`.
+- **`platform_settings`** gains `mcp_enabled` (false), `mcp_restricted_content_enabled`
+  (false), `mcp_access_token_ttl_minutes` (60), `mcp_refresh_token_ttl_days` (90).
+- **Sweep.** The worker's hourly housekeeping sweep (§2) deletes expired codes and
+  access tokens, consumed or expired pending authorizations, refresh lineage older than
+  `mcp_refresh_token_ttl_days`, and clients with no grant after 7 days.
+- **Erasure (§3)** deletes the person's grants (their tokens cascade).
+  `mcp_client_name` is not personal data and stays.
+
+**API (§16).** The OAuth and MCP endpoints of §25.2; `GET /api/me/agents` (server URL,
+on/off, the person's connections) and `DELETE /api/me/agents/:grantId` (revoke);
+`GET`/`PATCH /api/admin/mcp` (the §25.10 settings and counts),
+`GET /api/admin/mcp/clients`, `POST /api/admin/mcp/clients/:id/block` and `…/unblock`
+— platform admin only (**403** for namespace admins). Detail payloads gain `viaAgent`
+(§25.8).
+
+**Audit (§15).** Writes made through MCP keep the existing action names
+(`challenge.created`, `solution.created`, `challenge.edited`, `comment.posted`, …) and
+add `source: "mcp"` and `client: "<client name>"` to the payload, so the audit browser
+can find them. New rows: `mcp.grant_created`; `mcp.grant_revoked` with `reason:
+"user" | "deactivated" | "erased" | "refresh_reuse"`; `mcp.client_blocked`;
+`mcp.client_unblocked`; and `settings.mcp_changed` (`after` carries the four settings).
+All `mcp.*` rows sit under the Admin chip. **Not audited:** reads, registrations, token
+issue and rotation (they are metrics), and follows (as on the web).
+
+**Tests.**
+- *Unit:* PKCE verification; redirect-URI matching (loopback on any port, exact
+  `https`, custom schemes, no wildcards); duplicate-parameter rejection; refresh
+  rotation and reuse detection; TTL bounds; the restricted-content filter; the "via
+  agent" masking on anonymous items; the four badges, including the replay on
+  self-reveal and the `agent_connected` ledger check.
+- *Integration:* register → authorize → consent → token → `/mcp` → refresh → revoke;
+  the pending authorization is single-use, expires and is bound to its person; a
+  session cookie on `/mcp` is ignored; every tool's RBAC and visibility, **including
+  negative cases** — a restricted challenge is invisible to every tool for an outsider,
+  and to everyone while the restricted switch is off; anonymous authors are masked in
+  every result; no tool reaches a like, a transition other than resubmit, an assignment
+  or an admin route; writes fire the same notifications, audit rows and awards as the
+  API; `mcp_client_name` is stored and shown; off answers 503 and on resumes without
+  new consent; a blocked client is refused; deactivation and erasure revoke every
+  grant; rate limits per person and per client.
+- *Conformance:* the server against a real MCP client (initialize, tools/list,
+  tools/call) over Streamable HTTP.
+- *E2e:* connect from `/agents` through consent; an agent submits a challenge that
+  appears with "via agent" in the triage queue; the person earns Plugged In and
+  Co-Pilot; revoking on `/agents` stops the next call.
