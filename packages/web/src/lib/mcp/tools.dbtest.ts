@@ -141,8 +141,12 @@ test(
       assert.deepEqual(createdAudit.after.similarAcknowledged, ["CH-1"]);
       const { rows: follows } = await pool.query(`select 1 from follows where user_id = $1 and parent_id = $2`, [member.userId, aId]);
       assert.equal(follows.length, 1, "the author follows it");
-      const { rows: event1 } = await pool.query(`select 1 from notifications where user_id = $1 and type = 'challenge_submitted' and payload->>'parentId' = $2`, [nsAdmin.userId, aId]);
+      const { rows: event1 } = await pool.query<{ message: string }>(
+        `select payload->>'message' as message from notifications where user_id = $1 and type = 'challenge_submitted' and payload->>'parentId' = $2`,
+        [nsAdmin.userId, aId],
+      );
       assert.equal(event1.length, 1, "event 1 reaches the namespace admin");
+      assert.equal(event1[0]!.message, `New challenge CH-${aNum} "Agent submitted ${stamp}" needs triage.`, "the number is prefixed once");
       const detail = await store.getChallengeByNumber(pool, nsAdmin, aNum);
       assert.deepEqual(detail?.viaAgent, { client: CLIENT }, "the web shows via agent with the client");
       const ledger = async (userId: string) =>
