@@ -96,6 +96,27 @@ export async function getNamespaceAdminUserIds(db: Db, namespaceId: string): Pro
   return rows.map((r) => r.user_id);
 }
 
+/** Every active platform admin, resolved the only way roles ever are (invariant 1): SCIM-synced
+ *  group membership + role_mappings, plus the bootstrap group while it is configured. */
+export async function getPlatformAdminUserIds(db: Db, bootstrapAdminGroup: string | undefined = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP): Promise<string[]> {
+  const { rows } = await db.query<{ user_id: string }>(
+    `select distinct gm.user_id
+       from group_members gm
+       join groups g on g.id = gm.group_id
+       join users u on u.id = gm.user_id and u.active and u.scrubbed_at is null
+      where exists (select 1 from role_mappings rm where rm.group_external_id = g.external_id and rm.role = 'platform_admin')
+         or ($1::text is not null and g.external_id = $1)`,
+    [bootstrapAdminGroup || null],
+  );
+  return rows.map((r) => r.user_id);
+}
+
+/** An admin attention event about no single item (§12.1 event 14): the in-app row and the outbox
+ *  row for each recipient, deduplicated — never muted, no visibility scope to check. */
+export async function dispatchAdminAttention(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload): Promise<void> {
+  await writeNotifications(db, finalizeRecipients(userIds, null), type, payload);
+}
+
 export async function getNamespaceCommitteeUserIds(db: Db, namespaceId: string): Promise<string[]> {
   const { rows } = await db.query<{ user_id: string }>(
     `select distinct gm.user_id
@@ -158,7 +179,7 @@ async function optedOutOf(db: Db, preference: NotificationPreference, userIds: s
 export async function dispatchEvent(
   ctx: NotifyContext,
   visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
-  candidates: string[],
+  candidates: readonly (string | null)[],
   type: NotificationType,
   payload: NotificationPayload,
   mute?: PreferenceMute,
@@ -175,7 +196,7 @@ export async function dispatchEvent(
 async function finalRecipients(
   ctx: NotifyContext,
   visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
-  candidates: string[],
+  candidates: readonly (string | null)[],
   mute?: PreferenceMute,
 ): Promise<string[]> {
   const deduped = finalizeRecipients(candidates, ctx.actorId);
@@ -226,7 +247,7 @@ const COALESCED_MESSAGE_SQL = (n: string, r: string, p: string) =>
  */
 export async function dispatchCoalescedComment(
   ctx: NotifyContext,
-  candidates: string[],
+  candidates: readonly (string | null)[],
   comment: CommentNotification,
   mute?: PreferenceMute,
 ): Promise<void> {

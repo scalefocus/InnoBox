@@ -5917,20 +5917,6 @@ next start.
 
 ## §24 Public submissions (outside the organization)
 
-> **⚠ GAP-74 · new feature:** public submissions do not exist. Build: a migration
-> (`public_submissions`, `challenges.public_submission_id` and the nullable
-> `author_id` with its check constraint, `notification_outbox.recipient_email`, the
-> `public_submissions_enabled` and `public_privacy_notice` settings, grants — the app
-> role gets INSERT/SELECT/UPDATE/DELETE on `public_submissions`); the `/submit` and
-> `/submit/confirm` pages outside AppShell; the proof-of-work issue and verify
-> helpers; the four public API routes and their middleware allowlist; the per-IP and
-> per-address limits; the submitter e-mails; the `/admin/public-submissions`
-> review queue and its console card; the accept, decline, discard and erase actions;
-> the "External submission" author rendering everywhere an author is shown; the §14.3
-> settings card; event 14 (§12.1); the worker's retention job; the
-> `PUBLIC_INTAKE_KEY` wiring (§2.3); and the tests in §24.9. Ships as one minor
-> release.
-
 People outside the organization — customers, partners, suppliers — can send a
 challenge through a **public web form**, without an account and without signing in.
 Nothing they send reaches InnoBox's challenge list directly: it waits in a separate

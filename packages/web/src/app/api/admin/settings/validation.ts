@@ -1,5 +1,5 @@
 // Pure request-shape parsing for /api/admin/settings (INNOBOX_SPEC.md §14.3).
-import { isDateFormat } from "@innobox/shared";
+import { isDateFormat, validatePrivacyNotice } from "@innobox/shared";
 import type { AttachmentLimits } from "./store";
 import { parseFeaturedLimit } from "../../challenges/featured-rules";
 
@@ -18,6 +18,8 @@ export interface SettingsPatch {
   surveyEnabled?: boolean;
   /** §23.10 the gamification switch. */
   gamificationEnabled?: boolean;
+  /** §24.2 the public submissions card: the switch and/or the privacy notice. */
+  publicSubmissions?: { enabled?: boolean; privacyNotice?: string };
 }
 
 const MAX_ATTACHMENTS_PER_ITEM = 50;
@@ -82,14 +84,33 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.gamificationEnabled = rec.gamificationEnabled;
   }
 
+  if (rec.publicSubmissions !== undefined) {
+    const ps = rec.publicSubmissions;
+    if (typeof ps !== "object" || ps === null || Array.isArray(ps)) return fail("publicSubmissions must be an object");
+    const p = ps as Record<string, unknown>;
+    const out: { enabled?: boolean; privacyNotice?: string } = {};
+    if (p.enabled !== undefined) {
+      if (typeof p.enabled !== "boolean") return fail("publicSubmissions.enabled must be a boolean");
+      out.enabled = p.enabled;
+    }
+    if (p.privacyNotice !== undefined) {
+      const notice = validatePrivacyNotice(p.privacyNotice);
+      if (!notice.ok) return fail(notice.error);
+      out.privacyNotice = notice.value;
+    }
+    if (out.enabled === undefined && out.privacyNotice === undefined) return fail("publicSubmissions must include enabled and/or privacyNotice");
+    value.publicSubmissions = out;
+  }
+
   if (
     value.dateFormat === undefined &&
     value.attachmentLimits === undefined &&
     value.featuredLimit === undefined &&
     value.surveyEnabled === undefined &&
-    value.gamificationEnabled === undefined
+    value.gamificationEnabled === undefined &&
+    value.publicSubmissions === undefined
   ) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled");
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions");
   }
 
   return { ok: true, value };

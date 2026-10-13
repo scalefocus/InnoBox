@@ -71,7 +71,7 @@ export async function getLeaderboard(
       sql = `
         select c.author_id as user_id, count(*)::int as cnt, min(c.created_at) as first_at
           from challenges c
-         where c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+         where c.is_anonymous = false and c.author_id is not null and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
            and ($1::timestamptz is null or c.created_at >= $1)
          group by c.author_id`;
       break;
@@ -112,7 +112,7 @@ export async function getLeaderboard(
               from likes l
               join challenges c on c.id = l.parent_id
              where l.parent_type = 'challenge'
-               and c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+               and c.is_anonymous = false and c.author_id is not null and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
                and ($1::timestamptz is null or l.created_at >= $1)
             union all
             select s.author_id, l.created_at as liked_at

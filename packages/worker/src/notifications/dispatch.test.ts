@@ -7,7 +7,7 @@
 // email/email_notifications_enabled directly (a "missing user" row just has both null).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emailRetryDelayMinutes, emailRetryDelaySeconds, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
+import { composeOutboxEmail, emailRetryDelayMinutes, emailRetryDelaySeconds, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
 
 interface FakeRow {
   [key: string]: unknown;
@@ -107,6 +107,25 @@ test("runNotificationSweep: a missing user row (deleted between write and sweep)
   assert.deepEqual(summary, { sent: 0, skippedOptOut: 1, failed: 0 });
 });
 
+test("runNotificationSweep: a submitter row is not subject to any user preference", async () => {
+  const { pool, updates } = makeFakePool([
+    {
+      id: "o1",
+      user_id: null,
+      recipient_email: "ann@example.org",
+      type: "public_submission_accepted",
+      payload: { subject: "Your submission is under review", message: "Thanks.", link: "" },
+      attempts: 0,
+      email: null,
+      email_notifications_enabled: null,
+    },
+  ]);
+  // No transport here, so delivery fails — the point is that it was attempted, not skipped.
+  const summary = await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
+  assert.deepEqual(summary, { sent: 0, skippedOptOut: 0, failed: 1 });
+  assert.match(updates[0]!.sql, /status = 'failed'/);
+});
+
 test("emailRetryDelayMinutes: exponential 1, 2, 4, 8 … minutes, capped at 60", () => {
   assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 7, 20].map(emailRetryDelayMinutes), [1, 2, 4, 8, 16, 32, 60, 60, 60]);
   assert.equal(emailRetryDelayMinutes(-1), 1, "a nonsensical count never yields a sub-minute delay");
@@ -145,4 +164,19 @@ test("runNotificationSweep: only due failed rows below the attempt cap are selec
   assert.equal(selects.length, 1);
   assert.match(selects[0]!.sql, /o\.next_attempt_at is null or o\.next_attempt_at <= now\(\)/);
   assert.equal(selects[0]!.params[1], MAX_EMAIL_ATTEMPTS);
+});
+
+// §24.7: an outside submitter's row carries its own fixed subject and links nowhere but, for the
+// confirmation only, the public confirm page; a user's row keeps the "innobox: <message>" form.
+test("composeOutboxEmail: submitter rows use their own subject and link only when they carry one", () => {
+  const base = "https://innobox.example.com";
+  const confirm = composeOutboxEmail(
+    { recipient_email: "ann@example.org", payload: { subject: "Confirm your submission", message: "Please confirm:", link: "/submit/confirm#tok" } },
+    base,
+  );
+  assert.deepEqual(confirm, { subject: "Confirm your submission", body: "Please confirm:\n\nhttps://innobox.example.com/submit/confirm#tok" });
+  const accepted = composeOutboxEmail({ recipient_email: "ann@example.org", payload: { subject: "Your submission is under review", message: "Thanks.", link: "" } }, base);
+  assert.deepEqual(accepted, { subject: "Your submission is under review", body: "Thanks." });
+  const user = composeOutboxEmail({ recipient_email: null, payload: { message: "CH-1 moved.", link: "/challenges/1" } }, base);
+  assert.deepEqual(user, { subject: "innobox: CH-1 moved.", body: "CH-1 moved.\n\nhttps://innobox.example.com/challenges/1" });
 });

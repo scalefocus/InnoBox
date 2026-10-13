@@ -27,13 +27,6 @@ export interface UpcomingViewer {
 
 export const UPCOMING: UpcomingEntry[] = [
   {
-    ids: ["GAP-74"],
-    title: "Challenges from outside",
-    teaser:
-      "Customers and partners will be able to send a challenge through a public form, without an account. Each one is reviewed before it joins the list.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-77"],
     title: "Trash and restore",
     teaser: "Deleted challenges and solutions will wait in a trash for 30 days, so a mistaken delete can be undone.",

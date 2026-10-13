@@ -248,6 +248,13 @@ pipeline {
               # A throwaway AI key so the AI provider e2e drives the full configure → test → save →
               # enable flow against its local provider stub (never a real provider).
               export AI_TOKEN_ENC_KEY="$(openssl rand -base64 32)"
+              # The public submission e2e switches the form on, which needs an intake key and an
+              # e-mail transport. The SMTP fallback below is configured but never reached — no
+              # worker runs here, so nothing is sent; the test reads the confirmation token through
+              # the dev seam instead.
+              export PUBLIC_INTAKE_KEY="$(openssl rand -base64 32)"
+              export SMTP_HOST="127.0.0.1"
+              export SMTP_FROM="innobox-e2e@example.invalid"
 
               # Start the dev server on the agent and health-check it before Playwright runs (the
               # config reuses the already-listening server). Kill it on the way out.

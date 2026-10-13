@@ -38,6 +38,7 @@ const PLATFORM_STATE_SPECS = [
   "ai-triage.spec.ts",
   "featured.spec.ts",
   "gamification.spec.ts",
+  "public-submissions.spec.ts",
   "survey.spec.ts",
 ];
 

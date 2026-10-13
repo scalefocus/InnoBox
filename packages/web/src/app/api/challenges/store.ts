@@ -16,12 +16,13 @@ import {
   canAuthorWithdrawSolution,
   canSeeChallenge,
   canSeeSolution,
-  challengeEnforcedTargets,
+  challengeTargetsFor,
   decideTransition,
   formatChallengeNumber,
   formatSolutionNumber,
   isChallengeEnforcedTransition,
   isChallengeStatus,
+  isStatusRefusedForExternal,
   isSolutionEnforcedTransition,
   isSolutionStatus,
   maskAuthor,
@@ -55,6 +56,7 @@ import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
 import { featuredDetailFields, type FeaturedDetailFields } from "./featured-rules";
 import { unpinOnStatusChange } from "./featured-unpin";
+import { onExternalChallengeClosed } from "./external";
 
 export interface Viewer {
   userId: string;
@@ -147,9 +149,24 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   canResubmit: boolean;
   /** §10.3 permanent delete — platform admins only, on any status. */
   canDelete: boolean;
+  /** §24.6: set on a challenge accepted from the public form (for every viewer); null otherwise. */
+  external: { company: string | null } | null;
+  /** §24.6: the outside submitter's contact details — the item's namespace admins and platform
+   *  admins only; null for everyone else and on every other challenge. */
+  externalContact: ExternalContact | null;
   solutions: SolutionListItem[];
   /** §11 attachments on the challenge itself, visible to this viewer (anonymity-safe). */
   attachments: AttachmentView[];
+}
+
+/** §24.6 "Submitted from outside": name and e-mail are null once erased (§24.8). */
+export interface ExternalContact {
+  /** For the platform admin's "Erase contact details" action (§24.8). */
+  submissionId: string;
+  name: string | null;
+  email: string | null;
+  confirmedAt: string | null;
+  erasedAt: string | null;
 }
 
 export interface ChallengeRow {
@@ -165,11 +182,19 @@ export interface ChallengeRow {
   impact_area_id: string;
   impact_area_name: string;
   client_name: string | null;
-  author_id: string;
-  author_display_name: string;
-  author_active: boolean;
-  author_scrubbed: boolean;
+  /** Null for a challenge accepted from the public form (§24.6); the author columns are then null. */
+  author_id: string | null;
+  author_display_name: string | null;
+  author_active: boolean | null;
+  author_scrubbed: boolean | null;
   is_anonymous: boolean;
+  /** §24.6: the submission behind an external challenge — company always, contact for admins only. */
+  public_submission_id: string | null;
+  external_company: string | null;
+  external_name: string | null;
+  external_email: string | null;
+  external_confirmed_at: Date | null;
+  external_erased_at: Date | null;
   assignee_id: string | null;
   assignee_display_name: string | null;
   assignee_active: boolean | null;
@@ -213,6 +238,8 @@ export const CHALLENGE_SELECT = `
          c.namespace_id, ns.slug as namespace_slug, ns.archived_at is not null as namespace_archived,
          c.impact_area_id, ia.name as impact_area_name,
          c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.is_anonymous,
+         c.public_submission_id, ps.company as external_company, ps.submitter_name as external_name, ps.submitter_email as external_email,
+         ps.confirmed_at as external_confirmed_at, ps.contact_erased_at as external_erased_at,
          c.assignee_id, au.display_name as assignee_display_name, au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
          c.created_at, c.updated_at, c.edited_at, c.resolved_at,
          (select count(*) from likes l where l.parent_type = 'challenge' and l.parent_id = c.id) as like_count,
@@ -223,7 +250,8 @@ export const CHALLENGE_SELECT = `
          (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new,
          c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name
     from challenges c
-    join users u on u.id = c.author_id
+    left join users u on u.id = c.author_id
+    left join public_submissions ps on ps.id = c.public_submission_id
     left join users au on au.id = c.assignee_id
     join namespaces ns on ns.id = c.namespace_id
     join impact_areas ia on ia.id = c.impact_area_id
@@ -240,6 +268,7 @@ export function toListItem(row: ChallengeRow): ChallengeListItem {
       authorDisplayName: row.author_display_name,
       authorActive: row.author_active,
       authorScrubbed: row.author_scrubbed,
+      externalCompany: row.external_company,
     }),
     namespaceSlug: row.namespace_slug,
     impactAreaName: row.impact_area_name,
@@ -264,7 +293,7 @@ function isEnforcer(viewer: Viewer, namespaceId: string, assigneeId: string | nu
  *  one that does not exist. Takes the raw challenge columns the write paths already select. */
 function isChallengeRowVisible(
   viewer: Viewer,
-  row: { namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string },
+  row: { namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string | null },
 ): boolean {
   return canSeeChallenge(viewer, {
     namespaceId: row.namespace_id,
@@ -281,7 +310,7 @@ interface SolutionVisibilityColumns {
   namespace_id: string;
   visibility: "org" | "namespace";
   challenge_status: string;
-  challenge_author_id: string;
+  challenge_author_id: string | null;
   assignee_id: string | null;
 }
 
@@ -305,10 +334,23 @@ function isSolutionRowVisible(viewer: Viewer, row: SolutionVisibilityColumns): b
   );
 }
 
+/** §24.6: the contact panel's data — for the item's namespace admins and platform admins only. */
+function externalContactFor(row: ChallengeRow, isAdmin: boolean): ExternalContact | null {
+  if (!isAdmin || row.public_submission_id === null) return null;
+  return {
+    submissionId: row.public_submission_id,
+    name: row.external_name,
+    email: row.external_email,
+    confirmedAt: row.external_confirmed_at ? row.external_confirmed_at.toISOString() : null,
+    erasedAt: row.external_erased_at ? row.external_erased_at.toISOString() : null,
+  };
+}
+
 function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem[], attachments: AttachmentView[] = []): ChallengeDetail {
   const isAdmin = viewer.roles.isNamespaceAdmin(row.namespace_id);
-  const isMine = viewer.userId === row.author_id;
+  const isMine = row.author_id !== null && viewer.userId === row.author_id;
   const status = row.status as ChallengeStatus;
+  const external = row.public_submission_id !== null;
   return {
     ...toListItem(row),
     description: row.description,
@@ -333,12 +375,14 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     canOverrideStatus: isAdmin,
     allowedTransitions:
       !isAdmin && isEnforcer(viewer, row.namespace_id, row.assignee_id)
-        ? challengeEnforcedTargets(status)
+        ? challengeTargetsFor(status, external)
         : [],
     canEdit: isMine && canAuthorEditChallenge(status),
     canWithdraw: isMine && canAuthorWithdrawChallenge(status),
     canResubmit: isMine && canAuthorResubmit(status),
     canDelete: viewer.roles.isPlatformAdmin,
+    external: external ? { company: row.external_company } : null,
+    externalContact: externalContactFor(row, isAdmin),
     solutions,
     attachments,
     ...featuredDetailFields({
@@ -558,21 +602,24 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
     title: string;
     status: string;
     is_anonymous: boolean;
-    author_id: string;
-    author_display_name: string;
-    author_active: boolean;
-    author_scrubbed: boolean;
+    author_id: string | null;
+    author_display_name: string | null;
+    author_active: boolean | null;
+    author_scrubbed: boolean | null;
+    external_company: string | null;
     visibility: "org" | "namespace";
     excerpt: string;
     shared: number;
   }>(
     `select * from (
        select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
-              u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.visibility, left(c.description, 500) as excerpt,
+              u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
+              c.visibility, left(c.description, 500) as excerpt,
               ts_rank(c.search_vector, ${tsquery}) as rank,
               (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
          from challenges c
-         join users u on u.id = c.author_id
+         left join users u on u.id = c.author_id
+         left join public_submissions ps on ps.id = c.public_submission_id
         where ${conditions.join(" and ")}
         order by rank desc, c.created_at desc
         limit 50
@@ -592,6 +639,7 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
       authorDisplayName: r.author_display_name,
       authorActive: r.author_active,
       authorScrubbed: r.author_scrubbed,
+      externalCompany: r.external_company,
     }),
     visibility: r.visibility,
     excerpt: r.excerpt,
@@ -817,7 +865,7 @@ export async function createSolution(
     namespace_id: string;
     visibility: "org" | "namespace";
     status: string;
-    author_id: string;
+    author_id: string | null;
     assignee_id: string | null;
     namespace_archived: boolean;
   }>(
@@ -882,7 +930,8 @@ export type SetChallengeStatusResult =
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "illegal_transition" }
-  | { status: "invalid_status" };
+  | { status: "invalid_status" }
+  | { status: "external_no_author" };
 
 /** The actual mutation + audit, shared by the full (`setChallengeStatus`) and lean
  *  (`setChallengeStatusLean`, used by bulk actions) variants — a no-op when the status is
@@ -907,6 +956,8 @@ async function applyChallengeStatusChange(
   ]);
   // §12.4: stamp first_valid_at on the first `valid`, enqueue channel-webhook milestones.
   await onChallengeStatusChanged(client, current.id, newStatus);
+  // §24.7/§24.8: an external challenge's first close queues the outcome mail and the erasure date.
+  await onExternalChallengeClosed(client, current.id, newStatus);
   await appendAudit(client, {
     actorUserId: actor.userId,
     action: "challenge.status_changed",
@@ -927,7 +978,7 @@ async function loadChallengeForStatusChange(
   newStatus: string,
 ): Promise<
   | { status: "ok"; current: { id: string; namespace_id: string; status: string }; mode: TransitionMode }
-  | { status: "not_found" | "forbidden" | "illegal_transition" | "invalid_status" }
+  | { status: "not_found" | "forbidden" | "illegal_transition" | "invalid_status" | "external_no_author" }
 > {
   if (!isChallengeStatus(newStatus)) return { status: "invalid_status" };
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -936,12 +987,19 @@ async function loadChallengeForStatusChange(
     namespace_id: string;
     visibility: "org" | "namespace";
     status: string;
-    author_id: string;
+    author_id: string | null;
     assignee_id: string | null;
-  }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
+    public_submission_id: string | null;
+  }>(`select id, namespace_id, visibility, status, author_id, assignee_id, public_submission_id from challenges where number = $1`, [number]);
   const current = rows[0];
   // §2.4: a challenge the actor cannot see is "not found", never "forbidden".
   if (!current || !isChallengeRowVisible(actor, current)) return { status: "not_found" };
+  // §24.6: an outside submission has no author who could improve it — refused for every role.
+  // Checked after the role gate, so it tells nobody without review rights anything.
+  const permitted = actor.roles.isNamespaceAdmin(current.namespace_id) || isEnforcer(actor, current.namespace_id, current.assignee_id);
+  if (permitted && current.public_submission_id !== null && current.status !== newStatus && isStatusRefusedForExternal(newStatus)) {
+    return { status: "external_no_author" };
+  }
   const decision = decideTransition({
     from: current.status,
     to: newStatus,
@@ -994,7 +1052,8 @@ export type SetChallengeStatusLeanResult =
   | { status: "not_found" }
   | { status: "forbidden" }
   | { status: "illegal_transition" }
-  | { status: "invalid_status" };
+  | { status: "invalid_status" }
+  | { status: "external_no_author" };
 
 /** Same auth/audit semantics as `setChallengeStatus`, without the full challenge+solutions
  *  re-fetch — for bulk admin actions (§14.1) that only need the outcome, not the detail
@@ -1103,6 +1162,7 @@ export async function setSolutionStatus(
             `update challenges set status = 'solved', resolved_at = coalesce(resolved_at, now()), updated_at = now(), status_changed_at = now() where id = $1`,
             [current.challenge_id],
           );
+          await onExternalChallengeClosed(client, current.challenge_id, "solved"); // §24.7
           // Invariant 6: audited `from → to` like every transition. The cascade is part of the
           // actor's one action, so it carries that action's mode: an admin override that set
           // `implemented` makes the cascade rows overrides too; an enforced move does not.
@@ -1243,7 +1303,7 @@ export async function toggleLike(
  *  the same "can this viewer see the challenge/solution at all" gate (§4.3). */
 export async function isParentVisible(pool: Pool, viewer: Viewer, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
   if (parentType === "challenge") {
-    const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
+    const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string | null }>(
       `select namespace_id, visibility, status, author_id from challenges where id = $1`,
       [parentId],
     );
@@ -1262,7 +1322,7 @@ export async function isParentVisible(pool: Pool, viewer: Viewer, parentType: "c
     namespace_id: string;
     visibility: "org" | "namespace";
     challenge_status: string;
-    challenge_author_id: string;
+    challenge_author_id: string | null;
     assignee_id: string | null;
   }>(
     `select s.status, s.author_id, c.namespace_id, c.visibility,
@@ -1329,7 +1389,7 @@ export type ResolveAssigneeRoles = (userId: string) => Promise<RoleSet>;
  *  admin roles there, so only those who may assign (the assign endpoint's own gate) get it. */
 export async function getAssignmentAudience(pool: Pool, viewer: Viewer, number: string): Promise<ChallengeVisibilityInput | null> {
   if (!isEntityNumber(number)) return null;
-  const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
+  const { rows } = await pool.query<{ namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string | null }>(
     `select namespace_id, visibility, status, author_id from challenges where number = $1`,
     [number],
   );
@@ -1376,7 +1436,7 @@ async function loadChallengeForAssignment(
     namespace_id: string;
     visibility: "org" | "namespace";
     status: string;
-    author_id: string;
+    author_id: string | null;
     assignee_id: string | null;
   }>(`select id, namespace_id, visibility, status, author_id, assignee_id from challenges where number = $1`, [number]);
   const current = rows[0];
@@ -1468,7 +1528,7 @@ export type SetVisibilityResult =
 export async function setChallengeVisibility(pool: Pool, admin: Viewer, number: string, visibility: string): Promise<SetVisibilityResult> {
   if (visibility !== "org" && visibility !== "namespace") return { status: "invalid" };
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string }>(
+  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; author_id: string | null }>(
     `select id, namespace_id, visibility, status, author_id from challenges where number = $1`,
     [number],
   );
@@ -1537,7 +1597,7 @@ export async function editChallenge(
     id: string;
     namespace_id: string;
     status: string;
-    author_id: string;
+    author_id: string | null;
     impact_area_id: string;
     title: string;
     description: string;
@@ -1646,7 +1706,7 @@ export type WithdrawChallengeResult =
 /** Author withdraws their own challenge from any non-terminal status → withdrawn (§10.1). */
 export async function withdrawChallenge(pool: Pool, author: Viewer, number: string): Promise<WithdrawChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
+  const { rows } = await pool.query<{ id: string; status: string; author_id: string | null; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
     `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
     [number],
   );
@@ -1720,7 +1780,7 @@ export type ResubmitChallengeResult =
  *  reviewers (route). Audited as an enforced status change (`override:false`). */
 export async function resubmitChallenge(pool: Pool, author: Viewer, number: string): Promise<ResubmitChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; status: string; author_id: string; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
+  const { rows } = await pool.query<{ id: string; status: string; author_id: string | null; namespace_id: string; visibility: "org" | "namespace"; title: string; assignee_id: string | null }>(
     `select id, status, author_id, namespace_id, visibility, title, assignee_id from challenges where number = $1`,
     [number],
   );
@@ -1816,7 +1876,7 @@ function toRevealResult(user: RevealUserRow | undefined, authorId: string): Reve
  *  assignees cannot reveal. */
 export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string }>(
+  const { rows } = await pool.query<{ id: string; namespace_id: string; visibility: "org" | "namespace"; status: string; is_anonymous: boolean; author_id: string | null }>(
     `select id, namespace_id, visibility, status, is_anonymous, author_id from challenges where number = $1`,
     [number],
   );
@@ -1824,7 +1884,8 @@ export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: s
   // §2.4: visibility first — a non-admin probing a hidden challenge gets 404, never 403.
   if (!row || !isChallengeRowVisible(admin, row)) return { status: "not_found" };
   if (!admin.roles.isNamespaceAdmin(row.namespace_id)) return { status: "forbidden" };
-  if (!row.is_anonymous) return { status: "not_anonymous" };
+  // An external challenge (§24.6) is never anonymous, so it has no author to reveal.
+  if (!row.is_anonymous || row.author_id === null) return { status: "not_anonymous" };
 
   const { rows: userRows } = await pool.query<RevealUserRow>(REVEAL_USER_SELECT, [row.author_id]);
   await appendAudit(pool, {

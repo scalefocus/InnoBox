@@ -1710,3 +1710,25 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) {
   .avatar-ring-arc { transition: none; }
 }
+
+/* ── §24.3 the public submission form (/submit, /submit/confirm) ─────────────────────────────
+   A standalone page outside the app shell: the logo on top, one centered card, a quiet foot.
+   Follows the light/dark theme tokens like everything else; works at phone width. */
+.public-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 34px 16px 40px; }
+.public-head { width: 100%; max-width: 680px; display: flex; align-items: center; margin-bottom: 22px; }
+.public-head .brand-logo { height: 32px; }
+.public-card { width: 100%; max-width: 680px; }
+.public-card .page-title { font-size: clamp(26px, 5vw, 34px); }
+.public-form { display: flex; flex-direction: column; gap: 16px; margin-top: 22px; }
+.public-label { display: flex; justify-content: space-between; gap: 12px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+.public-label .count { letter-spacing: 0; text-transform: none; }
+.public-notice { border: 1px solid var(--line); background: var(--surface-2); border-radius: var(--radius); padding: 14px 16px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
+.public-check { display: flex; align-items: flex-start; gap: 9px; font-size: 14px; }
+.public-check input { margin-top: 3px; }
+/* The honeypot: off-screen and out of the accessibility tree, never display:none (bots skip those). */
+.public-hp { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+.public-status { font-size: 13.5px; color: var(--muted); }
+.public-error { border: 1px solid color-mix(in oklab, var(--danger) 40%, var(--line)); background: var(--danger-soft); border-radius: var(--radius); padding: 12px 14px; font-size: 14px; }
+.public-done { text-align: center; padding: 18px 6px 6px; }
+.public-foot { margin-top: 22px; font-size: 13.5px; color: var(--muted); }
+.public-foot a { color: var(--muted); }

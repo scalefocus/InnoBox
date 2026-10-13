@@ -5,7 +5,17 @@
 // is operational telemetry, not the audit log.)
 import { resolveRateLimitMultiplier } from "@innobox/shared";
 
-export type RateLimitBucket = "create" | "comment" | "upload" | "search" | "mutation" | "survey" | "csp-report";
+export type RateLimitBucket =
+  | "create"
+  | "comment"
+  | "upload"
+  | "search"
+  | "mutation"
+  | "survey"
+  | "csp-report"
+  | "public-read"
+  | "public-submit"
+  | "public-confirm";
 
 /** §2.4 limits: `limit` requests per `windowMs`, refilled continuously. */
 export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: number }> = {
@@ -18,6 +28,11 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
   // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
   "csp-report": { limit: 120, windowMs: 60 * 1000 },
+  // §24.4 the public submission routes — per client IP too, and taken via takeToken() directly:
+  // their 429s are counted by innobox_public_submissions_total, not logged or system-logged.
+  "public-read": { limit: 30, windowMs: 60 * 1000 }, // GET /api/public/pow and /api/public/settings
+  "public-submit": { limit: 5, windowMs: 60 * 60 * 1000 }, // POST /api/public/submissions
+  "public-confirm": { limit: 20, windowMs: 60 * 60 * 1000 }, // POST /api/public/confirm
 };
 
 /** RATE_LIMIT_MULTIPLIER scales every limit for local dev and e2e; a production build ignores it

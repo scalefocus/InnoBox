@@ -1,6 +1,6 @@
 // GET/PATCH /api/admin/settings (INNOBOX_SPEC.md §14.3): attachment limits, impact areas,
-// the platform date-display format, and the feedback-survey switch (§14.11, `surveyEnabled`).
-// Platform-admin only; every change audited.
+// the platform date-display format, the feedback-survey switch (§14.11, `surveyEnabled`), and the
+// public submissions card (§24.2, `publicSubmissions`). Platform-admin only; every change audited.
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import {
@@ -11,7 +11,11 @@ import {
   setAttachmentLimits,
   setDateFormat,
   setGamificationEnabled,
+  setPublicSubmissionSettings,
 } from "./store";
+import { publicSubmissionsCard } from "./public-submissions";
+import { emailTransportAvailable } from "@/lib/public-intake-live";
+import { PRECONDITION_HINT, publicIntakeKey } from "@/lib/public-intake";
 import { parseSettingsPatch } from "./validation";
 import { getFeaturedLimit, setFeaturedLimit } from "../../challenges/featured";
 import { getSurveyEnabled, setSurveyEnabled } from "../../me/survey/store";
@@ -25,15 +29,16 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled] = await Promise.all([
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     listAllImpactAreas(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
     getGamificationEnabled(pool),
+    publicSubmissionsCard(),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled });
+  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions });
 }
 
 async function handlePATCH(req: Request): Promise<Response> {
@@ -53,15 +58,25 @@ async function handlePATCH(req: Request): Promise<Response> {
   if (parsed.value.featuredLimit !== undefined) await setFeaturedLimit(pool, parsed.value.featuredLimit, gate.user.id);
   if (parsed.value.surveyEnabled !== undefined) await setSurveyEnabled(pool, parsed.value.surveyEnabled, gate.user.id);
   if (parsed.value.gamificationEnabled !== undefined) await setGamificationEnabled(pool, parsed.value.gamificationEnabled, gate.user.id);
+  if (parsed.value.publicSubmissions) {
+    const result = await setPublicSubmissionSettings(pool, parsed.value.publicSubmissions, gate.user.id, {
+      keyValid: publicIntakeKey() !== null,
+      transportAvailable: await emailTransportAvailable(),
+    });
+    if (result.status === "precondition") {
+      return Response.json({ error: PRECONDITION_HINT[result.missing], code: `public_submissions_${result.missing}` }, { status: 409 });
+    }
+  }
 
-  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled] = await Promise.all([
+  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
     getGamificationEnabled(pool),
+    publicSubmissionsCard(),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled });
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

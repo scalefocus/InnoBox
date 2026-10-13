@@ -7,6 +7,15 @@ import type { Pool } from "pg";
 import { GAMIFICATION_ENABLED_AT_KEY, GAMIFICATION_ENABLED_KEY, getGamificationSettings, isDateFormat, type DateFormat } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
+import {
+  PUBLIC_PRIVACY_NOTICE_KEY,
+  PUBLIC_SUBMISSIONS_ENABLED_KEY,
+  getPublicIntakeSettings,
+  missingPrecondition,
+  type MissingPrecondition,
+  type PublicIntakePreconditions,
+  type PublicIntakeSettings,
+} from "../../../../lib/public-intake";
 
 // ── Date format ──────────────────────────────────────────────────────────────────────────
 
@@ -67,6 +76,49 @@ export async function setGamificationEnabled(pool: Pool, enabled: boolean, actor
       targetId: GAMIFICATION_ENABLED_KEY,
       after: { enabled },
     });
+  });
+}
+
+// ── Public submissions (§24.2) ───────────────────────────────────────────────────────────
+
+export type SetPublicSubmissionsResult = { status: "ok"; settings: PublicIntakeSettings } | { status: "precondition"; missing: MissingPrecondition };
+
+/** The switch and/or the privacy notice. Turning the switch ON needs every precondition — the key,
+ *  a non-empty notice (this patch's, when it sets one) and an e-mail transport; turning it off and
+ *  editing the notice never do. Audited as `settings.public_submissions_changed` with the
+ *  resulting `{ enabled, noticeLength }` — never the notice text. `preconditions` is resolved by
+ *  the caller (the key and the e-mail channel are process/env state). */
+export async function setPublicSubmissionSettings(
+  pool: Pool,
+  patch: { enabled?: boolean; privacyNotice?: string },
+  actorUserId: string,
+  preconditions: Omit<PublicIntakePreconditions, "noticeSet">,
+): Promise<SetPublicSubmissionsResult> {
+  return inTransaction(pool, async (client): Promise<SetPublicSubmissionsResult> => {
+    await client.query(`select pg_advisory_xact_lock(hashtext('innobox.public_intake_settings'))`);
+    const before = await getPublicIntakeSettings(client);
+    const next: PublicIntakeSettings = {
+      enabled: patch.enabled ?? before.enabled,
+      privacyNotice: patch.privacyNotice ?? before.privacyNotice,
+    };
+    if (next.enabled && !before.enabled) {
+      const missing = missingPrecondition({ ...preconditions, noticeSet: next.privacyNotice.trim() !== "" });
+      if (missing) return { status: "precondition", missing };
+    }
+    if (next.enabled === before.enabled && next.privacyNotice === before.privacyNotice) return { status: "ok", settings: before };
+    const upsert = `insert into platform_settings (key, value, updated_by, updated_at)
+                    values ($1, $2::jsonb, $3, now())
+                    on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`;
+    await client.query(upsert, [PUBLIC_SUBMISSIONS_ENABLED_KEY, JSON.stringify(next.enabled), actorUserId]);
+    await client.query(upsert, [PUBLIC_PRIVACY_NOTICE_KEY, JSON.stringify(next.privacyNotice), actorUserId]);
+    await appendAudit(client, {
+      actorUserId,
+      action: "settings.public_submissions_changed",
+      targetType: "platform_settings",
+      targetId: PUBLIC_SUBMISSIONS_ENABLED_KEY,
+      after: { enabled: next.enabled, noticeLength: next.privacyNotice.length },
+    });
+    return { status: "ok", settings: next };
   });
 }
 

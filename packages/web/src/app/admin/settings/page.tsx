@@ -10,6 +10,7 @@ import { cachedGet, invalidateApi } from "@/lib/ui";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
 import { GamificationSettingsCard } from "@/components/GamificationSettingsCard";
+import { PublicSubmissionsSettingsCard, type PublicSubmissionsSettings } from "@/components/PublicSubmissionsSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
 
 interface MeResponse {
@@ -38,7 +39,7 @@ export default function AdminSettingsPage() {
       <div className="page-head reveal">
         {gate === "ok" && <Breadcrumb items={adminCrumbs("Platform settings")} />}
         <h1 className="page-title">Platform settings</h1>
-        <p className="page-sub">Impact areas, attachment limits, date format, the notification sender and the AI provider. Every change is audited.</p>
+        <p className="page-sub">Impact areas, attachment limits, date format, public submissions, the notification sender and the AI provider. Every change is audited.</p>
       </div>
 
       {gate === "loading" && <p className="muted">Loading…</p>}
@@ -72,6 +73,7 @@ interface SettingsData {
   impactAreas: ImpactArea[];
   featuredLimit: number;
   gamificationEnabled: boolean;
+  publicSubmissions: PublicSubmissionsSettings;
 }
 
 interface EmailStatus {
@@ -135,6 +137,12 @@ function SettingsConsole() {
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />
       <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />
       <GamificationSettingsCard key={String(data.gamificationEnabled)} enabled={data.gamificationEnabled} onChanged={refresh} onError={notify} />
+      <PublicSubmissionsSettingsCard
+        key={JSON.stringify(data.publicSubmissions)}
+        settings={data.publicSubmissions}
+        onChanged={refresh}
+        onError={notify}
+      />
       <EmailSenderCard status={email} onChanged={refreshEmail} onError={notify} />
       <AiProviderCard onNotice={notify} />
       {toast && <div className="toast">{toast}</div>}

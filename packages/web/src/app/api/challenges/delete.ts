@@ -21,6 +21,7 @@ import { inTransaction } from "../../../lib/db";
 import type { StorageClient } from "../../../lib/storage";
 import type { Viewer } from "./store";
 import { unpinOnDelete, unpinOnStatusChange } from "./featured-unpin";
+import { withdrawSubmitterEmails } from "../../../lib/public-intake-mail";
 
 export interface DeleteDeps {
   pool: Pool;
@@ -169,8 +170,8 @@ async function runPurge(storage: StorageClient, purge: Purge): Promise<void> {
 export async function deleteChallenge(deps: DeleteDeps, admin: Viewer, number: string, reason: string): Promise<DeleteChallengeResult> {
   if (!admin.roles.isPlatformAdmin) return { status: "not_found" };
 
-  const { rows } = await deps.pool.query<{ id: string; number: string; status: string; author_id: string; namespace_id: string }>(
-    `select id, number::text, status, author_id, namespace_id from challenges where number = $1`,
+  const { rows } = await deps.pool.query<{ id: string; number: string; status: string; author_id: string | null; namespace_id: string; public_submission_id: string | null }>(
+    `select id, number::text, status, author_id, namespace_id, public_submission_id from challenges where number = $1`,
     [number],
   );
   const challenge = rows[0];
@@ -191,6 +192,12 @@ export async function deleteChallenge(deps: DeleteDeps, admin: Viewer, number: s
     await unpinOnDelete(client, admin.userId, challenge.id);
     await client.query(`delete from solutions where challenge_id = $1`, [challenge.id]);
     await client.query(`delete from challenges where id = $1`, [challenge.id]);
+    // §24.8: a purged external challenge takes its submission row — and any mail still queued
+    // for the submitter — with it.
+    if (challenge.public_submission_id) {
+      await withdrawSubmitterEmails(client, challenge.public_submission_id);
+      await client.query(`delete from public_submissions where id = $1`, [challenge.public_submission_id]);
+    }
 
     const counts: CascadeCounts = { ...children.counts, solutions: solutionIds.length, ...notifications };
     await appendAudit(client, {

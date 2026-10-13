@@ -150,6 +150,9 @@ services:
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
       # §22.2 AI provider hosts allowed on private addresses (shared with the worker; unset → none).
       AI_ALLOWED_PRIVATE_HOSTS: ${AI_ALLOWED_PRIVATE_HOSTS:-}
+      # §24 public submissions: signs the public form's proof-of-work (web only; unset → the
+      # switch cannot be turned on and the form answers 404).
+      PUBLIC_INTAKE_KEY: ${PUBLIC_INTAKE_KEY:-}
     restart: always
     expose:
       - "3000"

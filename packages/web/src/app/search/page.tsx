@@ -15,7 +15,7 @@ import { reportFeatureUse } from "@/lib/survey-client";
 interface ChallengeResult {
   number: string;
   title: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
   status: string;
   namespaceSlug: string;
 }
@@ -23,7 +23,7 @@ interface ChallengeResult {
 interface SolutionResult {
   number: string;
   description: string;
-  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
+  author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
   status: string;
   challengeNumber: string;
   challengeTitle: string;
@@ -147,7 +147,7 @@ function SearchPageInner() {
                   <span className="chip mono">{c.number}</span>
                   <span className={statusPillClass(c.status)}>{CHALLENGE_STATUS_LABEL[c.status] ?? c.status}</span>
                   <span className="ttl grow">{c.title}</span>
-                  <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} deactivated={c.author.active === false} scrubbed={c.author.scrubbed === true} />
+                  <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} external={c.author.external === true} deactivated={c.author.active === false} scrubbed={c.author.scrubbed === true} />
                   <span className="sub">{c.author.anonymous ? "Anonymous" : c.author.displayName}</span>
                 </Link>
               ))}

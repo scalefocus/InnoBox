@@ -13,6 +13,8 @@ import { DateFormatProvider } from "@/components/DateFormat";
 import { AppShell } from "@/components/AppShell";
 import { NONCE_HEADER } from "@/lib/security-headers";
 import { enforceQuickStart } from "@/lib/quick-start-gate";
+import { PATHNAME_HEADER } from "@/lib/quick-start";
+import { isPublicFormPath } from "@/lib/public-intake-paths";
 import { publicBaseUrl } from "@innobox/shared/public-url";
 
 const DESCRIPTION =
@@ -57,7 +59,21 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   // §13.7: a signed-in user who has never completed /quick-start is redirected there before the
   // requested page renders (priority over a deep-link callbackUrl).
   await enforceQuickStart();
-  const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
+  // §24.3: the public submission form stands outside the app: no AppShell, no session provider,
+  // no date-format fetch — it makes no request that returns application data, and answers a
+  // signed-in employee exactly as anyone else. Its links back into the app are full page loads.
+  if (isPublicFormPath(requestHeaders.get(PATHNAME_HEADER) ?? "")) {
+    return (
+      <html lang="en" suppressHydrationWarning>
+        <body>
+          <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+          {children}
+        </body>
+      </html>
+    );
+  }
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
