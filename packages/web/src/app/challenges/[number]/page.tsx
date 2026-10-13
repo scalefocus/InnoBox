@@ -27,6 +27,17 @@ interface MaskedAuthor {
   anonymous: boolean;
   active?: boolean;
   scrubbed?: boolean;
+  /** §24.6: accepted from the public form — no author, the "External submission" label. */
+  external?: boolean;
+}
+
+/** §24.6 "Submitted from outside" — present for the item's namespace admins and platform admins. */
+interface ExternalContact {
+  submissionId: string;
+  name: string | null;
+  email: string | null;
+  confirmedAt: string | null;
+  erasedAt: string | null;
 }
 
 interface AttachmentItem {
@@ -105,6 +116,9 @@ interface ChallengeDetail {
   featuredBy?: string;
   featuredAt?: string;
   impactAreaId: string;
+  /** §24.6: set on a challenge accepted from the public form. */
+  external: { company: string | null } | null;
+  externalContact: ExternalContact | null;
   solutions: SolutionItem[];
   attachments: AttachmentItem[];
 }
@@ -595,7 +609,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             size="md"
             userId={challenge.author.userId}
             displayName={challenge.author.displayName}
-            anonymous={challenge.author.anonymous}
+            anonymous={challenge.author.anonymous} external={challenge.author.external === true}
             deactivated={challenge.author.active === false}
             scrubbed={challenge.author.scrubbed === true}
           />
@@ -636,6 +650,10 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           </button>
         </div>
         <p style={{ whiteSpace: "pre-wrap", fontSize: 14.5, lineHeight: 1.65 }}>{challenge.description}</p>
+
+        {challenge.externalContact && (
+          <ExternalContactPanel contact={challenge.externalContact} canErase={challenge.canDelete} onErased={onChanged} onError={notify} />
+        )}
 
         {(canReveal || canSelfReveal) && (
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -712,11 +730,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               disabled={busy}
               onChange={(e) => changeChallengeStatus(e.target.value)}
             >
-              {Object.keys(CHALLENGE_STATUS_LABEL).map((s) => (
-                <option key={s} value={s}>
-                  {CHALLENGE_STATUS_LABEL[s]}
-                </option>
-              ))}
+              {/* §24.6: an outside submission has no author to improve it — needs_improvement is left out. */}
+              {Object.keys(CHALLENGE_STATUS_LABEL)
+                .filter((s) => !(challenge.external && s === "needs_improvement"))
+                .map((s) => (
+                  <option key={s} value={s}>
+                    {CHALLENGE_STATUS_LABEL[s]}
+                  </option>
+                ))}
             </select>
 
             <div style={{ marginTop: 14 }}>
@@ -999,6 +1020,65 @@ function DangerZone({
           Cancel
         </button>
       </div>
+    </div>
+  );
+}
+
+// §24.6 "Submitted from outside": the outside submitter's name, e-mail and confirmation date — the
+// only place they appear, shown to the item's namespace admins and platform admins (the server
+// sends `externalContact` to nobody else). Platform admins may erase them at once (§24.8).
+function ExternalContactPanel({
+  contact,
+  canErase,
+  onErased,
+  onError,
+}: {
+  contact: ExternalContact;
+  canErase: boolean;
+  onErased: () => void;
+  onError: (message: string) => void;
+}) {
+  const fmt = useDateFmt();
+  const [busy, setBusy] = useState(false);
+  const erase = async () => {
+    if (!window.confirm("Erase the submitter's name and e-mail? They can't be recovered, and no further e-mail will be sent to them.")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/public-submissions/${contact.submissionId}/erase-contact`, { method: "POST" });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not erase the contact details");
+      onErased();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not erase the contact details");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="card card-pad" data-testid="external-contact" style={{ marginBottom: 14, background: "var(--surface-2)" }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>
+        Submitted from outside
+      </div>
+      {contact.erasedAt ? (
+        <p className="muted" style={{ margin: 0 }}>
+          Contact details erased on {fmt.date(contact.erasedAt)}.
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="ttl">{contact.name}</div>
+            <div className="sub mono" style={{ overflowWrap: "anywhere" }}>
+              {contact.email}
+              {contact.confirmedAt && ` · confirmed ${fmt.date(contact.confirmedAt)}`}
+            </div>
+          </div>
+          {canErase && (
+            <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={erase}>
+              Erase contact details
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

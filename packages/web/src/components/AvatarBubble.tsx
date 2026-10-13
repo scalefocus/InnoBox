@@ -6,7 +6,9 @@
 // Anonymity (§9, invariant 3): callers pass `userId={null}` for anonymous authors (that is what
 // maskAuthor returns), which renders the fixed generic bubble — no photo, no initials, no
 // per-user color, so nothing fingerprints the author. A real userId is the only thing that ever
-// triggers a photo request, so an anonymous author's photo can never be fetched.
+// triggers a photo request, so an anonymous author's photo can never be fetched. A challenge
+// accepted from the public form (§24.6, `external`) has no author at all: the same neutral bubble,
+// labelled with its "External submission" display name instead of "Anonymous".
 //
 // Directory hover card (§13.8): a bubble with a real userId is also the card's trigger — it becomes
 // focusable, loses its native `title` (a browser tooltip would race the card on the same element)
@@ -50,6 +52,7 @@ export function AvatarBubble({
   displayName,
   size = "sm",
   anonymous = false,
+  external = false,
   deactivated = false,
   scrubbed = false,
   title,
@@ -65,6 +68,9 @@ export function AvatarBubble({
   size?: AvatarSize;
   /** Force the generic anonymous bubble regardless of userId (§9). */
   anonymous?: boolean;
+  /** §24.6: an authorless challenge from the public form — the neutral bubble, labelled with the
+   *  display name ("External submission · <company>"). */
+  external?: boolean;
   /** Greyed initials bubble, no photo — a SCIM-deactivated user (§3.1). */
   deactivated?: boolean;
   /** The neutral "Deleted User" bubble — a GDPR-scrubbed user (§3 erasure). Every person payload
@@ -83,7 +89,7 @@ export function AvatarBubble({
 
   // Card-bearing only for a real, non-anonymous identity on a surface that hasn't opted out. The
   // gate is here (not inside the card) so an anonymous bubble carries no handlers and no tab stop.
-  const cardEligible = !noCard && !anonymous && userId !== null && displayName !== "Anonymous";
+  const cardEligible = !noCard && !anonymous && !external && userId !== null && displayName !== "Anonymous";
   const { triggerProps, card } = useDirectoryCard({
     userId,
     displayName,
@@ -96,10 +102,12 @@ export function AvatarBubble({
 
   const variant = avatarVariant({ userId, displayName, anonymous, deactivated, scrubbed });
 
-  // Generic anonymous bubble: no photo, no initials, no per-user color (§9/§13.6).
-  if (variant === "anon") {
+  // Generic anonymous bubble: no photo, no initials, no per-user color (§9/§13.6). An external
+  // submission (§24.6) shares it, under its own label.
+  if (variant === "anon" || external) {
+    const anonLabel = title ?? (external ? displayName : "Anonymous");
     return (
-      <span className={`avatar avatar-${size} avatar-anon`} title={title ?? "Anonymous"} aria-label={title ?? "Anonymous"} role="img">
+      <span className={`avatar avatar-${size} avatar-anon`} title={anonLabel} aria-label={anonLabel} role="img">
         <PersonGlyph />
       </span>
     );

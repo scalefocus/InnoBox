@@ -37,7 +37,7 @@ export async function notifyChallengeStatusChanged(
   newStatus: string,
 ): Promise<void> {
   const byId = "id" in challenge;
-  const { rows } = await ctx.pool.query<{ id: string; number: string; title: string; author_id: string; assignee_id: string | null }>(
+  const { rows } = await ctx.pool.query<{ id: string; number: string; title: string; author_id: string | null; assignee_id: string | null }>(
     `select id, number::text, title, author_id, assignee_id from challenges where ${byId ? "id = $1" : "number = $1"}`,
     [byId ? challenge.id : digitsOf(challenge.number)],
   );
@@ -90,7 +90,7 @@ export async function notifySolutionStatusChanged(
     author_id: string;
     challenge_number: string;
     challenge_title: string;
-    challenge_author_id: string;
+    challenge_author_id: string | null;
     assignee_id: string | null;
   }>(
     `select s.number::text, s.author_id, c.number::text as challenge_number, c.title as challenge_title,
@@ -129,7 +129,7 @@ export async function notifySolutionStatusChanged(
  * (the implemented one and every closed sibling). Non-mutable. Deduplicated and visibility-
  * filtered against the challenge by dispatchEvent.
  */
-async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorId: string }): Promise<void> {
+async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorId: string | null }): Promise<void> {
   const [challengeFollowers, ...solutionFollowers] = await Promise.all([
     getFollowerUserIds(ctx.pool, "challenge", info.challengeId),
     ...info.solutionIds.map((sid) => getFollowerUserIds(ctx.pool, "solution", sid)),
@@ -189,7 +189,7 @@ export async function notifySolutionProposed(
   solution: { id: string; number: string },
 ): Promise<void> {
   const number = digitsOf(challengeNumber);
-  const { rows } = await ctx.pool.query<{ id: string; title: string; namespace_id: string; author_id: string }>(
+  const { rows } = await ctx.pool.query<{ id: string; title: string; namespace_id: string; author_id: string | null }>(
     `select id, title, namespace_id, author_id from challenges where number = $1`,
     [number],
   );

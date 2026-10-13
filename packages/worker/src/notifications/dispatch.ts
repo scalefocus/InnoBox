@@ -28,12 +28,28 @@ export interface DispatchSummary {
 
 interface OutboxRow {
   id: string;
-  user_id: string;
+  /** Null on a §24.7 row addressed to an outside submitter (`recipient_email` set instead). */
+  user_id: string | null;
+  recipient_email: string | null;
   type: string;
-  payload: { message: string; link: string; [key: string]: unknown };
+  payload: { message: string; link: string; subject?: string; [key: string]: unknown };
   attempts: number;
   email: string | null;
   email_notifications_enabled: boolean | null;
+}
+
+/** §24.7: the confirmation e-mail's outbox type — its link carries the token, scrubbed once sent. */
+const SUBMITTER_CONFIRM_TYPE = "public_submission_confirm";
+
+/** Subject and plain-text body of one outbox row. A user's row reads "innobox: <message>" and
+ *  links into the app; a §24.7 submitter row carries its own fixed subject and links nowhere but,
+ *  for the confirmation only, the public confirm page. */
+export function composeOutboxEmail(row: Pick<OutboxRow, "recipient_email" | "payload">, baseUrl: string): { subject: string; body: string } {
+  if (typeof row.recipient_email === "string") {
+    const link = typeof row.payload.link === "string" && row.payload.link ? `\n\n${baseUrl}${row.payload.link}` : "";
+    return { subject: String(row.payload.subject ?? "").slice(0, 200), body: `${row.payload.message}${link}` };
+  }
+  return { subject: `innobox: ${row.payload.message}`.slice(0, 200), body: `${row.payload.message}\n\n${baseUrl}${row.payload.link}` };
 }
 
 /** Attempts after which a failed row is left `failed` for good (surfaced only via the admin
@@ -91,7 +107,7 @@ export async function runNotificationSweep(
   // a LEFT JOIN (not INNER) so a row whose user has since vanished still surfaces (and gets
   // skipped below) instead of silently never being processed at all.
   const { rows } = await pool.query<OutboxRow>(
-    `select o.id, o.user_id, o.type, o.payload, o.attempts, u.email, u.email_notifications_enabled
+    `select o.id, o.user_id, o.recipient_email, o.type, o.payload, o.attempts, u.email, u.email_notifications_enabled
        from notification_outbox o
        left join users u on u.id = o.user_id
       where o.status = 'pending'
@@ -111,20 +127,21 @@ export async function runNotificationSweep(
     let rateLimited = false;
     let retryAfterSeconds: number | undefined;
     try {
-      if (!row.email || !row.email_notifications_enabled) {
+      // §24.7: a submitter row has no user and no preference — it goes to its address as is (an
+      // erasure deletes the row first, so an erased address is never reached).
+      const submitter = typeof row.recipient_email === "string";
+      if (submitter ? !row.recipient_email : !row.email || !row.email_notifications_enabled) {
         await pool.query(`update notification_outbox set status = 'sent', sent_at = now() where id = $1`, [row.id]);
         summary.skippedOptOut += 1;
         continue;
       }
-      const recipientEmail = row.email;
+      const recipientEmail = (submitter ? row.recipient_email : row.email) as string;
 
-      const subject = `innobox: ${row.payload.message}`.slice(0, 200);
-      const text = renderEmailText(`${row.payload.message}\n\n${opts.baseUrl}${row.payload.link}`, opts.baseUrl);
+      const { subject, body } = composeOutboxEmail(row, opts.baseUrl);
+      const text = renderEmailText(body, opts.baseUrl);
       // §12 e-mail content safety: the message text is escaped and only links to the app's own
       // origin (PUBLIC_BASE_URL) become anchors — with or without an admin wrapper.
-      const html = wrapper
-        ? renderWrappedEmailHtml(wrapper, `${row.payload.message}\n\n${opts.baseUrl}${row.payload.link}`, opts.baseUrl)
-        : `<p>${textToHtmlFragment(text, opts.baseUrl)}</p>`;
+      const html = wrapper ? renderWrappedEmailHtml(wrapper, body, opts.baseUrl) : `<p>${textToHtmlFragment(text, opts.baseUrl)}</p>`;
 
       let delivered = false;
       let lastError: string | null = null;
@@ -157,7 +174,13 @@ export async function runNotificationSweep(
       }
 
       if (delivered) {
-        await pool.query(`update notification_outbox set status = 'sent', sent_at = now() where id = $1`, [row.id]);
+        // §24.5: once the confirmation is out, its token (in the link) is not kept here.
+        await pool.query(
+          `update notification_outbox set status = 'sent', sent_at = now(),
+                  payload = case when type = $2 then payload - 'link' else payload end
+            where id = $1`,
+          [row.id, SUBMITTER_CONFIRM_TYPE],
+        );
         summary.sent += 1;
       } else {
         await pool.query(MARK_FAILED_SQL, [

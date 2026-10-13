@@ -148,6 +148,9 @@ services:
       WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
       # §22 AI provider: API-key encryption key (shared with the worker; unset → AI form off).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §24 public submissions: signs the public form's proof-of-work (web only; unset → the
+      # switch cannot be turned on and the form answers 404).
+      PUBLIC_INTAKE_KEY: ${PUBLIC_INTAKE_KEY:-}
     restart: always
     expose:
       - "3000"

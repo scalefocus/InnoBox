@@ -64,6 +64,9 @@ export const NOTIFICATION_TYPES = [
   "assignments_transferred",
   // §12.1 event 13 / §23.7: a badge, a badge tier or a level — in-app only, never e-mailed.
   "achievement_earned",
+  // §12.1 event 14 / §24.5: a public submission was confirmed and waits for review — platform
+  // admins only, an admin attention event (never muted).
+  "public_submission_confirmed",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -89,10 +92,12 @@ export interface NotificationPayload {
 /** §12.1 recipient rules: actors never notify themselves; recipients are deduplicated.
  *  Visibility-dropping (recipients outside the item's visibility) is applied by the caller,
  *  which has DB access to check namespace membership per candidate. */
-export function finalizeRecipients(candidates: string[], actorId: string | null): string[] {
+export function finalizeRecipients(candidates: readonly (string | null | undefined)[], actorId: string | null): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const id of candidates) {
+    // A challenge accepted from the public form has no author (§24.6): its author route is empty.
+    if (!id) continue;
     if (id === actorId) continue;
     if (seen.has(id)) continue;
     seen.add(id);

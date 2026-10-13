@@ -37,6 +37,7 @@ import { runSystemLogAlertSweep } from "./system-log/alert.js";
 import { startWebhookSweeps } from "./webhooks/deliver.js";
 import { startTriageAssistSweeps } from "./ai/triage.js";
 import { runGamificationBackfill } from "./gamification/backfill.js";
+import { runPublicIntakeRetention } from "./public-intake/retention.js";
 
 // ENTRA_AUTH_SPEC.md §3 *Auth*: SCIM_BEARER_TOKEN guards a public endpoint that can create users
 // and change group membership, so a missing or short (< 32 chars) value refuses to start. The
@@ -191,6 +192,16 @@ const leaderElection = startLeaderElection(dbUrl, {
         if (pruned) console.log(JSON.stringify({ level: "info", msg: "ai usage prune", pruned }));
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "ai usage prune failed", error: String(err) }));
+      }
+      // §24.8 public submissions: unconfirmed rows go after 7 days, contact details 90 days after the
+      // decline or the challenge's close. Pure DB work — it runs whether or not the form is on.
+      try {
+        const summary = await runPublicIntakeRetention(pool);
+        if (summary.deletedUnconfirmed || summary.erased || summary.expiredConfirmMails) {
+          console.log(JSON.stringify({ level: "info", msg: "public submission retention", ...summary }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "public submission retention failed", error: String(err) }));
       }
       // §11 upload-session GC: reaps chunked-upload sessions abandoned after 2h (backstop to the
       // on-initiate cleanup). The session rows are reaped regardless; the MinIO multipart abort

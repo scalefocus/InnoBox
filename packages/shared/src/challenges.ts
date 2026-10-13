@@ -88,6 +88,19 @@ export interface MaskedAuthor {
    *  neutral "Deleted User" bubble from this flag, never from the display name. Absent when
    *  anonymous, like `active`. */
   scrubbed?: boolean;
+  /** §24.6: true for a challenge accepted from the public form — it has no author. The display
+   *  name is "External submission" (plus "· <company>"), the bubble is the neutral one, and there
+   *  is nothing to reveal: it is not anonymous in the §9 sense. Absent on every other author. */
+  external?: true;
+}
+
+/** §24.6: the author label of a challenge accepted from the public form. */
+export const EXTERNAL_AUTHOR_LABEL = "External submission";
+
+/** "External submission", followed by "· <company>" when the submitter gave one. */
+export function externalAuthorLabel(company: string | null | undefined): string {
+  const name = typeof company === "string" ? company.trim() : "";
+  return name ? `${EXTERNAL_AUTHOR_LABEL} · ${name}` : EXTERNAL_AUTHOR_LABEL;
 }
 
 /** Masking is total by default: an anonymous item shows "Anonymous" (and null userId, so no
@@ -98,19 +111,31 @@ export interface MaskedAuthor {
  *  carried only for a non-anonymous author; they default to true / false when omitted. */
 export function maskAuthor(item: {
   isAnonymous: boolean;
-  authorId: string;
-  authorDisplayName: string;
-  authorActive?: boolean;
-  authorScrubbed?: boolean;
+  /** Null only for a challenge accepted from the public form (§24.6). */
+  authorId: string | null;
+  authorDisplayName: string | null;
+  authorActive?: boolean | null;
+  authorScrubbed?: boolean | null;
+  /** §24.6: the outside submitter's company, read only when `authorId` is null. */
+  externalCompany?: string | null;
 }): MaskedAuthor {
+  // §24.6: no author at all — the "External submission" label. Checked first; an outside
+  // submitter's name and e-mail are never part of any author projection.
+  if (item.authorId === null) return { userId: null, displayName: externalAuthorLabel(item.externalCompany), anonymous: false, external: true };
   if (item.isAnonymous) return { userId: null, displayName: "Anonymous", anonymous: true };
   return {
     userId: item.authorId,
-    displayName: item.authorDisplayName,
+    displayName: item.authorDisplayName ?? "",
     anonymous: false,
     active: item.authorActive ?? true,
     scrubbed: item.authorScrubbed ?? false,
   };
+}
+
+/** §24.6: `needs_improvement` asks the author to edit and resubmit. A challenge accepted from the
+ *  public form has no author who could, so the status is refused for it, for every role. */
+export function isStatusRefusedForExternal(status: string): boolean {
+  return status === "needs_improvement";
 }
 
 // ── Visibility (§4.3, invariant 2) ──────────────────────────────────────────────────────
@@ -124,7 +149,8 @@ export interface ChallengeVisibilityInput {
   namespaceId: string;
   visibility: "org" | "namespace";
   status: ChallengeStatus;
-  authorId: string;
+  /** Null for a challenge accepted from the public form (§24.6) — nobody is its author. */
+  authorId: string | null;
 }
 
 /** §4.3: awaiting_triage/withdrawn are visible only to their author and the
@@ -220,6 +246,12 @@ const SOLUTION_ENFORCED_TRANSITIONS: Record<SolutionStatus, readonly SolutionSta
 /** The legal enforced next-statuses for a committee member / assignee from `from` (§7.2). */
 export function challengeEnforcedTargets(from: ChallengeStatus): ChallengeStatus[] {
   return [...(CHALLENGE_ENFORCED_TRANSITIONS[from] ?? [])];
+}
+
+/** The enforced targets for a challenge, without the status an external one refuses (§24.6). */
+export function challengeTargetsFor(from: ChallengeStatus, external: boolean): ChallengeStatus[] {
+  const targets = challengeEnforcedTargets(from);
+  return external ? targets.filter((t) => !isStatusRefusedForExternal(t)) : targets;
 }
 
 /** The legal enforced next-statuses for a committee member / assignee from `from` (§8.2). */

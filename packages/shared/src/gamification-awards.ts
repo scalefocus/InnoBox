@@ -269,7 +269,7 @@ export async function challengeAwardsSoFar(
   opts: { author: boolean; assignee: boolean },
 ): Promise<AwardInput[]> {
   const { rows } = await db.query<{
-    author_id: string;
+    author_id: string | null;
     assignee_id: string | null;
     status: string;
     created_at: Date;
@@ -284,7 +284,8 @@ export async function challengeAwardsSoFar(
     (await firstEntryAt(db, "challenge", challengeId, "solved")) ?? (c.status === "solved" ? (c.resolved_at ?? c.status_changed_at ?? c.created_at) : null);
   const item = { itemType: "challenge" as const, itemId: challengeId };
   const out: AwardInput[] = [];
-  if (opts.author) {
+  // §24.6: an external challenge has no author — only its assignee's award applies.
+  if (opts.author && c.author_id !== null) {
     out.push({ ...item, userId: c.author_id, reason: "challenge_submitted", awardKey: awardKey.challengeSubmitted(challengeId), occurredAt: c.created_at });
     if (validAt) out.push({ ...item, userId: c.author_id, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId), occurredAt: validAt });
     if (solvedAt) out.push({ ...item, userId: c.author_id, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId), occurredAt: solvedAt });

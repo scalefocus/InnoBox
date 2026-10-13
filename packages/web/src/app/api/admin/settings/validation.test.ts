@@ -80,3 +80,14 @@ test("parseSettingsPatch: gamificationEnabled is a boolean and may be sent alone
   if (parsed.ok) assert.deepEqual(parsed.value, { gamificationEnabled: true });
   for (const bad of ["true", 1, null]) assert.equal(parseSettingsPatch({ gamificationEnabled: bad }).ok, false, String(bad));
 });
+
+test("parseSettingsPatch: publicSubmissions takes the switch and/or a notice of at most 4 000 characters (§24.2)", () => {
+  const both = parseSettingsPatch({ publicSubmissions: { enabled: true, privacyNotice: "  We keep it.  " } });
+  assert.deepEqual(both, { ok: true, value: { publicSubmissions: { enabled: true, privacyNotice: "We keep it." } } });
+  assert.deepEqual(parseSettingsPatch({ publicSubmissions: { enabled: false } }), { ok: true, value: { publicSubmissions: { enabled: false } } });
+  assert.deepEqual(parseSettingsPatch({ publicSubmissions: { privacyNotice: "" } }), { ok: true, value: { publicSubmissions: { privacyNotice: "" } } });
+  assert.equal(parseSettingsPatch({ publicSubmissions: {} }).ok, false);
+  assert.equal(parseSettingsPatch({ publicSubmissions: { enabled: "yes" } }).ok, false);
+  assert.equal(parseSettingsPatch({ publicSubmissions: { privacyNotice: "x".repeat(4_001) } }).ok, false);
+  assert.equal(parseSettingsPatch({ publicSubmissions: true }).ok, false);
+});

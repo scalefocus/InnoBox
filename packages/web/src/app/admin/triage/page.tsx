@@ -31,6 +31,7 @@ interface TriageRow {
   authorId: string | null;
   authorActive?: boolean;
   authorScrubbed?: boolean;
+  authorExternal?: boolean;
   status: string;
   impactAreaName: string;
   namespaceSlug: string;
@@ -451,6 +452,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   userId={r.authorId}
                   displayName={r.authorDisplayName}
                   anonymous={r.authorAnonymous}
+                  external={r.authorExternal === true}
                   deactivated={r.authorActive === false}
                   scrubbed={r.authorScrubbed === true}
                 />

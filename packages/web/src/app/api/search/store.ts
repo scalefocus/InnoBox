@@ -79,10 +79,12 @@ interface ChallengeCandidate {
   title: string;
   status: string;
   is_anonymous: boolean;
-  author_id: string;
-  author_display_name: string;
-  author_active: boolean;
-  author_scrubbed: boolean;
+  /** Null for a challenge accepted from the public form (§24.6), with its author columns. */
+  author_id: string | null;
+  author_display_name: string | null;
+  author_active: boolean | null;
+  author_scrubbed: boolean | null;
+  external_company: string | null;
   namespace_id: string;
   visibility: "org" | "namespace";
   namespace_slug: string;
@@ -100,7 +102,7 @@ interface SolutionCandidate {
   namespace_id: string;
   visibility: "org" | "namespace";
   challenge_status: string;
-  challenge_author_id: string;
+  challenge_author_id: string | null;
   assignee_id: string | null;
   challenge_number: string;
   challenge_title: string;
@@ -130,9 +132,11 @@ async function challengeCandidates(pool: Pool, viewer: Viewer, match: Match, fil
 
   const { rows } = await pool.query<ChallengeCandidate>(
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
-            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.namespace_id, c.visibility, ns.slug as namespace_slug
+            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
+            c.namespace_id, c.visibility, ns.slug as namespace_slug
        from challenges c
-       join users u on u.id = c.author_id
+       left join users u on u.id = c.author_id
+       left join public_submissions ps on ps.id = c.public_submission_id
        join namespaces ns on ns.id = c.namespace_id
       where ${conditions.join(" and ")}
       order by ${orderBy}
@@ -200,6 +204,7 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
         authorDisplayName: row.author_display_name,
         authorActive: row.author_active,
         authorScrubbed: row.author_scrubbed,
+        externalCompany: row.external_company,
       }),
       status: row.status,
       namespaceSlug: row.namespace_slug,
