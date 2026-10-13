@@ -16,11 +16,16 @@
 // Improve with AI (§22.10): fills the title and description from the author's own text. A draft
 // fill changes the form signature, so it re-arms the duplicate check like any edit; the button
 // is unavailable while the form is locked, and Submit waits while a draft is in flight.
+//
+// Public form link (§6.1, §24.2): while public submissions are live, a link under the subtitle
+// copies `<PUBLIC_BASE_URL>/submit` so an employee can hand it to a customer. Absent while the
+// state is unknown, unavailable or off — never a placeholder above the form.
 import Link from "next/link";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
+import { copyText } from "@/lib/clipboard";
 import { AttachmentControl } from "@/components/AttachmentControl";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
@@ -80,6 +85,8 @@ export default function NewChallengePage() {
   const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[]; explainedBy: string | null } | null>(null);
   const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const ai = useImproveWithAi({
     kind: "challenge",
     fields: { title: [title, setTitle], description: [description, setDescription] },
@@ -99,6 +106,24 @@ export default function NewChallengePage() {
       setNamespaceId((current) => current || global?.id || j.namespaces[0]?.id || "");
     });
   }, []);
+
+  useEffect(() => {
+    // Not cachedGet: the switch can change at any time, and a stale "live" would copy a 404.
+    fetch("/api/public-submissions/link", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : { url: null }))
+      .then((json) => setPublicUrl(typeof json.url === "string" && json.url ? json.url : null))
+      .catch(() => setPublicUrl(null));
+  }, []);
+
+  const notify = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast((cur) => (cur === message ? null : cur)), 3200);
+  };
+
+  const copyPublicUrl = async () => {
+    if (!publicUrl) return;
+    notify((await copyText(publicUrl)) ? "Public challenge URL copied" : `Couldn't copy — the address is ${publicUrl}`);
+  };
 
   const button = primaryButtonState({
     locked: lock.locked,
@@ -167,6 +192,11 @@ export default function NewChallengePage() {
         <div className="eyebrow">Challenges</div>
         <h1 className="page-title">Raise a challenge</h1>
         <p className="page-sub">Describe the problem worth solving. A namespace admin will triage it before it opens for solutions.</p>
+        {publicUrl && (
+          <button type="button" className="link-button" data-testid="copy-public-url" onClick={copyPublicUrl}>
+            or ask a customer to challenge us
+          </button>
+        )}
       </div>
 
       <form
@@ -331,6 +361,11 @@ export default function NewChallengePage() {
         </div>
         <FormLockOverlay locked={lock.locked} />
       </form>
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
+        </div>
+      )}
     </>
   );
 }

@@ -3,9 +3,10 @@
 // submissions" switch (off by default), the privacy notice shown on the public form, and the
 // read-only public address with a copy button. The switch can be turned on only while
 // PUBLIC_INTAKE_KEY is set, a notice is saved and an e-mail transport is available — otherwise it
-// is disabled with the missing item named. Audited server-side as
+// is disabled and every unmet precondition is listed, so an admin can fix them in one pass. Audited server-side as
 // `settings.public_submissions_changed`. Same pill switch and optimistic flip as the other cards.
 import { useState } from "react";
+import type { UnmetPrecondition } from "@/lib/public-intake";
 import { PRIVACY_NOTICE_MAX } from "@innobox/shared/public-intake";
 
 export interface PublicSubmissionsSettings {
@@ -13,8 +14,26 @@ export interface PublicSubmissionsSettings {
   privacyNotice: string;
   publicUrl: string;
   live: boolean;
+  /** Every unmet precondition with its hint, in order; empty when none. */
+  unmet: UnmetPrecondition[];
   missing: "key" | "notice" | "transport" | null;
   hint: string | null;
+}
+
+/** The unmet preconditions under a heading — warning while off, danger while on but offline. */
+function UnmetList({ heading, items, tone, testId }: { heading: string; items: UnmetPrecondition[]; tone: "warn" | "danger"; testId: string }) {
+  return (
+    <div className="sub" style={{ color: `var(--${tone})`, marginTop: 6 }} data-testid={testId}>
+      {heading}
+      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+        {items.map((item) => (
+          <li key={item.precondition} data-precondition={item.precondition}>
+            {item.hint}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 async function patch(body: Record<string, unknown>): Promise<void> {
@@ -42,7 +61,7 @@ export function PublicSubmissionsSettingsCard({
   const [copied, setCopied] = useState(false);
 
   // Off → on needs every precondition; a saved notice counts only once it is saved.
-  const blocked = !on && settings.missing !== null;
+  const blocked = !on && settings.unmet.length > 0;
   const noticeDirty = notice.trim() !== settings.privacyNotice;
 
   const toggle = async () => {
@@ -92,15 +111,9 @@ export function PublicSubmissionsSettingsCard({
             People outside the organization can send a challenge through a public form, without an account. Every submission waits in a review queue
             until a platform admin accepts it.
           </div>
-          {blocked && settings.hint && (
-            <div className="sub" style={{ color: "var(--warn)", marginTop: 6 }} data-testid="public-submissions-hint">
-              {settings.hint}
-            </div>
-          )}
-          {on && !settings.live && settings.hint && (
-            <div className="sub" style={{ color: "var(--danger)", marginTop: 6 }}>
-              The form is offline until this is fixed: {settings.hint}
-            </div>
+          {blocked && <UnmetList heading="Before you can switch this on:" items={settings.unmet} tone="warn" testId="public-submissions-hint" />}
+          {on && !settings.live && settings.unmet.length > 0 && (
+            <UnmetList heading="The form is offline until this is fixed:" items={settings.unmet} tone="danger" testId="public-submissions-offline" />
           )}
         </div>
         <div className="toggle-field">
@@ -159,7 +172,8 @@ export function PublicSubmissionsSettingsCard({
           </button>
         </div>
         <div className="sub" style={{ marginTop: 6 }}>
-          InnoBox links to it from nowhere — share it wherever you want outside submissions to come from.
+          No public page links to it — share it wherever you want outside submissions to come from. While the form is live, signed-in people can
+          also copy it from the Raise a challenge page.
         </div>
       </div>
     </div>

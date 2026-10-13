@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.8.0",
+    date: "2026-10-13",
+    summary:
+      'While the public submission form is working, the Raise a challenge page offers an "or ask a customer to challenge us" link that copies its address, ready to send to a customer or partner. Platform admins setting the form up now see every missing prerequisite at once, so they can fix them all in one pass.',
+  },
+  {
     version: "1.7.1",
     date: "2026-10-13",
     summary:

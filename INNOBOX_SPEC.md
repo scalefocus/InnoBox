@@ -1178,6 +1178,17 @@ impact = Client; impact area required and must be active at submission time.
 Reached at **`/challenges/new`**, via the **Submit a Challenge** sidebar nav item
 (§2.2, directly above **Challenges**) — shown to every authenticated user.
 
+**Public form link.** While public submissions are **live** (§24.2 — the switch is on
+*and* every precondition holds), the page header shows a small text link directly
+below the subtitle, above the form card: *"or ask a customer to challenge us"*.
+Clicking it copies `<PUBLIC_BASE_URL>/submit` to the clipboard and shows the standard
+transient toast *"Public challenge URL copied"*; if the clipboard write fails, the toast
+reads *"Couldn't copy — the address is <url>"* so it can be copied by hand. It is a
+button styled as a link (keyboard-operable, no navigation) and is shown to **every**
+authenticated user. The page learns the state from `GET /api/public-submissions/link`
+(§24.9); while that is pending, fails, or returns `url: null`, the link is simply absent
+— no placeholder, no layout shift above the form. It never affects the form itself.
+
 Form: title, description, impact area (active areas), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11), **"Submit
@@ -4748,6 +4759,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   **`admin/mcp`** (`GET`/`PATCH`), **`admin/mcp/clients`** (`GET`) and
   **`admin/mcp/clients/:id/block`** / **`…/unblock`** (`POST`) (§25.13)
   — all platform admin only)
+- `public-submissions/link` (`GET` → `{ url | null }`, any authenticated user — the §6.1
+  copy link to the §24 public form, `url` set only while that feature is live, §24.9)
 - `me/agents` (`GET` the server URL, the on/off state and the caller's connections;
   `me/agents/:grantId` `DELETE` revokes one — §25.9); challenge and solution detail
   payloads and comment rows carry `viaAgent` (§25.8)
@@ -5941,15 +5954,31 @@ The §14.3 **Public submissions** card holds:
   lives in the repository (§2.3): what to tell outside submitters is each deployment's
   decision.
 - **The public address** — `<PUBLIC_BASE_URL>/submit`, read-only, with a copy button.
-  InnoBox does not link to it from anywhere, not even the signed-out Home: the
-  organization shares it wherever it wants outside submissions to come from.
+  No **unauthenticated** surface links to it — not the signed-out Home, not the public
+  form's own pages — so an outsider cannot discover it: the organization shares it
+  wherever it wants outside submissions to come from. Inside the app, the one other
+  place that offers it is the §6.1 *"or ask a customer to challenge us"* copy link on
+  `/challenges/new`, shown to signed-in users only while the feature is live, so any
+  employee can hand the address to a customer.
 
 The switch can be turned **on** only when all three hold: `PUBLIC_INTAKE_KEY` is valid
 (§2.3), the privacy notice is not empty, and an e-mail transport is available (Graph
 connected with a saved wrapper, or the SMTP fallback, §12.1). Otherwise it is disabled,
-with the missing item named in a hint. If a precondition stops holding later (the key is
+and the card lists **every** unmet precondition at once, not just the first, so an admin
+can fix them all in one pass. The list sits under the switch's description, headed
+*"Before you can switch this on:"*, one line each, in the fixed order key → notice →
+transport, with the existing plain-text hint for each:
+
+- *"Set PUBLIC_INTAKE_KEY — a 32-byte base64 key — on the web service."*
+- *"Enter a privacy notice first."*
+- *"Connect the notification sender (or configure the SMTP fallback) first."*
+
+The notice line counts the **saved** notice: text typed but not yet saved still shows
+it. The list updates when the card reloads after a save. When nothing is missing, the
+list is absent. If a precondition stops holding later (the key is
 removed, or the mailbox disconnected), the public routes answer **404** until it is
-fixed. The queue stays usable for anything already received. Changing the switch or the
+fixed, and the card shows the same list in the danger colour under the heading
+*"The form is offline until this is fixed:"*. The queue stays usable for anything already received. Changing the switch or the
 notice is audited as `settings.public_submissions_changed` (`after: { enabled,
 noticeLength }`).
 
@@ -6163,6 +6192,16 @@ user.
   `{ pending }` for the console bubble. The challenge detail payload gains
   `external: { company } | null` for every viewer, and `externalContact: { name, email,
   confirmedAt, erasedAt } | null` for the item's admins only.
+- **The card's read model** (`publicSubmissions` in `GET /api/admin/settings`) carries
+  `unmet: [{ precondition: "key" | "notice" | "transport", hint }]`. It holds every unmet
+  precondition in the §24.2 order and is empty when none are unmet. The existing
+  `missing`/`hint` pair, which names the first one only, stays for compatibility.
+- **The share link**, any authenticated user (**401** without a session):
+  `GET /api/public-submissions/link` → `{ url: "<PUBLIC_BASE_URL>/submit" }` while the
+  feature is live (switch on and every precondition holds), `{ url: null }` otherwise —
+  always **200**, never 404, and it carries nothing else (no notice, no precondition
+  detail). It is not under `/api/public/*`: it reads a session and does not follow the
+  §24.2 404-while-off rule. Read-only; not audited.
 - **Audit (§15)**, every row under the Admin chip (`public_submission.*` joins its
   patterns), each carrying the submission id and **never** a name or an e-mail:
   `public_submission.accepted` (with the challenge number), `public_submission.declined`
@@ -6180,8 +6219,15 @@ user.
   nothing; two concurrent decisions → one 409; the contact panel appears only for the
   item's admins, and no list, search, export, webhook or employee e-mail carries the
   name or e-mail; the retention job deletes and erases on schedule; the outcome mail is
-  sent once. E2e: submit on `/submit`, confirm through the link, accept in the queue,
-  and find the challenge in the triage queue labelled "External submission".
+  sent once. The unmet list: one, two and all three preconditions missing each come
+  back in key → notice → transport order, and none → empty; the card renders every
+  entry while off, and the offline variant while on but not live. The share link: 401 without a session; `{ url: null }` while the switch is
+  off and while it is on with a precondition missing; the full URL once live.
+  E2e: submit on `/submit`, confirm through the link, accept in the queue,
+  and find the challenge in the triage queue labelled "External submission"; on
+  `/challenges/new` the *"or ask a customer to challenge us"* link is absent while the
+  feature is off, and while live it copies the public URL and shows *"Public challenge
+  URL copied"*.
 
 ## §25 Agent access (MCP server)
 
