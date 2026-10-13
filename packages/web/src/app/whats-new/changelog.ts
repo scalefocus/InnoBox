@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "You can now reply to a comment: press Reply and your answer appears indented under it, keeping the conversation in one thread. Long threads show the first three replies with a button for the rest, and your comment notifications tell you when someone replied to you.",
   },
   {
+    version: "1.2.0",
+    date: "2026-10-13",
+    summary:
+      "On phones and tablets, press and hold anyone's profile picture to see their card: job title, department, office and a link to their profile. A quick tap still does what it always did, and scrolling past pictures never opens a card. Tap outside the card or scroll to close it.",
+  },
+  {
     version: "1.1.0",
     date: "2026-10-13",
     summary:
