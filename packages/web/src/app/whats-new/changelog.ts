@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.4",
+    date: "2026-10-13",
+    summary:
+      "The Coming soon list at the top of this page has a new plan: connecting your AI assistant, such as Claude, to InnoBox so it can search challenges and submit challenges, solutions and comments as you, after you approve it in your browser. Firsts with an agent will earn new badges. Nothing changes yet, and plans can change.",
+  },
+  {
     version: "1.0.2",
     date: "2026-10-12",
     summary:
