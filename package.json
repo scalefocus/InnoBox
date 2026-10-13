@@ -14,7 +14,7 @@
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "test:db": "pnpm --filter @innobox/web test:db",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm --filter @innobox/shared build && pnpm -r typecheck"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

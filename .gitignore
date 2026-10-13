@@ -34,3 +34,7 @@ Thumbs.db
 # Playwright artifacts (e2e runs)
 packages/web/test-results/
 packages/web/playwright-report/
+
+# Next.js-managed type references: `next typegen` / `next dev` / `next build` regenerate it, and dev
+# and build point it at different paths, so tracking it leaves a dirty tree after every dev run.
+packages/web/next-env.d.ts
