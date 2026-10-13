@@ -46,6 +46,10 @@
       "types": "./dist/notification-preferences.d.ts",
       "default": "./dist/notification-preferences.js"
     },
+    "./email-digest": {
+      "types": "./dist/email-digest.d.ts",
+      "default": "./dist/email-digest.js"
+    },
     "./identity-sync": {
       "types": "./dist/identity-sync.d.ts",
       "default": "./dist/identity-sync.js"

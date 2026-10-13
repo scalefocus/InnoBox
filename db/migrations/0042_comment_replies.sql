@@ -1,4 +1,4 @@
--- 0041_comment_replies.sql — one-level comment replies (INNOBOX_SPEC.md §10.2, §5). Idempotent.
+-- 0042_comment_replies.sql — one-level comment replies (INNOBOX_SPEC.md §10.2, §5). Idempotent.
 --
 --   thread_root_id — the top-level comment a reply belongs to; null on a top-level comment.
 --   reply_to_id    — the comment the reply answers: the root itself or another reply in the same

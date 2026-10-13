@@ -1,7 +1,8 @@
 "use client";
 // Own profile (INNOBOX_SPEC.md §13.5): identity, challenges/solutions by status (incl.
 // awaiting triage — the author can always see their own), likes received, items followed,
-// recent activity (newest first, any status), the e-mail notification opt-out switch, and the
+// recent activity (newest first, any status), the e-mail notification opt-out switch, the §12.1
+// e-mail delivery choice (immediately, or a daily or weekly digest), and the
 // Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open.
 // While gamification is on (§23.6): the Achievements section, the level ring on the bubble, and the
 // two gamification switches (the Achievements notification and "Show my level and badges to others").
@@ -21,6 +22,7 @@ import {
   type NotificationPreference,
   type NotificationPreferences,
 } from "@innobox/shared/notification-preferences";
+import { EMAIL_DELIVERY_LABEL, EMAIL_DELIVERY_MODES, nextDigestSlot, type EmailDelivery } from "@innobox/shared/email-digest";
 
 interface OwnProfile {
   user: {
@@ -32,6 +34,7 @@ interface OwnProfile {
     officeLocation: string | null;
   };
   emailNotificationsEnabled: boolean;
+  emailDelivery: EmailDelivery;
   notificationPreferences: NotificationPreferences;
   surveysEnabled: boolean;
   challengesByStatus: Record<string, number>;
@@ -62,6 +65,7 @@ export default function ProfilePage() {
   const fmt = useDateFmt();
   const [profile, setProfile] = useState<OwnProfile | null>(null);
   const [emailPrefError, setEmailPrefError] = useState<string | null>(null);
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const [prefErrors, setPrefErrors] = useState<Partial<Record<NotificationPreference | keyof GamificationPreferences, string>>>({});
   const [surveyPrefError, setSurveyPrefError] = useState<string | null>(null);
   // §13.10: whether a survey offer is open (from the `me` resource), kept in step with the shell.
@@ -138,6 +142,26 @@ export default function ProfilePage() {
     } catch (err) {
       setProfile((current) => (current ? { ...current, emailNotificationsEnabled: previous } : current));
       setEmailPrefError(err instanceof Error ? err.message : "Could not update preference");
+    }
+  };
+
+  // §12.1 e-mail delivery: the same optimistic change + revert-with-reason as the switches.
+  const chooseDelivery = async (next: EmailDelivery) => {
+    if (!profile || profile.emailDelivery === next) return;
+    const previous = profile.emailDelivery;
+    setDeliveryError(null);
+    setProfile({ ...profile, emailDelivery: next });
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ emailDelivery: next }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not update preference");
+    } catch (err) {
+      setProfile((current) => (current ? { ...current, emailDelivery: previous } : current));
+      setDeliveryError(err instanceof Error ? err.message : "Could not update preference");
     }
   };
 
@@ -234,6 +258,43 @@ export default function ProfilePage() {
                 {profile.emailNotificationsEnabled ? "📧" : "🔇"}
               </span>
             </button>
+          </div>
+        </div>
+        <div className="row" style={{ border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14, flexWrap: "wrap", gap: 10 }}>
+          <div className="grow">
+            <div className="ttl" id="email-delivery-label">E-mail delivery</div>
+            <div className="sub">
+              {!profile.emailNotificationsEnabled
+                ? "Turn e-mail notifications on to choose how they arrive."
+                : profile.emailDelivery === "immediate"
+                  ? "One e-mail per update, as it happens."
+                  : "One summary of what you follow instead of an e-mail per update. Rejections, assignments and admin alerts still arrive at once."}
+            </div>
+            {profile.emailNotificationsEnabled && profile.emailDelivery !== "immediate" && (
+              <div className="sub muted" data-testid="profile-next-digest">
+                Next digest: {fmt.dateTime(nextDigestSlot(profile.emailDelivery, new Date()).toISOString())}
+              </div>
+            )}
+            {deliveryError && (
+              <div className="sub" style={{ color: "var(--danger)" }} role="status">
+                {deliveryError}
+              </div>
+            )}
+          </div>
+          <div role="radiogroup" aria-labelledby="email-delivery-label" style={{ display: "flex", gap: 6, flexWrap: "wrap" }} data-testid="profile-email-delivery">
+            {EMAIL_DELIVERY_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={profile.emailDelivery === mode}
+                className={profile.emailDelivery === mode ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                disabled={!profile.emailNotificationsEnabled}
+                onClick={() => chooseDelivery(mode)}
+              >
+                {EMAIL_DELIVERY_LABEL[mode]}
+              </button>
+            ))}
           </div>
         </div>
         {NOTIFICATION_PREFERENCES.map((key) => {
