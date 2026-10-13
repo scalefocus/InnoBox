@@ -509,6 +509,16 @@ The delivery pipeline, pinned:
     provider write answers `ai_key_missing`. Deliberately not the e-mail or webhook key:
     the three rotate independently. Compose passes `${AI_TOKEN_ENC_KEY:-}` to both
     services.
+  - **`AI_ALLOWED_PRIVATE_HOSTS`** (web **and** worker; added in v1.1) — a
+    comma-separated list of exact host names (or IP literals) the §22 AI provider may use
+    even though they resolve to private or internal addresses (§22.2). Empty by default
+    (unset → no exception). Entries are trimmed and lower-cased; no wildcards, no CIDR,
+    no port. An entry that is neither a valid host name nor an IP literal is ignored,
+    with one `warn` line on stdout at start. An operator setting **on purpose**: it is
+    not editable in the UI, so a hijacked admin session cannot aim the server at the
+    internal network. Compose passes `${AI_ALLOWED_PRIVATE_HOSTS:-}` to both services.
+    A provider whose certificate is issued by an internal CA also needs that CA in
+    `NODE_EXTRA_CA_CERTS` — TLS is always verified.
   - **`PUBLIC_INTAKE_KEY`** (web; added in v0.14) — 32 bytes, base64; signs the §24
     proof-of-work challenges and derives nothing else. Unset or invalid → the public
     submissions switch cannot be turned on, and if it was on, the public form answers
@@ -652,7 +662,9 @@ these rules close the generic web-platform paths by which it could.
   its own timeouts, §22.6). Each is `https` on port 443 only, refuses private,
   loopback, link-local and other non-public addresses after DNS resolution, connects to
   the vetted address, follows no redirects, ignores proxy environment variables, and
-  times out after 10 s.
+  times out after 10 s. The one exception is an AI provider host an operator lists in
+  `AI_ALLOWED_PRIVATE_HOSTS` (§2.3, §22.2), which may resolve to private addresses —
+  never loopback or link-local. Channel webhooks have no such exception.
 - **Rate limiting** — per signed-in user, token-bucket, held in the web process
   (v1 runs one web instance; the buckets reset on restart, which is acceptable for an
   abuse brake). Limits:
@@ -4215,7 +4227,10 @@ console directly under Audit, never shown to namespace admins, and the API answe
   429 included, is ever recorded. It is unauthenticated, and recording it would give
   anyone who can reach the proxy a write path into this table. **AI provider runtime
   failures** (§22.6) are recorded at most once per 15 minutes platform-wide, `source` =
-  the calling process, with no user and no item number. The §13.10 survey routes
+  the calling process, with no user and no item number; **failed AI provider tests and
+  model lists** from the admin card (§22.5) are recorded every time, as the admin, even
+  though the test answers 200 — both carry the §22.6 provider diagnostic (host, resolved
+  addresses, low-level cause) in `message`. The §13.10 survey routes
   (`me/features/used`, `me/survey/*`) are recorded **without `user_id` and without the
   actor snapshot**, so no named, exact-time row can sit beside a date-only survey
   response.
@@ -5138,7 +5153,7 @@ sees who wrote anything.
 |---|---|---|
 | 1 | **One active configuration** (a single row): provider, base URL, token, model, enabled. | One secret to rotate and audit. |
 | 2 | Providers: **Open WebUI** and **OpenAI**, both through the OpenAI-shaped **Chat Completions** API. | Open WebUI is OpenAI-compatible, so one code path serves both. |
-| 3 | **Public HTTPS only** — the provider URL obeys the same outbound rules as channel webhooks (§2.4, §12.4). | One audited outbound class, no internal-network reach from the admin console. |
+| 3 | **Public HTTPS only** — the provider URL obeys the same outbound rules as channel webhooks (§2.4, §12.4) — **except** a host an operator lists in `AI_ALLOWED_PRIVATE_HOSTS`, which may resolve to private addresses (§22.2). | One audited outbound class, no internal-network reach from the admin console; a self-hosted provider on the corporate network is an operator's deliberate, deployment-level opt-in, never a UI setting. |
 | 4 | The token is **AES-256-GCM-encrypted** under a **new `AI_TOKEN_ENC_KEY`**; write-only in the UI. | Key separation from the e-mail and webhook keys. |
 | 5 | **Save runs a test; a failing save is rejected** and the previous configuration stays live. The **enable** toggle needs a passing test. | A bad rotation can never take AI down; no "enabled but never worked" state. |
 | 6 | The stored token is sent **only to the stored base URL**; changing provider or URL requires re-entering it. | A hijacked session or a typo cannot ship the secret elsewhere. |
@@ -5168,6 +5183,19 @@ sees who wrote anything.
   only difference is the timeout (§22.6). **Only when `NODE_ENV` is not `production`**
   may the base URL be `http://localhost` / `127.0.0.1` (the e2e provider stub) — the
   same structural guard as dev auth (§2.3).
+- **Private-network providers (`AI_ALLOWED_PRIVATE_HOSTS`, §2.3).** When the base URL's
+  host name exactly matches a listed entry (case-insensitive), its resolved addresses
+  may be **private or internal** — RFC 1918, carrier-grade NAT `100.64.0.0/10`, IPv6
+  unique-local `fc00::/7` and the other §12.4 refused ranges — **except** loopback
+  (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16` — the cloud metadata endpoint —
+  and `fe80::/10`), unspecified (`0.0.0.0/8`, `::`), multicast (`224.0.0.0/4`,
+  `ff00::/8`) and reserved (`240.0.0.0/4`), which stay refused even for a listed host.
+  Everything else is unchanged: `https` on 443, pinned to the vetted address, TLS
+  verified, no redirects, proxy variables ignored, 1 MB cap — in every environment,
+  production included. Applies to the AI provider only, at test, model list, save and
+  every call. An unlisted host on a private address is refused with *"The AI provider
+  address is on a private or internal network. An operator can allow this host with
+  AI_ALLOWED_PRIVATE_HOSTS."*
 - **Responses** are capped at 1 MB; the token never appears in a URL.
 - **Budget exhausted.** A 2xx whose content is empty, whitespace or absent **and** whose
   `finish_reason` is `"length"` is `ai_provider_error` with *"The model used its whole
@@ -5252,13 +5280,24 @@ encrypted-token pattern. Platform admins only.
   token means "use the stored one" — allowed **only** when provider and normalized base
   URL equal the saved configuration, else **422 `ai_token_required`**. Every test writes
   an `ai_usage` row (`feature = 'test'`); only a test of exactly the saved configuration
-  updates `last_test_*`. Tests are **not audited** and never written to the system log.
+  updates `last_test_*`. Tests are **not audited**. A **failed** test **is written to
+  the system log** (§14.7) with the provider diagnostic (§22.6) — every failure, **not
+  throttled** (only a rate-limited platform admin can trigger one) and independent of
+  the runtime 15-minute slot: `source = web`, the admin as the user (with the actor
+  snapshot), `method`/`route`/`path` of the admin request (`POST /api/admin/ai/test`),
+  `status` 504 for `ai_timeout` and 502 otherwise, `error_code` = the `AiError` code,
+  `message` *"AI test failed: {diagnostic}"*. A passing test writes nothing. The card
+  still shows only the fixed one-line error. A **failed model list** (`POST
+  /api/admin/ai/models`, §22.4) is recorded the same way — *"AI model list failed:
+  {diagnostic}"*.
 - **Save** (`PUT /api/admin/ai`) — validate, test, and on a pass upsert (a new token
   encrypted and `token_last4` updated; a blank token keeps the stored one), keeping
   `enabled` as it was. Audited `ai.config_updated` (before/after of provider, base URL,
   model; `after.token_rotated` — **never the token or its last 4**). On a fail **422
-  `ai_test_failed`** with the result; **nothing is persisted**. Saving identical values
-  is a no-op.
+  `ai_test_failed`** with the result; **nothing is persisted**. That 422 is the one
+  system-log row for a failed save (the route wrapper records it, §14.7), and its
+  `message` is *"AI save test failed: {diagnostic}"* rather than the generic response
+  text — no second row for the embedded test. Saving identical values is a no-op.
 - **Enable** (`PATCH { enabled: true }`) — **409 `ai_not_configured` | `ai_test_required`
   | `ai_token_undecryptable`** when not allowed; audited `ai.enabled`. **Disable** —
   always allowed, keeps the configuration, audited `ai.disabled`; every helper call then
@@ -5302,8 +5341,33 @@ encrypted-token pattern. Platform admins only.
   last_failure_logged_at = now() WHERE … < now() - interval '15 minutes'`, so web and
   worker never double-log — with `source` = the calling process, `status` 502 / 504 /
   500, `method` `POST`, `route` `/ai/[feature]`, `path` the provider endpoint path (no
-  host), **no user and no item number**, a fixed `error_code` and a sanitized message.
-  A new carve-out in §14.7's recorded list; no chip of its own.
+  host), **no user and no item number**, a fixed `error_code` and the message *"AI
+  {feature} call failed: {diagnostic}"*. A new carve-out in §14.7's recorded list; no
+  chip of its own.
+- **The diagnostic** — what actually went wrong, written **only to the system log**
+  (platform admins only, §14.7) for runtime failures and for failed tests, saves and
+  model lists (§22.5). It is the fixed card error followed by ` — ` and a detail naming
+  the **provider host** and the stage that failed:
+  - refused address — *"ai.example.com resolved to 10.20.0.5, 10.20.0.6 (private or
+    internal; not in AI_ALLOWED_PRIVATE_HOSTS)"*, or *"… (loopback or link-local;
+    refused even for an allowed host)"* — every resolved address, at most 8, then
+    *"+N more"*;
+  - URL form (not https, a port, credentials, not a URL) — the fixed card error only;
+  - DNS — *"ai.example.com did not resolve (ENOTFOUND)"*;
+  - connection, TLS, reset — *"connecting to ai.example.com (203.0.113.5) failed:
+    ECONNREFUSED"* / *"…: CERT_HAS_EXPIRED"*;
+  - timeout — *"no response from ai.example.com (203.0.113.5) within 20 s"*;
+  - HTTP — *"HTTP 401 from ai.example.com"* plus the already-sanitized provider text;
+  - a 2xx that is not a chat completion or model list, an oversized body, a 3xx — the
+    card error plus the host and the HTTP status.
+  The low-level cause is the Node error **`code` only** (an upper-case identifier such as
+  `ECONNREFUSED`, `EAI_AGAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`,
+  `ERR_TLS_CERT_ALTNAME_INVALID`; anything else is dropped) — **never `err.message`**,
+  which can echo the URL. **Never** the token or any part of it, request or response
+  headers, the request body, the base-URL path, or prompt and response content.
+  Sanitized by the §14.7 rules and capped at the 500-character message limit. The
+  diagnostic never reaches the card, the API response, `last_test_error` /
+  `last_call_error`, `ai_usage` or stdout.
 - **Metrics:** `innobox_ai_calls_total{feature,outcome}` on both `/metrics`. AI is
   **not** a `/readyz` dependency.
 - **The browser never talks to the provider** — every call is server-side, so the CSP
