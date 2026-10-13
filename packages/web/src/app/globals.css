@@ -305,6 +305,12 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* A card-bearing bubble is an interactive trigger (§13.6): it gains a pointer cursor and a
    visible focus ring, since it is also a tab stop. Non-card bubbles are untouched. */
 .avatar[role="button"] { cursor: pointer; }
+/* Press and hold opens the card on touch and pen (§13.8), so the native long-press callout
+   ("Save image") and text selection are suppressed — on card-bearing bubbles only; anonymous and
+   no-id bubbles keep their native behavior. (Desktop right-click is handled in the component.) */
+.avatar[role="button"], .avatar[role="button"] .avatar-img {
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+}
 .avatar[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Signed-out sidebar-foot control: the "Sign in with Entra ID" button sits in the account

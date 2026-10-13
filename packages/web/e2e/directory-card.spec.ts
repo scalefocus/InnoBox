@@ -5,13 +5,14 @@
 // Keyboard users reach "View profile" through explicit Tab routing around the portalled card;
 // your own bubble links to /profile; a scrubbed author renders the "Deleted User" bubble from the
 // payload's flag with no profile behind it; and the read-only assignee on a terminal triage row
-// opens the card without opening the row.
+// opens the card without opening the row. On touch and pen, press and hold opens the same card,
+// while a short tap, a drag and an anonymous bubble never do.
 //
 // Dev-auth personas carry no department/job title/office (those are Entra attributes written by
 // reconciliation, §3), so the card's directory block legitimately renders its degraded
 // "No directory information." state here — which is exactly the graceful-degradation contract the
 // spec requires, and is asserted as such.
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
 
@@ -259,4 +260,102 @@ test("directory card: the read-only assignee on a terminal triage row opens the 
 
   await assigneeCtx.close();
   await adminCtx.close();
+});
+
+test("directory card: press and hold opens it on touch; a tap, a drag or an anonymous bubble never does", async ({ browser }) => {
+  test.slow();
+
+  const stamp = Date.now().toString(36);
+  const authorName = `E2E Card Holder ${stamp}`;
+  const ctx = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+  await signIn(ctx, { name: authorName });
+  const named = await createChallengeViaApi(ctx.request, {
+    title: `E2E card hold challenge ${stamp}`,
+    description: "Raised by the press-and-hold e2e.",
+  });
+  const anon = await createChallengeViaApi(ctx.request, {
+    title: `E2E card hold anonymous ${stamp}`,
+    description: "Raised anonymously by the press-and-hold e2e.",
+    isAnonymous: true,
+  });
+
+  const page = await ctx.newPage();
+  const cardRequests: string[] = [];
+  page.on("request", (req) => {
+    if (/\/api\/users\/[^/]+\/card(\?|$)/.test(req.url())) cardRequests.push(req.url());
+  });
+
+  // Real touch input through the browser's own gesture pipeline (pointerType "touch").
+  const cdp = await ctx.newCDPSession(page);
+  const press = async (target: Locator, opts: { ms: number; driftY?: number }) => {
+    const box = (await target.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    if (opts.driftY) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + opts.driftY }] });
+    await page.waitForTimeout(opts.ms);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+
+  await page.goto(`/challenges/${named.digits}`);
+  await expect(page.getByRole("heading", { name: named.title })).toBeVisible();
+  const bubble = page.locator(".avatar.avatar-md[role='button']").first();
+  const card = page.getByRole("dialog", { name: authorName });
+
+  // A short tap is unchanged: no card, no request (it even focuses the bubble — still no card).
+  await press(bubble, { ms: 80 });
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // A press that drifts is a scroll, never a hold.
+  await press(bubble, { ms: 800, driftY: 30 });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(cardRequests, "neither a tap nor a drag fetches the card").toHaveLength(0);
+
+  // Press and hold opens the same card, fetching it at the threshold.
+  await press(bubble, { ms: 800 });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("link", { name: "View profile" })).toBeVisible();
+  expect(cardRequests).toHaveLength(1);
+  // Lifting the finger does not close it (touch "leaves" on every lift).
+  await page.waitForTimeout(500);
+  await expect(card).toBeVisible();
+
+  // A tap outside closes it.
+  await page.getByRole("heading", { name: named.title }).tap();
+  await expect(card).toBeHidden();
+
+  // Holding the same bubble again toggles it closed.
+  await press(bubble, { ms: 800 });
+  await expect(card).toBeVisible();
+  await press(bubble, { ms: 800 });
+  await expect(card).toBeHidden();
+
+  // A hold-opened card closes on scroll.
+  await press(bubble, { ms: 800 });
+  await expect(card).toBeVisible();
+  await page.evaluate(() => document.dispatchEvent(new Event("scroll")));
+  await expect(card).toBeHidden();
+
+  // The bubble suppresses the native long-press callout / selection.
+  expect(await bubble.evaluate((el) => getComputedStyle(el).userSelect)).toBe("none");
+
+  // A hold inside a link (a search result row) opens the card and never also navigates.
+  await page.goto(`/search?q=${encodeURIComponent(named.title)}`);
+  const row = page.locator("a.row").filter({ hasText: named.title });
+  await expect(row).toHaveCount(1);
+  await press(row.locator(".avatar[role='button']"), { ms: 800 });
+  await expect(page.getByRole("dialog", { name: authorName })).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(/\/search\?/);
+
+  // An anonymous author's bubble: no card and no request, however long it is held.
+  const before = cardRequests.length;
+  await page.goto(`/challenges/${anon.digits}`);
+  await expect(page.getByRole("heading", { name: anon.title })).toBeVisible();
+  await press(page.locator(".avatar-anon").first(), { ms: 800 });
+  await page.waitForTimeout(300);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(cardRequests.length, "an anonymous bubble issues NO card request").toBe(before);
+
+  await ctx.close();
 });

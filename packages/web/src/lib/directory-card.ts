@@ -47,3 +47,127 @@ export function focusNeighbor<T>(
   }
   return null;
 }
+
+// ── Press and hold (touch and pen, §13.8) ────────────────────────────────────────────────────
+
+/** How long a touch/pen press must be held before the card opens. */
+export const HOLD_MS = 500;
+/** How far a press may drift before it is a scroll, not a hold. */
+export const HOLD_SLOP_PX = 10;
+/** After a touch/pen press ends, focus it caused (mobile browsers focus a tapped `tabindex`
+ *  element) must not open the card — a short tap is unchanged. */
+export const HOLD_FOCUS_GUARD_MS = 800;
+/** How long after a completed hold the release's click is swallowed. */
+export const HOLD_CLICK_SWALLOW_MS = 400;
+
+/** Touch and pen open the card by press-and-hold; the mouse keeps hover-intent. */
+export function isHoldPointer(pointerType: string): boolean {
+  return pointerType === "touch" || pointerType === "pen";
+}
+
+export interface HoldGesture {
+  /** A pointer went down on the bubble. Only touch/pen starts the hold timer. */
+  down(pointerType: string, x: number, y: number): void;
+  /** The pressing pointer moved; drifting past the slop aborts the hold (it is a scroll). */
+  move(x: number, y: number): void;
+  /** The pointer lifted. True when the hold had fired — the caller swallows the click. */
+  up(): boolean;
+  /** The browser took the pointer (`pointercancel`, e.g. for a scroll) — abort silently. */
+  cancel(): void;
+  /** True when the most recent press on the bubble came from touch or pen — the gate for
+   *  cancelling `contextmenu` (Android raises one at its own long-press threshold), so a desktop
+   *  right-click keeps the browser's menu. */
+  lastPressWasHold(): boolean;
+  /** True while a touch/pen press is in progress, or within the focus guard after it ended. */
+  suppressFocus(now: number): boolean;
+}
+
+/**
+ * The press-and-hold state machine (§13.8), DOM-free so it can be unit-tested with fake timers.
+ * `onHold` fires once the press has been held for `holdMs` without drifting more than `slopPx`.
+ */
+export function createHoldGesture(opts: {
+  onHold: () => void;
+  holdMs?: number;
+  slopPx?: number;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+}): HoldGesture {
+  const holdMs = opts.holdMs ?? HOLD_MS;
+  const slop = opts.slopPx ?? HOLD_SLOP_PX;
+  const now = opts.now ?? Date.now;
+  const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+
+  let timer: unknown = null;
+  let start: { x: number; y: number } | null = null;
+  let held = false;
+  let lastType = "";
+  let pressing = false;
+  let endedAt = -Infinity;
+
+  const stop = () => {
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    start = null;
+  };
+  const end = () => {
+    stop();
+    if (pressing) endedAt = now();
+    pressing = false;
+  };
+
+  return {
+    down(pointerType, x, y) {
+      stop();
+      held = false;
+      lastType = pointerType;
+      pressing = isHoldPointer(pointerType);
+      if (!pressing) return;
+      start = { x, y };
+      timer = setTimer(() => {
+        timer = null;
+        held = true;
+        opts.onHold();
+      }, holdMs);
+    },
+    move(x, y) {
+      if (!start || held) return;
+      if (Math.hypot(x - start.x, y - start.y) > slop) stop();
+    },
+    up() {
+      const fired = held;
+      held = false;
+      end();
+      return fired;
+    },
+    cancel() {
+      held = false;
+      end();
+    },
+    lastPressWasHold: () => isHoldPointer(lastType),
+    suppressFocus: (t) => pressing || t - endedAt < HOLD_FOCUS_GUARD_MS,
+  };
+}
+
+/**
+ * Swallow the click a completed hold's release would fire (§13.8): many bubbles sit inside a link,
+ * card or clickable row, and opening the card must never also navigate or open the row. Listens in
+ * the capture phase on `target` (the window), so it runs before React's root listener; disarms
+ * itself after the first click or `ms`, whichever comes first.
+ */
+export function swallowNextClick(
+  target: Pick<EventTarget, "addEventListener" | "removeEventListener">,
+  ms = HOLD_CLICK_SWALLOW_MS,
+  setTimer: (fn: () => void, ms: number) => unknown = (fn, t) => setTimeout(fn, t),
+): void {
+  const onClick = (e: Event) => {
+    e.preventDefault();
+    e.stopPropagation();
+    disarm();
+  };
+  const disarm = () => target.removeEventListener("click", onClick, { capture: true });
+  target.addEventListener("click", onClick, { capture: true });
+  setTimer(disarm, ms);
+}
