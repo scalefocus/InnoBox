@@ -4,6 +4,7 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi } from "./helpers/api";
+import { UPCOMING } from "../src/app/whats-new/upcoming";
 
 test("dashboard: a signed-in member sees KPIs, quick links, and the account menu", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -76,7 +77,17 @@ test("what's new: Coming soon starts collapsed, expands on click, and hides admi
   const page = await ctx.newPage();
   await page.goto("/whats-new");
 
+  // Driven by the live teaser list, never by named features — those ship and leave the list.
   const toggle = page.locator(".soon-head");
+  const forMembers = UPCOMING.filter((e) => e.audience === "everyone");
+  if (forMembers.length === 0) {
+    // Nothing applies to a member → the section is hidden entirely.
+    await expect(page.getByRole("heading", { name: "What's new" })).toBeVisible();
+    await expect(toggle).toHaveCount(0);
+    await ctx.close();
+    return;
+  }
+
   await expect(toggle).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
@@ -85,9 +96,11 @@ test("what's new: Coming soon starts collapsed, expands on click, and hides admi
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const list = page.getByRole("list", { name: "Coming soon" });
   await expect(list).toBeVisible();
-  await expect(list.getByText("Replies to comments")).toBeVisible();
-  // Platform-admin tooling is teased only to platform admins.
-  await expect(list.getByText("Trash and restore")).toHaveCount(0);
+  await expect(list.getByText(forMembers[0]!.title, { exact: true })).toBeVisible();
+  // Admin-only teasers are hidden from members.
+  for (const entry of UPCOMING.filter((e) => e.audience !== "everyone")) {
+    await expect(list.getByText(entry.title, { exact: true })).toHaveCount(0);
+  }
 
   await toggle.click();
   await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);

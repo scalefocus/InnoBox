@@ -110,10 +110,11 @@ pipeline {
     }
 
     stage('Typecheck') {
-      // Deliberately NOT in the parallel block: web's tsc reads next-env.d.ts, a committed file
-      // that `next dev` (E2E) and `next build` (Build web) both rewrite as they start — dev points
-      // it at .next/dev/types, build at .next/types. Running it here, before either starts, keeps
-      // it deterministic. Needs only shared's dist/, which Build libs produced.
+      // Deliberately NOT in the parallel block: web's typecheck generates next-env.d.ts (untracked;
+      // `next typegen`) and tsc reads it, while `next dev` (E2E) and `next build` (Build web) both
+      // rewrite it as they start — dev points it at .next/dev/types, build at .next/types. Running
+      // it here, before either starts, keeps it deterministic. Needs only shared's dist/, which
+      // Build libs produced.
       steps {
         sh '. "${HOME}/.asdf/asdf.sh" && pnpm -r typecheck'
       }

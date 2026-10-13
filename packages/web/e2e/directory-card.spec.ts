@@ -242,7 +242,12 @@ test("directory card: the read-only assignee on a terminal triage row opens the 
 
   const page = await adminCtx.newPage();
   await page.goto("/admin/triage");
+  // The unfiltered queue may already list this row; the debounced number filter then refetches
+  // and remounts the rows, so a hover landed before that refetch hits a detached bubble. Wait
+  // for the filtered response before touching the row.
+  const filtered = page.waitForResponse((r) => r.url().includes("/api/admin/triage?") && r.url().includes(`number=${ch.number}`));
   await page.getByPlaceholder("CH-123").fill(ch.number);
+  await filtered;
   const row = page.locator(".triage-rows .row-link").filter({ hasText: ch.title });
   await expect(row).toHaveCount(1);
 
