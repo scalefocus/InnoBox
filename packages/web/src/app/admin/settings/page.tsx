@@ -262,10 +262,9 @@ function ImpactAreasCard({ areas, onChanged, onError }: { areas: ImpactArea[]; o
           const chosenTarget = reassignTo[a.id] ?? "";
           const needsTarget = a.challengeCount > 0 && chosenTarget === "";
           return (
-            <div className="row" key={a.id} style={{ flexWrap: "wrap" }}>
+            <div className="row impact-row" key={a.id}>
               <input
-                className="field grow"
-                style={{ maxWidth: 320 }}
+                className="field"
                 value={draft}
                 onChange={(e) => setDrafts((cur) => ({ ...cur, [a.id]: e.target.value }))}
                 aria-label={`Impact area name`}
@@ -282,7 +281,7 @@ function ImpactAreasCard({ areas, onChanged, onError }: { areas: ImpactArea[]; o
                   {a.challengeCount > 0 && (
                     <select
                       className="field"
-                      style={{ maxWidth: 200 }}
+                      style={{ maxWidth: "min(100%, 220px)" }}
                       value={chosenTarget}
                       disabled={busy}
                       aria-label={`Move challenges from ${a.name} to`}
@@ -360,20 +359,20 @@ function AttachmentLimitsCard({
   return (
     <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
       <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 12 }}>Attachment limits</h3>
-      <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+      <div className="settings-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
+        <label>
           Max per item
           <input className="field" type="number" min={1} max={50} value={maxPerItem} onChange={(e) => setMaxPerItem(Number(e.target.value))} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        <label>
           Max upload size (MB)
           <input className="field" type="number" min={5} max={200} value={maxUploadSizeMb} onChange={(e) => setMaxUploadSizeMb(Number(e.target.value))} />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+        <label>
           Chunk size (MB)
           <input className="field" type="number" min={5} max={maxUploadSizeMb} value={chunkSizeMb} onChange={(e) => setChunkSizeMb(Number(e.target.value))} />
         </label>
-        <button type="button" className="btn btn-sm btn-primary" disabled={saving} onClick={save}>
+        <button type="button" className="btn btn-sm btn-primary" style={{ justifySelf: "start" }} disabled={saving} onClick={save}>
           Save
         </button>
       </div>
@@ -411,7 +410,7 @@ function DateFormatCard({ current, onChanged, onError }: { current: "eu" | "us";
   return (
     <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
       <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 12 }}>Date display format</h3>
-      <div style={{ display: "flex", gap: 10 }}>
+      <div className="settings-actions">
         <button type="button" className={current === "eu" ? "btn btn-sm btn-primary" : "btn btn-sm"} disabled={saving} onClick={() => setFormat("eu")}>
           EU — dd/mm/yyyy, 24h
         </button>
@@ -485,10 +484,8 @@ function EmailSenderCard({ status, onChanged, onError }: { status: EmailStatus |
 
   return (
     <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
-      <div className="row" style={{ border: 0, padding: 0, marginBottom: 14 }}>
-        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, margin: 0 }} className="grow">
-          Notification sender
-        </h3>
+      <div className="settings-head" style={{ marginBottom: 14 }}>
+        <h3>Notification sender</h3>
         <span className={pillClass}>{pillLabel}</span>
       </div>
 
@@ -501,7 +498,7 @@ function EmailSenderCard({ status, onChanged, onError }: { status: EmailStatus |
               {status.lastRefreshError}
             </p>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <div className="settings-actions" style={{ marginTop: 10 }}>
             <a href="/api/admin/email/connect" className="btn btn-sm">
               Reconnect
             </a>
@@ -524,8 +521,10 @@ function EmailSenderCard({ status, onChanged, onError }: { status: EmailStatus |
         </div>
       )}
 
-      <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
-        Message wrapper HTML (must contain exactly one <span className="mono">[SYSTEM MESSAGE]</span> placeholder)
+      <label className="settings-field">
+        <span>
+          Message wrapper HTML (must contain exactly one <span className="mono">[SYSTEM MESSAGE]</span> placeholder)
+        </span>
         <textarea
           className="field"
           style={{ minHeight: 100, fontFamily: "var(--font-mono)", fontSize: 12.5 }}

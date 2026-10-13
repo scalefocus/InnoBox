@@ -147,11 +147,19 @@ h1, h2, h3 { margin: 0; font-weight: 500; letter-spacing: -0.02em; }
 
 /* Source-type tabs (Hosted upload vs Pointer): an underlined tab strip so it's obvious the
    panel below switches with the selection. */
-.srctabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+/* A strip with more tabs than fit (the audit log's eight categories on a phone) scrolls sideways
+   inside its card instead of widening the page. The baseline is an inset shadow, not a border, so
+   the active tab's underline can sit on it without the -1px overlap that would make the clipped
+   strip scroll vertically too. */
+.srctabs {
+  display: flex; gap: 4px; box-shadow: inset 0 -1px 0 var(--line);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.srctabs::-webkit-scrollbar { display: none; }
 .srctab {
-  appearance: none; border: 0; background: none; cursor: pointer;
+  appearance: none; border: 0; background: none; cursor: pointer; flex-shrink: 0; white-space: nowrap;
   padding: 9px 16px; font-family: var(--font-body); font-size: 13.5px; font-weight: 500;
-  color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  color: var(--muted); border-bottom: 2px solid transparent;
   transition: color 0.15s, border-color 0.15s;
 }
 .srctab:hover:not(:disabled):not(.active) { color: var(--ink); }
@@ -1206,6 +1214,33 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    group name can't push the native select past the card's right edge. */
 .add-mapping select { min-width: 0; max-width: 100%; box-sizing: border-box; }
 
+/* ── Platform settings (/admin/settings) ─────────────────────────────────── */
+/* Card header: title, then status pill and switch. The title keeps its natural width (no
+   min-width:0), so on a narrow card the pill and switch wrap under it instead of covering it. */
+.settings-head { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.settings-head h3 { flex: 1 1 auto; font-family: var(--font-display); font-size: 17px; margin: 0; }
+.settings-head-meta { display: inline-flex; align-items: center; gap: 12px; }
+/* Labelled form grid: columns never narrower than 200px, nor wider than the card on a phone. */
+.settings-grid {
+  display: grid; gap: 12px; align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+}
+.settings-grid > label,
+.settings-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; min-width: 0; }
+/* A field with its button (Model + Load models, Display name + Save): the field takes what the
+   button leaves, and can shrink below its intrinsic size so the button stays inside the card. */
+.field-with-btn { display: flex; gap: 8px; min-width: 0; }
+.field-with-btn > .field { flex: 1; min-width: 0; }
+.field-with-btn > .btn { flex-shrink: 0; white-space: nowrap; }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Impact-area row: name field, status pill and actions. */
+.impact-row { flex-wrap: wrap; gap: 10px 12px; }
+.impact-row > .field:first-child { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+/* Audit-log / system-log filter bar. */
+.log-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.log-filters > .field { flex: 1 1 220px; min-width: 0; }
+.log-filters > label { display: flex; align-items: center; gap: 6px; }
+
 @media (max-width: 560px) {
   .maintainer-item {
     grid-template-columns: auto 1fr auto;
@@ -1228,7 +1263,14 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .create-ns-form { flex-direction: column; align-items: stretch; }
   .create-ns-form > input,
   .create-ns-form > label,
-  .create-ns-form > button { width: 100%; }
+  .create-ns-form > button { width: 100%; justify-content: center; }
+  /* Impact-area rows: the name takes the full first line; pill and actions follow beneath. */
+  .impact-row { padding: 12px 14px; }
+  .impact-row > .field:first-child { flex-basis: 100%; max-width: none; }
+  /* Filter bar: From and To each take a full line, their date fields lined up after a fixed-width
+     label; Export / clear sit on the last line. */
+  .log-filters > label { flex: 1 1 100%; }
+  .log-filters > label > .field { flex: 1; min-width: 0; margin-left: auto; max-width: calc(100% - 44px); }
   /* Role-mapping cards: group name, id, and role each on their own line; the remove ✕ on top. */
   .mapping-row { flex-direction: column; align-items: stretch; gap: 6px; }
   .mapping-row > button { order: -1; align-self: flex-end; }
