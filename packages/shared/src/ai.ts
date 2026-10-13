@@ -14,6 +14,10 @@
 //     take effect at once in both processes.
 //   - Every call that reaches the provider writes ONE ai_usage row (counts, never content) and
 //     updates last_call_*; runtime failures reach the system log at most once per 15 minutes.
+//   - A host listed in AI_ALLOWED_PRIVATE_HOSTS may resolve to private addresses — never
+//     loopback, link-local, unspecified, multicast or reserved ones (§22.2).
+//   - Every AiError thrown here carries a `detail` (host, addresses, stage, errno code) that only
+//     the system log ever sees (§22.6), through aiFailureDiagnostic().
 import http from "node:http";
 import https from "node:https";
 import type { ClientRequest, IncomingMessage } from "node:http";
@@ -22,9 +26,10 @@ import { decryptToken, encryptToken, parseEmailTokenKey } from "./email-crypto.j
 import type { DbClient } from "./email-graph.js";
 import type { MetricSample } from "./metrics.js";
 import { sanitizeSystemMessage } from "./system-log.js";
-import { ipLiteralFamily, isPublicAddress } from "./webhook-address.js";
+import { ipLiteralFamily, isAlwaysRefusedAddress, isPublicAddress } from "./webhook-address.js";
 import { defaultWebhookResolver, type ResolvedAddress, type WebhookResolver } from "./webhook-send.js";
 import {
+  AI_ALLOWED_PRIVATE_HOSTS_ENV,
   AI_ERROR_MESSAGES,
   AI_FAILURE_LOG_INTERVAL_MINUTES,
   AI_FEATURES,
@@ -35,7 +40,10 @@ import {
   AI_TEST_TIMEOUT_MS,
   AI_USAGE_RETENTION_DAYS,
   AiError,
+  aiAllowedPrivateHostsWarning,
   aiCompletionUrl,
+  aiErrnoCode,
+  aiFailureDiagnostic,
   aiFeatureMaxTokens,
   aiFeatureSwitchKey,
   aiModelsUrl,
@@ -45,8 +53,10 @@ import {
   classifyAiHttpFailure,
   effectiveAiTimeoutMs,
   findAiFeature,
+  formatAiAddresses,
   isAiError,
   isAiProvider,
+  parseAiAllowedPrivateHosts,
   parseAiCompletionBody,
   parseAiJson,
   parseAiModelList,
@@ -89,6 +99,8 @@ export interface AiHttpResponse {
   status: number;
   bodyText: string;
   retryAfter: string | null;
+  /** "host (address)" — for the system-log diagnostic only. */
+  peer: string;
 }
 
 /** The request primitive, injectable so tests can drive a local server — never the internet. */
@@ -100,7 +112,23 @@ export interface AiTransportDeps {
   request?: AiRequestFn;
   /** Admits http://localhost / 127.0.0.1 — only ever true outside production. */
   allowLocalhost?: boolean;
+  /** AI_ALLOWED_PRIVATE_HOSTS, parsed: exact host names / IP literals that may be private. */
+  allowedPrivateHosts?: ReadonlySet<string>;
 }
+
+/** AI_ALLOWED_PRIVATE_HOSTS → the transport's set, plus the entries it ignored. */
+export function aiAllowedPrivateHosts(raw: string | undefined): { hosts: Set<string>; invalid: string[] } {
+  return parseAiAllowedPrivateHosts(raw, (text) => ipLiteralFamily(text) !== 0);
+}
+
+/** The one start-up warning for ignored AI_ALLOWED_PRIVATE_HOSTS entries (§2.3), or nothing. */
+export function warnAiAllowedPrivateHosts(env: Record<string, string | undefined> = process.env, warn: (line: string) => void = console.warn): void {
+  const line = aiAllowedPrivateHostsWarning(aiAllowedPrivateHosts(env[AI_ALLOWED_PRIVATE_HOSTS_ENV]).invalid);
+  if (line) warn(line);
+}
+
+export const AI_PRIVATE_ADDRESS_MESSAGE = "The AI provider address is on a private or internal network. An operator can allow this host with AI_ALLOWED_PRIVATE_HOSTS.";
+export const AI_REFUSED_ADDRESS_MESSAGE = "The AI provider address is a loopback, link-local or reserved address, which is never allowed.";
 
 export interface AiHttpRequest {
   url: string;
@@ -123,7 +151,8 @@ type Vetted =
   | { local: false; url: URL; hostname: string; address: ResolvedAddress };
 
 /** Form rules, then the address check after resolution: refused when ANY resolved address is not
- *  public. Fixed messages only — never the URL. */
+ *  public — or, for a host listed in `allowedPrivateHosts`, when any is always refused. Fixed
+ *  messages only — never the URL; the host and addresses go to `detail` (system log only). */
 export async function vetAiUrl(raw: string, deps: AiTransportDeps = {}): Promise<Vetted> {
   let url: URL;
   try {
@@ -135,21 +164,46 @@ export async function vetAiUrl(raw: string, deps: AiTransportDeps = {}): Promise
   if (url.username !== "" || url.password !== "") throw new AiError("ai_provider_error", { message: "The AI provider address must not contain credentials." });
   if (deps.allowLocalhost && url.protocol === "http:" && LOCAL_HOSTS.has(hostname)) return { local: true, url };
   if (url.protocol !== "https:" || url.port !== "") throw new AiError("ai_provider_error", { message: "The AI provider address must use https on port 443." });
+
+  const listed = deps.allowedPrivateHosts?.has(hostname.toLowerCase()) ?? false;
+  /** null when the addresses pass; else the refusal, naming every address. */
+  const refusal = (addresses: string[], subject: string): AiError | null => {
+    if (addresses.some(isAlwaysRefusedAddress)) {
+      const why = listed ? "loopback or link-local; refused even for an allowed host" : "loopback, link-local or reserved";
+      return new AiError("ai_provider_error", { message: AI_REFUSED_ADDRESS_MESSAGE, detail: `${subject} (${why})` });
+    }
+    if (!listed && addresses.some((a) => !isPublicAddress(a))) {
+      return new AiError("ai_provider_error", {
+        message: AI_PRIVATE_ADDRESS_MESSAGE,
+        detail: `${subject} (private or internal; not in ${AI_ALLOWED_PRIVATE_HOSTS_ENV})`,
+      });
+    }
+    return null;
+  };
+
   const literal = ipLiteralFamily(hostname);
   if (literal !== 0) {
-    if (!isPublicAddress(hostname)) throw new AiError("ai_provider_error", { message: "The AI provider address is on a private or internal network." });
+    const refused = refusal([hostname], hostname);
+    if (refused) throw refused;
     return { local: false, url, hostname, address: { address: hostname, family: literal } };
   }
   let addresses: ResolvedAddress[];
   try {
     addresses = await (deps.resolve ?? defaultWebhookResolver)(hostname);
-  } catch {
-    throw new AiError("ai_provider_error", { message: "The AI provider address could not be resolved.", retryable: true });
+  } catch (err) {
+    const code = aiErrnoCode(err);
+    throw new AiError("ai_provider_error", {
+      message: "The AI provider address could not be resolved.",
+      retryable: true,
+      detail: `${hostname} did not resolve${code ? ` (${code})` : ""}`,
+    });
   }
-  if (addresses.length === 0) throw new AiError("ai_provider_error", { message: "The AI provider address could not be resolved.", retryable: true });
-  if (addresses.some((a) => !isPublicAddress(a.address))) {
-    throw new AiError("ai_provider_error", { message: "The AI provider address is on a private or internal network." });
+  if (addresses.length === 0) {
+    throw new AiError("ai_provider_error", { message: "The AI provider address could not be resolved.", retryable: true, detail: `${hostname} did not resolve (no addresses)` });
   }
+  const all = addresses.map((a) => a.address);
+  const refused = refusal(all, `${hostname} resolved to ${formatAiAddresses(all)}`);
+  if (refused) throw refused;
   return { local: false, url, hostname, address: addresses[0]! };
 }
 
@@ -172,6 +226,15 @@ export async function aiHttp(req: AiHttpRequest, deps: AiTransportDeps = {}): Pr
     headers["content-length"] = String(Buffer.byteLength(req.body));
   }
   const path = `${vet.url.pathname}${vet.url.search}`;
+  const peer = vet.local ? vet.url.hostname : vet.hostname === vet.address.address ? vet.hostname : `${vet.hostname} (${vet.address.address})`;
+  const failed = (stage: string, err: unknown) => {
+    const code = aiErrnoCode(err);
+    return new AiError("ai_provider_error", {
+      message: "The connection to the AI provider failed.",
+      retryable: true,
+      detail: `${stage} ${peer} failed${code ? `: ${code}` : ""}`,
+    });
+  };
 
   return new Promise<AiHttpResponse>((resolve, reject) => {
     let settled = false;
@@ -188,7 +251,10 @@ export async function aiHttp(req: AiHttpRequest, deps: AiTransportDeps = {}): Pr
       request?.destroy();
     };
     const onAbort = () => fail(new AiError("ai_cancelled"));
-    const timer = setTimeout(() => fail(new AiError("ai_timeout")), req.timeoutMs);
+    const timer = setTimeout(
+      () => fail(new AiError("ai_timeout", { detail: `no response from ${peer} within ${Number((req.timeoutMs / 1000).toFixed(1))} s` })),
+      req.timeoutMs,
+    );
     req.signal?.addEventListener("abort", onAbort, { once: true });
 
     const onResponse = (res: IncomingMessage) => {
@@ -200,14 +266,14 @@ export async function aiHttp(req: AiHttpRequest, deps: AiTransportDeps = {}): Pr
       res.on("data", (chunk: Buffer) => {
         read += chunk.length;
         if (read > AI_RESPONSE_MAX_BYTES) {
-          fail(new AiError("ai_provider_error", { httpStatus: status, message: "The AI provider's response was larger than 1 MB." }));
+          fail(new AiError("ai_provider_error", { httpStatus: status, message: "The AI provider's response was larger than 1 MB.", detail: `HTTP ${status} from ${peer}` }));
           res.destroy();
           return;
         }
         chunks.push(chunk);
       });
-      res.on("end", () => done(() => resolve({ status, bodyText: Buffer.concat(chunks).toString("utf8"), retryAfter })));
-      res.on("error", () => fail(new AiError("ai_provider_error", { message: "The connection to the AI provider failed.", retryable: true })));
+      res.on("end", () => done(() => resolve({ status, bodyText: Buffer.concat(chunks).toString("utf8"), retryAfter, peer })));
+      res.on("error", (err) => fail(failed("reading the response from", err)));
     };
 
     try {
@@ -242,11 +308,11 @@ export async function aiHttp(req: AiHttpRequest, deps: AiTransportDeps = {}): Pr
           onResponse,
         );
       }
-    } catch {
-      fail(new AiError("ai_provider_error", { message: "The connection to the AI provider failed.", retryable: true }));
+    } catch (err) {
+      fail(failed("connecting to", err));
       return;
     }
-    request.on("error", () => fail(new AiError("ai_provider_error", { message: "The connection to the AI provider failed.", retryable: true })));
+    request.on("error", (err) => fail(failed("connecting to", err)));
     request.end(req.body);
   });
 }
@@ -285,8 +351,26 @@ export async function aiChatOnce(
     },
     opts.transport,
   );
-  if (res.status < 200 || res.status >= 300) throw classifyAiHttpFailure(res.status, res.bodyText, res.retryAfter, now(), conn.token);
-  return parseAiCompletionBody(res.bodyText, res.status);
+  if (res.status < 200 || res.status >= 300) throw withHttpDetail(classifyAiHttpFailure(res.status, res.bodyText, res.retryAfter, now(), conn.token), res);
+  try {
+    return parseAiCompletionBody(res.bodyText, res.status);
+  } catch (err) {
+    throw isAiError(err) ? withHttpDetail(err, res) : err;
+  }
+}
+
+/** Names the host and status of an answer the provider gave (§22.6). */
+function withHttpDetail(err: AiError, res: AiHttpResponse): AiError {
+  err.detail ??= `HTTP ${res.status} from ${res.peer}`;
+  return err;
+}
+
+/** A failure as the system log records it (§22.5, §22.6): never the card's or the API's. */
+export interface AiFailure {
+  code: AiErrorCode;
+  httpStatus: number | null;
+  /** aiFailureDiagnostic() — the card error plus the host, addresses and cause. */
+  diagnostic: string;
 }
 
 export interface AiTestResult {
@@ -303,7 +387,10 @@ export interface AiTestResult {
 
 /** The connectivity check (§22.5): fixed prompt, 1 024-token budget, 20 s, no retry. Pass =
  *  HTTP 2xx with a parseable answer; the wording is not checked. Never throws. */
-export async function runAiTest(conn: AiConnection & { model: string }, opts: { transport?: AiTransportDeps; now?: () => number } = {}): Promise<AiTestResult> {
+export async function runAiTest(
+  conn: AiConnection & { model: string },
+  opts: { transport?: AiTransportDeps; now?: () => number; onFailure?: (f: AiFailure) => void } = {},
+): Promise<AiTestResult> {
   const now = opts.now ?? Date.now;
   const started = now();
   try {
@@ -315,6 +402,7 @@ export async function runAiTest(conn: AiConnection & { model: string }, opts: { 
     return { ok: true, latencyMs: Math.max(0, now() - started), model: r.model, httpStatus: 200, error: null, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
   } catch (err) {
     const e = isAiError(err) ? err : new AiError("ai_provider_error");
+    opts.onFailure?.({ code: e.code, httpStatus: e.httpStatus, diagnostic: aiFailureDiagnostic(e, conn.token) });
     return {
       ok: false,
       latencyMs: Math.max(0, now() - started),
@@ -328,17 +416,26 @@ export async function runAiTest(conn: AiConnection & { model: string }, opts: { 
 }
 
 /** The provider's model list (OpenAI filtered to chat-capable families). 20 s, no retry. */
-export async function listAiModels(conn: AiConnection, opts: { transport?: AiTransportDeps; now?: () => number } = {}): Promise<{ ok: true; models: string[] } | { ok: false; error: string; httpStatus: number | null }> {
+export async function listAiModels(
+  conn: AiConnection,
+  opts: { transport?: AiTransportDeps; now?: () => number; onFailure?: (f: AiFailure) => void } = {},
+): Promise<{ ok: true; models: string[] } | { ok: false; error: string; httpStatus: number | null }> {
+  const failure = (e: AiError) => {
+    opts.onFailure?.({ code: e.code, httpStatus: e.httpStatus, diagnostic: aiFailureDiagnostic(e, conn.token) });
+    return { ok: false as const, error: sanitizeAiErrorText(e.message, conn.token), httpStatus: e.httpStatus };
+  };
   try {
     const res = await aiHttp({ url: aiModelsUrl(conn.provider, conn.baseUrl), method: "GET", token: conn.token, timeoutMs: AI_TEST_TIMEOUT_MS }, opts.transport);
     if (res.status < 200 || res.status >= 300) {
-      const e = classifyAiHttpFailure(res.status, res.bodyText, res.retryAfter, (opts.now ?? Date.now)(), conn.token);
-      return { ok: false, error: sanitizeAiErrorText(e.message, conn.token), httpStatus: res.status };
+      return failure(withHttpDetail(classifyAiHttpFailure(res.status, res.bodyText, res.retryAfter, (opts.now ?? Date.now)(), conn.token), res));
     }
-    return { ok: true, models: parseAiModelList(conn.provider, res.bodyText) };
+    try {
+      return { ok: true, models: parseAiModelList(conn.provider, res.bodyText) };
+    } catch (err) {
+      return failure(withHttpDetail(isAiError(err) ? err : new AiError("ai_provider_error"), res));
+    }
   } catch (err) {
-    const e = isAiError(err) ? err : new AiError("ai_provider_error");
-    return { ok: false, error: sanitizeAiErrorText(e.message, conn.token), httpStatus: e.httpStatus };
+    return failure(isAiError(err) ? err : new AiError("ai_provider_error"));
   }
 }
 
@@ -726,7 +823,7 @@ export function createAiClient(deps: AiClientDeps): AiClient {
         const text = sanitizeAiErrorText(e.message, token);
         await markCall(false, text);
         await safely("ai system log failed", () =>
-          logAiFailure(deps.db, { source: deps.source, feature: feature.key, code: e.code, endpointPath, message: `AI ${feature.key} call failed: ${text}` }),
+          logAiFailure(deps.db, { source: deps.source, feature: feature.key, code: e.code, endpointPath, message: `AI ${feature.key} call failed: ${aiFailureDiagnostic(e, token)}` }),
         );
       }
       throw e;

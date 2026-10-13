@@ -10,7 +10,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 import { getAiAdminView, removeAiConfig, saveAiConfig, setAiEnabled } from "./store";
 import { parseAiConfigInput, parseAiEnabledPatch } from "./validation";
-import { AI_ENABLE_REFUSALS, aiAdminDeps, aiError, connectionRefusal, keyMissingResponse } from "./responses";
+import { AI_ENABLE_REFUSALS, aiAdminDeps, aiError, connectionRefusal, keyMissingResponse, noteAiSaveFailure } from "./responses";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,9 @@ async function handlePUT(req: Request): Promise<Response> {
   const deps = aiAdminDeps();
   const outcome = await saveAiConfig(pool, deps, gate.user.id, parsed.value);
   if (!outcome.ok) {
-    if (outcome.status === "test_failed") return aiError(422, "ai_test_failed", "The test failed, so nothing was saved", { result: outcome.result });
+    if (outcome.status === "test_failed") {
+      return noteAiSaveFailure(aiError(422, "ai_test_failed", "The test failed, so nothing was saved", { result: outcome.result }), outcome.failure);
+    }
     return connectionRefusal(outcome);
   }
   return Response.json({ saved: outcome.status === "saved", ai: await getAiAdminView(pool, deps) });

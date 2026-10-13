@@ -131,6 +131,34 @@ export function ipLiteralFamily(text: string): 0 | 4 | 6 {
   return 0;
 }
 
+/** The ranges refused even for an AI provider host listed in AI_ALLOWED_PRIVATE_HOSTS (§22.2):
+ *  unspecified, loopback, link-local (the cloud metadata endpoint), multicast and reserved. */
+const IPV4_NEVER: readonly Cidr[] = [
+  [[0, 0, 0, 0], 8],
+  [[127, 0, 0, 0], 8],
+  [[169, 254, 0, 0], 16],
+  [[224, 0, 0, 0], 4],
+  [[240, 0, 0, 0], 4],
+];
+
+const IPV6_NEVER: readonly Cidr[] = [
+  [V6(), 96], // ::/96 — ::, ::1 and the deprecated IPv4-compatible block
+  [V6(0xfe, 0x80), 10],
+  [V6(0xff), 8],
+];
+
+/** True for an address no allowance can admit (§22.2) — and for anything unparsable. */
+export function isAlwaysRefusedAddress(address: string): boolean {
+  const v4 = parseIPv4(address);
+  if (v4) return IPV4_NEVER.some((c) => inCidr(v4, c));
+  const v6 = address.includes(":") ? parseIPv6(address) : null;
+  if (!v6) return true;
+  for (const c of IPV6_EMBEDS_IPV4) {
+    if (inCidr(v6, c)) return IPV4_NEVER.some((r) => inCidr(v6.slice(12), r));
+  }
+  return IPV6_NEVER.some((c) => inCidr(v6, c));
+}
+
 /** True only for a parsable address outside every refused range. */
 export function isPublicAddress(address: string): boolean {
   const v4 = parseIPv4(address);

@@ -11,7 +11,7 @@ import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
 import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, type GraphMailEnv } from "@innobox/shared";
-import { aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage } from "@innobox/shared/ai";
+import { aiAllowedPrivateHosts, aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage, warnAiAllowedPrivateHosts } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
 import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
@@ -236,13 +236,18 @@ const leaderElection = startLeaderElection(dbUrl, {
     stopWebhookSweeps = startWebhookSweeps(pool, { onSweep: recordWebhookSweep });
 
     // §22.11 triage assist (every minute): idle unless its switch is on and AI is available. The
-    // helper client is rebuilt per sweep so AI_TOKEN_ENC_KEY is read like every other key.
+    // helper client is rebuilt per sweep so AI_TOKEN_ENC_KEY (and AI_ALLOWED_PRIVATE_HOSTS, §22.2)
+    // is read like every other key; ignored allowlist entries are warned about once, here.
+    warnAiAllowedPrivateHosts();
     stopTriageAssistSweeps = startTriageAssistSweeps(pool, () =>
       createAiClient({
         db: pool,
         key: parseAiKey(process.env.AI_TOKEN_ENC_KEY),
         source: "worker",
-        transport: { allowLocalhost: aiLocalhostAllowed(process.env.NODE_ENV) },
+        transport: {
+          allowLocalhost: aiLocalhostAllowed(process.env.NODE_ENV),
+          allowedPrivateHosts: aiAllowedPrivateHosts(process.env.AI_ALLOWED_PRIVATE_HOSTS).hosts,
+        },
       }),
     );
 

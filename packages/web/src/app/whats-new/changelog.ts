@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.1.0",
+    date: "2026-10-13",
+    summary:
+      "Platform admins can now see why an AI provider connection failed: a failed test, model list or save on the AI provider card is written to the System log with the provider's host, the addresses it resolved to and the underlying cause. An AI provider on your internal network can be allowed by your operator with the new AI_ALLOWED_PRIVATE_HOSTS setting.",
+  },
+  {
     version: "1.0.4",
     date: "2026-10-13",
     summary:

@@ -47,6 +47,28 @@ export interface SystemLogOptions {
   anonymousActor?: boolean;
 }
 
+/** What a handler wants recorded for its response instead of the defaults — the §22.5 AI admin
+ *  routes, whose failed provider test answers 200 yet must reach the log with its diagnostic. */
+export interface SystemEventNote {
+  /** The row's status — defaults to the response's. */
+  status?: number;
+  errorCode?: string | null;
+  /** Replaces the `{ error }` text. Sanitized at insert like any message. */
+  message: string;
+}
+
+const notes = new WeakMap<Response, SystemEventNote>();
+
+/**
+ * Attaches a note to a response: the wrapper then records a row for it whatever its status (a 2xx
+ * included), with the note's status, code and message. Nothing reaches the response itself, so a
+ * diagnostic meant only for the system log never leaves the server. Returns the response.
+ */
+export function noteSystemEvent(res: Response, note: SystemEventNote): Response {
+  notes.set(res, note);
+  return res;
+}
+
 /** The user-facing 500 body for an unhandled throw. Deliberately generic — the detail is in the
  *  system log and stdout, never in the response. */
 export const INTERNAL_ERROR_MESSAGE = "something went wrong on our side — please try again";
@@ -142,7 +164,10 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
         void capture(template, req, 500, error.message, error.name && error.name !== "Error" ? error.name : null, startedAt, opts).catch(() => {});
         return Response.json({ error: INTERNAL_ERROR_MESSAGE }, { status: 500 });
       }
-      if (shouldRecordSystemEvent(res.status)) {
+      const note = notes.get(res);
+      if (note) {
+        void capture(template, req, note.status ?? res.status, note.message, note.errorCode ?? null, startedAt, opts).catch(() => {});
+      } else if (shouldRecordSystemEvent(res.status)) {
         void (async () => {
           const message = await errorMessageOf(res);
           await capture(template, req, res.status, message, null, startedAt, opts);

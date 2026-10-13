@@ -44,6 +44,14 @@ export async function register(): Promise<void> {
     console.error(baseUrlFatal);
     process.exit(1);
   }
+
+  // §2.3: AI_ALLOWED_PRIVATE_HOSTS entries that are not a host name or IP address are ignored,
+  // with one warning here. The AI module is Node-only (node:http, node:dns), so its import sits
+  // inside the documented NEXT_RUNTIME block, like onRequestError's below.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { warnAiAllowedPrivateHosts } = await import("@innobox/shared/ai");
+    warnAiAllowedPrivateHosts();
+  }
 }
 
 // onRequestError (INNOBOX_SPEC.md §14.7 "Capture — net"): records uncaught 500s on

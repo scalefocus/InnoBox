@@ -2,7 +2,7 @@
 // and NAT64 addresses judged by their embedded IPv4, and parser strictness.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ipLiteralFamily, isPublicAddress, parseIPv4, parseIPv6 } from "./webhook-address.js";
+import { ipLiteralFamily, isAlwaysRefusedAddress, isPublicAddress, parseIPv4, parseIPv6 } from "./webhook-address.js";
 
 test("parseIPv4 is strict dotted-quad", () => {
   assert.deepEqual(parseIPv4("192.168.1.10"), [192, 168, 1, 10]);
@@ -93,4 +93,13 @@ test("anything unparsable is not public", () => {
   assert.equal(isPublicAddress("localhost"), false);
   assert.equal(isPublicAddress("1.2.3.4.5"), false);
   assert.equal(isPublicAddress("::g"), false);
+});
+
+test("isAlwaysRefusedAddress: what no AI_ALLOWED_PRIVATE_HOSTS entry can admit (§22.2)", () => {
+  for (const a of ["127.0.0.1", "127.9.9.9", "0.0.0.0", "169.254.169.254", "224.0.0.1", "240.0.0.1", "255.255.255.255", "::", "::1", "fe80::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "not-an-ip"]) {
+    assert.equal(isAlwaysRefusedAddress(a), true, a);
+  }
+  for (const a of ["10.0.0.5", "172.16.3.4", "192.168.1.1", "100.64.0.1", "fd00::1", "fc00::1", "::ffff:10.0.0.5", "20.50.2.3", "2606:4700::1"]) {
+    assert.equal(isAlwaysRefusedAddress(a), false, a);
+  }
 });
