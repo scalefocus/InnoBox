@@ -128,6 +128,13 @@ test(
           [parentType, parentId, `dbtest-del-${stamp}-${parentType}-${parentId}`, authorId],
         );
       }
+      // §10.2: a reply on the challenge's comment — the self-referencing thread goes in the same
+      // cascade statement as its root.
+      await pool.query(
+        `insert into comments (parent_type, parent_id, author_id, body, thread_root_id, reply_to_id)
+         select 'challenge', $1, $2, 'a reply', id, id from comments where parent_type = 'challenge' and parent_id = $1`,
+        [challengeId, authorId],
+      );
       // One bound chunked-upload session on the winner (must be aborted + dropped).
       const sessionKey = `dbtest-del-${stamp}-session`;
       await pool.query(
@@ -294,7 +301,7 @@ test(
       assert.equal(delCh.status, "ok");
       if (delCh.status !== "ok") return;
       assert.equal(delCh.counts.solutions, 1, "the surviving sibling is cascaded away");
-      assert.equal(delCh.counts.comments, 2, "the challenge's comment and the sibling's");
+      assert.equal(delCh.counts.comments, 3, "the challenge's comment, its reply, and the sibling's");
       assert.equal(delCh.counts.likes, 1);
       assert.equal(delCh.counts.follows, 2);
       assert.equal(delCh.counts.attachments, 2);

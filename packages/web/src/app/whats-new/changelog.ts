@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.4.0",
+    date: "2026-10-13",
+    summary:
+      "You can now reply to a comment: press Reply and your answer appears indented under it, keeping the conversation in one thread. Long threads show the first three replies with a button for the rest, and your comment notifications tell you when someone replied to you.",
+  },
+  {
     version: "1.3.0",
     date: "2026-10-13",
     summary:

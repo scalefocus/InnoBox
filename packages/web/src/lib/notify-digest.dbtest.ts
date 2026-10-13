@@ -105,6 +105,7 @@ test(
         challengeTitle: `Digest ${stamp}`,
         latestBy: "Dbtest Digest actor",
         link: "/x",
+        replyToAuthorId: null,
       };
       await dispatchCoalescedComment(ctx, [daily], comment);
       await dispatchCoalescedComment(ctx, [daily], comment);

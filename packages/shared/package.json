@@ -81,6 +81,10 @@
     "./gamification": {
       "types": "./dist/gamification.d.ts",
       "default": "./dist/gamification.js"
+    },
+    "./comment-threads": {
+      "types": "./dist/comment-threads.d.ts",
+      "default": "./dist/comment-threads.js"
     }
   },
   "scripts": {

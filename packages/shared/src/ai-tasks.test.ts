@@ -232,6 +232,24 @@ test("discussion prompt: title and pseudonymized text only; nothing marks the it
   assert.ok(text.includes("DISCUSSION"));
 });
 
+test("discussion prompt: replies are marked with the participant they answer (§10.2)", () => {
+  const comments = pseudonymizeComments([
+    { id: "c1", authorId: "u-anna", body: "Root" },
+    { id: "c2", authorId: "u-ben", body: "Answer", replyToId: "c1" },
+    { id: "c3", authorId: "u-anna", body: "Back to you", replyToId: "c2" },
+    { id: "c4", authorId: "u-cara", body: "Orphan", replyToId: "gone" },
+  ]);
+  assert.deepEqual(
+    comments.map((c) => c.replyTo),
+    [undefined, "Participant A", "Participant B", "a removed comment"],
+  );
+  const text = promptText(buildDiscussionPrompt({ title: "Invoice matching", comments }));
+  assert.ok(text.includes("Participant A: Root"));
+  assert.ok(text.includes("Participant B (replying to Participant A): Answer"));
+  assert.ok(text.includes("Participant C (replying to a removed comment): Orphan"));
+  assert.ok(!text.includes("c1") && !text.includes("u-"), "never an id");
+});
+
 test("discussion output: capped summary, at most 5 questions", () => {
   const out = processDiscussionSummary({ summary: "s".repeat(900), openQuestions: ["a", "b", "c", "d", "e", "f"] });
   assert.equal(out?.summary.length, 600);

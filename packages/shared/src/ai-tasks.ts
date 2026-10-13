@@ -383,34 +383,43 @@ export function participantLetter(index: number): string {
 }
 
 /**
- * Comments → pseudonymized lines, oldest first: each distinct commenter becomes "Participant A",
- * "Participant B" … in order of first appearance. Only the text survives — never a name or an
- * id — and nothing marks which participant wrote the item itself. Deleted comments must already
- * be excluded by the caller (it reads only visible ones).
+ * Comments → pseudonymized lines, in the order given (the caller passes §10.2 thread order): each
+ * distinct commenter becomes "Participant A", "Participant B" … in order of first appearance. Only
+ * the text survives — never a name or an id — and nothing marks which participant wrote the item
+ * itself. A reply (`replyToId`) is marked with the participant it answers, or "a removed comment"
+ * when that comment is not among the given ones. Deleted comments must already be excluded by the
+ * caller (it reads only visible ones).
  */
-export function pseudonymizeComments(comments: readonly { authorId: string; body: string }[]): { participant: string; body: string }[] {
+export function pseudonymizeComments(
+  comments: readonly { id?: string; authorId: string; body: string; replyToId?: string | null }[],
+): { participant: string; body: string; replyTo?: string }[] {
   const letters = new Map<string, string>();
+  const participantOf = new Map<string, string>();
   return comments.map((c) => {
     let letter = letters.get(c.authorId);
     if (!letter) {
       letter = participantLetter(letters.size);
       letters.set(c.authorId, letter);
     }
-    return { participant: `Participant ${letter}`, body: c.body };
+    const participant = `Participant ${letter}`;
+    if (c.id) participantOf.set(c.id, participant);
+    if (!c.replyToId) return { participant, body: c.body };
+    return { participant, body: c.body, replyTo: participantOf.get(c.replyToId) ?? "a removed comment" };
   });
 }
 
 /** Exactly the §22.13 egress: the item's title and the pseudonymized comment texts. */
-export function buildDiscussionPrompt(input: { title: string; comments: readonly { participant: string; body: string }[] }): AiPrompt {
+export function buildDiscussionPrompt(input: { title: string; comments: readonly { participant: string; body: string; replyTo?: string }[] }): AiPrompt {
   const system = [
     "You summarize a DISCUSSION thread on an internal innovation platform for someone who has not read it.",
     "Answer as JSON with exactly these keys:",
     `"summary": what the participants discussed and where they stand, in at most ${DISCUSSION_SUMMARY_MAX} characters, plain text;`,
     `"openQuestions": up to ${DISCUSSION_QUESTIONS_MAX} questions the thread leaves unanswered.`,
     'Refer to people only by their labels ("Participant A"); never guess who they are.',
+    'A comment marked "(replying to …)" answers the comment named there.',
     AI_DATA_RULES,
   ].join("\n");
-  const thread = input.comments.map((c) => `${c.participant}: ${c.body}`).join("\n\n");
+  const thread = input.comments.map((c) => `${c.participant}${c.replyTo ? ` (replying to ${c.replyTo})` : ""}: ${c.body}`).join("\n\n");
   const user = [dataBlock("TITLE", input.title), dataBlock("COMMENTS", thread)].join("\n\n");
   return { system, messages: [{ role: "user", content: user }] };
 }
