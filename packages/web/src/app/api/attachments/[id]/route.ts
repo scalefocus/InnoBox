@@ -12,6 +12,7 @@ import { ATTACHMENT_DOWNLOAD_CSP } from "@/lib/security-headers";
 import { getStorage } from "@/lib/storage";
 import { getAttachmentForDownload, removeAttachment } from "../store";
 import { withSystemLog } from "@/lib/system-log";
+import { trashedResponse } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +69,8 @@ async function handleDELETE(_req: Request, context: { params: Promise<{ id: stri
       return Response.json({ error: "attachment not found" }, { status: 404 });
     case "forbidden":
       return Response.json({ error: "only the uploader can remove this attachment" }, { status: 403 });
+    case "trashed":
+      return trashedResponse();
     case "not_editable":
       return Response.json({ error: "attachments can only be removed while the item is editable" }, { status: 409 });
     case "already_removed":

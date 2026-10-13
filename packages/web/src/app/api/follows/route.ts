@@ -8,7 +8,7 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { parseFollowToggle } from "./validation";
 import { toggleFollow, unfollow } from "./store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -25,6 +25,7 @@ async function handlePOST(req: Request): Promise<Response> {
 
   const result = await toggleFollow(pool, { userId: gate.user.id, roles: gate.user.roles }, parsed.value.parentType, parsed.value.parentId);
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
+  if (result.status === "trashed") return trashedResponse();
   return Response.json({ following: result.following });
 }
 
@@ -40,6 +41,7 @@ async function handleDELETE(req: Request): Promise<Response> {
 
   const result = await unfollow(pool, { userId: gate.user.id, roles: gate.user.roles }, parsed.value.parentType, parsed.value.parentId);
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
+  if (result.status === "trashed") return trashedResponse();
   return Response.json({ following: result.following });
 }
 

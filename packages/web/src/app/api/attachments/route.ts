@@ -11,7 +11,7 @@
 //   GET  — ?draftKey=<uuid>: list the caller's OWN staged attachments (status only, no bytes).
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { declaredLengthExceeds, MULTIPART_OVERHEAD_BYTES, readBytesLimited } from "@/lib/http";
+import { declaredLengthExceeds, MULTIPART_OVERHEAD_BYTES, readBytesLimited, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { getStorage } from "@/lib/storage";
 import { getAttachmentLimits } from "../admin/settings/store";
@@ -117,6 +117,8 @@ async function handlePOST(req: Request): Promise<Response> {
       return Response.json({ error: "that challenge or solution was not found" }, { status: 404 });
     case "forbidden":
       return Response.json({ error: "only the author can attach files to this item" }, { status: 403 });
+    case "trashed":
+      return trashedResponse();
     case "not_editable":
       return Response.json({ error: "attachments can only be added while the item is editable" }, { status: 409 });
     case "too_many":

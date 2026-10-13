@@ -8,7 +8,8 @@
 // Replies (§10.2): one level deep. Top-level comments stay oldest first; each one's replies follow
 // it, indented, also oldest first — the first REPLIES_SHOWN, then "Show N more replies". Every
 // live comment has a Reply action that opens a composer under its thread. A reply that answers
-// another reply carries "↪ replying to <name>", which scrolls to and flashes that comment.
+// another reply carries "↪ replying to <name>", which scrolls to and flashes that comment. A
+// `readOnly` thread (an item in the §10.4 trash) shows the comments and nothing else.
 import { Fragment, useEffect, useRef, useState } from "react";
 import { REPLIES_SHOWN, groupThreads } from "@innobox/shared/comment-threads";
 import { readJson } from "@/lib/api-client";
@@ -52,6 +53,7 @@ export function CommentThread({
   parentId,
   parentNumber,
   authoredAnonymously = false,
+  readOnly = false,
 }: {
   parentType: "challenge" | "solution";
   parentId: string;
@@ -60,6 +62,8 @@ export function CommentThread({
   /** True when the viewer is the ANONYMOUS author of this item — §9 warns them that commenting
    *  shows their real name (comments are never anonymous), without revealing them as the author. */
   authoredAnonymously?: boolean;
+  /** §10.4: the item is in the trash — no composer, no reply, edit or delete, no AI summary. */
+  readOnly?: boolean;
 }) {
   const fmt = useDateFmt();
   const [comments, setComments] = useState<CommentRecord[] | null>(null);
@@ -238,7 +242,7 @@ export function CommentThread({
           </p>
         )}
         {/* A removed comment can't be answered, edited or deleted again. */}
-        {!c.deleted && editingId !== c.id && (
+        {!c.deleted && !readOnly && editingId !== c.id && (
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => openReply(c)}>
               Reply
@@ -268,7 +272,7 @@ export function CommentThread({
 
   return (
     <div style={{ marginTop: 8 }}>
-      {parentNumber && comments !== null && <DiscussionSummary parentType={parentType} parentNumber={parentNumber} version={threadVersion} />}
+      {parentNumber && comments !== null && !readOnly && <DiscussionSummary parentType={parentType} parentNumber={parentNumber} version={threadVersion} />}
       {comments === null && <p className="muted">Loading comments…</p>}
       {comments !== null && comments.length === 0 && <p className="muted">No comments yet.</p>}
       {comments !== null && comments.length > 0 && (
@@ -288,7 +292,7 @@ export function CommentThread({
                     </button>
                   </div>
                 )}
-                {reply?.rootId === root.id && (
+                {reply?.rootId === root.id && !readOnly && (
                   <form key={`composer-${reply.replyToId}`} className="row comment-reply" onSubmit={postReply} style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
                     <span className="sub">Replying to {reply.replyToName}</span>
                     <div style={{ display: "flex", gap: 8 }}>
@@ -324,24 +328,26 @@ export function CommentThread({
           })}
         </div>
       )}
-      {authoredAnonymously && (
+      {authoredAnonymously && !readOnly && (
         <p className="sub" style={{ margin: "0 0 8px", color: "var(--warn, var(--faint))" }}>
           You submitted this anonymously. Commenting won&apos;t reveal you as the author, but your name is shown on the comment itself (comments are never anonymous).
         </p>
       )}
-      <form onSubmit={post} style={{ display: "flex", gap: 8 }}>
-        <input
-          className="field"
-          style={{ flex: 1 }}
-          placeholder="Add a comment…"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          maxLength={5000}
-        />
-        <button type="submit" className="btn btn-sm btn-primary" disabled={submitting || !draft.trim()}>
-          Post
-        </button>
-      </form>
+      {!readOnly && (
+        <form onSubmit={post} style={{ display: "flex", gap: 8 }}>
+          <input
+            className="field"
+            style={{ flex: 1 }}
+            placeholder="Add a comment…"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={5000}
+          />
+          <button type="submit" className="btn btn-sm btn-primary" disabled={submitting || !draft.trim()}>
+            Post
+          </button>
+        </form>
+      )}
     </div>
   );
 }

@@ -30,10 +30,15 @@ const CLOSED_SOLUTION_STATUSES: ReadonlySet<string> = new Set(["rejected", "not_
 
 /** §4.3: the detail page lists `rejected` / `not_selected` / `withdrawn` solutions in a collapsed
  *  "Closed solutions" section below the open list; its `Solutions (n)` heading counts only the
- *  open list. Order is preserved within each half. */
-export function splitSolutions<T extends { status: string }>(solutions: readonly T[]): { open: T[]; closed: T[] } {
+ *  open list. A solution in the trash (§10.4 — only a platform admin is sent one) goes there too,
+ *  whatever its status. Order is preserved within each half. */
+export function splitSolutions<T extends { status: string; trashed?: unknown }>(solutions: readonly T[]): { open: T[]; closed: T[] } {
   const open: T[] = [];
   const closed: T[] = [];
-  for (const s of solutions) (CLOSED_SOLUTION_STATUSES.has(s.status) ? closed : open).push(s);
+  for (const s of solutions) (CLOSED_SOLUTION_STATUSES.has(s.status) || (s.trashed !== undefined && s.trashed !== null) ? closed : open).push(s);
   return { open, closed };
 }
+
+/** §10.4: the tooltip on a solution's disabled Restore while its challenge is in the trash — the
+ *  same words the restore endpoint refuses with (`RESTORE_CHALLENGE_FIRST`, pinned by a test). */
+export const RESTORE_CHALLENGE_FIRST = "Restore the challenge first.";

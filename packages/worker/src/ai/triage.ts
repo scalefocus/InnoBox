@@ -75,6 +75,7 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
        join impact_areas ia on ia.id = c.impact_area_id
        left join ai_results r on r.kind = $1 and r.parent_type = 'challenge' and r.parent_id = c.id
       where c.status = any($2::text[])
+        and c.trashed_at is null -- §10.4: a trashed challenge drops out of AI tasks
         and (c.visibility = 'org' or $3::boolean)
         and ($6::uuid is null or c.namespace_id = $6::uuid)
         and (r.id is null
@@ -117,6 +118,7 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
           where c.namespace_id = $1
             and c.id <> $4
             and c.status not in ('awaiting_triage', 'withdrawn')
+            and c.trashed_at is null
             and (c.visibility = 'org' or $5::boolean)
           order by ts_rank(c.search_vector, q.tsq) desc, c.created_at desc
           limit ${TRIAGE_CANDIDATE_LIMIT}`,

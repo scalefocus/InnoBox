@@ -6,6 +6,7 @@ import { selfRevealSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
+import { trashedResponse } from "@/lib/http";
 
 async function handlePOST(_req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
   const gate = await requireUser();
@@ -21,6 +22,8 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
       return new Response(null, { status: 204 });
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "only the author can reveal their own anonymity" }, { status: 403 });
     case "not_anonymous":

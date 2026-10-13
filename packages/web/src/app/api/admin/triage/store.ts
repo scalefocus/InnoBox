@@ -70,7 +70,8 @@ function buildTriageQuery(viewer: Viewer, filters: TriageFilters): { whereClause
     params.push(v);
     return `$${params.length}`;
   };
-  const conditions: string[] = [];
+  // §10.4: the queue, its CSV export and the bulk actions never see a trashed challenge.
+  const conditions: string[] = [`c.trashed_at is null`];
 
   if (filters.namespaceId) {
     if (adminNs !== "all" && !adminNs.includes(filters.namespaceId)) return null;
@@ -253,6 +254,7 @@ export async function bulkSetStatus(
     // Bulk actions are admin-only, so `illegal_transition` can't occur (admins free-set) — it's
     // folded into "invalid" alongside invalid_status purely to keep the outcome union closed.
     // `external_no_author` (§24.6) is its own outcome: the row is skipped, the rest proceed.
+    // A trashed challenge is not on the queue (§10.4), so it answers like a missing one.
     return {
       number: formatChallengeNumber(number),
       status:
@@ -260,7 +262,9 @@ export async function bulkSetStatus(
           ? "ok"
           : result.status === "invalid_status" || result.status === "illegal_transition"
             ? "invalid"
-            : result.status,
+            : result.status === "trashed"
+              ? "not_found"
+              : result.status,
     };
   });
 }
@@ -288,7 +292,7 @@ export async function bulkAssign(
         logNotifyFailure("bulk assignment notification failed"),
       );
     }
-    return { number: formatChallengeNumber(number), status: result.status === "ok" ? "ok" : result.status };
+    return { number: formatChallengeNumber(number), status: result.status === "ok" ? "ok" : result.status === "trashed" ? "not_found" : result.status };
   });
 }
 
@@ -343,10 +347,10 @@ export async function countTriageAttention(pool: Pool, viewer: Viewer): Promise<
   const { rows } = await pool.query<{ count: string }>(
     `select (
        (select count(*) from challenges c
-          where c.status = 'awaiting_triage' and c.status_changed_at > ${seen} ${nsClause})
+          where c.status = 'awaiting_triage' and c.trashed_at is null and c.status_changed_at > ${seen} ${nsClause})
        +
        (select count(*) from solutions s join challenges c on c.id = s.challenge_id
-          where s.status = 'proposed' and s.status_changed_at > ${seen} ${nsClause})
+          where s.status = 'proposed' and s.trashed_at is null and c.trashed_at is null and s.status_changed_at > ${seen} ${nsClause})
      )::text as count`,
     params,
   );
@@ -431,7 +435,7 @@ export async function listTriageSolutions(
   if (adminNs !== "all" && adminNs.length === 0) return { rows: [], total: 0, page, pageSize };
 
   const params: unknown[] = [];
-  const conditions = [`s.status = 'proposed'`];
+  const conditions = [`s.status = 'proposed'`, `s.trashed_at is null`, `c.trashed_at is null`];
   if (adminNs !== "all") {
     params.push(adminNs);
     conditions.push(`c.namespace_id = any($${params.length}::uuid[])`);

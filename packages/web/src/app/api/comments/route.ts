@@ -9,7 +9,7 @@ import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyCommentPosted } from "@/lib/notify-events";
 import { parseCommentCreate, parseParentQuery } from "./validation";
 import { createComment, listComments } from "./store";
-import { readJsonObject } from "@/lib/http";
+import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -42,6 +42,7 @@ async function handlePOST(req: Request): Promise<Response> {
   const result = await createComment(pool, viewer, parsed.value.parentType, parsed.value.parentId, parsed.value.body, undefined, parsed.value.replyTo);
 
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
+  if (result.status === "trashed") return trashedResponse();
   if (result.status === "invalid") return Response.json({ error: result.error }, { status: 400 });
   if (result.status === "unprocessable") return Response.json({ error: result.error }, { status: 422 });
 

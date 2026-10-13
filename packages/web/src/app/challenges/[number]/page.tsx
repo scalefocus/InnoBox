@@ -3,8 +3,10 @@
 // list, propose-a-solution (§6.2), like/follow toggles, comments (§10.2), the admin
 // status-override control (§7.2/§8.2), assignment + unassignment (§7.3), anonymity reveal (§9,
 // admin transient in a dialog + author self-reveal, on the challenge and on each solution), the
-// §11 attachment control, the §8.3 like freeze, the platform-admin danger zone (§10.3), and the
-// §25.8 "via agent" tag on the author line and on each solution card.
+// §11 attachment control, the §8.3 like freeze, the platform-admin danger zone (§10.3, §10.4:
+// Move to trash / Delete permanently), and the §25.8 "via agent" tag on the author line and on
+// each solution card. A platform admin who opens an item in the trash sees it read-only under a
+// banner with Restore and Delete permanently; every other control is absent.
 import { useParams, useRouter } from "next/navigation";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useEffect, useRef, useState } from "react";
@@ -21,6 +23,7 @@ import { primaryButtonState } from "@/lib/form-lock";
 import { FeatureOnHomeControl } from "@/components/FeatureOnHomeControl";
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { TriageNotesPanel } from "@/components/TriageNotesPanel";
+import { DangerZone, TrashedBanner, type TrashInfo } from "@/components/TrashControls";
 import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 
 interface MaskedAuthor {
@@ -72,6 +75,11 @@ interface SolutionItem {
   canWithdraw: boolean;
   canResubmit: boolean;
   canDelete: boolean;
+  canTrash: boolean;
+  canRestore: boolean;
+  restoreBlocked: boolean;
+  /** Platform admins only: set while this solution itself is in the trash. */
+  trashed?: TrashInfo | null;
   attachments: AttachmentItem[];
   /** §25.8: set when proposed through an AI agent (client name masked on anonymous items). */
   viaAgent?: ViaAgent;
@@ -114,6 +122,10 @@ interface ChallengeDetail {
   canWithdraw: boolean;
   canResubmit: boolean;
   canDelete: boolean;
+  canTrash: boolean;
+  canRestore: boolean;
+  /** Platform admins only: set while the challenge is in the trash (the read-only view). */
+  trashed?: TrashInfo | null;
   /** §13.2 Home pin: `featured` for everyone; the control + provenance only via `canFeature`. */
   featured: boolean;
   canFeature: boolean;
@@ -427,7 +439,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
   // §10.3 platform-admin permanent delete. The reason is mandatory (the server refuses a
   // blank one) and the deleted item is gone for good — so a challenge delete leaves this
-  // page entirely, while a solution delete just re-reads the challenge.
+  // page entirely (for the trash page when it came from the trash), while a solution delete just
+  // re-reads the challenge.
   const deletePermanently = async (path: string, reason: string, after: "leave" | "refresh"): Promise<void> => {
     setBusy(true);
     try {
@@ -438,10 +451,31 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not delete");
-      if (after === "leave") router.push("/challenges");
+      if (after === "leave") router.push(challenge.trashed ? "/admin/trash" : "/challenges");
       else onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not delete");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // §10.4 Move to trash / Restore: both keep this page — a trashed item re-reads into its
+  // read-only view under the banner, and a restored one comes back exactly as it was.
+  const trashAction = async (path: string, verb: "trash" | "restore", reason?: string): Promise<void> => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${path}/${verb}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(reason === undefined ? {} : { reason }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? (verb === "trash" ? "Could not move to the trash" : "Could not restore"));
+      notify(verb === "trash" ? "Moved to the trash." : "Restored.");
+      await onChanged();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : verb === "trash" ? "Could not move to the trash" : "Could not restore");
     } finally {
       setBusy(false);
     }
@@ -468,14 +502,32 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
+  // §10.4: the read-only trashed view — only a platform admin is ever sent a trashed challenge.
+  const readOnly = challenge.trashed != null;
   const canReveal = challenge.canReveal && challenge.author.anonymous;
   const canSelfReveal = challenge.canSelfReveal && challenge.author.anonymous;
   const likeHint = challenge.likesFrozen ? LIKES_FROZEN_HINT : undefined;
   // §4.3: closed solutions go to a collapsed section; the heading counts only the open list.
   const { open: openSolutions, closed: closedSolutions } = splitSolutions(challenge.solutions);
 
-  const renderSolution = (s: SolutionItem) => (
+  const renderSolution = (s: SolutionItem) => {
+    const solutionReadOnly = readOnly || s.trashed != null;
+    const solutionPath = `/api/solutions/${s.number.replace("SOL-", "")}`;
+    const solutionWhat = `${s.number} and all comments, likes, follows, and files attached to it`;
+    return (
     <div className="row" key={s.id} id={s.number} style={{ flexDirection: "column", alignItems: "stretch", gap: 10, scrollMarginTop: 80 }}>
+      {s.trashed && (
+        <TrashedBanner
+          kind="solution"
+          label={s.number}
+          what={solutionWhat}
+          trashed={s.trashed}
+          restoreBlocked={s.restoreBlocked}
+          busy={busy}
+          onRestore={() => trashAction(solutionPath, "restore")}
+          onDelete={(reason) => deletePermanently(solutionPath, reason, "refresh")}
+        />
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span className="chip mono">{s.number}</span>
         <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
@@ -484,19 +536,25 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
           <ViaAgentTag via={s.viaAgent} />
         </span>
-        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
-          {s.followedByViewer ? "Following" : "Follow"}
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          disabled={busy || challenge.likesFrozen}
-          title={likeHint}
-          aria-label={likeHint ? `${s.likeCount} likes. ${likeHint}` : undefined}
-          onClick={() => toggleLike("solution", s.id)}
-        >
-          {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
-        </button>
+        {solutionReadOnly ? (
+          <span className="sub mono">♡ {s.likeCount}</span>
+        ) : (
+          <>
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
+              {s.followedByViewer ? "Following" : "Follow"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy || challenge.likesFrozen}
+              title={likeHint}
+              aria-label={likeHint ? `${s.likeCount} likes. ${likeHint}` : undefined}
+              onClick={() => toggleLike("solution", s.id)}
+            >
+              {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
+            </button>
+          </>
+        )}
       </div>
       {s.author.anonymous && (s.canReveal || s.canSelfReveal) && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
@@ -573,29 +631,51 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
         </div>
       )}
-      {s.canDelete && (
+      {s.canDelete && !solutionReadOnly && (
         <DangerZone
           label={s.number}
-          what={`${s.number} and all comments, likes, follows, and files attached to it`}
+          what={solutionWhat}
           note={
             s.status === "implemented" && challenge.status === "solved"
-              ? "This challenge was solved by this solution, so it returns to “Valid — open for solutions”. Other solutions stay closed."
+              ? "This challenge was solved by this solution, so a permanent delete returns it to “Valid — open for solutions”. Other solutions stay closed. Moving it to the trash changes nothing until it is deleted."
               : undefined
           }
           busy={busy}
-          onDelete={(reason) => deletePermanently(`/api/solutions/${s.number.replace("SOL-", "")}`, reason, "refresh")}
+          canTrash={s.canTrash}
+          onTrash={(reason) => trashAction(solutionPath, "trash", reason)}
+          onDelete={(reason) => deletePermanently(solutionPath, reason, "refresh")}
         />
       )}
       <AttachmentControl
         parentType="solution"
         target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
       />
-      <CommentThread parentType="solution" parentId={s.id} parentNumber={s.number} authoredAnonymously={s.isMine && s.author.anonymous} />
+      <CommentThread
+        parentType="solution"
+        parentId={s.id}
+        parentNumber={s.number}
+        authoredAnonymously={s.isMine && s.author.anonymous}
+        readOnly={solutionReadOnly}
+      />
     </div>
-  );
+    );
+  };
+
+  const challengeWhat = `${challenge.number}, every solution on it, and all comments, likes, follows, and files attached to any of them`;
 
   return (
     <>
+      {challenge.trashed && (
+        <TrashedBanner
+          kind="challenge"
+          label={challenge.number}
+          what={challengeWhat}
+          trashed={challenge.trashed}
+          busy={busy}
+          onRestore={() => trashAction(`/api/challenges/${chNum}`, "restore")}
+          onDelete={(reason) => deletePermanently(`/api/challenges/${chNum}`, reason, "leave")}
+        />
+      )}
       <div className="page-head reveal">
         <div className="eyebrow">{challenge.number}</div>
         <h1 className="page-title" style={{ fontSize: "clamp(26px, 4vw, 38px)" }}>
@@ -644,25 +724,31 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               </div>
             )}
           </div>
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("challenge", challenge.id)}>
-            {challenge.followedByViewer ? "Following" : "Follow"}
-          </button>
-          {/* §8.3: frozen on a solved challenge — the count stays, the button takes no clicks. */}
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={busy || challenge.likesFrozen}
-            title={likeHint}
-            aria-label={likeHint ? `${challenge.likeCount} likes. ${likeHint}` : undefined}
-            onClick={() => toggleLike("challenge", challenge.id)}
-          >
-            {challenge.likedByViewer ? "♥" : "♡"} {challenge.likeCount}
-          </button>
+          {readOnly ? (
+            <span className="sub mono">♡ {challenge.likeCount}</span>
+          ) : (
+            <>
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("challenge", challenge.id)}>
+                {challenge.followedByViewer ? "Following" : "Follow"}
+              </button>
+              {/* §8.3: frozen on a solved challenge — the count stays, the button takes no clicks. */}
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy || challenge.likesFrozen}
+                title={likeHint}
+                aria-label={likeHint ? `${challenge.likeCount} likes. ${likeHint}` : undefined}
+                onClick={() => toggleLike("challenge", challenge.id)}
+              >
+                {challenge.likedByViewer ? "♥" : "♡"} {challenge.likeCount}
+              </button>
+            </>
+          )}
         </div>
         <p style={{ whiteSpace: "pre-wrap", fontSize: 14.5, lineHeight: 1.65 }}>{challenge.description}</p>
 
         {challenge.externalContact && (
-          <ExternalContactPanel contact={challenge.externalContact} canErase={challenge.canDelete} onErased={onChanged} onError={notify} />
+          <ExternalContactPanel contact={challenge.externalContact} canErase={challenge.canDelete && !readOnly} onErased={onChanged} onError={notify} />
         )}
 
         {(canReveal || canSelfReveal) && (
@@ -820,25 +906,31 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           />
         )}
 
-        {challenge.canDelete && (
+        {challenge.canDelete && !readOnly && (
           <DangerZone
             label={challenge.number}
-            what={`${challenge.number}, every solution on it, and all comments, likes, follows, and files attached to any of them`}
+            what={challengeWhat}
             busy={busy}
+            canTrash={challenge.canTrash}
+            onTrash={(reason) => trashAction(`/api/challenges/${chNum}`, "trash", reason)}
             onDelete={(reason) => deletePermanently(`/api/challenges/${chNum}`, reason, "leave")}
           />
         )}
       </div>
 
-      {/* §22.11: shown only to those the server allows (never the author); renders nothing otherwise. */}
-      <TriageNotesPanel challengeNumber={challenge.number} version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`} />
+      {!readOnly && (
+        <>
+          {/* §22.11: shown only to those the server allows (never the author); renders nothing otherwise. */}
+          <TriageNotesPanel challengeNumber={challenge.number} version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`} />
 
-      <ProposeSolutionForm
-        challengeNumber={challenge.number}
-        disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
-        restricted={challenge.visibility === "namespace"}
-        onProposed={onChanged}
-      />
+          <ProposeSolutionForm
+            challengeNumber={challenge.number}
+            disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
+            restricted={challenge.visibility === "namespace"}
+            onProposed={onChanged}
+          />
+        </>
+      )}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>
         Solutions {openSolutions.length > 0 && `(${openSolutions.length})`}
@@ -862,7 +954,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       )}
 
       <h2 style={{ fontFamily: "var(--font-display)", fontSize: 21, margin: "26px 0 14px" }}>Discussion</h2>
-      <CommentThread parentType="challenge" parentId={challenge.id} parentNumber={challenge.number} authoredAnonymously={challenge.isMine && challenge.author.anonymous} />
+      <CommentThread
+        parentType="challenge"
+        parentId={challenge.id}
+        parentNumber={challenge.number}
+        authoredAnonymously={challenge.isMine && challenge.author.anonymous}
+        readOnly={readOnly}
+      />
 
       {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}
       {toast && <div className="toast">{toast}</div>}
@@ -934,103 +1032,6 @@ function RevealDialog({ revealed, onClose }: { revealed: RevealedAuthor; onClose
         </form>
       </div>
     </dialog>
-  );
-}
-
-/**
- * §10.3 danger zone — the platform-admin permanent delete, on the challenge and on each
- * solution. Deliberate friction: the admin must type the item's own number back AND give a
- * reason before the button arms, because there is no undo, no trash, and no notification —
- * once this returns, the item and everything under it are gone.
- */
-function DangerZone({
-  label,
-  what,
-  note,
-  busy,
-  onDelete,
-}: {
-  label: string;
-  what: string;
-  note?: string;
-  busy: boolean;
-  onDelete: (reason: string) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [reason, setReason] = useState("");
-  const armed = typed.trim().toUpperCase() === label.toUpperCase() && reason.trim() !== "";
-
-  const close = () => {
-    setOpen(false);
-    setTyped("");
-    setReason("");
-  };
-
-  if (!open) {
-    return (
-      <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
-        <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={() => setOpen(true)}>
-          Delete {label} permanently
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      role="dialog"
-      aria-label={`Delete ${label} permanently`}
-      style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}
-    >
-      <p style={{ fontSize: 14, margin: "0 0 6px", fontWeight: 600 }}>Delete {label} permanently?</p>
-      <p className="muted" style={{ fontSize: 13, margin: "0 0 6px" }}>
-        This removes {what}. It cannot be undone — there is no restore, and nobody is notified.
-      </p>
-      {note && (
-        <p className="muted" style={{ fontSize: 13, margin: "0 0 6px" }}>
-          {note}
-        </p>
-      )}
-      <label htmlFor={`del-confirm-${label}`} className="sub" style={{ display: "block", marginTop: 10, marginBottom: 4 }}>
-        Type {label} to confirm
-      </label>
-      <input
-        id={`del-confirm-${label}`}
-        className="field"
-        style={{ maxWidth: 220 }}
-        autoComplete="off"
-        value={typed}
-        onChange={(e) => setTyped(e.target.value)}
-      />
-      <label htmlFor={`del-reason-${label}`} className="sub" style={{ display: "block", marginTop: 10, marginBottom: 4 }}>
-        Reason (required — kept in the audit trail)
-      </label>
-      <textarea
-        id={`del-reason-${label}`}
-        className="field"
-        rows={2}
-        maxLength={500}
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-      />
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button
-          type="button"
-          className="btn btn-sm btn-danger"
-          disabled={busy || !armed}
-          onClick={async () => {
-            await onDelete(reason.trim());
-            close();
-          }}
-        >
-          Delete permanently
-        </button>
-        <button type="button" className="btn btn-sm" disabled={busy} onClick={close}>
-          Cancel
-        </button>
-      </div>
-    </div>
   );
 }
 

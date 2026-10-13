@@ -55,7 +55,7 @@ export async function getDraftAvailability(pool: Pool, ai: AiClient): Promise<Dr
 export type DraftOutcome =
   | { status: "ok"; kind: "challenge"; draft: ChallengeDraftOutput }
   | { status: "ok"; kind: "solution"; draft: SolutionDraftOutput }
-  | { status: "unavailable" | "restricted" | "minute" | "day" | "not_found" | "failed" };
+  | { status: "unavailable" | "restricted" | "minute" | "day" | "not_found" | "trashed" | "failed" };
 
 /** Runs one draft for `viewer`. Never throws for an AI failure — the caller maps the outcome. */
 export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: DraftRequest, signal?: AbortSignal): Promise<DraftOutcome> {
@@ -66,14 +66,18 @@ export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: Dr
   if (req.kind === "challenge") {
     restrictedContent = req.visibility === "namespace";
   } else {
-    const { rows } = await pool.query<{ title: string; description: string; visibility: "org" | "namespace"; status: string; author_id: string; namespace_id: string }>(
-      `select title, description, visibility, status, author_id, namespace_id from challenges where number = $1`,
+    const { rows } = await pool.query<{ title: string; description: string; visibility: "org" | "namespace"; status: string; author_id: string; namespace_id: string; trashed: boolean }>(
+      `select title, description, visibility, status, author_id, namespace_id, trashed_at is not null as trashed from challenges where number = $1`,
       [req.challengeNumber],
     );
     const row = rows[0];
+    // §10.4: a trashed challenge drops out of every AI task — refused (409) for the platform admin,
+    // the only one who can see it there.
+    if (row?.trashed && viewer.roles.isPlatformAdmin) return { status: "trashed" };
     if (
       !row ||
-      !canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id })
+      row.trashed ||
+      !canSeeChallenge(viewer, { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false })
     ) {
       return { status: "not_found" };
     }

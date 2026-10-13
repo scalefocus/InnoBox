@@ -68,7 +68,7 @@ test(
       // The JS predicate is the reference: each viewer's SQL view must match it exactly.
       const expected = (v: typeof author) =>
         all
-          .filter((c) => canSeeChallenge(v, { namespaceId: nsId, visibility: "namespace", status: c.status, authorId: author.userId }))
+          .filter((c) => canSeeChallenge(v, { namespaceId: nsId, visibility: "namespace", status: c.status, authorId: author.userId, trashed: false }))
           .map((c) => c.number)
           .sort();
       assert.deepEqual(expected(author), [triage.number, withdrawn.number].sort(), "fixture sanity: JS shows the author both");

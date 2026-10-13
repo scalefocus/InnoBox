@@ -17,6 +17,7 @@ export async function onExternalChallengeClosed(client: PoolClient, challengeId:
         set contact_erase_due_at = now() + make_interval(days => $2)
        from challenges c
       where c.id = $1 and ps.id = c.public_submission_id and ps.contact_erase_due_at is null
+        and c.trashed_at is null -- §24.7: a trashed challenge sends nothing (§10.4)
       returning ps.id, ps.title, ps.submitter_email`,
     [challengeId, CONTACT_RETENTION_DAYS],
   );

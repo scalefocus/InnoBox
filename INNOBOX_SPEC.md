@@ -1750,14 +1750,6 @@ never deleted, by anyone, for any reason (invariant 5).
 
 ### §10.4 Trash & restore (platform admin)
 
-> **⚠ GAP-77 · new feature:** the trash does not exist; the danger zone's only action
-> today is the immediate §10.3 delete. Build: a migration adding `trashed_at`,
-> `trashed_by` and `trash_reason` to `challenges` and `solutions` (§5); the trashed
-> exclusion in the shared visibility predicate and in every derived query listed
-> below; the trash and restore endpoints; the worker's daily purge job; the
-> `/admin/trash` page and its console card; the two-action danger zone (§10.3); the
-> read-only trashed detail view; and the tests below. Ships as one minor release.
-
 A deleted challenge or solution goes to a **trash** first, where it waits **30 days**
 before it is purged for good (§10.3). In that time a platform admin can **restore** it
 exactly as it was. It is a safety net against a mistaken delete, not an archive: a

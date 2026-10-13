@@ -110,7 +110,8 @@ async function resolveRoles(pool: Pool, userId: string, bootstrapAdminGroup: str
   );
 }
 
-/** The §4.3 gate for the row's item, with the item's CURRENT state. A vanished item is invisible. */
+/** The §4.3 gate for the row's item, with the item's CURRENT state. A vanished item is invisible,
+ *  and so is a trashed one (§10.4) — to everyone, platform admins included: it sends nothing. */
 async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet }, parentType: unknown, parentId: unknown): Promise<boolean> {
   if (typeof parentId !== "string" || (parentType !== "challenge" && parentType !== "solution")) return false;
   const { rows } = await pool.query<{
@@ -121,29 +122,32 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
     assignee_id: string | null;
     solution_status: SolutionStatus | null;
     solution_author_id: string | null;
+    trashed: boolean;
   }>(
     parentType === "challenge"
       ? `select c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
-                null as solution_status, null as solution_author_id
+                null as solution_status, null as solution_author_id, c.trashed_at is not null as trashed
            from challenges c where c.id = $1`
       : `select c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
-                s.status as solution_status, s.author_id as solution_author_id
+                s.status as solution_status, s.author_id as solution_author_id,
+                (s.trashed_at is not null or c.trashed_at is not null) as trashed
            from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [parentId],
   );
   const row = rows[0];
-  if (!row) return false;
+  if (!row || row.trashed) return false;
   const challengeVisible = canSeeChallenge(viewer, {
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.challenge_status,
     authorId: row.challenge_author_id,
+    trashed: false,
   });
   if (!challengeVisible || parentType === "challenge") return challengeVisible;
   return canSeeSolution(
     viewer,
     { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-    { status: row.solution_status!, authorId: row.solution_author_id! },
+    { status: row.solution_status!, authorId: row.solution_author_id!, trashed: false },
   );
 }
 

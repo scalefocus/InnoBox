@@ -6,6 +6,7 @@
 import { DISCUSSION_ERROR, aiDisplayName } from "@innobox/shared/ai";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { trashedResponse } from "@/lib/http";
 import { webAi } from "@/lib/ai";
 import { withSystemLog } from "@/lib/system-log";
 import { getAiDisplayNameSetting } from "../../../../admin/ai/store";
@@ -42,6 +43,8 @@ async function handlePOST(req: Request, context: { params: Promise<{ parentType:
       return Response.json({ ok: true, summary: outcome.summary, cached: outcome.cached });
     case "not_found":
       return Response.json({ error: NOT_FOUND }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "unavailable":
       return Response.json({ error: "Discussion summaries aren't available here right now.", code: "ai_unavailable" }, { status: 409 });
     case "too_short":

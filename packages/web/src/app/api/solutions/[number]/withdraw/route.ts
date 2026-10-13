@@ -10,6 +10,7 @@ import { withdrawSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
+import { trashedResponse } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,8 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
     }
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });
+    case "trashed":
+      return trashedResponse();
     case "forbidden":
       return Response.json({ error: "only the author can withdraw this solution" }, { status: 403 });
     case "not_withdrawable":

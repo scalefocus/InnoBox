@@ -84,15 +84,24 @@ async function loadParent(
   pool: Pool | PoolClient,
   parentType: AttachmentParentType,
   parentId: string,
-): Promise<{ authorId: string; status: string } | null> {
+): Promise<{ authorId: string; status: string; trashed: boolean } | null> {
   if (!isUuid(parentId)) return null;
-  const table = parentType === "challenge" ? "challenges" : "solutions";
-  const { rows } = await pool.query<{ author_id: string; status: string }>(
-    `select author_id, status from ${table} where id = $1`,
+  // §10.4: `trashed` is the item's own flag or, for a solution, its challenge's.
+  const { rows } = await pool.query<{ author_id: string; status: string; trashed: boolean }>(
+    parentType === "challenge"
+      ? `select author_id, status, trashed_at is not null as trashed from challenges where id = $1`
+      : `select s.author_id, s.status, (s.trashed_at is not null or c.trashed_at is not null) as trashed
+           from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [parentId],
   );
   const row = rows[0];
-  return row ? { authorId: row.author_id, status: row.status } : null;
+  return row ? { authorId: row.author_id, status: row.status, trashed: row.trashed } : null;
+}
+
+/** §10.4: a trashed parent takes no attachment change. Only a platform admin can see it, and is
+ *  told why (409); to anyone else it does not exist. */
+function trashedParentRefusal(viewer: Viewer): { status: "trashed" } | { status: "not_found" } {
+  return viewer.roles.isPlatformAdmin ? { status: "trashed" } : { status: "not_found" };
 }
 
 /** The refusal for a bound upload by someone other than the parent's author (§11 author-only,
@@ -179,6 +188,7 @@ export async function listAttachmentsForParent(
 export type UploadAttachmentResult =
   | { status: "ok"; attachment: AttachmentView }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   | { status: "too_many" }
@@ -200,6 +210,7 @@ export async function uploadAttachment(
 ): Promise<UploadAttachmentResult> {
   const parent = await loadParent(deps.pool, input.parentType, input.parentId);
   if (!parent) return { status: "not_found" };
+  if (parent.trashed) return trashedParentRefusal(viewer);
   // Author-only (404 for a parent the caller cannot see), and only within the parent's §10.1
   // author-edit window.
   if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, input.parentId);
@@ -425,6 +436,7 @@ export async function bindStagedAttachments(
 export type RemoveAttachmentResult =
   | { status: "ok" }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   | { status: "already_removed" };
@@ -466,6 +478,7 @@ export async function removeAttachment(
   if (att.parent_id !== null) {
     const parent = await loadParent(deps.pool, att.parent_type, att.parent_id);
     if (!parent) return { status: "not_found" };
+    if (parent.trashed) return trashedParentRefusal(viewer);
     if (!parentAcceptsAttachmentChanges(att.parent_type, parent.status)) return { status: "not_editable" };
   }
 
@@ -582,6 +595,7 @@ async function abortStaleUploadSessions(deps: AttachmentDeps, uploaderId: string
 export type InitiateUploadResult =
   | { status: "ok"; uploadId: string; chunkSizeBytes: number }
   | { status: "not_found" }
+  | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   | { status: "too_many" }
@@ -627,6 +641,7 @@ export async function initiateChunkedUpload(
     if (typeof parentId !== "string" || !isUuid(parentId)) return { status: "not_found" };
     const parent = await loadParent(deps.pool, input.parentType, parentId);
     if (!parent) return { status: "not_found" };
+    if (parent.trashed) return trashedParentRefusal(viewer);
     if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, parentId);
     if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
     if ((await countLiveAttachments(deps.pool, { kind: "parent", parentType: input.parentType, parentId })) >= limits.maxPerItem) {
@@ -780,7 +795,8 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
     : { kind: "parent", parentType: session.parent_type, parentId: session.parent_id! };
   if (capTarget.kind === "parent") {
     const parent = await loadParent(deps.pool, capTarget.parentType, capTarget.parentId);
-    if (!parent) return abortAnd({ status: "not_found" });
+    // §10.4: trashing drops the parent's open sessions, so a trashed parent is a lost race — gone.
+    if (!parent || parent.trashed) return abortAnd({ status: "not_found" });
     if (parent.authorId !== viewer.userId) {
       return abortAnd(await nonAuthorRefusal(deps.pool, viewer, capTarget.parentType, capTarget.parentId));
     }
