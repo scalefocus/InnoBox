@@ -10,7 +10,7 @@
 //
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool, PoolClient } from "pg";
-import { isPublicAddress } from "@innobox/shared";
+import { isAlwaysRefusedAddress, isPublicAddress } from "@innobox/shared";
 import {
   AI_FEATURES,
   AI_PROVIDER_LABEL,
@@ -34,6 +34,7 @@ import {
   sameAiTimeouts,
   storedTokenApplies,
   tokenLast4,
+  type AiFailure,
   type AiFeature,
   type AiIntegrationRow,
   type AiProvider,
@@ -201,7 +202,12 @@ const AI_TOKEN_UNREADABLE_MESSAGE = "The stored API key cannot be decrypted — 
 /** Normalizes the base URL and applies the stored-token rule (§22.1 #6). */
 async function resolveConnection(pool: Pool, deps: AiAdminDeps, input: AiConnectionInput): Promise<Resolved> {
   if (!deps.key) return { ok: false, status: "key_missing" };
-  const base = normalizeAiBaseUrl(input.provider, input.baseUrl, { allowLocalhost: !!deps.transport.allowLocalhost, isPublicAddress });
+  const base = normalizeAiBaseUrl(input.provider, input.baseUrl, {
+    allowLocalhost: !!deps.transport.allowLocalhost,
+    isPublicAddress,
+    isAlwaysRefusedAddress,
+    allowedPrivateHosts: deps.transport.allowedPrivateHosts,
+  });
   if (!base.ok) return { ok: false, status: "invalid", error: base.message };
   const row = await readAiIntegration(pool);
   const storedToken = row ? decryptAiToken(row.tokenEnc, deps.key) : null;
@@ -221,9 +227,20 @@ function isSavedConfig(r: Extract<Resolved, { ok: true }>, model: string): boole
   return !!r.row && r.row.provider === r.provider && r.row.baseUrl === r.baseUrl && r.row.model === model && (r.usesStoredToken || r.token === r.storedToken);
 }
 
-async function runAndRecordTest(pool: Pool, deps: AiAdminDeps, adminUserId: string, r: Extract<Resolved, { ok: true }>, model: string): Promise<AiTestResult> {
-  const result = await runAiTest({ provider: r.provider, baseUrl: r.baseUrl, token: r.token, model }, { transport: deps.transport });
-  // Every test writes one usage row (feature = 'test'); tests are never audited or system-logged.
+async function runAndRecordTest(
+  pool: Pool,
+  deps: AiAdminDeps,
+  adminUserId: string,
+  r: Extract<Resolved, { ok: true }>,
+  model: string,
+): Promise<{ result: AiTestResult; failure: AiFailure | null }> {
+  let failure: AiFailure | null = null;
+  const result = await runAiTest(
+    { provider: r.provider, baseUrl: r.baseUrl, token: r.token, model },
+    { transport: deps.transport, onFailure: (f) => (failure = f) },
+  );
+  // Every test writes one usage row (feature = 'test'); tests are never audited. A failure's
+  // diagnostic is handed back for the route's system-log row (§22.5) — never into the result.
   await recordAiUsage(pool, {
     feature: "test",
     userId: adminUserId,
@@ -235,19 +252,20 @@ async function runAndRecordTest(pool: Pool, deps: AiAdminDeps, adminUserId: stri
     ok: result.ok,
     errorCode: result.ok ? null : "ai_provider_error",
   });
-  return result;
+  return { result, failure };
 }
 
 // ── Test, model list ─────────────────────────────────────────────────────────────────────
 
-export type AiTestOutcome = Exclude<Resolved, { ok: true }> | { ok: true; result: AiTestResult };
+/** `failure` is for the system log only (§22.5): the route must never put it in a response. */
+export type AiTestOutcome = Exclude<Resolved, { ok: true }> | { ok: true; result: AiTestResult; failure: AiFailure | null };
 
 /** POST /api/admin/ai/test — the values currently in the form. Only a test of exactly the saved
  *  configuration updates last_test_*. */
 export async function testAiConfig(pool: Pool, deps: AiAdminDeps, adminUserId: string, input: AiConfigInput): Promise<AiTestOutcome> {
   const r = await resolveConnection(pool, deps, input);
   if (!r.ok) return r;
-  const result = await runAndRecordTest(pool, deps, adminUserId, r, input.model);
+  const { result, failure } = await runAndRecordTest(pool, deps, adminUserId, r, input.model);
   if (isSavedConfig(r, input.model)) {
     // Guarded on the same configuration, in case a concurrent save replaced it meanwhile.
     await pool.query(
@@ -257,17 +275,25 @@ export async function testAiConfig(pool: Pool, deps: AiAdminDeps, adminUserId: s
       [result.ok, result.error, result.latencyMs, result.model, r.provider, r.baseUrl, input.model, r.row!.tokenEnc],
     );
   }
-  return { ok: true, result };
+  return { ok: true, result, failure };
 }
 
-export type AiModelsOutcome = Exclude<Resolved, { ok: true }> | { ok: true; models: string[] } | { ok: false; status: "failed"; error: string };
+export type AiModelsOutcome =
+  | Exclude<Resolved, { ok: true }>
+  | { ok: true; models: string[] }
+  | { ok: false; status: "failed"; error: string; failure: AiFailure | null };
 
-/** POST /api/admin/ai/models — 20 s, no retry, not recorded. */
+/** POST /api/admin/ai/models — 20 s, no retry, no usage row. A failure's diagnostic is handed back
+ *  for the route's system-log row (§22.5). */
 export async function loadAiModels(pool: Pool, deps: AiAdminDeps, input: AiConnectionInput): Promise<AiModelsOutcome> {
   const r = await resolveConnection(pool, deps, input);
   if (!r.ok) return r;
-  const listed = await listAiModels({ provider: r.provider, baseUrl: r.baseUrl, token: r.token }, { transport: deps.transport });
-  return listed.ok ? { ok: true, models: listed.models } : { ok: false, status: "failed", error: listed.error };
+  let failure: AiFailure | null = null;
+  const listed = await listAiModels(
+    { provider: r.provider, baseUrl: r.baseUrl, token: r.token },
+    { transport: deps.transport, onFailure: (f) => (failure = f) },
+  );
+  return listed.ok ? { ok: true, models: listed.models } : { ok: false, status: "failed", error: listed.error, failure };
 }
 
 // ── Save, enable/disable, remove ─────────────────────────────────────────────────────────
@@ -275,7 +301,7 @@ export async function loadAiModels(pool: Pool, deps: AiAdminDeps, input: AiConne
 export type AiSaveOutcome =
   | Exclude<Resolved, { ok: true }>
   | { ok: true; status: "saved" | "noop" }
-  | { ok: false; status: "test_failed"; result: AiTestResult };
+  | { ok: false; status: "test_failed"; result: AiTestResult; failure: AiFailure | null };
 
 /** PUT /api/admin/ai — validate, test, and on a pass upsert (keeping `enabled` as it was). On a
  *  fail nothing is persisted (beyond the test's own usage row). Identical values are a no-op. */
@@ -284,8 +310,8 @@ export async function saveAiConfig(pool: Pool, deps: AiAdminDeps, adminUserId: s
   if (!r.ok) return r;
   if (isSavedConfig(r, input.model)) return { ok: true, status: "noop" };
 
-  const result = await runAndRecordTest(pool, deps, adminUserId, r, input.model);
-  if (!result.ok) return { ok: false, status: "test_failed", result };
+  const { result, failure } = await runAndRecordTest(pool, deps, adminUserId, r, input.model);
+  if (!result.ok) return { ok: false, status: "test_failed", result, failure };
 
   const tokenRotated = !r.usesStoredToken && r.token !== r.storedToken;
   const key = deps.key!;

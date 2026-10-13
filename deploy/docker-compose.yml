@@ -148,6 +148,8 @@ services:
       WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
       # §22 AI provider: API-key encryption key (shared with the worker; unset → AI form off).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §22.2 AI provider hosts allowed on private addresses (shared with the worker; unset → none).
+      AI_ALLOWED_PRIVATE_HOSTS: ${AI_ALLOWED_PRIVATE_HOSTS:-}
     restart: always
     expose:
       - "3000"
@@ -192,6 +194,8 @@ services:
       WEBHOOK_ENC_KEY: ${WEBHOOK_ENC_KEY:-}
       # §22 AI background tasks: the same API-key encryption key as web (unset → AI off).
       AI_TOKEN_ENC_KEY: ${AI_TOKEN_ENC_KEY:-}
+      # §22.2 the same private-network AI provider allowlist as web (unset → none).
+      AI_ALLOWED_PRIVATE_HOSTS: ${AI_ALLOWED_PRIVATE_HOSTS:-}
       ENTRA_EMAIL_CLIENT_ID: ${ENTRA_EMAIL_CLIENT_ID:-}
       ENTRA_EMAIL_CLIENT_SECRET: ${ENTRA_EMAIL_CLIENT_SECRET:-}
       SMTP_HOST: ${SMTP_HOST:-}

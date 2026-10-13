@@ -81,6 +81,11 @@ test(
       // Save-fail persists nothing (but the test is recorded as usage).
       const failed = await store.saveAiConfig(pool, deps, adminId, { ...cfg, model: "broken" });
       assert.equal(!failed.ok && failed.status, "test_failed");
+      // §22.5: the diagnostic (host + status) is handed back for the system log only.
+      const failure = !failed.ok && failed.status === "test_failed" ? failed.failure : null;
+      assert.equal(failure?.code, "ai_provider_error");
+      assert.equal(failure?.diagnostic, "HTTP 400: no such model — HTTP 400 from 127.0.0.1");
+      assert.ok(!JSON.stringify(!failed.ok && failed.status === "test_failed" ? failed.result : null).includes("from 127.0.0.1"), "never in the result");
       assert.equal(await ai.readAiIntegration(pool), null);
       const { rows: testRows } = await pool.query(`select feature, user_id, ok from ai_usage`);
       assert.deepEqual(testRows, [{ feature: "test", user_id: adminId, ok: false }]);
@@ -122,6 +127,7 @@ test(
       // Only a test of exactly the saved configuration updates last_test_*.
       const other = await store.testAiConfig(pool, deps, adminId, { ...cfg, model: "broken", token: "" });
       assert.ok(other.ok && !other.result.ok);
+      assert.match(other.ok ? (other.failure?.diagnostic ?? "") : "", / — HTTP 400 from 127\.0\.0\.1$/);
       assert.equal((await ai.readAiIntegration(pool))!.lastTestOk, true, "a different model leaves last_test_* alone");
 
       // Enable gating: a failing test of the saved config blocks enabling.
@@ -129,6 +135,7 @@ test(
       assert.deepEqual(await store.setAiEnabled(pool, deps, adminId, true), { ok: false, status: "test_required" });
       const retest = await store.testAiConfig(pool, deps, adminId, { ...cfg, token: "" });
       assert.ok(retest.ok && retest.result.ok);
+      assert.equal(retest.ok && retest.failure, null, "a pass hands back no failure");
       assert.equal((await ai.readAiIntegration(pool))!.lastTestOk, true, "the saved config's test refreshes last_test_*");
       assert.deepEqual(await store.setAiEnabled(pool, { ...deps, key: randomBytes(32) }, adminId, true), { ok: false, status: "token_undecryptable" });
       assert.deepEqual(await store.setAiEnabled(pool, deps, adminId, true), { ok: true, changed: true });

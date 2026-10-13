@@ -61,3 +61,18 @@ test("the store never audits the key or its last 4", () => {
     assert.ok(!/token(Enc|_enc|Last4|_last4)|r\.token\b/.test(payload), `audit payload: ${payload.slice(0, 80)}`);
   }
 });
+
+test("the provider diagnostic only ever reaches the system log, never a response body (§22.5)", () => {
+  for (const file of [...ROUTES, "responses.ts"]) {
+    const source = readFileSync(path.join(here, file), "utf8");
+    // The call's own arguments — up to its first `)`, so a wrapping note call is not included.
+    for (const m of source.matchAll(/(?:Response\.json|aiError)\(([^)\n]*)/g)) {
+      assert.ok(!/failure|diagnostic/.test(m[1]!), `${file}: ${m[0].slice(0, 100)}`);
+    }
+  }
+  const responses = readFileSync(path.join(here, "responses.ts"), "utf8");
+  assert.match(responses, /noteSystemEvent\(res, \{ status: aiAdminFailureLogStatus\(failure\.code\), errorCode: failure\.code, message: `AI \$\{what\} failed: \$\{failure\.diagnostic\}` \}\)/);
+  assert.match(readFileSync(path.join(here, "test", "route.ts"), "utf8"), /noteAiFailure\(Response\.json\(outcome\.result\), "test", outcome\.failure\)/);
+  assert.match(readFileSync(path.join(here, "models", "route.ts"), "utf8"), /noteAiFailure\(Response\.json\(\{ ok: false, error: outcome\.error \}\), "model list", outcome\.failure\)/);
+  assert.match(readFileSync(path.join(here, "route.ts"), "utf8"), /noteAiSaveFailure\(aiError\(422, "ai_test_failed"/);
+});

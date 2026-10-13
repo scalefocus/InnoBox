@@ -9,7 +9,11 @@ import {
   AI_FEATURES,
   AI_QUOTA_MESSAGE,
   AiError,
+  aiAdminFailureLogStatus,
+  aiAllowedPrivateHostsWarning,
   aiCompletionUrl,
+  aiErrnoCode,
+  aiFailureDiagnostic,
   aiDisplayName,
   aiEnableBlocker,
   aiModelsUrl,
@@ -19,7 +23,9 @@ import {
   deriveAiStatus,
   effectiveAiTimeoutMs,
   findAiFeature,
+  formatAiAddresses,
   normalizeAiBaseUrl,
+  parseAiAllowedPrivateHosts,
   parseAiCompletionBody,
   parseAiDisplayName,
   parseAiJson,
@@ -35,7 +41,7 @@ import {
   type AiFeature,
   type AiStatusInput,
 } from "./ai-rules.js";
-import { isPublicAddress } from "./webhook-address.js";
+import { ipLiteralFamily, isAlwaysRefusedAddress, isPublicAddress } from "./webhook-address.js";
 
 const prod = { allowLocalhost: false, isPublicAddress };
 const dev = { allowLocalhost: true, isPublicAddress };
@@ -299,4 +305,52 @@ test("display name: 1–24 printable characters; empty means AI", () => {
   assert.equal(aiDisplayName(undefined), "AI");
   assert.equal(aiDisplayName("Ada"), "Ada");
   assert.equal(aiDisplayName("bad\u0000"), "AI");
+});
+
+// ── Private-network providers & the system-log diagnostic (§2.3, §22.2, §22.5, §22.6) ─────
+
+test("base URL: a private IP literal passes only when listed, never a loopback or link-local one", () => {
+  const listed = { ...prod, isAlwaysRefusedAddress, allowedPrivateHosts: new Set(["10.1.2.3", "fd00::5", "127.0.0.1", "169.254.169.254"]) };
+  assert.equal(url(normalizeAiBaseUrl("openai", "https://10.1.2.3/v1", listed)), "https://10.1.2.3/v1");
+  assert.equal(url(normalizeAiBaseUrl("openai", "https://[fd00::5]/v1", listed)), "https://[fd00::5]/v1");
+  assert.equal(url(normalizeAiBaseUrl("openai", "https://10.1.2.4/v1", listed)), "!blocked_address", "exact match only");
+  assert.equal(url(normalizeAiBaseUrl("openai", "https://127.0.0.1/v1", listed)), "!refused_address", "loopback stays refused");
+  assert.equal(url(normalizeAiBaseUrl("openai", "https://169.254.169.254/v1", listed)), "!refused_address", "the metadata endpoint stays refused");
+  const blocked = normalizeAiBaseUrl("openai", "https://10.1.2.4/v1", listed);
+  assert.ok(!blocked.ok && blocked.message.includes("AI_ALLOWED_PRIVATE_HOSTS"), "the refusal names the setting");
+  assert.ok(!blocked.ok && !blocked.message.includes("§"));
+});
+
+test("AI_ALLOWED_PRIVATE_HOSTS: exact host names and IP literals, trimmed and lower-cased", () => {
+  const isIp = (t: string) => ipLiteralFamily(t) !== 0;
+  const { hosts, invalid } = parseAiAllowedPrivateHosts(" AI.Example.com , 10.0.0.7,[fd00::1],, *.corp.example, 10.0.0.0/8, host:8443, -bad-.example ", isIp);
+  assert.deepEqual([...hosts], ["ai.example.com", "10.0.0.7", "fd00::1"]);
+  assert.deepEqual(invalid, ["*.corp.example", "10.0.0.0/8", "host:8443", "-bad-.example"]);
+  assert.equal(parseAiAllowedPrivateHosts(undefined, isIp).hosts.size, 0, "unset → no exception");
+  assert.equal(aiAllowedPrivateHostsWarning([]), null);
+  const warn = JSON.parse(aiAllowedPrivateHostsWarning(["*.corp.example"])!) as { level: string; entries: string[] };
+  assert.equal(warn.level, "warn");
+  assert.deepEqual(warn.entries, ["*.corp.example"]);
+});
+
+test("diagnostic: card error + detail, token redacted; errno codes only; addresses capped at 8", () => {
+  const e = new AiError("ai_provider_error", { message: "The connection to the AI provider failed.", detail: "connecting to ai.example.com (10.0.0.5) failed: ECONNREFUSED" });
+  assert.equal(aiFailureDiagnostic(e), "The connection to the AI provider failed. — connecting to ai.example.com (10.0.0.5) failed: ECONNREFUSED");
+  assert.equal(aiFailureDiagnostic(new AiError("ai_timeout")), "The AI provider did not answer in time.", "no detail → the card error alone");
+  const leaky = new AiError("ai_provider_error", { message: "HTTP 401: bad key sk-SECRETSECRET1", detail: "HTTP 401 from ai.example.com — Bearer abc.def" });
+  const text = aiFailureDiagnostic(leaky, "sk-SECRETSECRET1");
+  assert.ok(!text.includes("SECRETSECRET") && !text.includes("abc.def"), text);
+
+  assert.equal(aiErrnoCode(Object.assign(new Error("connect ECONNREFUSED https://ai.example.com/x"), { code: "ECONNREFUSED" })), "ECONNREFUSED");
+  assert.equal(aiErrnoCode({ code: "ERR_TLS_CERT_ALTNAME_INVALID" }), "ERR_TLS_CERT_ALTNAME_INVALID");
+  assert.equal(aiErrnoCode({ code: "https://ai.example.com/" }), null, "never anything URL-like");
+  assert.equal(aiErrnoCode(new Error("no code")), null);
+  assert.equal(aiErrnoCode(null), null);
+
+  assert.equal(formatAiAddresses(["10.0.0.1", "10.0.0.2"]), "10.0.0.1, 10.0.0.2");
+  const ten = Array.from({ length: 10 }, (_, i) => `10.0.0.${i}`);
+  assert.equal(formatAiAddresses(ten), `${ten.slice(0, 8).join(", ")} +2 more`);
+
+  assert.equal(aiAdminFailureLogStatus("ai_timeout"), 504);
+  assert.equal(aiAdminFailureLogStatus("ai_provider_error"), 502);
 });

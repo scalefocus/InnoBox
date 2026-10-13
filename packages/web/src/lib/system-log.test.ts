@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SystemEventInput } from "@innobox/shared";
-import { INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, type SystemLogDeps } from "./system-log-core";
+import { INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, noteSystemEvent, type SystemLogDeps } from "./system-log-core";
 
 function fakeDeps(overrides: Partial<SystemLogDeps> = {}) {
   const recorded: SystemEventInput[] = [];
@@ -193,4 +193,35 @@ test("anonymousActor: the row carries no user id and no actor snapshot, and the 
     assert.equal(row.actorEmail, null);
   }
   assert.equal(resolved, 0);
+});
+
+test("a noted response is recorded with the note's status, code and message — even a 2xx — and the body is untouched (§22.5)", async () => {
+  const { recorded, withSystemLog } = fakeDeps();
+  const POST = withSystemLog("/api/admin/ai/test", async (_req: Request) =>
+    noteSystemEvent(Response.json({ ok: false, error: "The connection to the AI provider failed." }), {
+      status: 502,
+      errorCode: "ai_provider_error",
+      message: "AI test failed: The connection to the AI provider failed. — connecting to ai.example.com (10.0.0.5) failed: ECONNREFUSED\nsecond line",
+    }),
+  );
+  const res = await POST(req("POST", "/api/admin/ai/test"));
+  assert.equal(res.status, 200, "the client still gets the handler's response");
+  const body = (await res.json()) as { error: string };
+  assert.ok(!JSON.stringify(body).includes("ECONNREFUSED"), "the diagnostic never reaches the client");
+  await settle();
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.status, 502);
+  assert.equal(recorded[0]!.errorCode, "ai_provider_error");
+  assert.equal(recorded[0]!.message, "AI test failed: The connection to the AI provider failed. — connecting to ai.example.com (10.0.0.5) failed: ECONNREFUSED", "one sanitized line");
+  assert.equal(recorded[0]!.route, "/api/admin/ai/test");
+  assert.equal(recorded[0]!.userId, "u-1", "recorded as the admin");
+
+  // A note on an error response replaces its message; with no status it keeps the response's.
+  const PUT = withSystemLog("/api/admin/ai", async (_req: Request) =>
+    noteSystemEvent(Response.json({ error: "The test failed, so nothing was saved" }, { status: 422 }), { errorCode: "ai_test_failed", message: "AI save test failed: x" }),
+  );
+  await PUT(req("PUT", "/api/admin/ai"));
+  await settle();
+  assert.equal(recorded.length, 2, "one row, never two");
+  assert.deepEqual([recorded[1]!.status, recorded[1]!.errorCode, recorded[1]!.message], [422, "ai_test_failed", "AI save test failed: x"]);
 });
