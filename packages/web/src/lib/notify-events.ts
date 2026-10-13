@@ -261,7 +261,8 @@ export async function notifyChallengeSubmitted(
     await getNamespaceAdminUserIds(ctx.pool, challenge.namespaceId),
     "challenge_submitted",
     {
-      message: `New challenge ${formatChallengeNumber(challenge.number)} "${challenge.title}" needs triage.`,
+      // Both callers pass the display number ("CH-412"); normalize so it is prefixed exactly once.
+      message: `New challenge ${formatChallengeNumber(digitsOf(challenge.number))} "${challenge.title}" needs triage.`,
       link: `/challenges/${digitsOf(challenge.number)}`,
     },
   );

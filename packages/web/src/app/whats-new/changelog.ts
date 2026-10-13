@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.7.1",
+    date: "2026-10-13",
+    summary:
+      'The notification admins get when a new challenge needs triage showed its number twice, as "CH-CH-12". It now reads "CH-12" again, both for challenges submitted in the app and for those submitted through an AI agent. No action is needed.',
+  },
+  {
     version: "1.7.0",
     date: "2026-10-13",
     summary:

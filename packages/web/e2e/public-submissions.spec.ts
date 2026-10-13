@@ -3,7 +3,8 @@
 // a platform admin accepts it in the queue, and the challenge sits in the triage queue labelled
 // "External submission". The switch is platform-wide (this spec is pinned to shard 1) and is put
 // back as it was whatever happens. Needs a server with PUBLIC_INTAKE_KEY and an e-mail transport
-// (Jenkins sets both), and the dev seam for the confirmation token — it self-skips otherwise.
+// (Jenkins sets both) — it self-skips otherwise — and reads the confirmation token from the dev
+// seam, which is on wherever dev sign-in is.
 import { test, expect, type BrowserContext } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 
@@ -63,7 +64,21 @@ test("submit on /submit, confirm through the link, accept in the queue → Exter
 
     // ── The outsider: no session, no app shell ─────────────────────────────────────────────
     const page = await outsider.newPage();
-    const loadedAt = Date.now();
+    // The server's "too fast" clock starts when it ISSUES the proof-of-work challenge, which the
+    // form fetches only after hydrating (twice under dev StrictMode) — not at navigation. Timing
+    // from the latest challenge response bounds the issuance from above, so the wait below is safe.
+    let powIssuedAt = Date.now();
+    page.on("response", (r) => {
+      if (r.url().endsWith("/api/public/pow")) powIssuedAt = Date.now();
+    });
+    // Read the 202 through a route: the form never consumes that body, so waiting on the page's
+    // own response body can stall. route.fetch() reads it on the test side and passes it on as is.
+    const submitted: { status?: number; devConfirmToken?: string } = {};
+    await page.route("**/api/public/submissions", async (route) => {
+      const res = await route.fetch();
+      Object.assign(submitted, { status: res.status() }, (await res.json().catch(() => ({}))) as { devConfirmToken?: string });
+      await route.fulfill({ response: res });
+    });
     await page.goto("/submit");
     await expect(page.getByRole("heading", { name: "Submit a challenge" })).toBeVisible();
     await expect(page.locator(".sidebar-head")).toHaveCount(0);
@@ -79,13 +94,15 @@ test("submit on /submit, confirm through the link, accept in the queue → Exter
     const submit = page.getByRole("button", { name: "Submit" });
     await expect(submit).toBeEnabled({ timeout: 30_000 }); // the proof-of-work is solved
     // A person takes more than 3 seconds to fill the form; a faster answer is dropped silently.
-    const wait = 3_500 - (Date.now() - loadedAt);
+    const wait = 3_500 - (Date.now() - powIssuedAt);
     if (wait > 0) await page.waitForTimeout(wait);
 
-    const [response] = await Promise.all([page.waitForResponse((r) => r.url().endsWith("/api/public/submissions")), submit.click()]);
-    expect(response.status()).toBe(202);
-    const token = ((await response.json()) as { devConfirmToken?: string }).devConfirmToken;
-    test.skip(!token, "the dev seam is off — the confirmation token is only in the e-mail");
+    await submit.click();
+    await expect.poll(() => submitted.status).toBe(202);
+    // The seam is on wherever the e2e can sign in (dev auth, non-production build), so a missing
+    // token means the server silently dropped the submission — fail rather than skip it away.
+    const token = submitted.devConfirmToken;
+    expect(token, "no confirmation token — the submission was dropped as too fast or as a bot").toBeTruthy();
     await expect(page.getByTestId("public-submit-done")).toContainText("Check your inbox");
 
     await page.goto(`/submit/confirm#${token}`);
