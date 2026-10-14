@@ -228,7 +228,7 @@ export function SubmitForm() {
             <span>Who should see this?</span>
           </legend>
           <div className="public-radios">
-            {(["org", "people", "teams"] as const).map((option) => (
+            {(["org", "teams", "people"] as const).map((option) => (
               <label key={option} className="public-check">
                 <input type="radio" name="ps-visibility" value={option} checked={visibility === option} onChange={() => setVisibility(option)} />
                 <span>{REQUESTED_VISIBILITY_LABELS[option]}</span>

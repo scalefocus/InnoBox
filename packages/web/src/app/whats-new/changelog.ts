@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.2",
+    date: "2026-10-14",
+    summary:
+      "On the public submission form, the \"Who should see this?\" choices now list Specific teams before Specific people. Everyone in the organization is still the first option and the default.",
+  },
+  {
     version: "1.10.1",
     date: "2026-10-14",
     summary:
