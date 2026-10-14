@@ -39,12 +39,19 @@ export interface PublicIntakePreconditions {
 
 export type MissingPrecondition = "key" | "notice" | "transport";
 
+/** Every unmet precondition, in the fixed key → notice → transport order; empty when the switch
+ *  may be on. The card lists them all so an admin can fix them in one pass. */
+export function unmetPreconditions(p: PublicIntakePreconditions): MissingPrecondition[] {
+  const unmet: MissingPrecondition[] = [];
+  if (!p.keyValid) unmet.push("key");
+  if (!p.noticeSet) unmet.push("notice");
+  if (!p.transportAvailable) unmet.push("transport");
+  return unmet;
+}
+
 /** The first missing precondition, or null when the switch may be on. */
 export function missingPrecondition(p: PublicIntakePreconditions): MissingPrecondition | null {
-  if (!p.keyValid) return "key";
-  if (!p.noticeSet) return "notice";
-  if (!p.transportAvailable) return "transport";
-  return null;
+  return unmetPreconditions(p)[0] ?? null;
 }
 
 /** The card's hint for a missing precondition (plain text, no section marks). */
@@ -53,6 +60,17 @@ export const PRECONDITION_HINT: Record<MissingPrecondition, string> = {
   notice: "Enter a privacy notice first.",
   transport: "Connect the notification sender (or configure the SMTP fallback) first.",
 };
+
+/** One line of the card's unmet list: the precondition and its plain-text hint. */
+export interface UnmetPrecondition {
+  precondition: MissingPrecondition;
+  hint: string;
+}
+
+/** The card's unmet list — every unmet precondition with its hint, in order. */
+export function unmetPreconditionList(p: PublicIntakePreconditions): UnmetPrecondition[] {
+  return unmetPreconditions(p).map((precondition) => ({ precondition, hint: PRECONDITION_HINT[precondition] }));
+}
 
 export interface PublicIntakeState extends PublicIntakeSettings, PublicIntakePreconditions {
   /** The switch is on AND every precondition holds: the public routes answer. */

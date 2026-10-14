@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { deleteReq, readJson } from "@/lib/api-client";
 import { invalidateApi } from "@/lib/ui";
+import { copyText } from "@/lib/clipboard";
 import { VIA_AGENT_TOOLTIP } from "@/components/ViaAgentTag";
 
 const URL_ = "/api/me/agents";
@@ -155,33 +156,6 @@ function snippetsFor(url: string): Snippet[] {
       text: JSON.stringify({ servers: { innobox: { type: "http", url } } }, null, 2),
     },
   ];
-}
-
-/** Copies `text`; falls back to a hidden textarea where the async clipboard is unavailable
- *  (a non-secure context). Resolves false when neither works. */
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* fall through to the legacy path */
-  }
-  try {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(area);
-    return ok;
-  } catch {
-    return false;
-  }
 }
 
 function ConnectCard({ serverUrl }: { serverUrl: string }) {

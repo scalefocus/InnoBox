@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Admins can now share a challenge with a named list of people instead of everyone: only they, the namespace's admins and committee and the assignee can see it, and the people listed are notified once it leaves triage. The public submission form also asks who should see a challenge — specific people, specific teams or everyone — and the reviewing admin decides on accept.",
   },
   {
+    version: "1.8.0",
+    date: "2026-10-13",
+    summary:
+      'While the public submission form is working, the Raise a challenge page offers an "or ask a customer to challenge us" link that copies its address, ready to send to a customer or partner. Platform admins setting the form up now see every missing prerequisite at once, so they can fix them all in one pass.',
+  },
+  {
     version: "1.7.1",
     date: "2026-10-13",
     summary:

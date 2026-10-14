@@ -686,6 +686,15 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* Display headings anchor in brand Navy (light) / a legible navy tint (dark) — Montserrat Bold. */
 .page-title { font-family: var(--font-display); font-size: clamp(34px, 5vw, 52px); font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; color: var(--anchor); font-optical-sizing: auto; }
 .page-sub { color: var(--muted); margin-top: 12px; max-width: 60ch; font-size: 15.5px; }
+/* A button that reads as an inline text link — an action with no navigation (e.g. §6.1's
+   "or ask a customer to challenge us", which copies the public form's address). */
+.link-button {
+  display: inline-block; margin-top: 8px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 14px; color: var(--accent-2); text-decoration: underline;
+  text-decoration-color: transparent; text-underline-offset: 3px; transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+.link-button:hover { color: var(--accent); text-decoration-color: currentColor; }
+.link-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 /* §13.5: the muted "Deactivated" notice on a deactivated user's public profile — the same dashed
    pill as the hover card's flag (§13.8), one size up. */
 .profile-deactivated {
