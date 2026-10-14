@@ -6129,20 +6129,21 @@ Fields, with the §6.1 limits where one exists:
   **Company** (optional, ≤ 200).
 - **Who should see this?** — a radio group, required, with three options; a hint below
   it reads *"The team that reviews your submission decides the final visibility."*
+  The options appear in this order:
   - **Everyone in the organization** — the default.
+  - **Specific teams** — reveals a required tag field, **Team names**, free text.
+    Pressing **Enter** or **comma** locks a name in as a tag when it has **at least 3
+    characters** after trimming (any characters count) and at most 100; otherwise
+    *"Team names need at least 3 characters."* Pasting splits on commas, semicolons and
+    line breaks (not spaces — team names may contain them). **1–10** names; a
+    case-insensitive duplicate is refused.
   - **Specific people** — reveals a required tag field, **Their work e-mails**. Typing
-    an address and pressing **Enter** or **comma** locks it in as a tag when it passes
-    the same syntax check as *Your e-mail* (≤ 254); otherwise it stays in the field with
-    the inline error *"Enter a valid e-mail address."* Pasting splits on commas,
-    semicolons, spaces and line breaks: valid addresses become tags, and the rest stay
-    in the field, flagged. **1–20** addresses, compared lower-cased; a duplicate is
-    refused inline (*"Already added."*).
-  - **Specific teams** — reveals a required tag field, **Team names**, free text. Enter
-    or comma locks a name in when it has **at least 3 characters** after trimming (any
-    characters count) and at most 100; otherwise *"Team names need at least 3
-    characters."* Pasting splits on commas, semicolons and line breaks (not spaces —
-    team names may contain them). **1–10** names; a case-insensitive duplicate is
-    refused.
+    an address and pressing Enter or comma locks it in as a tag when it passes the same
+    syntax check as *Your e-mail* (≤ 254); otherwise it stays in the field with the
+    inline error *"Enter a valid e-mail address."* Pasting splits on commas, semicolons,
+    spaces and line breaks: valid addresses become tags, and the rest stay in the field,
+    flagged. **1–20** addresses, compared lower-cased; a duplicate is refused inline
+    (*"Already added."*).
 
   Both tag fields work the same way. Each tag has a **✕** (`aria-label="Remove <value>"`),
   Backspace in an empty field removes the last tag, and the tags form a list announced
