@@ -15,13 +15,18 @@ import {
   parsePowSolution,
   silentDrop,
   validatePublicSubmission,
+  validateVisibilityRequest,
   verifyPowSolution,
   type PublicSubmissionFields,
+  type VisibilityRequest,
 } from "@innobox/shared";
 import { readJsonObject } from "../../../lib/http";
 import { takeToken, type RateLimitBucket } from "../../../lib/rate-limit";
 import { countPublicSubmission, publicNotFound } from "../../../lib/public-intake";
 import type { ConfirmResult, ReceiveResult } from "./store";
+
+/** What the store receives: the form's fields plus the §24.3 *Who should see this?* request. */
+export type ReceivedSubmission = PublicSubmissionFields & { request: VisibilityRequest };
 
 export interface PublicRouteDeps {
   /** Whether the form is live, and its notice. */
@@ -31,7 +36,7 @@ export interface PublicRouteDeps {
   /** The TRUST_PROXY-selected client address, null when none. */
   clientIp: string | null;
   now?: () => number;
-  receive: (fields: PublicSubmissionFields, powSalt: string) => Promise<ReceiveResult>;
+  receive: (fields: ReceivedSubmission, powSalt: string) => Promise<ReceiveResult>;
   confirm: (token: string) => Promise<ConfirmResult>;
   /** The dev/e2e seam: include the confirmation token in the 202. */
   exposeDevToken?: boolean;
@@ -97,6 +102,9 @@ export function handlePublicSubmission(req: Request, deps: PublicRouteDeps): Pro
     if (!read.ok) return read.response;
     const fields = validatePublicSubmission(read.value);
     if (!fields.ok) return json({ error: fields.error }, 422);
+    // §24.3: the visibility request — only a request, which the admin settles on accept.
+    const request = validateVisibilityRequest(read.value);
+    if (!request.ok) return json({ error: request.error }, 422);
 
     const now = (deps.now ?? Date.now)();
     const pow = parsePowSolution(read.value.pow);
@@ -113,7 +121,7 @@ export function handlePublicSubmission(req: Request, deps: PublicRouteDeps): Pro
       return accepted;
     }
 
-    const result = await deps.receive(fields.value, pow.salt);
+    const result = await deps.receive({ ...fields.value, request: request.value }, pow.salt);
     switch (result.status) {
       case "spent":
         countPublicSubmission("pow_failed");

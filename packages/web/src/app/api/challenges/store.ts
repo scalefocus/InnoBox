@@ -6,8 +6,15 @@
 // plain node test runner (mirrors packages/web/src/app/api/admin/store.ts).
 import type { Pool, PoolClient } from "pg";
 import {
+  addAccessForAssignment,
   areLikesFrozen,
   blocksAcceptedInternally,
+  clearAccessList,
+  deliverShareNotifications,
+  isChallengeVisibility,
+  listAccessEntries,
+  parseAccessListInput,
+  replaceAccessList,
   canAssignAtStatus,
   canAuthorEditChallenge,
   canAuthorEditSolution,
@@ -32,8 +39,10 @@ import {
   validateChallengeFields,
   validateSolutionFields,
   viaAgentOf,
+  type AccessEntryView,
   type AttachmentView,
   type ChallengeStatus,
+  type ChallengeVisibility,
   type ChallengeVisibilityInput,
   type MaskedAuthor,
   type RoleSet,
@@ -158,7 +167,10 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   description: string;
   clientName: string | null;
   impactAreaId: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
+  /** §4.3 `people`: the access list — the item's namespace admins and platform admins only, and
+   *  only while the visibility is `people`; null for everyone else and every other visibility. */
+  access: AccessEntryView[] | null;
   namespaceId: string;
   assigneeId: string | null;
   assigneeDisplayName: string | null;
@@ -227,7 +239,7 @@ export interface ChallengeRow {
   title: string;
   description: string;
   status: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   namespace_id: string;
   namespace_slug: string;
   namespace_archived: boolean;
@@ -357,19 +369,24 @@ function isEnforcer(viewer: Viewer, namespaceId: string, assigneeId: string | nu
  *  one that does not exist. Takes the raw challenge columns the write paths already select. */
 function isChallengeRowVisible(viewer: Viewer, row: ChallengeVisibilityColumns): boolean {
   return canSeeChallenge(viewer, {
+    id: row.id,
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.status as ChallengeStatus,
     authorId: row.author_id,
+    assigneeId: row.assignee_id,
     trashed: row.trashed,
   });
 }
 
 /** The raw challenge columns the by-number write paths select for the visibility gate. */
 interface ChallengeVisibilityColumns {
+  id: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   status: string;
+  /** §4.3 `people`: the assignee may read it. */
+  assignee_id: string | null;
   /** Null for a challenge accepted from the public form (§24.6). */
   author_id: string | null;
   /** §10.4: `trashed_at is not null`. */
@@ -380,8 +397,9 @@ interface ChallengeVisibilityColumns {
 interface SolutionVisibilityColumns {
   status: string;
   author_id: string;
+  challenge_id: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   challenge_status: string;
   challenge_author_id: string | null;
   assignee_id: string | null;
@@ -391,7 +409,7 @@ interface SolutionVisibilityColumns {
   challenge_trashed: boolean;
 }
 
-const SOLUTION_VISIBILITY_SELECT = `s.status, s.author_id, c.namespace_id, c.visibility, c.status as challenge_status,
+const SOLUTION_VISIBILITY_SELECT = `s.status, s.author_id, c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status,
             c.author_id as challenge_author_id, c.assignee_id,
             s.trashed_at is not null as trashed, c.trashed_at is not null as challenge_trashed`;
 
@@ -399,10 +417,12 @@ const SOLUTION_VISIBILITY_SELECT = `s.status, s.author_id, c.namespace_id, c.vis
  *  `proposed` solution is narrower still, §4.3). */
 function isSolutionRowVisible(viewer: Viewer, row: SolutionVisibilityColumns): boolean {
   const challengeVisible = canSeeChallenge(viewer, {
+    id: row.challenge_id,
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.challenge_status as ChallengeStatus,
     authorId: row.challenge_author_id,
+    assigneeId: row.assignee_id,
     trashed: row.challenge_trashed,
   });
   if (!challengeVisible) return false;
@@ -443,7 +463,13 @@ function externalContactFor(row: ChallengeRow, isAdmin: boolean): ExternalContac
   };
 }
 
-function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem[], attachments: AttachmentView[] = []): ChallengeDetail {
+function toDetail(
+  row: ChallengeRow,
+  viewer: Viewer,
+  solutions: SolutionListItem[],
+  attachments: AttachmentView[] = [],
+  access: AccessEntryView[] | null = null,
+): ChallengeDetail {
   // §10.4: a trashed challenge (seen by platform admins only) is read-only — every control is off
   // except Restore and Delete permanently.
   const live = row.trashed_at === null;
@@ -459,6 +485,7 @@ function toDetail(row: ChallengeRow, viewer: Viewer, solutions: SolutionListItem
     clientName: row.client_name,
     impactAreaId: row.impact_area_id,
     visibility: row.visibility,
+    access: row.visibility === "people" && viewer.roles.isNamespaceAdmin(row.namespace_id) ? access : null,
     namespaceId: row.namespace_id,
     assigneeId: row.assignee_id,
     assigneeDisplayName: row.assignee_display_name,
@@ -579,7 +606,9 @@ async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer,
     solutions.push(toSolutionItem(s, viewer, challengeCtx, solutionAttachments));
   }
   const challengeAttachments = await listAttachmentsForParent(db, viewer, "challenge", row.id);
-  return toDetail(row, viewer, solutions, challengeAttachments);
+  // §4.3: who is on a `people` list is the item's admins' business only.
+  const access = row.visibility === "people" && viewer.roles.isNamespaceAdmin(row.namespace_id) ? await listAccessEntries(db, row.id) : null;
+  return toDetail(row, viewer, solutions, challengeAttachments, access);
 }
 
 /** The §4.3 solution gate as the detail builders apply it — a trashed solution (§10.4) is listed
@@ -633,8 +662,9 @@ function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] 
  *  the profile's follow lists so none of them can disagree with the detail page about what the
  *  viewer may see. awaiting_triage/withdrawn are visible to the author and the namespace's admins
  *  — the state rule REPLACES the namespace rule, so an author who has lost membership of a
- *  restricted namespace still finds their own item; every other status is org-visible or
- *  member-only. Platform admins see everything — except the trash (§10.4): a trashed challenge
+ *  restricted namespace still finds their own item; every other status is org-visible,
+ *  member-only, or — for `people` — open to the access list, the namespace's admins and
+ *  committee, and the assignee. Platform admins see everything — except the trash (§10.4): a trashed challenge
  *  is gone from every list for everyone, platform admins included (they reach it through the
  *  trash page instead). */
 export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
@@ -643,11 +673,16 @@ export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unkn
   // shortcut, since the switch governs what leaves through MCP whoever the person is.
   if (viewer.orgVisibleOnly) conditions.push(`c.visibility = 'org'`);
   if (viewer.roles.isPlatformAdmin) return;
+  const viewerParam = push(viewer.userId);
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
+  const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
   conditions.push(
     `(CASE WHEN c.status IN ('awaiting_triage','withdrawn')
-           THEN c.author_id = ${push(viewer.userId)} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
+           THEN c.author_id = ${viewerParam} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
+           WHEN c.visibility = 'people'
+           THEN c.namespace_id = ANY(${push(reviewerNamespaceIds)}::uuid[]) OR c.assignee_id = ${viewerParam}
+                OR c.id = ANY(${push(viewer.roles.accessListChallenges())}::uuid[])
            ELSE c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
   );
 }
@@ -703,7 +738,7 @@ export async function findSimilarChallenges(pool: Pool, viewer: Viewer, input: {
  *  browser: the visibility (restricted candidates are dropped from the AI input while the switch
  *  is off) and the first 500 characters of the description. */
 export interface SimilarCandidate extends SimilarChallenge {
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   excerpt: string;
 }
 
@@ -865,10 +900,12 @@ export async function getChallengeByNumber(pool: Pool, viewer: Viewer, number: s
   const row = rows[0];
   if (!row) return null;
   const visible = canSeeChallenge(viewer, {
+    id: row.id,
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.status as ChallengeStatus,
     authorId: row.author_id,
+    assigneeId: row.assignee_id,
     trashed: row.trashed_at !== null,
   });
   if (!visible) return null;
@@ -1107,6 +1144,9 @@ async function applyChallengeStatusChange(
   // §23.2: entering valid/solved awards its milestones (first entry only — the award key), whether
   // the move was enforced or an admin override.
   await writeLiveAwards(client, await challengeStatusAwards(client, current.id, newStatus));
+  // §12.1 event 15: a `people` challenge leaving triage (or withdrawal) tells everyone on its list
+  // who has not been told yet. A no-op for any other visibility or a status that still hides it.
+  if (newStatus !== "awaiting_triage" && newStatus !== "withdrawn") await deliverShareNotifications(client, current.id, actor.userId);
 }
 
 async function loadChallengeForStatusChange(
@@ -1452,7 +1492,7 @@ export async function getParentAccess(
   if (!isUuid(parentId)) return "not_found";
   if (parentType === "challenge") {
     const { rows } = await db.query<ChallengeVisibilityColumns>(
-      `select namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where id = $1`,
+      `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where id = $1`,
       [parentId],
     );
     const row = rows[0];
@@ -1574,13 +1614,21 @@ export type ResolveAssigneeRoles = (userId: string) => Promise<RoleSet>;
 export async function getAssignmentAudience(pool: Pool, viewer: Viewer, number: string): Promise<ChallengeVisibilityInput | null> {
   if (!isEntityNumber(number)) return null;
   const { rows } = await pool.query<ChallengeVisibilityColumns>(
-    `select namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
   // §10.4: a trashed challenge takes no assignee, so its picker offers nobody.
   if (!row || row.trashed || !isChallengeRowVisible(viewer, row) || !viewer.roles.isNamespaceAdmin(row.namespace_id)) return null;
-  return { namespaceId: row.namespace_id, visibility: row.visibility, status: row.status as ChallengeStatus, authorId: row.author_id, trashed: false };
+  return {
+    id: row.id,
+    namespaceId: row.namespace_id,
+    visibility: row.visibility,
+    status: row.status as ChallengeStatus,
+    authorId: row.author_id,
+    assigneeId: row.assignee_id,
+    trashed: false,
+  };
 }
 
 /** Exported for the GDPR erasure hand-over (§3), whose every move is an ordinary §7.3 change. */
@@ -1612,7 +1660,7 @@ async function loadChallengeForAssignment(
   assigneeUserId: string | null,
   resolveRoles: ResolveAssigneeRoles,
 ): Promise<
-  | { status: "ok"; current: { id: string; namespace_id: string; status: string; assignee_id: string | null } }
+  | { status: "ok"; current: { id: string; namespace_id: string; status: string; assignee_id: string | null }; addToAccessList: boolean }
   | { status: "not_found" | "trashed" | "forbidden" | "terminal_status" | "unknown_user" | "assignee_cannot_see" }
 > {
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -1634,10 +1682,18 @@ async function loadChallengeForAssignment(
     // §7.3: the assignee must be able to see the challenge — checked at assignment time only,
     // with their roles resolved from SCIM-synced membership exactly as the §3 hand-over does.
     if (!isChallengeRowVisible({ userId: assigneeUserId, roles: await resolveRoles(assigneeUserId) }, current)) {
+      // A `people` challenge past triage relaxes the gate instead: the assignment puts them on
+      // its access list. In triage the ordinary gate holds (only its namespace's admins).
+      if (isPeopleAutoAddable(current)) return { status: "ok", current, addToAccessList: true };
       return { status: "assignee_cannot_see" };
     }
   }
-  return { status: "ok", current };
+  return { status: "ok", current, addToAccessList: false };
+}
+
+/** §7.3: whether assigning someone who cannot yet see this challenge adds them to its list. */
+function isPeopleAutoAddable(row: { visibility: ChallengeVisibility; status: string }): boolean {
+  return row.visibility === "people" && row.status !== "awaiting_triage" && row.status !== "withdrawn";
 }
 
 /** `assigneeUserId: null` unassigns. Assignment is possible from awaiting_triage onward and
@@ -1654,6 +1710,7 @@ export async function setChallengeAssignee(
   const { current } = loaded;
 
   return inTransaction(pool, async (client) => {
+    if (loaded.addToAccessList && assigneeUserId) await addAccessForAssignment(client, { challengeId: current.id, userId: assigneeUserId, actorId: admin.userId });
     await applyChallengeAssigneeChange(client, admin, current, assigneeUserId);
     const { rows: full } = await client.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [
       current.id,
@@ -1690,6 +1747,7 @@ export async function setChallengeAssigneeLean(
   const { current } = loaded;
 
   return inTransaction(pool, async (client) => {
+    if (loaded.addToAccessList && assigneeUserId) await addAccessForAssignment(client, { challengeId: current.id, userId: assigneeUserId, actorId: admin.userId });
     await applyChallengeAssigneeChange(client, admin, current, assigneeUserId);
     return { status: "ok", assigned: assigneeUserId !== null };
   });
@@ -1702,33 +1760,56 @@ export type SetVisibilityResult =
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
-  | { status: "invalid" };
+  | { status: "invalid" }
+  /** §4.3 `people`: the access list is missing, empty, too long or malformed (→ 422). */
+  | { status: "invalid_access"; error: string };
 
-/** §4.3: a challenge's visibility (org ↔ namespace) is changeable after submission only by a
- *  namespace/platform admin, and every change is audited (§15 "visibility changes"). */
-export async function setChallengeVisibility(pool: Pool, admin: Viewer, number: string, visibility: string): Promise<SetVisibilityResult> {
-  if (visibility !== "org" && visibility !== "namespace") return { status: "invalid" };
+/** §4.3: a challenge's visibility (org | namespace | people) is changeable after submission only by
+ *  a namespace/platform admin, and every change is audited (§15 "visibility changes"). `people`
+ *  takes the whole access list (`access`), which the same call also uses to edit the list of a
+ *  challenge that stays `people`. Switching away from `people` clears the list, and the
+ *  `visibility_changed` row records what was removed — user ids and a count of pending e-mails,
+ *  never an address. */
+export async function setChallengeVisibility(
+  pool: Pool,
+  admin: Viewer,
+  number: string,
+  visibility: string,
+  accessRaw?: unknown,
+): Promise<SetVisibilityResult> {
+  if (!isChallengeVisibility(visibility)) return { status: "invalid" };
+  const access = visibility === "people" ? parseAccessListInput(accessRaw) : null;
+  if (access && !access.ok) return { status: "invalid_access", error: access.error };
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string }>(
-    `select id, namespace_id, visibility, status, author_id, trashed_at is not null as trashed from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const cur = rows[0];
   if (!cur || !isChallengeRowVisible(admin, cur)) return { status: "not_found" };
   if (cur.trashed) return { status: "trashed" }; // §10.4
   if (!admin.roles.isNamespaceAdmin(cur.namespace_id)) return { status: "forbidden" };
-  if (cur.visibility === visibility) return { status: "ok", challenge: await reloadChallengeDetail(pool, admin, cur.id) };
+  if (cur.visibility === visibility && visibility !== "people") return { status: "ok", challenge: await reloadChallengeDetail(pool, admin, cur.id) };
 
-  return inTransaction(pool, async (client) => {
-    await client.query(`update challenges set visibility = $2, updated_at = now() where id = $1`, [cur.id, visibility]);
-    await appendAudit(client, {
-      actorUserId: admin.userId,
-      action: "challenge.visibility_changed",
-      targetType: "challenge",
-      targetId: cur.id,
-      before: { visibility: cur.visibility },
-      after: { visibility },
-    });
+  return inTransaction(pool, async (client): Promise<SetVisibilityResult> => {
+    if (access?.ok) {
+      const replaced = await replaceAccessList(client, { challengeId: cur.id, input: access.value, actorId: admin.userId, via: "editor" });
+      if (replaced.status === "unknown_user") return { status: "invalid_access", error: "One of the people chosen is no longer an active user." };
+    }
+    if (cur.visibility !== visibility) {
+      const removed = visibility === "people" ? null : await clearAccessList(client, cur.id);
+      await client.query(`update challenges set visibility = $2, updated_at = now() where id = $1`, [cur.id, visibility]);
+      await appendAudit(client, {
+        actorUserId: admin.userId,
+        action: "challenge.visibility_changed",
+        targetType: "challenge",
+        targetId: cur.id,
+        before: { visibility: cur.visibility },
+        after: removed && cur.visibility === "people" ? { visibility, removedAccess: removed } : { visibility },
+      });
+    }
+    // §12.1 event 15 for whoever is newly on the list, if the challenge is past triage.
+    if (visibility === "people") await deliverShareNotifications(client, cur.id, admin.userId);
     return { status: "ok", challenge: await reloadChallengeDetail(client, admin, cur.id) };
   });
 }
@@ -1786,11 +1867,12 @@ export async function editChallenge(
     title: string;
     description: string;
     client_name: string | null;
-    visibility: "org" | "namespace";
+    visibility: ChallengeVisibility;
+    assignee_id: string | null;
     is_anonymous: boolean;
     trashed: boolean;
   }>(
-    `select id, namespace_id, status, author_id, impact_area_id, title, description, client_name, visibility, is_anonymous,
+    `select id, namespace_id, status, author_id, assignee_id, impact_area_id, title, description, client_name, visibility, is_anonymous,
             trashed_at is not null as trashed
        from challenges where number = $1`,
     [number],
@@ -2090,7 +2172,7 @@ function toRevealResult(user: RevealUserRow | undefined, authorId: string): Reve
 export async function revealChallengeAuthor(pool: Pool, admin: Viewer, number: string): Promise<RevealResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; is_anonymous: boolean }>(
-    `select id, namespace_id, visibility, status, is_anonymous, author_id, trashed_at is not null as trashed from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, is_anonymous, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];
@@ -2147,7 +2229,7 @@ export type SelfRevealResult =
 export async function selfRevealChallenge(pool: Pool, viewer: Viewer, number: string): Promise<SelfRevealResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { id: string; is_anonymous: boolean }>(
-    `select id, namespace_id, visibility, status, is_anonymous, author_id, trashed_at is not null as trashed from challenges where number = $1`,
+    `select id, namespace_id, visibility, status, is_anonymous, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
     [number],
   );
   const row = rows[0];

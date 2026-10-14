@@ -27,8 +27,10 @@ const RESULT_LIMIT = 10;
 function canSeeChallengeCondition(audience: ChallengeVisibilityInput, push: (v: unknown) => string): string {
   const stateRule = audience.status === "awaiting_triage" || audience.status === "withdrawn";
   // Org-visible and past triage: every active user can see it. Return before pushing anything —
-  // an unreferenced parameter has no type and Postgres refuses the query.
-  if (!stateRule && audience.visibility === "org") return "true";
+  // an unreferenced parameter has no type and Postgres refuses the query. A `people` challenge past
+  // triage relaxes the gate instead (§7.3): assigning someone puts them on its access list, so the
+  // picker offers every active user.
+  if (!stateRule && (audience.visibility === "org" || audience.visibility === "people")) return "true";
 
   const grant = (namespaceCondition: string) =>
     `exists (select 1 from group_members gm

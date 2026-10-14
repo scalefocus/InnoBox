@@ -4,6 +4,7 @@
 // a JIT stub (scim_synced=false) is refreshed from claims at each sign-in; once SCIM or
 // reconciliation set scim_synced=true, claims never overwrite.
 import type { Pool } from "pg";
+import { bindPendingAccess } from "@innobox/shared";
 import { APP_VERSION } from "@innobox/shared/version";
 import { appendAudit } from "./audit";
 import { isCalendarDate, isVersion } from "./whats-new";
@@ -131,6 +132,8 @@ export async function jitUpsertFromClaims(
       targetId: user.id,
       after: { externalId: user.externalId, userName: user.userName, displayName: user.displayName },
     });
+    // §4.3: a pending access-list entry for this address now names a user.
+    await bindPendingAccess(db, user.id);
     return user;
   }
   if (decision.action === "refresh") {
@@ -145,6 +148,7 @@ export async function jitUpsertFromClaims(
       `update users set ${sets.join(", ")}, updated_at = now() where id = $${params.length}`,
       params,
     );
+    if (decision.patch.email !== undefined || decision.patch.user_name !== undefined) await bindPendingAccess(db, existing.id);
     return {
       ...existing,
       userName: decision.patch.user_name ?? existing.userName,

@@ -105,6 +105,12 @@ export * from "./gamification-awards.js";
 export * from "./public-intake.js";
 export * from "./public-intake-pow.js";
 
+// §4.3 `people` visibility: the access-list limits and tag-field rules (client-safe, also exposed
+// at `@innobox/shared/challenge-access`) and the database half — writing the list, binding pending
+// e-mails, the assignment auto-add and §12.1 event 15 — shared by the web tier and the worker.
+export * from "./challenge-access.js";
+export * from "./challenge-access-db.js";
+
 // §25 agent access (MCP): the four settings with their bounds, the "via agent" projection (client-
 // safe, also at `@innobox/shared/mcp`) and the server-only grant revocation + hourly sweep web and
 // worker share.

@@ -6,11 +6,11 @@
 // the §25.8 "via agent" tag beside the author.
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { FloatingResults } from "@/components/FloatingResults";
 import { UserResultButton } from "@/components/UserResultButton";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
@@ -621,61 +621,6 @@ function useRowNavigate() {
     if (sel && sel.type === "Range" && sel.toString().trim().length > 0) return;
     router.push(href);
   };
-}
-
-// Floating user-search results (§14.1): a portaled, fixed-positioned panel anchored to its input
-// so the list is never clipped by, nor pushed under the edge of, the surrounding list/card
-// (`.rows`/`.card` both `overflow: hidden`). Follows the input on scroll/resize, closes on an
-// outside click, and preventDefaults its own mousedown so a pick never blurs the input first.
-function FloatingResults({
-  anchorRef,
-  onClose,
-  children,
-}: {
-  anchorRef: RefObject<HTMLInputElement | null>;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const [rect, setRect] = useState<DOMRect | null>(null);
-
-  useLayoutEffect(() => {
-    const el = anchorRef.current;
-    if (!el) return;
-    const update = () => setRect(el.getBoundingClientRect());
-    update();
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-    };
-  }, [anchorRef]);
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (anchorRef.current?.contains(t) || panelRef.current?.contains(t)) return;
-      onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [anchorRef, onClose]);
-
-  if (!rect) return null;
-  const width = Math.min(360, Math.max(rect.width, 220));
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  return createPortal(
-    <div
-      ref={panelRef}
-      className="menu-pop user-search-pop"
-      onMouseDown={(e) => e.preventDefault()}
-      style={{ position: "fixed", top: rect.bottom + 4, left, width, zIndex: 1000 }}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
 }
 
 // Per-row inline assign (§14.1 / §7.3): the Assignee column is an inline editable text field —

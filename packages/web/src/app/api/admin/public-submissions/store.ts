@@ -6,8 +6,9 @@
 //               audited as `challenge.created` (`source: "public"`) and `public_submission.accepted`.
 //   - decline → the row `declined`, the optional note mailed, audited without the note.
 //   - discard → the row deleted outright, nothing sent.
-// Erasing the contact details works on any confirmed row. No audit payload ever carries the
-// submitter's name or e-mail. Relative imports only (no `@/`) so the gated .dbtest.ts suites run
+// Erasing the contact details works on any confirmed row, and takes the §24.3 visibility request's
+// typed e-mails and team names with it. No audit payload ever carries the submitter's name or
+// e-mail, nor an address from the request. Relative imports only (no `@/`) so the gated .dbtest.ts suites run
 // under the plain node runner.
 import type { Pool, PoolClient } from "pg";
 import {
@@ -16,7 +17,14 @@ import {
   acceptedEmail,
   declinedEmail,
   formatChallengeNumber,
+  isChallengeVisibility,
+  parseAccessListInput,
+  replaceAccessList,
+  resolveAccessEmails,
   validateChallengeFields,
+  type AccessListInput,
+  type ChallengeVisibility,
+  type RequestedVisibility,
 } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
@@ -38,11 +46,23 @@ export interface PublicSubmissionRow {
   contactErasedAt: string | null;
   /** The challenge an accepted row became ("CH-12"); null otherwise. */
   challengeNumber: string | null;
+  /** §24.3: the submitter's *Who should see this?* choice — a request the admin settles on accept. */
+  requestedVisibility: RequestedVisibility;
+}
+
+/** §24.3 / §24.5: the request as the review panel shows it. Each requested address is resolved
+ *  against the directory for the Accept dialog's pre-fill: a user, or null (*"No InnoBox user yet"*).
+ *  Empty lists once the contact details are erased (§24.8). */
+export interface RequestedAccess {
+  visibility: RequestedVisibility;
+  emails: { email: string; user: { id: string; displayName: string } | null }[];
+  teams: string[];
 }
 
 export interface PublicSubmissionDetail extends PublicSubmissionRow {
   description: string;
   declineNote: string | null;
+  requested: RequestedAccess;
   /** §6.1 similarity, run as the reviewing admin; authors masked per §9. */
   similar: SimilarChallenge[];
 }
@@ -60,11 +80,15 @@ interface QueueDbRow {
   contact_erased_at: Date | null;
   decline_note: string | null;
   challenge_number: string | null;
+  requested_visibility: RequestedVisibility;
+  requested_emails: string[];
+  requested_teams: string[];
 }
 
 const QUEUE_SELECT = `
   select ps.id, ps.status, ps.title, ps.description, ps.company, ps.submitter_name, ps.submitter_email,
-         ps.confirmed_at, ps.decided_at, ps.contact_erased_at, ps.decline_note, c.number::text as challenge_number
+         ps.confirmed_at, ps.decided_at, ps.contact_erased_at, ps.decline_note, c.number::text as challenge_number,
+         ps.requested_visibility, ps.requested_emails, ps.requested_teams
     from public_submissions ps
     left join challenges c on c.public_submission_id = ps.id`;
 
@@ -82,6 +106,26 @@ function toRow(r: QueueDbRow): PublicSubmissionRow {
     decidedAt: iso(r.decided_at),
     contactErasedAt: iso(r.contact_erased_at),
     challengeNumber: r.challenge_number ? formatChallengeNumber(r.challenge_number) : null,
+    requestedVisibility: r.requested_visibility,
+  };
+}
+
+/** The requested addresses, each resolved to the active user it names (by e-mail or user name), if
+ *  exactly one does. */
+async function resolveRequested(pool: Pool, r: QueueDbRow): Promise<RequestedAccess> {
+  const resolved = await resolveAccessEmails(pool, r.requested_emails);
+  const ids = [...new Set(resolved.values())];
+  const { rows: users } = ids.length
+    ? await pool.query<{ id: string; display_name: string }>(`select id, display_name from users where id = any($1::uuid[])`, [ids])
+    : { rows: [] as { id: string; display_name: string }[] };
+  const names = new Map(users.map((u) => [u.id, u.display_name]));
+  return {
+    visibility: r.requested_visibility,
+    emails: r.requested_emails.map((email) => {
+      const id = resolved.get(email);
+      return { email, user: id ? { id, displayName: names.get(id) ?? email } : null };
+    }),
+    teams: r.requested_teams,
   };
 }
 
@@ -108,7 +152,7 @@ export async function getPublicSubmission(pool: Pool, viewer: Viewer, id: string
   const row = rows[0];
   if (!row) return null;
   const similar = await findSimilarChallenges(pool, viewer, { title: row.title, description: row.description });
-  return { ...toRow(row), description: row.description, declineNote: row.decline_note, similar };
+  return { ...toRow(row), description: row.description, declineNote: row.decline_note, requested: await resolveRequested(pool, row), similar };
 }
 
 // ── Decisions ────────────────────────────────────────────────────────────────────────────────
@@ -121,12 +165,13 @@ interface LockedRow {
   company: string | null;
   submitter_email: string | null;
   contact_erased_at: Date | null;
+  requested_visibility: RequestedVisibility;
 }
 
 /** The row, locked for this transaction — null for unknown or unconfirmed (both "not found"). */
 async function lockSubmission(client: PoolClient, id: string): Promise<LockedRow | null> {
   const { rows } = await client.query<LockedRow>(
-    `select id, status, title, description, company, submitter_email, contact_erased_at
+    `select id, status, title, description, company, submitter_email, contact_erased_at, requested_visibility
        from public_submissions where id = $1 for update`,
     [id],
   );
@@ -139,6 +184,8 @@ export type DecisionRefusal = { status: "not_found" } | { status: "conflict" };
 export interface AcceptInput {
   namespaceId: string;
   visibility: unknown;
+  /** §4.3: the access list, required iff `visibility` is `people`. */
+  access?: unknown;
   impactAreaId: string;
   clientName: unknown;
   title: unknown;
@@ -152,12 +199,24 @@ export type AcceptResult =
   | { status: "namespace_archived" }
   | { status: "unknown_impact_area" }
   | { status: "inactive_impact_area" }
-  | { status: "invalid"; error: string };
+  | { status: "invalid"; error: string }
+  /** §4.3 `people`: the access list is missing, empty, too long, malformed, or names someone who is
+   *  not an active user (→ 422). */
+  | { status: "invalid_access"; error: string }
+  /** §24.5: a *Specific teams* request accepted as namespace-only in `global` — which would mean
+   *  everyone (→ 422). */
+  | { status: "teams_need_namespace" };
+
+/** §24.5: the Accept dialog's hint, and the API's answer, for a teams request left in `global`. */
+export const TEAMS_NEED_NAMESPACE = "Choose the namespace that matches the requested teams, or a different visibility.";
 
 /** §24.6 accept: the normal §6.1 create rules (namespace not archived, an active impact area,
  *  the field limits, the Client pairing), with the admin's choices and possibly edited text. */
 export async function acceptPublicSubmission(pool: Pool, admin: Viewer, id: string, input: AcceptInput): Promise<AcceptResult> {
-  const { rows: nsRows } = await pool.query<{ archived: boolean }>(`select archived_at is not null as archived from namespaces where id = $1`, [input.namespaceId]);
+  const { rows: nsRows } = await pool.query<{ archived: boolean; slug: string }>(
+    `select archived_at is not null as archived, slug from namespaces where id = $1`,
+    [input.namespaceId],
+  );
   if (!nsRows[0]) return { status: "unknown_namespace" };
   if (nsRows[0].archived) return { status: "namespace_archived" };
   const { rows: areaRows } = await pool.query<{ name: string; active: boolean }>(`select name, active from impact_areas where id = $1`, [input.impactAreaId]);
@@ -165,21 +224,37 @@ export async function acceptPublicSubmission(pool: Pool, admin: Viewer, id: stri
   if (!area) return { status: "unknown_impact_area" };
   if (!area.active) return { status: "inactive_impact_area" };
 
+  // §4.3: an admin may accept as `people` (the employee form never offers it); the §6.1 field rules
+  // below check the text with a submittable placeholder and the access list is checked here.
+  if (!isChallengeVisibility(input.visibility)) return { status: "invalid", error: "visibility must be 'org', 'namespace' or 'people'" };
+  const visibility: ChallengeVisibility = input.visibility;
+  let access: AccessListInput | null = null;
+  if (visibility === "people") {
+    const parsed = parseAccessListInput(input.access);
+    if (!parsed.ok) return { status: "invalid_access", error: parsed.error };
+    access = parsed.value;
+    if (access.userIds.length > 0) {
+      const { rows } = await pool.query<{ n: number }>(`select count(*)::int as n from users where id = any($1::uuid[]) and active and scrubbed_at is null`, [access.userIds]);
+      if ((rows[0]?.n ?? 0) !== access.userIds.length) return { status: "invalid_access", error: "One of the people chosen is no longer an active user." };
+    }
+  }
   const validated = validateChallengeFields({
     title: input.title,
     description: input.description,
     clientName: input.clientName,
-    visibility: input.visibility,
+    visibility: visibility === "people" ? "org" : visibility,
     isAnonymous: false,
     impactAreaIsClient: area.name === "Client",
   });
   if (!validated.ok) return { status: "invalid", error: validated.error };
-  const fields = validated.value;
+  const fields = { ...validated.value, visibility };
 
   return inTransaction(pool, async (client): Promise<AcceptResult> => {
     const row = await lockSubmission(client, id);
     if (!row) return { status: "not_found" };
     if (row.status !== "pending_review") return { status: "conflict" };
+    // §24.5: namespace-only in `global` is everyone — not what a teams request asked for.
+    if (row.requested_visibility === "teams" && visibility === "namespace" && nsRows[0]!.slug === "global") return { status: "teams_need_namespace" };
 
     const { rows: created } = await client.query<{ id: string; number: string }>(
       `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id, public_submission_id)
@@ -188,6 +263,12 @@ export async function acceptPublicSubmission(pool: Pool, admin: Viewer, id: stri
       [input.namespaceId, fields.visibility, fields.title, fields.description, input.impactAreaId, fields.clientName, id],
     );
     const challenge = created[0]!;
+    // §4.3: the list goes in with the challenge; it grants nothing while the challenge is in
+    // triage, and event 15 waits until it leaves (§12.1).
+    if (access) {
+      const written = await replaceAccessList(client, { challengeId: challenge.id, input: access, actorId: admin.userId, via: "accept" });
+      if (written.status !== "ok") throw new Error("an access-list user vanished during accept");
+    }
     await client.query(`update public_submissions set status = 'accepted', decided_at = now(), decided_by = $2 where id = $1`, [id, admin.userId]);
     // The title as the submitter wrote it — they know it by that, whatever the admin changed.
     await enqueueSubmitterEmail(client, id, row.submitter_email, acceptedEmail(row.title));
@@ -206,6 +287,7 @@ export async function acceptPublicSubmission(pool: Pool, admin: Viewer, id: stri
         title: fields.title,
         namespaceId: input.namespaceId,
         visibility: fields.visibility,
+        requestedVisibility: row.requested_visibility,
         isAnonymous: false,
         source: "public",
         publicSubmissionId: id,
@@ -277,7 +359,13 @@ export async function eraseSubmissionContact(pool: Pool, admin: Viewer, id: stri
     const row = await lockSubmission(client, id);
     if (!row) return { status: "not_found" as const };
     if (row.contact_erased_at) return { status: "ok" as const, erased: false };
-    await client.query(`update public_submissions set submitter_name = null, submitter_email = null, contact_erased_at = now() where id = $1`, [id]);
+    // §24.8: the request's typed e-mails and team names go with the contact details.
+    await client.query(
+      `update public_submissions
+          set submitter_name = null, submitter_email = null, requested_emails = '{}', requested_teams = '{}', contact_erased_at = now()
+        where id = $1`,
+      [id],
+    );
     await withdrawSubmitterEmails(client, id);
     await appendAudit(client, {
       actorUserId: admin.userId,

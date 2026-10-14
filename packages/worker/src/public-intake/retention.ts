@@ -53,7 +53,7 @@ export async function runPublicIntakeRetention(pool: Pool, now: Date = new Date(
   const erased = await inTransaction(pool, async (client) => {
     const { rows } = await client.query<{ id: string }>(
       `update public_submissions
-          set submitter_name = null, submitter_email = null, contact_erased_at = $3
+          set submitter_name = null, submitter_email = null, requested_emails = '{}', requested_teams = '{}', contact_erased_at = $3
         where contact_erased_at is null
           and ((status = 'declined' and decided_at < $1)
             or (status = 'accepted' and contact_erase_due_at is not null and contact_erase_due_at <= $2))

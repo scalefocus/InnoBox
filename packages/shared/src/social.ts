@@ -67,6 +67,9 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 14 / §24.5: a public submission was confirmed and waits for review — platform
   // admins only, an admin attention event (never muted).
   "public_submission_confirmed",
+  // §12.1 event 15 / §4.3: a `people` challenge was shared with the recipient — written by the
+  // shared challenge-access-db helper (web and worker), immediate, never digested.
+  "challenge_shared",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

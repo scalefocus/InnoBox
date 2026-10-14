@@ -53,12 +53,12 @@ test(
       const nsAdmin = { userId: await mkUser("admin"), roles: roles([{ role: "namespace_admin", namespaceId: nsId }]) };
 
       const mk = async (label: string, status: ChallengeStatus) => {
-        const { rows } = await pool.query<{ number: string }>(
+        const { rows } = await pool.query<{ id: string; number: string }>(
           `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
-           values ($1, 'namespace', $2, 'vissql fixture', $3, $4, $5) returning number::text`,
+           values ($1, 'namespace', $2, 'vissql fixture', $3, $4, $5) returning id, number::text`,
           [nsId, `${label} ${token}`, ia[0]!.id, author.userId, status],
         );
-        return { number: `CH-${rows[0]!.number}`, status };
+        return { id: rows[0]!.id, number: `CH-${rows[0]!.number}`, status };
       };
       const triage = await mk("Awaiting", "awaiting_triage");
       const withdrawn = await mk("Withdrawn", "withdrawn");
@@ -68,7 +68,9 @@ test(
       // The JS predicate is the reference: each viewer's SQL view must match it exactly.
       const expected = (v: typeof author) =>
         all
-          .filter((c) => canSeeChallenge(v, { namespaceId: nsId, visibility: "namespace", status: c.status, authorId: author.userId, trashed: false }))
+          .filter((c) =>
+            canSeeChallenge(v, { id: c.id, namespaceId: nsId, visibility: "namespace", status: c.status, authorId: author.userId, assigneeId: null, trashed: false }),
+          )
           .map((c) => c.number)
           .sort();
       assert.deepEqual(expected(author), [triage.number, withdrawn.number].sort(), "fixture sanity: JS shows the author both");

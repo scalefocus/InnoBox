@@ -101,12 +101,14 @@ test("insert path: INSERT stub + audit user.jit_created with actor = the new use
     { rows: [] }, // select by external_id — no row yet
     { rows: [dbRow] }, // insert … returning
     { rows: [] }, // audit insert
+    { rows: [] }, // §4.3: pending access-list entries for this address — none
   ]);
   const user = await jitUpsertFromClaims(db, claims);
   assert.equal(user.id, dbRow.id);
   assert.equal(user.externalId, claims.oid);
 
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
+  assert.match(calls[3]!.text, /from challenge_access/i); // the new user binds any pending entry
   assert.match(calls[1]!.text, /insert into users/i);
   assert.match(calls[1]!.text, /scim_synced/); // stubs are explicitly not SCIM-owned
   assert.deepEqual(calls[1]!.params, [claims.oid, claims.userName, claims.email, claims.displayName, false]);
@@ -137,6 +139,19 @@ test("refresh path: UPDATEs only the drifted columns, stamps updated_at, no audi
   assert.match(update.text, /update users set display_name = \$1, updated_at = now\(\)/i);
   assert.doesNotMatch(update.text, /user_name|email =/i); // untouched columns stay out
   assert.deepEqual(update.params, [claims.displayName, stored.id]);
+});
+
+test("refresh path: a changed e-mail binds pending access-list entries for the new address (§4.3)", async () => {
+  const stored = { ...dbRow, email: "old.address@example.test" };
+  const { db, calls } = scriptedDb([
+    { rows: [stored] }, // select by external_id
+    { rows: [] }, // update
+    { rows: [] }, // pending access-list entries for this address — none
+  ]);
+  await jitUpsertFromClaims(db, claims);
+  assert.equal(calls.length, 3);
+  assert.match(calls[1]!.text, /update users set email = \$1/i);
+  assert.match(calls[2]!.text, /from challenge_access/i);
 });
 
 test("synced row: returns it untouched — a lone SELECT, zero writes", async () => {

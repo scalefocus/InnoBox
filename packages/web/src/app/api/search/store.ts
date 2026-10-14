@@ -22,6 +22,7 @@ import {
   formatSolutionNumber,
   maskAuthor,
   type ChallengeStatus,
+  type ChallengeVisibility,
   type MaskedAuthor,
   type SolutionStatus,
 } from "@innobox/shared";
@@ -93,8 +94,10 @@ interface ChallengeCandidate {
   author_active: boolean | null;
   author_scrubbed: boolean | null;
   external_company: string | null;
+  id: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
+  assignee_id: string | null;
   namespace_slug: string;
 }
 
@@ -107,8 +110,9 @@ interface SolutionCandidate {
   author_display_name: string;
   author_active: boolean;
   author_scrubbed: boolean;
+  challenge_id: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: ChallengeVisibility;
   challenge_status: string;
   challenge_author_id: string | null;
   assignee_id: string | null;
@@ -141,7 +145,7 @@ async function challengeCandidates(pool: Pool, viewer: Viewer, match: Match, fil
   const { rows } = await pool.query<ChallengeCandidate>(
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
             u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
-            c.namespace_id, c.visibility, ns.slug as namespace_slug
+            c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug
        from challenges c
        left join users u on u.id = c.author_id
        left join public_submissions ps on ps.id = c.public_submission_id
@@ -178,7 +182,7 @@ async function solutionCandidates(pool: Pool, viewer: Viewer, match: Match, filt
 
   const { rows } = await pool.query<SolutionCandidate>(
     `select s.number::text, s.description, s.status, s.is_anonymous, s.author_id, u.display_name as author_display_name,
-            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.namespace_id, c.visibility, c.status as challenge_status,
+            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status,
             c.author_id as challenge_author_id, c.assignee_id,
             c.number::text as challenge_number, c.title as challenge_title
        from solutions s
@@ -196,10 +200,12 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
   return rows
     .filter((row) =>
       canSeeChallenge(viewer, {
+        id: row.id,
         namespaceId: row.namespace_id,
         visibility: row.visibility,
         status: row.status as ChallengeStatus,
         authorId: row.author_id,
+        assigneeId: row.assignee_id,
         trashed: false, // §10.4: the SQL predicate already dropped trashed rows
       }),
     )
@@ -224,10 +230,12 @@ function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionS
   return rows
     .filter((row) => {
       const challengeVisible = canSeeChallenge(viewer, {
+        id: row.challenge_id,
         namespaceId: row.namespace_id,
         visibility: row.visibility,
         status: row.challenge_status as ChallengeStatus,
         authorId: row.challenge_author_id,
+        assigneeId: row.assignee_id,
         trashed: false, // §10.4: dropped in SQL
       });
       if (!challengeVisible) return false;
@@ -333,10 +341,12 @@ export async function searchChallengePage(pool: Pool, viewer: Viewer, input: Cha
   );
   const visible = rows.filter((row) =>
     canSeeChallenge(viewer, {
+      id: row.id,
       namespaceId: row.namespace_id,
       visibility: row.visibility,
       status: row.status as ChallengeStatus,
       authorId: row.author_id,
+      assigneeId: row.assignee_id,
       trashed: row.trashed_at !== null,
     }),
   );

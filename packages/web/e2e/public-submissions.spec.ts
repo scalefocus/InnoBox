@@ -2,12 +2,15 @@
 // are 404, the settings card lists every unmet precondition, and /challenges/new shows no §6.1 share
 // link; switched on, the share link copies the public address with a toast, an outsider (no
 // session) submits on /submit, confirms through the link, a platform admin accepts it in the
-// queue, and the challenge sits in the triage queue labelled "External submission". The switch is
-// platform-wide (this spec is pinned to shard 1) and is put back as it was whatever happens. Needs
-// a server with PUBLIC_INTAKE_KEY and an e-mail transport (Jenkins sets both) — it self-skips
-// otherwise — and reads the confirmation token from the dev seam, which is on wherever dev sign-in is.
+// queue, and the challenge sits in the triage queue labelled "External submission"; and the §24.3
+// visibility request — Specific people with its tag field, pre-filled into the Accept dialog,
+// shared once the challenge leaves triage (§4.3, §12.1 event 15). The switch is platform-wide
+// (this spec is pinned to shard 1) and is put back as it was whatever happens. Needs a server with
+// PUBLIC_INTAKE_KEY and an e-mail transport (Jenkins sets both) — it self-skips otherwise — and
+// reads the confirmation token from the dev seam, which is on wherever dev sign-in is.
 import { test, expect, type BrowserContext } from "@playwright/test";
-import { signIn } from "./helpers/auth";
+import { devSlug, signIn } from "./helpers/auth";
+import { setChallengeStatusViaApi } from "./helpers/api";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -169,6 +172,122 @@ test("submit on /submit, confirm through the link, accept in the queue → Exter
     await patchCard(admin, { enabled: false });
     await patchCard(admin, { enabled: before.enabled, privacyNotice: before.privacyNotice });
     await admin.close();
+    await outsider.close();
+  }
+});
+
+test("Specific people: the tag field, the pre-filled Accept, and sharing once the challenge leaves triage", async ({ browser }) => {
+  const stamp = Date.now().toString(36);
+  const admin = await browser.newContext();
+  const listed = await browser.newContext();
+  const unlisted = await browser.newContext();
+  const outsider = await browser.newContext(); // never signed in
+  await signIn(admin, { name: `E2E Share Admin ${stamp}`, admin: true });
+  const listedName = `E2E Share Listed ${stamp}`;
+  await signIn(listed, { name: listedName });
+  await signIn(unlisted, { name: `E2E Share Unlisted ${stamp}` });
+  const listedEmail = `${devSlug(listedName)}@dev.test`;
+  const pendingEmail = `not-yet-here.${stamp}@example.org`;
+  const before = await readCard(admin);
+  const title = `Shared outside idea ${stamp}`;
+
+  try {
+    expect((await patchCard(admin, { privacyNotice: `We use your details only to answer you. ${stamp}` })).status()).toBe(200);
+    const on = await patchCard(admin, { enabled: true });
+    test.skip(on.status() === 409, `the server cannot switch the form on: ${(await on.json().catch(() => ({}))).error ?? "precondition missing"}`);
+    expect(on.status()).toBe(200);
+
+    // ── The outsider: Who should see this? ───────────────────────────────────────────────────
+    const page = await outsider.newPage();
+    let powIssuedAt = Date.now();
+    page.on("response", (r) => {
+      if (r.url().endsWith("/api/public/pow")) powIssuedAt = Date.now();
+    });
+    const submitted: { status?: number; devConfirmToken?: string } = {};
+    await page.route("**/api/public/submissions", async (route) => {
+      const res = await route.fetch();
+      Object.assign(submitted, { status: res.status() }, (await res.json().catch(() => ({}))) as { devConfirmToken?: string });
+      await route.fulfill({ response: res });
+    });
+    await page.goto("/submit");
+    await page.locator("#ps-title").fill(title);
+    await page.locator("#ps-description").fill(`Our loading dock ${stamp} needs a better schedule.`);
+    await page.locator("#ps-name").fill("Outside Person");
+    await page.locator("#ps-email").fill(`outside.share.${stamp}@example.org`);
+    await expect(page.getByLabel("Everyone in the organization")).toBeChecked();
+
+    // Teams: a name needs 3 characters.
+    await page.getByLabel("Specific teams").check();
+    await page.locator("#ps-teams").fill("QA");
+    await page.locator("#ps-teams").press("Enter");
+    await expect(page.getByRole("alert").filter({ hasText: "Team names need at least 3 characters." })).toBeVisible();
+
+    // People: an invalid address stays in the field; a valid one locks in on Enter.
+    await page.getByLabel("Specific people").check();
+    const emails = page.locator("#ps-emails");
+    await emails.fill("not-an-address");
+    await emails.press("Enter");
+    await expect(page.getByRole("alert").filter({ hasText: "Enter a valid e-mail address." })).toBeVisible();
+    await emails.fill(listedEmail);
+    await emails.press("Enter");
+    await expect(page.getByRole("list", { name: "E-mail addresses added" }).getByText(listedEmail)).toBeVisible();
+    // Text left in the field is locked in on Submit when it is valid.
+    await emails.fill(pendingEmail);
+
+    await page.getByLabel("I have read the privacy notice").check();
+    const submit = page.getByRole("button", { name: "Submit" });
+    await expect(submit).toBeEnabled({ timeout: 30_000 });
+    const wait = 3_500 - (Date.now() - powIssuedAt);
+    if (wait > 0) await page.waitForTimeout(wait);
+    await submit.click();
+    await expect.poll(() => submitted.status).toBe(202);
+    expect(submitted.devConfirmToken, "no confirmation token — the submission was dropped").toBeTruthy();
+    await page.goto(`/submit/confirm#${submitted.devConfirmToken}`);
+    await page.getByRole("button", { name: "Confirm my submission" }).click();
+    await expect(page.getByTestId("public-confirm-done")).toContainText("with our team");
+
+    // ── The platform admin: the request, then a pre-filled Accept ──────────────────────────────
+    const adminPage = await admin.newPage();
+    await adminPage.goto("/admin/public-submissions");
+    await adminPage.getByTestId("public-submission-rows").getByRole("button", { name: new RegExp(title) }).click();
+    const requested = adminPage.getByTestId("requested-visibility");
+    await expect(requested).toContainText("Requested: Specific people");
+    await expect(requested).toContainText(listedEmail);
+    await expect(requested).toContainText(pendingEmail);
+    await adminPage.getByTestId("public-submission-review").getByRole("button", { name: "Accept…" }).click();
+    const dialog = adminPage.locator("dialog[open]");
+    await expect(dialog.getByLabel("Visibility")).toHaveValue("people");
+    const people = dialog.getByRole("list", { name: "People with access" });
+    await expect(people.getByText(listedName)).toBeVisible();
+    await expect(people.getByText(pendingEmail)).toBeVisible();
+    await expect(people.getByText("No InnoBox user yet")).toBeVisible();
+    await dialog.getByLabel("Impact area").selectOption({ label: "Internal" });
+    await dialog.getByRole("button", { name: "Accept", exact: true }).click();
+    const toast = adminPage.locator(".toast");
+    await expect(toast).toContainText("Accepted as CH-");
+    const digits = /CH-(\d+)/.exec((await toast.textContent()) ?? "")?.[1];
+    expect(digits).toBeTruthy();
+
+    // ── In triage the listed person sees nothing; out of it, they are told and can open it ────
+    expect((await listed.request.get(`${base()}/api/challenges/${digits}`)).status()).toBe(404);
+    await setChallengeStatusViaApi(admin.request, digits!, "in_review");
+    const inbox = await listed.request.get(`${base()}/api/notifications`, { headers: { accept: "application/json" } });
+    const shared = ((await inbox.json()) as { notifications: { type: string; message: string; link: string }[] }).notifications.filter(
+      (n) => n.type === "challenge_shared" && n.link === `/challenges/${digits}`,
+    );
+    expect(shared).toHaveLength(1);
+    expect(shared[0]!.message).toContain("has been shared with you");
+    const listedPage = await listed.newPage();
+    await listedPage.goto(`/challenges/${digits}`);
+    await expect(listedPage.getByRole("heading", { name: title })).toBeVisible();
+    await expect(listedPage.getByText("Shared with specific people")).toBeVisible();
+    expect((await unlisted.request.get(`${base()}/api/challenges/${digits}`)).status(), "someone not on the list").toBe(404);
+  } finally {
+    await patchCard(admin, { enabled: false });
+    await patchCard(admin, { enabled: before.enabled, privacyNotice: before.privacyNotice });
+    await admin.close();
+    await listed.close();
+    await unlisted.close();
     await outsider.close();
   }
 });
