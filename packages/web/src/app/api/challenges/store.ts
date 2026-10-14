@@ -1489,15 +1489,28 @@ export async function getParentAccess(
   parentType: "challenge" | "solution",
   parentId: string,
 ): Promise<ParentAccess> {
-  if (!isUuid(parentId)) return "not_found";
+  return parentAccessFor(viewer, await loadParentVisibility(db, parentType, parentId));
+}
+
+/** A parent's §4.3 visibility columns, read once so many viewers can be checked against it —
+ *  the notification fan-out checks every recipient of an event against the same item. */
+export type ParentVisibility =
+  | { parentType: "challenge"; row: ChallengeVisibilityColumns }
+  | { parentType: "solution"; row: SolutionVisibilityColumns };
+
+/** The parent's visibility columns, or null when it does not exist. */
+export async function loadParentVisibility(
+  db: Pool | PoolClient,
+  parentType: "challenge" | "solution",
+  parentId: string,
+): Promise<ParentVisibility | null> {
+  if (!isUuid(parentId)) return null;
   if (parentType === "challenge") {
     const { rows } = await db.query<ChallengeVisibilityColumns>(
       `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where id = $1`,
       [parentId],
     );
-    const row = rows[0];
-    if (!row || !isChallengeRowVisible(viewer, row)) return "not_found";
-    return isRowTrashed(row) ? "trashed" : "live";
+    return rows[0] ? { parentType, row: rows[0] } : null;
   }
   const { rows } = await db.query<SolutionVisibilityColumns>(
     `select ${SOLUTION_VISIBILITY_SELECT}
@@ -1506,9 +1519,15 @@ export async function getParentAccess(
       where s.id = $1`,
     [parentId],
   );
-  const row = rows[0];
-  if (!row || !isSolutionRowVisible(viewer, row)) return "not_found";
-  return isRowTrashed(row) ? "trashed" : "live";
+  return rows[0] ? { parentType, row: rows[0] } : null;
+}
+
+/** getParentAccess's verdict for a parent already loaded by loadParentVisibility (null = missing). */
+export function parentAccessFor(viewer: Viewer, parent: ParentVisibility | null): ParentAccess {
+  if (!parent) return "not_found";
+  const visible = parent.parentType === "challenge" ? isChallengeRowVisible(viewer, parent.row) : isSolutionRowVisible(viewer, parent.row);
+  if (!visible) return "not_found";
+  return isRowTrashed(parent.row) ? "trashed" : "live";
 }
 
 /** The read gate: true when the viewer may SEE the parent — a platform admin sees a trashed one
