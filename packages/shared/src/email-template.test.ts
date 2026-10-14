@@ -217,3 +217,12 @@ test("renderEmailText: appends the manage line (absolute when base URL known)", 
   assert.ok(renderEmailText("msg", "https://s.example.com").includes("https://s.example.com/profile"));
   assert.ok(renderEmailText("msg", "").includes("Manage email notifications"));
 });
+
+// §24.7: a mail to an outside submitter (no account, no profile) leaves the footer out.
+test("renderWrappedEmailHtml / renderEmailText: footer: false leaves out the manage footer", () => {
+  const html = renderWrappedEmailHtml(`<div>${EMAIL_WRAPPER_PLACEHOLDER}</div>`, "hello", BASE, { footer: false });
+  assert.equal(html, "<div>hello</div>");
+  assert.equal(renderEmailText("msg", BASE, { footer: false }), "msg");
+  assert.equal(renderEmailText("msg", "", { footer: false }), "msg");
+  assert.ok(renderEmailText("msg", BASE, { footer: true }).includes("Manage email notifications"));
+});

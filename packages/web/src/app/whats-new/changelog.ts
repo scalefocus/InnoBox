@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.1",
+    date: "2026-10-14",
+    summary:
+      "E-mails to people who submit a challenge through the public form no longer end with a \"Manage email notifications\" link. They have no InnoBox account, so the link led nowhere useful. E-mails to employees keep it.",
+  },
+  {
     version: "1.10.0",
     date: "2026-10-14",
     summary:

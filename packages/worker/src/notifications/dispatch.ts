@@ -16,6 +16,7 @@ import {
   renderWrappedEmailHtml,
   sendGraphMail,
   textToHtmlFragment,
+  type EmailRenderOptions,
   type GraphMailEnv,
 } from "@innobox/shared";
 
@@ -106,11 +107,23 @@ export interface EmailTransportOptions {
 
 /** The text and HTML parts of a mail whose body is `message`. §12 e-mail content safety: the text
  *  is escaped and only links to the app's own origin (PUBLIC_BASE_URL) become anchors — with or
- *  without an admin wrapper. */
-export function renderEmailParts(message: string, wrapper: string | null, baseUrl: string): { text: string; html: string } {
-  const text = renderEmailText(message, baseUrl);
-  const html = wrapper ? renderWrappedEmailHtml(wrapper, message, baseUrl) : `<p>${textToHtmlFragment(text, baseUrl)}</p>`;
+ *  without an admin wrapper. `footer: false` drops the "Manage email notifications" footer, for a
+ *  §24.7 mail to an outside submitter (no account, no profile). */
+export function renderEmailParts(message: string, wrapper: string | null, baseUrl: string, opts: EmailRenderOptions = {}): { text: string; html: string } {
+  const text = renderEmailText(message, baseUrl, opts);
+  const html = wrapper ? renderWrappedEmailHtml(wrapper, message, baseUrl, opts) : `<p>${textToHtmlFragment(text, baseUrl)}</p>`;
   return { text, html };
+}
+
+/** One outbox row's subject and both body parts. §24.7: a submitter row has no account to manage,
+ *  so it carries no "Manage email notifications" footer; every user row does. */
+export function renderOutboxEmail(
+  row: Pick<OutboxRow, "recipient_email" | "payload">,
+  wrapper: string | null,
+  baseUrl: string,
+): { subject: string; text: string; html: string } {
+  const { subject, body } = composeOutboxEmail(row, baseUrl);
+  return { subject, ...renderEmailParts(body, wrapper, baseUrl, { footer: typeof row.recipient_email !== "string" }) };
 }
 
 export interface DeliveryOutcome {
@@ -202,8 +215,7 @@ export async function runNotificationSweep(pool: Pool, opts: EmailTransportOptio
       }
       const recipientEmail = (submitter ? row.recipient_email : row.email) as string;
 
-      const { subject, body } = composeOutboxEmail(row, opts.baseUrl);
-      const { text, html } = renderEmailParts(body, wrapper, opts.baseUrl);
+      const { subject, text, html } = renderOutboxEmail(row, wrapper, opts.baseUrl);
       const { delivered, lastError, rateLimited, retryAfterSeconds } = await deliverEmail(pool, opts, wrapper, { to: recipientEmail, subject, text, html });
 
       if (delivered) {

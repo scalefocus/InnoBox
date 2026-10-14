@@ -2276,8 +2276,12 @@ renewal, and an env-configured SMTP transport serves as the optional plain-text
 fallback. All Graph mails render inside one branded HTML wrapper template, so the
 Graph transport is used only once the service mailbox is connected **and** a wrapper
 has been saved (§14.3); until then mail goes through the SMTP fallback when it is
-configured, and is not sent otherwise (the in-app item is unaffected). The per-user
-e-mail opt-out (§13.5) is honored at dispatch (in-app items are always delivered):
+configured, and is not sent otherwise (the in-app item is unaffected). Every e-mail to a
+user ends with a small **"Manage email notifications"** footer linking to
+`<PUBLIC_BASE_URL>/profile` (a plain-text line in the text part), appended even when the
+wrapper omits it. E-mails to an outside submitter (§24.7) carry **no** footer: they have
+no account and no profile. The per-user e-mail opt-out (§13.5) is honored at dispatch
+(in-app items are always delivered):
 
 | # | Event | Recipients |
 |---|---|---|
@@ -6324,7 +6328,8 @@ How an external challenge appears:
 These are outbox rows with `recipient_email` set and no `user_id` (§5), sent from the
 service mailbox through the normal transport, wrapper and retry policy. They are never
 held for a digest and no user preference applies. They carry **no link into InnoBox**
-(the submitter cannot sign in), no employee names, no comments and no solution content,
+(the submitter cannot sign in) — not even the §12.1 *"Manage email notifications"*
+footer, which every e-mail to a user ends with — no employee names, no comments and no solution content,
 and the §12.1 content-safety rules apply. No mail is sent once the contact details are
 erased.
 
@@ -6411,7 +6416,8 @@ user.
   token answers 429, both without a database read or a body read; saving the card clears
   the cache); the IPv6 /64 key; the bucket store's 50 000-key bound with
   least-recently-used eviction; the honeypot and timing drops; the per-address and platform caps; the
-  e-mail templates (the confirmation carries no submitted text); the retention due
+  e-mail templates (the confirmation carries no submitted text, and no submitter e-mail
+  carries the *Manage email notifications* footer); the retention due
   dates; the author label and masking helpers; `needs_improvement` refused for an
   external challenge; the tag-field rules (syntax, the 3-character minimum, limits,
   duplicates, paste splitting, pending text on submit) and the visibility/array

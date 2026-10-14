@@ -220,20 +220,28 @@ export function manageEmailFooterText(baseUrl: string): string {
  *  after re-sanitizing (e.g. a row saved before a sanitizer change hid it in dropped markup). */
 const FALLBACK_WRAPPER = `<div>${EMAIL_WRAPPER_PLACEHOLDER}</div>`;
 
+/** `footer: false` leaves out the manage-preferences footer — for a §24.7 mail to an outside
+ *  submitter, who has no account and no profile to manage. */
+export interface EmailRenderOptions {
+  footer?: boolean;
+}
+
 /**
  * Render the HTML part of a notification email: the stored wrapper is sanitized again (so a
  * row stored before a sanitizer change is still cleaned on use), the plain-text message
  * becomes an HTML fragment substituted for [SYSTEM MESSAGE], and the manage-preferences footer
- * is appended even when the template omits it.
+ * is appended even when the template omits it (unless `footer: false`).
  */
-export function renderWrappedEmailHtml(wrapperHtml: string, messageText: string, baseUrl: string): string {
+export function renderWrappedEmailHtml(wrapperHtml: string, messageText: string, baseUrl: string, opts: EmailRenderOptions = {}): string {
   let wrapper = sanitizeWrapperHtml(wrapperHtml);
   if (countWrapperPlaceholders(wrapper) !== 1) wrapper = FALLBACK_WRAPPER;
   const fragment = textToHtmlFragment(messageText, baseUrl);
-  return wrapper.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragment) + manageEmailFooterHtml(baseUrl);
+  const footer = opts.footer === false ? "" : manageEmailFooterHtml(baseUrl);
+  return wrapper.replace(EMAIL_WRAPPER_PLACEHOLDER, () => fragment) + footer;
 }
 
-/** Render the plain-text alternative part: the existing text rendering + the manage line. */
-export function renderEmailText(messageText: string, baseUrl: string): string {
-  return messageText + manageEmailFooterText(baseUrl);
+/** Render the plain-text alternative part: the existing text rendering + the manage line
+ *  (unless `footer: false`). */
+export function renderEmailText(messageText: string, baseUrl: string, opts: EmailRenderOptions = {}): string {
+  return opts.footer === false ? messageText : messageText + manageEmailFooterText(baseUrl);
 }
