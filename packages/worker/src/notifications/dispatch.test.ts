@@ -7,7 +7,14 @@
 // email/email_notifications_enabled directly (a "missing user" row just has both null).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { composeOutboxEmail, emailRetryDelayMinutes, emailRetryDelaySeconds, MAX_EMAIL_ATTEMPTS, runNotificationSweep } from "./dispatch.js";
+import {
+  composeOutboxEmail,
+  emailRetryDelayMinutes,
+  emailRetryDelaySeconds,
+  MAX_EMAIL_ATTEMPTS,
+  renderOutboxEmail,
+  runNotificationSweep,
+} from "./dispatch.js";
 
 interface FakeRow {
   [key: string]: unknown;
@@ -192,4 +199,27 @@ test("composeOutboxEmail: a user row with its own subject (event 15) keeps it", 
   );
   assert.equal(shared.subject, "A challenge has been shared with you");
   assert.equal(shared.body, 'CH-7 "Faster onboarding" (submitted by Anonymous) has been shared with you.\n\nhttps://innobox.example.com/challenges/7');
+});
+
+// §24.7: an outside submitter has no account, so no submitter mail carries the "Manage email
+// notifications" footer — in either part, with or without the admin wrapper. A user's mail does.
+test("renderOutboxEmail: submitter mails carry no manage-notifications footer; user mails do", () => {
+  const base = "https://innobox.example.com";
+  const wrapper = "<div>[SYSTEM MESSAGE]</div>";
+  const confirm = { recipient_email: "ann@example.org", payload: { subject: "Confirm your submission", message: "Please confirm:", link: "/submit/confirm#tok" } };
+  const declined = { recipient_email: "ann@example.org", payload: { subject: "About your submission", message: "Not taken further.", link: "" } };
+  const user = { recipient_email: null, payload: { message: "CH-1 moved.", link: "/challenges/1" } };
+  for (const w of [wrapper, null]) {
+    for (const row of [confirm, declined]) {
+      const mail = renderOutboxEmail(row, w, base);
+      assert.ok(!mail.text.includes("Manage email notifications"), `text, wrapper=${w}`);
+      assert.ok(!mail.html.includes("Manage email notifications"), `html, wrapper=${w}`);
+      assert.ok(!mail.text.includes("/profile") && !mail.html.includes("/profile"));
+    }
+    const confirmMail = renderOutboxEmail(confirm, w, base);
+    assert.ok(confirmMail.text.includes(`${base}/submit/confirm#tok`), "the confirm link survives");
+    const userMail = renderOutboxEmail(user, w, base);
+    assert.ok(userMail.text.includes(`Manage email notifications: ${base}/profile`));
+    assert.ok(userMail.html.includes("Manage email notifications"));
+  }
 });
