@@ -226,6 +226,9 @@ services:
     environment:
       # Outer body cap = maximum upload size + 1 MB (see Caddyfile); default fits the 200 MB ceiling.
       PROXY_MAX_BODY_SIZE: ${PROXY_MAX_BODY_SIZE:-201MiB}
+      # The org proxy (or proxies) in front of this one, as CIDR ranges (see Caddyfile). Empty →
+      # Caddy's direct peer is the client. Behind an org proxy it must be set (.env.example).
+      PROXY_TRUSTED_RANGES: ${PROXY_TRUSTED_RANGES:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     ports:

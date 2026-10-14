@@ -33,7 +33,7 @@ export interface PublicRouteDeps {
   state: () => Promise<{ live: boolean; privacyNotice: string }>;
   /** PUBLIC_INTAKE_KEY (non-null whenever `live`). */
   key: () => Buffer | null;
-  /** The TRUST_PROXY-selected client address, null when none. */
+  /** The TRUST_PROXY-selected client address as a bucket key (IPv6 by /64), null when none. */
   clientIp: string | null;
   now?: () => number;
   receive: (fields: ReceivedSubmission, powSalt: string) => Promise<ReceiveResult>;

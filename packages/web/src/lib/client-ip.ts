@@ -176,3 +176,22 @@ function ipv6Key(bytes: number[]): string {
   for (let i = 0; i < 16; i += 2) groups.push(((bytes[i]! << 8) | bytes[i + 1]!).toString(16));
   return groups.join(":");
 }
+
+const IPV4_MAPPED = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
+
+/**
+ * The key a per-IP rate-limit bucket uses for a client address (INNOBOX_SPEC.md §2.4 *Per-IP
+ * keys*). An IPv6 address is keyed by its /64 prefix, because one host typically holds a whole
+ * /64 and could otherwise rotate through unlimited buckets. An IPv4 address, or an IPv4-mapped
+ * IPv6 one, is keyed as the IPv4 address. Only for bucket keys: anything that records the address
+ * (an OAuth client registration, an audit row) keeps the full address from
+ * clientIpFromForwardedFor().
+ */
+export function rateLimitIpKey(ip: string | null): string | null {
+  if (ip === null) return null;
+  const parsed = parseIp(ip);
+  if (!parsed) return null;
+  if (parsed.v === 4) return parsed.bytes.join(".");
+  if (IPV4_MAPPED.every((b, i) => parsed.bytes[i] === b)) return parsed.bytes.slice(12).join(".");
+  return `${ipv6Key([...parsed.bytes.slice(0, 8), 0, 0, 0, 0, 0, 0, 0, 0])}/64`;
+}

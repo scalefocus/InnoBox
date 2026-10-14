@@ -1,13 +1,17 @@
 "use client";
 // Platform settings → Public submissions (INNOBOX_SPEC.md §24.2, §14.3): the "Accept public
 // submissions" switch (off by default), the privacy notice shown on the public form, and the
-// read-only public address with a copy button. The switch can be turned on only while
+// read-only public address with a copy button and the edge-protection reminder. The switch can be turned on only while
 // PUBLIC_INTAKE_KEY is set, a notice is saved and an e-mail transport is available — otherwise it
 // is disabled and every unmet precondition is listed, so an admin can fix them in one pass. Audited server-side as
 // `settings.public_submissions_changed`. Same pill switch and optimistic flip as the other cards.
 import { useState } from "react";
 import type { UnmetPrecondition } from "@/lib/public-intake";
 import { PRIVACY_NOTICE_MAX } from "@innobox/shared/public-intake";
+
+/** §24.4 edge protection: what the deployment must provide before the address is shared. */
+export const PUBLIC_EDGE_HINT =
+  "Before sharing this address, make sure your reverse proxy forwards the real client address and protects this page against floods.";
 
 export interface PublicSubmissionsSettings {
   enabled: boolean;
@@ -174,6 +178,9 @@ export function PublicSubmissionsSettingsCard({
         <div className="sub" style={{ marginTop: 6 }}>
           No public page links to it — share it wherever you want outside submissions to come from. While the form is live, signed-in people can
           also copy it from the Raise a challenge page.
+        </div>
+        <div className="sub" style={{ marginTop: 4 }} data-testid="public-edge-hint">
+          {PUBLIC_EDGE_HINT}
         </div>
       </div>
     </div>

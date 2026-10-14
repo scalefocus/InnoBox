@@ -80,3 +80,19 @@ test("parseIp: IPv4, IPv6 (compressed, embedded IPv4, bracketed), and rejects", 
     assert.equal(parseIp(bad), null, bad);
   }
 });
+
+test("rateLimitIpKey: IPv4 as is, IPv6 by its /64, IPv4-mapped IPv6 as the IPv4 address", async () => {
+  const { rateLimitIpKey } = await import("./client-ip");
+  assert.equal(rateLimitIpKey(null), null);
+  assert.equal(rateLimitIpKey("not-an-ip"), null);
+  assert.equal(rateLimitIpKey("203.0.113.7"), "203.0.113.7");
+  assert.equal(rateLimitIpKey("::ffff:203.0.113.7"), "203.0.113.7");
+  assert.equal(rateLimitIpKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), "2001:db8:1:2:0:0:0:0/64");
+  // Every address in one /64 shares a key; the next /64 does not.
+  assert.equal(rateLimitIpKey("2001:db8:1:2::1"), rateLimitIpKey("2001:db8:1:2:ffff:ffff:ffff:ffff"));
+  assert.notEqual(rateLimitIpKey("2001:db8:1:2::1"), rateLimitIpKey("2001:db8:1:3::1"));
+  // It composes with the selector, which keeps the full address for anything that records it.
+  const full = clientIpFromForwardedFor("2001:db8:1:2::9", 1);
+  assert.equal(full, "2001:db8:1:2:0:0:0:9");
+  assert.equal(rateLimitIpKey(full), "2001:db8:1:2:0:0:0:0/64");
+});

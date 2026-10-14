@@ -2,7 +2,7 @@
 // state, the key, the TRUST_PROXY-selected client address and the store. Each route file stays a
 // one-liner over app/api/public/handlers.ts. Not wrapped in withSystemLog: an unauthenticated route
 // must not be a write path into the system log (§14.7), like the CSP sink.
-import { clientIpFromForwardedFor, parseTrustProxy } from "@/lib/client-ip";
+import { clientIpFromForwardedFor, parseTrustProxy, rateLimitIpKey } from "@/lib/client-ip";
 import { pool } from "@/lib/db";
 import { publicIntakeKey } from "@/lib/public-intake";
 import { loadPublicIntakeState, publicIntakeSeamEnabled } from "@/lib/public-intake-live";
@@ -16,7 +16,7 @@ export function publicRouteDeps(req: Request): PublicRouteDeps {
   return {
     state: loadPublicIntakeState,
     key: publicIntakeKey,
-    clientIp: clientIpFromForwardedFor(req.headers.get("x-forwarded-for"), TRUST),
+    clientIp: rateLimitIpKey(clientIpFromForwardedFor(req.headers.get("x-forwarded-for"), TRUST)),
     receive: (fields, salt) => receiveSubmission(pool, fields, salt),
     confirm: (token) => confirmSubmission(pool, token),
     exposeDevToken: publicIntakeSeamEnabled(),

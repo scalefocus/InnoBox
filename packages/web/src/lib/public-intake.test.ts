@@ -34,3 +34,40 @@ test("all three unmet → all three in key → notice → transport order, each 
   ]);
   assert.equal(missingPrecondition(none), "key", "the first-only answer is the head of the list");
 });
+
+test("the live-state cache: one load per 10 seconds, shared by concurrent misses, cleared on demand", async () => {
+  const { createStateCache, PUBLIC_STATE_CACHE_MS } = await import("./public-intake");
+  assert.equal(PUBLIC_STATE_CACHE_MS, 10_000);
+  let t = 0;
+  let loads = 0;
+  const cache = createStateCache(async () => ++loads, PUBLIC_STATE_CACHE_MS, () => t);
+
+  assert.deepEqual(await Promise.all([cache.get(), cache.get(), cache.get()]), [1, 1, 1]);
+  assert.equal(loads, 1, "concurrent misses share one load");
+  t = 9_999;
+  assert.equal(await cache.get(), 1);
+  t = 10_000;
+  assert.equal(await cache.get(), 2, "expired after 10 seconds");
+  cache.clear();
+  assert.equal(await cache.get(), 3, "clear() forces the next read");
+});
+
+test("the live-state cache does not keep a failed load", async () => {
+  const { createStateCache } = await import("./public-intake");
+  let fail = true;
+  const cache = createStateCache(async () => {
+    if (fail) throw new Error("db down");
+    return "ok";
+  }, 10_000, () => 0);
+  await assert.rejects(cache.get(), /db down/);
+  fail = false;
+  assert.equal(await cache.get(), "ok");
+});
+
+test("the settings card reads fresh state, and saving it clears the public routes' cache", async () => {
+  const { readFileSync } = await import("node:fs");
+  const card = readFileSync(new URL("../app/api/admin/settings/public-submissions.ts", import.meta.url), "utf8");
+  assert.match(card, /await readPublicIntakeState\(\)/);
+  const route = readFileSync(new URL("../app/api/admin/settings/route.ts", import.meta.url), "utf8");
+  assert.match(route, /invalidatePublicIntakeState\(\);/);
+});

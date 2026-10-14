@@ -89,6 +89,36 @@ export async function getPublicIntakeState(db: Db, transportAvailable: () => Pro
   return { ...settings, ...pre, live: settings.enabled && missingPrecondition(pre) === null };
 }
 
+/** §24.4 load shedding: how long the web process trusts its last reading of the live state. */
+export const PUBLIC_STATE_CACHE_MS = 10_000;
+
+export interface StateCache<T> {
+  get(): Promise<T>;
+  clear(): void;
+}
+
+/** A single-value cache for `ttlMs`. Concurrent misses share one load, so a flood that arrives as
+ *  the entry expires costs one read, not one per request. A failed load is not cached. */
+export function createStateCache<T>(load: () => Promise<T>, ttlMs: number, now: () => number = Date.now): StateCache<T> {
+  let entry: { value: Promise<T>; expiresAt: number } | null = null;
+  return {
+    get() {
+      const t = now();
+      if (entry && entry.expiresAt > t) return entry.value;
+      const value = load();
+      const mine = { value, expiresAt: t + ttlMs };
+      entry = mine;
+      value.catch(() => {
+        if (entry === mine) entry = null;
+      });
+      return value;
+    },
+    clear() {
+      entry = null;
+    },
+  };
+}
+
 /** The answer every public route gives while the form is not live — indistinguishable from a
  *  route that does not exist (§24.2). */
 export function publicNotFound(): Response {

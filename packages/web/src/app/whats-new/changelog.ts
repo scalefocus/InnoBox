@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.0",
+    date: "2026-10-14",
+    summary:
+      "The public submission form now turns away floods of requests before they reach the database, so a flood can no longer slow InnoBox down for employees. Rate limits now see each visitor's real address. Operators running behind an organization proxy must set PROXY_TRUSTED_RANGES to that proxy's address range.",
+  },
+  {
     version: "1.9.0",
     date: "2026-10-13",
     summary:

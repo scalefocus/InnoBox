@@ -116,3 +116,32 @@ test("§25.11 per-IP buckets: registration 10/hour, token + unauthenticated /mcp
   assert.deepEqual(RATE_LIMITS["mcp-register"], { limit: 10, windowMs: 60 * 60 * 1000 });
   assert.deepEqual(RATE_LIMITS["mcp-ip"], { limit: 60, windowMs: 60 * 1000 });
 });
+
+test("the bucket store is bounded: a new key beyond the cap evicts the least recently used one", async () => {
+  const { MAX_TRACKED, trackedBucketCount } = await import("./rate-limit");
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  // The first key spends its whole allowance, then every other key arrives.
+  for (let i = 0; i < 5; i++) takeToken("first", "public-submit", t0, 1);
+  assert.equal(takeToken("first", "public-submit", t0, 1).ok, false);
+  takeToken("kept", "public-submit", t0, 1);
+  for (let i = 0; i < MAX_TRACKED - 2; i++) takeToken(`ip-${i}`, "public-read", t0, 1);
+  assert.equal(trackedBucketCount(), MAX_TRACKED);
+  // Using "kept" again makes "first" the least recently used.
+  takeToken("kept", "public-submit", t0, 1);
+  takeToken("one-more", "public-read", t0, 1);
+  assert.equal(trackedBucketCount(), MAX_TRACKED, "the cap holds");
+  // "first" was forgotten — a fresh allowance, never a refusal; "kept" still remembers its two.
+  assert.equal(takeToken("first", "public-submit", t0, 1).ok, true);
+  for (let i = 0; i < 3; i++) assert.equal(takeToken("kept", "public-submit", t0, 1).ok, true);
+  assert.equal(takeToken("kept", "public-submit", t0, 1).ok, false);
+});
+
+test("a flood of new keys stays cheap: no request scans the whole store", async () => {
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  const started = performance.now();
+  for (let i = 0; i < 200_000; i++) takeToken(`flood-${i}`, "public-read", t0, 1);
+  // A per-request scan of 50 000 entries would take minutes here; constant-time eviction, well under that.
+  assert.ok(performance.now() - started < 5_000);
+});

@@ -69,6 +69,10 @@ test("while the switch is off, /submit and every public route answer 404", async
     await expect(list).toContainText("Before you can switch this on:");
     await expect(list.locator("li")).toHaveCount(unmet.length);
     await expect(list.locator('li[data-precondition="notice"]')).toHaveText("Enter a privacy notice first.");
+    // §24.4 edge protection: the reminder under the public address.
+    await expect(newPage.getByTestId("public-submissions-card").getByTestId("public-edge-hint")).toHaveText(
+      "Before sharing this address, make sure your reverse proxy forwards the real client address and protects this page against floods.",
+    );
   } finally {
     await patchCard(admin, { enabled: before.enabled, privacyNotice: before.privacyNotice });
     await admin.close();
