@@ -55,10 +55,62 @@ interface BucketState {
   updatedAt: number;
 }
 
-const buckets = new Map<string, BucketState>();
+/** A store entry: the bucket's state, linked into the recency list. */
+interface Entry extends BucketState {
+  key: string;
+  older: Entry | null;
+  newer: Entry | null;
+}
 
-/** Bounds the map: entries idle long enough to have fully refilled carry no information. */
-const MAX_TRACKED = 50_000;
+/** One store for every bucket, per-user and per-IP: a Map for lookup plus a doubly linked
+ *  recency list (`oldest` … `newest`), so moving or evicting an entry never iterates. (Taking the
+ *  first key of a Map is not constant time under churn: deleted slots are skipped one by one.) */
+const buckets = new Map<string, Entry>();
+let oldest: Entry | null = null;
+let newest: Entry | null = null;
+
+/** §2.4 bucket store bound: at most this many keys. A new key beyond it evicts the least recently
+ *  used one in constant time, so memory stays bounded however many addresses a flood comes from,
+ *  and no request ever scans the store. Forgetting a bucket can only hand a caller a fresh
+ *  allowance, never refuse one. */
+export const MAX_TRACKED = 50_000;
+
+function unlink(e: Entry): void {
+  if (e.older) e.older.newer = e.newer;
+  else oldest = e.newer;
+  if (e.newer) e.newer.older = e.older;
+  else newest = e.older;
+  e.older = e.newer = null;
+}
+
+function append(e: Entry): void {
+  e.older = newest;
+  e.newer = null;
+  if (newest) newest.newer = e;
+  else oldest = e;
+  newest = e;
+}
+
+/** Records `key`'s new state and marks it the most recently used. */
+function touch(key: string, tokens: number, updatedAt: number): void {
+  const existing = buckets.get(key);
+  if (existing) {
+    existing.tokens = tokens;
+    existing.updatedAt = updatedAt;
+    if (existing !== newest) {
+      unlink(existing);
+      append(existing);
+    }
+    return;
+  }
+  if (buckets.size >= MAX_TRACKED && oldest) {
+    buckets.delete(oldest.key);
+    unlink(oldest);
+  }
+  const entry: Entry = { key, tokens, updatedAt, older: null, newer: null };
+  buckets.set(key, entry);
+  append(entry);
+}
 
 export type RateLimitDecision = { ok: true } | { ok: false; retryAfterSeconds: number };
 
@@ -78,21 +130,16 @@ export function takeToken(
   const tokens = prev ? Math.min(limit, prev.tokens + (now - prev.updatedAt) * refillPerMs) : limit;
 
   if (tokens < 1) {
-    buckets.set(key, { tokens, updatedAt: now });
+    touch(key, tokens, now);
     return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((1 - tokens) / refillPerMs / 1000)) };
   }
-  if (!prev && buckets.size >= MAX_TRACKED) pruneFull(now, multiplier);
-  buckets.set(key, { tokens: tokens - 1, updatedAt: now });
+  touch(key, tokens - 1, now);
   return { ok: true };
 }
 
-function pruneFull(now: number, multiplier: number): void {
-  for (const [key, state] of buckets) {
-    const bucket = key.slice(0, key.indexOf(":")) as RateLimitBucket;
-    const { windowMs } = RATE_LIMITS[bucket];
-    const limit = effectiveLimit(bucket, multiplier);
-    if (state.tokens + (now - state.updatedAt) * (limit / windowMs) >= limit) buckets.delete(key);
-  }
+/** Test hook: how many keys the store holds. */
+export function trackedBucketCount(): number {
+  return buckets.size;
 }
 
 /** The warning line for a refused request. `anonymous` drops the user id: the survey routes'
@@ -131,4 +178,5 @@ export function takeMcpToken(userId: string, clientRowId: string, bucket: RateLi
 /** Test hook. */
 export function resetRateLimits(): void {
   buckets.clear();
+  oldest = newest = null;
 }

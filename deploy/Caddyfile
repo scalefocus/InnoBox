@@ -3,6 +3,20 @@
 # PUBLIC_BASE_URL, set in .env); this Caddy instance handles internal routing on
 # port 8080. It forwards X-Forwarded-Proto and X-Forwarded-Host so Next.js and
 # NextAuth can reconstruct the correct public URL.
+#
+# Client address (INNOBOX_SPEC.md §2.3, PROXY_TRUSTED_RANGES): Caddy trusts the
+# X-Forwarded-For entries added by the org proxies listed in PROXY_TRUSTED_RANGES (CIDR
+# ranges, space-separated; empty = trust none), parses them right to left, and hands web
+# and worker exactly one X-Forwarded-For entry — the real client — so TRUST_PROXY=1 is
+# right in every deployment. Unset behind an org proxy, every caller would be keyed by
+# the org proxy's address and the per-IP rate limits would become one shared bucket.
+{
+	servers {
+		trusted_proxies static {$PROXY_TRUSTED_RANGES}
+		trusted_proxies_strict
+	}
+}
+
 :8080 {
 	# Outer request-body cap (INNOBOX_SPEC.md §2.4): the maximum upload size plus 1 MB, as a
 	# backstop only — the per-route limits in the app are the real ones. The maximum upload
@@ -19,6 +33,7 @@
 			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
 			header_up X-Forwarded-Host  {>X-Forwarded-Host}
 			header_up X-Real-IP         {remote_host}
+			header_up X-Forwarded-For   {client_ip}
 		}
 	}
 	# everything else -> web app (UI + API)
@@ -29,6 +44,7 @@
 			header_up X-Forwarded-Proto {>X-Forwarded-Proto}
 			header_up X-Forwarded-Host  {>X-Forwarded-Host}
 			header_up X-Real-IP         {remote_host}
+			header_up X-Forwarded-For   {client_ip}
 		}
 	}
 }

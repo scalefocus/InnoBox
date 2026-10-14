@@ -188,3 +188,55 @@ test("a failing store is a fixed 500, never a throw", async () => {
   const res = await handlePublicSubmission(post({ ...FORM, pow: solvedPow() }), deps({ receive: async () => Promise.reject(new Error("db down")) }));
   assert.equal(res.status, 500);
 });
+
+// §24.4 load shedding: the live check first (so the form stays undiscoverable while off), then the
+// per-IP token, and only then the body and the database.
+test("load shedding: a refused token is a 429 before the body is read or the store is touched", async () => {
+  const d = deps({ clientIp: "198.51.100.77" });
+  let stored = 0;
+  const counting: PublicRouteDeps = {
+    ...d,
+    receive: async (fields, salt) => {
+      stored++;
+      return d.receive(fields, salt);
+    },
+    confirm: async (token) => {
+      stored++;
+      return d.confirm(token);
+    },
+  };
+  for (let i = 0; i < 5; i++) await handlePublicSubmission(post({ ...FORM, pow: solvedPow() }), counting);
+  assert.equal(stored, 5);
+
+  const req = post({ ...FORM, pow: solvedPow() });
+  const res = await handlePublicSubmission(req, counting);
+  assert.equal(res.status, 429);
+  assert.equal(req.bodyUsed, false, "the body is never read");
+  assert.equal(stored, 5, "the store is never reached");
+
+  for (let i = 0; i < 20; i++) await handlePublicConfirm(post({ token: "A".repeat(43) }), counting);
+  const confirmReq = post({ token: "A".repeat(43) });
+  assert.equal((await handlePublicConfirm(confirmReq, counting)).status, 429);
+  assert.equal(confirmReq.bodyUsed, false);
+  assert.equal(stored, 25);
+});
+
+test("load shedding: while off, nothing takes a token or reads the body — 404 first", async () => {
+  const ip = "198.51.100.78";
+  for (let i = 0; i < 50; i++) {
+    const req = post({ ...FORM, pow: solvedPow() });
+    assert.equal((await handlePublicSubmission(req, deps({ ...off(), clientIp: ip }))).status, 404);
+    assert.equal(req.bodyUsed, false);
+    assert.equal((await handlePublicPow(deps({ ...off(), clientIp: ip }))).status, 404);
+  }
+  // The 404s spent nothing: the same address still has its whole allowance once the form is live.
+  assert.equal((await handlePublicPow(deps({ clientIp: ip }))).status, 200);
+  assert.equal((await handlePublicSubmission(post({ ...FORM, pow: solvedPow() }), deps({ clientIp: ip }))).status, 202);
+});
+
+test("the production wiring reads the cached state and keys buckets by rateLimitIpKey", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("./deps.ts", import.meta.url), "utf8");
+  assert.match(src, /state: loadPublicIntakeState,/);
+  assert.match(src, /clientIp: rateLimitIpKey\(clientIpFromForwardedFor\(/);
+});

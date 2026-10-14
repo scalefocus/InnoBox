@@ -14,7 +14,7 @@ import {
   setPublicSubmissionSettings,
 } from "./store";
 import { publicSubmissionsCard } from "./public-submissions";
-import { emailTransportAvailable } from "@/lib/public-intake-live";
+import { emailTransportAvailable, invalidatePublicIntakeState } from "@/lib/public-intake-live";
 import { PRECONDITION_HINT, publicIntakeKey } from "@/lib/public-intake";
 import { parseSettingsPatch } from "./validation";
 import { getFeaturedLimit, setFeaturedLimit } from "../../challenges/featured";
@@ -66,6 +66,8 @@ async function handlePATCH(req: Request): Promise<Response> {
     if (result.status === "precondition") {
       return Response.json({ error: PRECONDITION_HINT[result.missing], code: `public_submissions_${result.missing}` }, { status: 409 });
     }
+    // §24.2: the public routes read a 10-second cache; a saved switch takes effect at once.
+    invalidatePublicIntakeState();
   }
 
   const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([

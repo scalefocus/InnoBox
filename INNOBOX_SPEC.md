@@ -525,6 +525,20 @@ The delivery pipeline, pinned:
     404. Compose passes `${PUBLIC_INTAKE_KEY:-}` to `web`.
   - **`TRUST_PROXY`** — now read by **web** as well as the worker, for the CSP report
     sink's per-IP key (§2.4); compose passes the same `${TRUST_PROXY:-1}` to `web`.
+  - **`PROXY_TRUSTED_RANGES`** (the bundled Caddy proxy) — a space-separated list of
+    CIDR ranges for the org reverse proxy (or proxies) in front of the compose stack.
+    It is empty by default, and the repository pins no address (§2.3). Caddy trusts
+    the `X-Forwarded-For` entries those proxies add (`trusted_proxies`, strict
+    right-to-left parsing), works out the real client address from them, and **replaces**
+    `X-Forwarded-For` toward web and worker with that one address (`{client_ip}`). So
+    web and worker always receive exactly one entry, the real client, and the default
+    `TRUST_PROXY=1` is right in every deployment. When it is empty, the client address is
+    Caddy's direct peer, which is correct when nothing sits in front of Caddy. **Behind
+    an org proxy it must be set.** Otherwise every outside caller is keyed by the org
+    proxy's address, so the per-IP limits (§2.4, §24.4, §25.11) become a single bucket
+    that one caller can use up for everyone. `deploy/.env.example` documents it next to
+    `TRUST_PROXY`, together with the check: if the client IPs on audit rows are all the
+    same address, it is unset.
   - **Egress:** web and worker need outbound HTTPS (443) to channel-webhook receivers
     (Teams Workflows URLs are on `*.logic.azure.com` or
     `*.environment.api.powerplatform.com`). No forward-proxy support in v1 (§12.4).
@@ -695,6 +709,19 @@ these rules close the generic web-platform paths by which it could.
   `/healthz`, `/readyz`, and `/metrics` are **exempt**, so probe and scrape cadence
   can never be throttled. Like the web buckets, the counters are in memory per
   instance.
+- **Per-IP keys (web)** — the web tier's per-IP buckets (the CSP report sink above, the
+  §24 public submission routes, and the §25.11 registration, token and unauthenticated
+  `/mcp` buckets) key on the client address that `TRUST_PROXY` selects. The bundled
+  proxy has already reduced it to the real client (`PROXY_TRUSTED_RANGES`, §2.3). An
+  **IPv6 address is keyed by its /64 prefix**, because one host typically controls a
+  whole /64 and could otherwise rotate through unlimited buckets. An IPv4 address is
+  keyed as is.
+- **Bucket store bound** — all web buckets, per-user and per-IP, live in one in-process
+  store capped at **50 000 keys**. When it is full, adding a key evicts the **least
+  recently used** one in constant time; a flood never triggers a scan of the whole
+  store. Eviction only forgets a bucket, which can at worst hand a caller a fresh
+  allowance. It never refuses a request, and memory stays bounded however many
+  addresses a flood comes from.
 - **Dev and e2e scaling** — local dev and e2e may scale every limit above via
   `RATE_LIMIT_MULTIPLIER`, honoured **only when `NODE_ENV !== "production"`** (the
   same guard as the dev-auth bypass, §2.3); a production build ignores the variable.
@@ -6031,6 +6058,7 @@ other, unauthenticated surface (§2.1 invariant 2).
 | 7 | The submitter gets **key e-mails only**: confirm, accepted or declined, and the final outcome. | They are kept informed without a public status page or an account. |
 | 8 | Contact details are **erased 90 days after closure**; unconfirmed submissions are deleted after **7 days**. | Data minimization for people with no other relationship to the platform. |
 | 9 | The submitter may say **who should see** the challenge — specific people (by e-mail), specific teams (free text), or everyone in the organization. It is a **request**: the admin settles the real visibility on accept. | Outside submitters often know who inside should handle their challenge; the platform admin stays the gate, and the form still reads no application data. |
+| 10 | The app **sheds load cheaply** (no database read before the per-IP limit), but absorbing **volumetric and distributed floods is the edge's job**. | One web instance with in-process buckets cannot stop a botnet. It can make sure that a flood it rejects costs it nothing and never starves the rest of InnoBox. |
 
 ### §24.2 The switch and its preconditions
 
@@ -6048,7 +6076,9 @@ The §14.3 **Public submissions** card holds:
   wherever it wants outside submissions to come from. Inside the app, the one other
   place that offers it is the §6.1 *"or ask a customer to challenge us"* copy link on
   `/challenges/new`, shown to signed-in users only while the feature is live, so any
-  employee can hand the address to a customer.
+  employee can hand the address to a customer. On the card, under the address,
+  a muted line names what the deployment must provide before sharing it (§24.4 *Edge
+  protection*).
 
 The switch can be turned **on** only when all three hold: `PUBLIC_INTAKE_KEY` is valid
 (§2.3), the privacy notice is not empty, and an e-mail transport is available (Graph
@@ -6067,7 +6097,11 @@ it. The list updates when the card reloads after a save. When nothing is missing
 list is absent. If a precondition stops holding later (the key is
 removed, or the mailbox disconnected), the public routes answer **404** until it is
 fixed, and the card shows the same list in the danger colour under the heading
-*"The form is offline until this is fixed:"*. The queue stays usable for anything already received. Changing the switch or the
+*"The form is offline until this is fixed:"*. The queue stays usable for anything already received.
+The web process caches whether the form is live for **10 seconds** (§24.4 *Load
+shedding*), so a precondition that stops or starts holding takes effect within that
+time. Saving the card clears the cache, so turning the switch on or off takes effect at
+once. Changing the switch or the
 notice is audited as `settings.public_submissions_changed` (`after: { enabled,
 noticeLength }`).
 
@@ -6144,8 +6178,21 @@ link works for 24 hours."*
 - **Honeypot and timing.** A filled honeypot, or a submission arriving less than **3
   seconds** after its challenge was issued, is **silently dropped**. The response is the
   normal 202, nothing is stored or sent, and only the metric counts it.
+- **Load shedding.** Every public route, and the `/submit` and `/submit/confirm` pages,
+  does its work in this order:
+  1. Read whether the form is live from a **10-second in-process cache** (§24.2). Off →
+     **404**. While the cache is fresh this costs no database read, so a flood against
+     a switched-off form is free too.
+  2. **Routes only:** take a per-IP token (below). Refused → **429**, before the body is
+     read and before any database read.
+  3. Only then read the body and touch the database.
+
+  This keeps the 404-while-off answer, so the feature stays undiscoverable, and a
+  rejected request never takes a connection from the database pool that the rest of
+  InnoBox shares. The pages make no database read beyond the cached state. A flood of
+  page loads costs rendering only, and that is the edge's to absorb (below).
 - **Per-IP limits** (token buckets in the web process, keyed by the client IP chosen by
-  `TRUST_PROXY`, like the CSP sink, §2.4): `GET /api/public/pow` and
+  `TRUST_PROXY`, IPv6 by /64, like the CSP sink, §2.4): `GET /api/public/pow` and
   `GET /api/public/settings` **30 per minute**; `POST /api/public/submissions` **5 per
   hour**; `POST /api/public/confirm` **20 per hour**. Exceeded → **429** with
   `Retry-After` and *"Too many requests — try again later."*
@@ -6168,6 +6215,14 @@ link works for 24 hours."*
   table. They are counted in **`innobox_public_submissions_total{outcome}`** instead,
   with `outcome` one of `received`, `confirmed`, `honeypot`, `too_fast`, `pow_failed`,
   `address_capped`, `ip_limited` and `ceiling`.
+- **Edge protection (deployment).** The limits above stop spam and a single abusive
+  client. They do not stop a volumetric or widely distributed flood. A deployment that
+  turns the form on should put it behind edge protection: rate limiting, a WAF or a CDN
+  at the org reverse proxy, scoped to `/submit*` and `/api/public/*` if it wants to
+  leave the rest alone. It must also set `PROXY_TRUSTED_RANGES` (§2.3), or every
+  per-IP limit here becomes one shared bucket. The §14.3 card says so in a muted line
+  under the public address: *"Before sharing this address, make sure your reverse proxy
+  forwards the real client address and protects this page against floods."*
 
 ### §24.5 Confirmation and the review queue
 
@@ -6352,7 +6407,10 @@ user.
   Receiving and confirming are unauthenticated and are **not** audited (§24.4); the
   metric counts them.
 - **Tests.** Unit: proof-of-work issue and verify (signature, expiry, wrong number,
-  spent salt); the honeypot and timing drops; the per-address and platform caps; the
+  spent salt); the load-shedding order (a cached-off form answers 404 and a refused
+  token answers 429, both without a database read or a body read; saving the card clears
+  the cache); the IPv6 /64 key; the bucket store's 50 000-key bound with
+  least-recently-used eviction; the honeypot and timing drops; the per-address and platform caps; the
   e-mail templates (the confirmation carries no submitted text); the retention due
   dates; the author label and masking helpers; `needs_improvement` refused for an
   external challenge; the tag-field rules (syntax, the 3-character minimum, limits,

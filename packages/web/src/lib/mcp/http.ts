@@ -5,7 +5,7 @@
 // verifier or Authorization header.
 import { errorCodeForStatus, sanitizeSystemMessage } from "@innobox/shared";
 import { recordSystemEvent } from "@/app/api/admin/system-log/store";
-import { clientIpFromForwardedFor, parseTrustProxy } from "@/lib/client-ip";
+import { clientIpFromForwardedFor, parseTrustProxy, rateLimitIpKey } from "@/lib/client-ip";
 import { pool } from "@/lib/db";
 import { JSON_BODY_MAX_BYTES, readBytesLimited } from "@/lib/http";
 import { takeToken, type RateLimitBucket } from "@/lib/rate-limit";
@@ -32,7 +32,7 @@ export function clientIp(req: Request): string | null {
 /** §25.11 per-IP limits (registration; token endpoint and unauthenticated /mcp). An address that
  *  cannot be determined shares one bucket, which can only under-count. */
 export function ipLimited(req: Request, bucket: Extract<RateLimitBucket, "mcp-register" | "mcp-ip">): Response | null {
-  const decision = takeToken(`ip:${clientIp(req) ?? "unknown"}`, bucket);
+  const decision = takeToken(`ip:${rateLimitIpKey(clientIp(req)) ?? "unknown"}`, bucket);
   if (decision.ok) return null;
   return Response.json(
     { error: "too_many_requests", error_description: "Too many requests — try again shortly." },

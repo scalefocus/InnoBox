@@ -3,7 +3,7 @@
 // (lib/csrf.ts). Deliberately NOT wrapped in withSystemLog — an unauthenticated endpoint must not
 // be a write path into the system log (§14.7) — and never audited. The logic lives in
 // lib/csp-report.ts; every method but POST answers 405.
-import { clientIpFromForwardedFor, parseTrustProxy } from "@/lib/client-ip";
+import { clientIpFromForwardedFor, parseTrustProxy, rateLimitIpKey } from "@/lib/client-ip";
 import { handleCspReport, methodNotAllowed } from "@/lib/csp-report";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 const TRUST = parseTrustProxy(process.env.TRUST_PROXY);
 
 export function POST(req: Request): Promise<Response> {
-  return handleCspReport(req, clientIpFromForwardedFor(req.headers.get("x-forwarded-for"), TRUST));
+  return handleCspReport(req, rateLimitIpKey(clientIpFromForwardedFor(req.headers.get("x-forwarded-for"), TRUST)));
 }
 
 export const GET = methodNotAllowed;

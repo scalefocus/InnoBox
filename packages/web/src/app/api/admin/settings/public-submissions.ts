@@ -4,7 +4,7 @@
 import { publicBaseUrl } from "@innobox/shared/public-url";
 import { PUBLIC_FORM_PATH } from "@/lib/public-intake-paths";
 import { PRECONDITION_HINT, missingPrecondition, unmetPreconditionList, type MissingPrecondition, type UnmetPrecondition } from "@/lib/public-intake";
-import { loadPublicIntakeState } from "@/lib/public-intake-live";
+import { readPublicIntakeState } from "@/lib/public-intake-live";
 
 export interface PublicSubmissionsCard {
   enabled: boolean;
@@ -21,7 +21,7 @@ export interface PublicSubmissionsCard {
 }
 
 export async function publicSubmissionsCard(): Promise<PublicSubmissionsCard> {
-  const state = await loadPublicIntakeState();
+  const state = await readPublicIntakeState();
   const missing = missingPrecondition(state);
   return {
     enabled: state.enabled,
