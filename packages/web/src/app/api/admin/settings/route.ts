@@ -1,5 +1,6 @@
 // GET/PATCH /api/admin/settings (INNOBOX_SPEC.md §14.3): attachment limits, impact areas,
-// the platform date-display format, the feedback-survey switch (§14.11, `surveyEnabled`), and the
+// the platform date-display format, the feedback-survey switch (§14.11, `surveyEnabled`), the bug-report
+// switch (§13.10, `bugReportsEnabled`), and the
 // public submissions card (§24.2, `publicSubmissions`). Platform-admin only; every change audited.
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
@@ -18,7 +19,7 @@ import { emailTransportAvailable, invalidatePublicIntakeState } from "@/lib/publ
 import { PRECONDITION_HINT, publicIntakeKey } from "@/lib/public-intake";
 import { parseSettingsPatch } from "./validation";
 import { getFeaturedLimit, setFeaturedLimit } from "../../challenges/featured";
-import { getSurveyEnabled, setSurveyEnabled } from "../../me/survey/store";
+import { getBugReportsEnabled, getSurveyEnabled, setBugReportsEnabled, setSurveyEnabled } from "../../me/survey/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -29,16 +30,17 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     listAllImpactAreas(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
+    getBugReportsEnabled(pool),
     getGamificationEnabled(pool),
     publicSubmissionsCard(),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions });
+  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions });
 }
 
 async function handlePATCH(req: Request): Promise<Response> {
@@ -57,6 +59,7 @@ async function handlePATCH(req: Request): Promise<Response> {
   if (parsed.value.attachmentLimits) await setAttachmentLimits(pool, parsed.value.attachmentLimits, gate.user.id);
   if (parsed.value.featuredLimit !== undefined) await setFeaturedLimit(pool, parsed.value.featuredLimit, gate.user.id);
   if (parsed.value.surveyEnabled !== undefined) await setSurveyEnabled(pool, parsed.value.surveyEnabled, gate.user.id);
+  if (parsed.value.bugReportsEnabled !== undefined) await setBugReportsEnabled(pool, parsed.value.bugReportsEnabled, gate.user.id);
   if (parsed.value.gamificationEnabled !== undefined) await setGamificationEnabled(pool, parsed.value.gamificationEnabled, gate.user.id);
   if (parsed.value.publicSubmissions) {
     const result = await setPublicSubmissionSettings(pool, parsed.value.publicSubmissions, gate.user.id, {
@@ -70,15 +73,16 @@ async function handlePATCH(req: Request): Promise<Response> {
     invalidatePublicIntakeState();
   }
 
-  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
+  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
+    getBugReportsEnabled(pool),
     getGamificationEnabled(pool),
     publicSubmissionsCard(),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions });
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

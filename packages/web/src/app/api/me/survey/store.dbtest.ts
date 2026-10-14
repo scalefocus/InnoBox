@@ -2,7 +2,8 @@
 // vs repeats, consumed first uses, `canShow`, exactly one of two concurrent winners, the 90-day
 // fallback, close counting once, submit (no user reference anywhere in the response, the offer
 // cleared, 409/422), the opt-out and an open `self` offer, the GDPR erasure, and the migration's
-// backfill and idempotency. Self-skips when DATABASE_URL is unset.
+// backfill and idempotency; bug reports (the stored shape, fromOffer, the switches, migration
+// 0047's CHECKs). Self-skips when DATABASE_URL is unset.
 //
 // `survey_daily` and the platform switch are global, so counters are asserted as deltas and every
 // test that flips the switch restores it.
@@ -202,8 +203,10 @@ test("submit: stored with no user reference, the offer cleared, counted; then 40
     const { rows } = await pool.query<Record<string, unknown>>(`select * from survey_responses where free_text = $1`, [text]);
     assert.equal(rows.length, 1);
     const row = rows[0]!;
-    // No user reference, no timestamp: exactly these columns.
-    assert.deepEqual(Object.keys(row).sort(), ["answered_on", "feature", "free_text", "id", "segment", "survey_version", "trigger", "via"]);
+    // No user reference, no timestamp: exactly these columns (the last two are bug-report only).
+    assert.deepEqual(Object.keys(row).sort(), ["answered_on", "app_version", "feature", "free_text", "id", "page_path", "segment", "survey_version", "trigger", "via"]);
+    assert.equal(row.page_path, null);
+    assert.equal(row.app_version, null);
     assert.equal(row.segment, "committee");
     assert.equal(row.feature, "review");
     assert.equal(row.trigger, "feature");
@@ -426,6 +429,176 @@ test("start: an open random offer is returned unchanged — no stamp, nothing co
     } finally {
       await store.setSurveyEnabled(pool, true, admin);
     }
+  } finally {
+    await pool.end();
+  }
+});
+
+// ── Bug reports (§13.10 *Bug reports*) ────────────────────────────────────────────────────
+
+async function bugDaily(pool: Pool): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>(`select coalesce(sum(submitted_bug),0)::int as n from survey_daily`);
+  return rows[0]!.n;
+}
+
+test("bug report: a bug row with no user reference, the path and the server version; only submitted_bug counts", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const userId = await makeUser(pool, randomUUID().slice(0, 8), "bug");
+    await pool.query(`update users set surveys_enabled = false where id = $1`, [userId]); // the random opt-out plays no part
+    const before = await daily(pool);
+    const bugsBefore = await bugDaily(pool);
+    const text = `Dbtest bug ${randomUUID()}`;
+
+    const res = await store.submitBugReport(
+      pool,
+      { id: userId, roles: member },
+      { description: `  ${text}  `, pagePath: "/challenges/12?tab=solutions#s-3", fromOffer: false },
+      "9.9.9-test",
+    );
+    assert.deepEqual(res, { status: "ok" });
+
+    const { rows } = await pool.query<Record<string, unknown>>(`select * from survey_responses where free_text = $1`, [text]);
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.trigger, "bug");
+    assert.equal(row.feature, null);
+    assert.equal(row.via, "popup");
+    assert.equal(row.segment, "member");
+    assert.equal(row.page_path, "/challenges/12", "the path only — never the query or the fragment");
+    assert.equal(row.app_version, "9.9.9-test", "the server's version");
+    for (const value of Object.values(row)) assert.ok(!String(value).includes(userId), "the user id appears nowhere");
+    const { rows: answers } = await pool.query(`select 1 from survey_answers where response_id = $1`, [row.id]);
+    assert.equal(answers.length, 0, "a bug report has no star answers");
+
+    assert.deepEqual(await daily(pool), before, "no survey counter moves");
+    assert.equal(await bugDaily(pool), bugsBefore + 1);
+    const { rows: stamps } = await pool.query(`select survey_last_shown_at, survey_self_shown_at, survey_offer from users where id = $1`, [userId]);
+    assert.deepEqual(stamps[0], { survey_last_shown_at: null, survey_self_shown_at: null, survey_offer: null }, "no cooldown is read or written");
+
+    // An invalid path is stored as null rather than refusing the report.
+    const text2 = `Dbtest bug api ${randomUUID()}`;
+    assert.deepEqual(await store.submitBugReport(pool, { id: userId, roles: member }, { description: text2, pagePath: "/api/me" }, "9.9.9-test"), { status: "ok" });
+    const { rows: r2 } = await pool.query<{ page_path: string | null }>(`select page_path from survey_responses where free_text = $1`, [text2]);
+    assert.equal(r2[0]!.page_path, null);
+
+    // A description is required.
+    for (const description of ["", "   ", undefined]) {
+      assert.equal((await store.submitBugReport(pool, { id: userId, roles: member }, { description, pagePath: "/" }, "9.9.9-test")).status, "invalid");
+    }
+  } finally {
+    await pool.end();
+  }
+});
+
+test("bug report: fromOffer ends an open self offer (via from its closed flag); 409 for no offer or a random one", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const stamp = randomUUID().slice(0, 8);
+    const report = (id: string, fromOffer: boolean) =>
+      store.submitBugReport(pool, { id, roles: member }, { description: `Dbtest offer bug ${randomUUID()}`, pagePath: "/", fromOffer }, "9.9.9-test");
+    /** Sends a fromOffer bug report and returns the stored via. */
+    const viaOf = async (id: string) => {
+      const text = `Dbtest via ${randomUUID()}`;
+      assert.deepEqual(await store.submitBugReport(pool, { id, roles: member }, { description: text, pagePath: "/", fromOffer: true }, "9.9.9-test"), { status: "ok" });
+      const { rows } = await pool.query<{ via: string }>(`select via from survey_responses where free_text = $1`, [text]);
+      return rows[0]?.via;
+    };
+
+    // An open self offer, never closed: popup, and the offer is gone.
+    const fresh = await makeUser(pool, stamp, "bugself");
+    assert.equal((await store.startSelfSurvey(pool, fresh, { rng: win })).status, "ok");
+    assert.equal(await viaOf(fresh), "popup");
+    assert.equal(await offerOf(pool, fresh), null, "the submit ends the self offer");
+    assert.ok((await store.readSelfSurvey(pool, fresh))?.nextAt, "the cooldown stamped on open still runs");
+
+    // Closed first (✕), then reopened: menu. Closing a self offer counts nothing.
+    const reopened = await makeUser(pool, stamp, "bugmenu");
+    assert.equal((await store.startSelfSurvey(pool, reopened, { rng: win })).status, "ok");
+    const before = await daily(pool);
+    assert.equal(await store.closeSurvey(pool, reopened), "ok");
+    assert.deepEqual(await daily(pool), before, "a self close bumps nothing");
+    assert.equal((await offerOf(pool, reopened))?.closed, true);
+    assert.equal(await viaOf(reopened), "menu");
+
+    // No offer at all: 409, nothing stored.
+    const none = await makeUser(pool, stamp, "bugnone");
+    assert.deepEqual(await report(none, true), { status: "no_open_survey" });
+
+    // A random offer: 409, and the random offer is untouched.
+    const random = await makeUser(pool, stamp, "bugrandom");
+    await store.recordFeatureUse(pool, random, "like", true, { rng: win });
+    const offer = await offerOf(pool, random);
+    assert.equal(offer?.trigger, "feature");
+    assert.deepEqual(await report(random, true), { status: "no_open_survey" });
+    assert.deepEqual(await offerOf(pool, random), offer);
+    // From an offer-less card (fromOffer false) the random offer stays open too.
+    assert.deepEqual(await report(random, false), { status: "ok" });
+    assert.deepEqual(await offerOf(pool, random), offer);
+  } finally {
+    await pool.end();
+  }
+});
+
+test("bug report: 409 bug_reports_off / surveys_off; me.bugReports follows both switches; the switch is audited", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const stamp = randomUUID().slice(0, 8);
+    const userId = await makeUser(pool, stamp, "bugoff");
+    const admin = await makeUser(pool, stamp, "bugoffadmin");
+    const body = { description: "Dbtest switched off", pagePath: "/" };
+    assert.equal(await store.readBugReports(pool), true);
+
+    await store.setBugReportsEnabled(pool, false, admin);
+    try {
+      assert.equal(await store.getBugReportsEnabled(pool), false);
+      assert.equal(await store.readBugReports(pool), false);
+      assert.deepEqual(await store.submitBugReport(pool, { id: userId, roles: member }, body, "9.9.9-test"), { status: "bug_reports_off" });
+      assert.ok(await store.readSelfSurvey(pool, userId), "the survey itself is unaffected");
+    } finally {
+      await store.setBugReportsEnabled(pool, true, admin);
+    }
+
+    await store.setSurveyEnabled(pool, false, admin);
+    try {
+      assert.equal(await store.readBugReports(pool), false, "the survey switch is the master");
+      assert.deepEqual(await store.submitBugReport(pool, { id: userId, roles: member }, body, "9.9.9-test"), { status: "surveys_off" });
+    } finally {
+      await store.setSurveyEnabled(pool, true, admin);
+    }
+    assert.equal(await store.readBugReports(pool), true);
+
+    const { rows } = await pool.query<{ after: { enabled: boolean } }>(
+      `select after from audit_log where action = 'settings.bug_reports_enabled_changed' and actor_user_id = $1 order by id`,
+      [admin],
+    );
+    assert.deepEqual(rows.map((r) => r.after.enabled), [false, true], "audited both ways");
+  } finally {
+    await pool.end();
+  }
+});
+
+test("migration 0047: a bug row must have text and no feature; only a bug row carries a path or a version", { skip }, async () => {
+  const { Pool } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const insert = (trigger: string, feature: string | null, text: string | null, path: string | null, version: string | null) =>
+      pool.query(
+        `insert into survey_responses (answered_on, survey_version, trigger, feature, segment, via, free_text, page_path, app_version)
+         values ((now() at time zone 'utc')::date, 1, $1, $2, 'member', 'popup', $3, $4, $5)`,
+        [trigger, feature, text, path, version],
+      );
+    await assert.rejects(insert("bug", null, null, "/", "1.0.0"), /survey_responses_bug_shape/);
+    await assert.rejects(insert("bug", "search", "x", "/", "1.0.0"), /survey_responses_bug_shape/);
+    await assert.rejects(insert("feature", "search", "x", "/", null), /survey_responses_bug_only_columns/);
+    await assert.rejects(insert("self", null, "x", null, "1.0.0"), /survey_responses_bug_only_columns/);
+    await assert.rejects(insert("bug", null, "x", "/" + "a".repeat(512), "1.0.0"), /survey_responses_page_path_len/);
+    await assert.rejects(insert("nope", null, "x", null, null), /survey_responses_trigger_check/);
+    const { rows } = await pool.query(`select 1 from platform_settings where key = 'bug_reports_enabled'`);
+    assert.equal(rows.length, 1, "the switch is seeded");
   } finally {
     await pool.end();
   }

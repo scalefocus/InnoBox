@@ -91,3 +91,10 @@ test("parseSettingsPatch: publicSubmissions takes the switch and/or a notice of 
   assert.equal(parseSettingsPatch({ publicSubmissions: { privacyNotice: "x".repeat(4_001) } }).ok, false);
   assert.equal(parseSettingsPatch({ publicSubmissions: true }).ok, false);
 });
+
+test("parseSettingsPatch: bugReportsEnabled is a boolean and may be sent alone (§13.10)", () => {
+  const parsed = parseSettingsPatch({ bugReportsEnabled: false });
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.deepEqual(parsed.value, { bugReportsEnabled: false });
+  for (const bad of ["false", 0, null]) assert.equal(parseSettingsPatch({ bugReportsEnabled: bad }).ok, false, String(bad));
+});

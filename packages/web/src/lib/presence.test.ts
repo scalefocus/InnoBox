@@ -160,7 +160,7 @@ test("chart buckets are UTC days, not the viewer's local days (invariant 8)", ()
 
 test("every survey route is silent for presence (§13.10)", () => {
   // A named, exact-time "last seen" next to a date-only response would identify it.
-  for (const p of ["/api/me/features/used", "/api/me/survey/check", "/api/me/survey/close", "/api/me/survey/responses", "/api/me/survey/start"]) {
+  for (const p of ["/api/me/features/used", "/api/me/survey/check", "/api/me/survey/close", "/api/me/survey/responses", "/api/me/survey/start", "/api/me/survey/bug"]) {
     assert.equal(presenceTouchFor(p, "POST"), null, `${p} must be silent`);
   }
 });

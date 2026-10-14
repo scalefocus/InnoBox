@@ -3,7 +3,7 @@
 // parsing, the current-day exclusion, the trend buckets and — the part that matters — the
 // minimum group size. The web store aggregates in SQL and runs every figure through these
 // helpers before anything leaves the server, so a withheld figure never reaches the browser.
-import { SURVEY_TRIGGERS, isSurveyFeature, type SurveyFeature, type SurveySegment, type SurveyTrigger, SURVEY_SEGMENTS } from "./survey.js";
+import { SURVEY_TRIGGERS, isSurveyFeature, type SurveyFeature, type SurveyResponseTrigger, type SurveySegment, SURVEY_SEGMENTS } from "./survey.js";
 
 /** Any figure computed over fewer than this many responses is withheld. */
 export const SURVEY_MIN_GROUP = 5;
@@ -51,20 +51,36 @@ export function surveyRangeBounds(range: SurveyRange, now: Date): { from: string
 
 // ── Filters ───────────────────────────────────────────────────────────────────────────────
 
-export const SURVEY_SOURCES = ["all", "prompted", "self"] as const;
+export const SURVEY_SOURCES = ["all", "prompted", "self", "bug"] as const;
 export type SurveySource = (typeof SURVEY_SOURCES)[number];
-export const SURVEY_SOURCE_LABEL: Record<SurveySource, string> = { all: "All", prompted: "Prompted", self: "Self-initiated" };
+export const SURVEY_SOURCE_LABEL: Record<SurveySource, string> = { all: "All", prompted: "Prompted", self: "Self-initiated", bug: "Bug reports" };
 
 export function parseSurveySource(raw: string | null | undefined): SurveySource {
   return (SURVEY_SOURCES as readonly string[]).includes(raw ?? "") ? (raw as SurveySource) : "all";
 }
 
 /** The triggers a source covers; null for "all" (no condition). *Prompted* is the random
- *  survey — first-use and fallback alike. */
-export function triggersForSource(source: SurveySource): SurveyTrigger[] | null {
+ *  survey — first-use and fallback alike; *Self-initiated* stays `self` only; *Bug reports* is
+ *  `bug` only. */
+export function triggersForSource(source: SurveySource): SurveyResponseTrigger[] | null {
   if (source === "all") return null;
   if (source === "self") return ["self"];
+  if (source === "bug") return ["bug"];
   return SURVEY_TRIGGERS.filter((t) => t !== "self");
+}
+
+/**
+ * The free-text feed's withholding with bug reports in it (§14.11). The size-5 rule covers the
+ * SURVEY comments of the filtered set only; bug reports are listed whatever their number, since a
+ * bug report is a problem to act on. Returns whether the survey comments are withheld and which
+ * kinds of row the feed lists. With the *Bug reports* source, or with no survey comment at all,
+ * there is nothing to withhold.
+ */
+export function surveyFeedPlan(source: SurveySource, surveyCommentCount: number): { withheld: boolean; listSurvey: boolean; listBugs: boolean } {
+  if (source === "bug") return { withheld: false, listSurvey: false, listBugs: true };
+  const listBugs = source === "all";
+  if (surveyCommentCount > 0 && isWithheld(surveyCommentCount)) return { withheld: true, listSurvey: false, listBugs };
+  return { withheld: false, listSurvey: true, listBugs };
 }
 
 export function parseSurveySegmentFilter(raw: string | null | undefined): SurveySegment | null {

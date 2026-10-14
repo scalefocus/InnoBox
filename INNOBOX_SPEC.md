@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.15 — draft for review** (2026-10-13; v0.2 added the UI and CI/CD
+> Status: **v0.16 — draft for review** (2026-10-14; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -44,7 +44,10 @@
 > e-mail digests (§12.1), and a 30-day trash with restore for deleted challenges and
 > solutions (§10.4), lifting the matching §19 non-goals; v0.15 (2026-10-13) specified
 > agent access through an MCP server — OAuth sign-in, 15 read-and-contribute tools,
-> "via agent" attribution and four agent badges — as a new-feature gap (§25)).
+> "via agent" attribution and four agent badges — as a new-feature gap (§25); v0.16
+(2026-10-14) added bug reports to the feedback survey — a sidebar bug button, a Bug
+category in the survey card, and their own source in the admin results (§13.10,
+§14.11)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -263,7 +266,8 @@ including theme-aware scrollbars and form controls. Pinned values:
   `APP_VERSION` above **"Created by Scalefocus"** and, below it, **"Powered by the
   community"** — three stacked lines, the two attribution lines sharing the same
   `.colophon-sub` treatment, both plain text (no links) — except that, signed in, the
-  community line ends in the §13.10 **"· Have your say"** button; the account menu carries the
+  community line ends in the §13.10 **"· Have your say"** button, with the §13.10 **bug
+  button** at the right end of that line; the account menu carries the
   **Quick start** and **What's new** links; the shell also owns the §13.9 **update
   notice** (a floating card, bottom-right, after a new release); fully responsive. The shell renders in
   three states keyed on the session:
@@ -692,6 +696,8 @@ these rules close the generic web-platform paths by which it could.
     hammer, and the directory search could otherwise enumerate every user);
   - starting an on-demand survey or submitting a survey response (§13.10) — **10 per
     minute** (the `survey` bucket; its 429 warning omits the user id);
+  - submitting a bug report (§13.10) — **3 per minute and 20 per day** (the `bug_report`
+    bucket, both limits enforced; its 429 warning omits the user id too);
   - every other state-changing API request — **120 per minute**.
   An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
   requests — try again shortly."). Rate-limit rejections are **logged** (structured
@@ -3664,7 +3670,9 @@ with InnoBox in general and with **one feature they have just started using**. I
 in the corner and can be closed at any time. It appears **at random, at most once every
 30 days** per user; users opt out with a profile switch, and platform admins can switch
 it off platform-wide. Users can also **ask for the survey themselves** — *Have your say*
-— at most once every 7 days. The results are shown to platform admins only (§14.11).
+— at most once every 7 days — and **report a bug** from a small button in the sidebar,
+which uses the same card and storage (*Bug reports*, below). The results are shown to
+platform admins only (§14.11).
 
 Anonymity here means **non-storage**, not masking: a response is stored **without any
 reference to its author**, so — unlike an anonymous challenge (§9) — there is no true
@@ -3870,6 +3878,206 @@ request.
   the random funnel and filterable in the results (§14.11). The 7-day cooldown caps one
   person at about 52 on-demand responses a year — it limits stuffing, it doesn't stop it.
 
+#### Bug reports (the bug button, migration 0047)
+
+A signed-in user can **report a bug** from a small bug button at the bottom-right of the
+sidebar. It opens the survey card with a new category, **Bug**, already selected in the
+*"What would you like to tell us about?"* picker (above). The user describes the problem
+in one text box. A bug report is stored as an anonymous survey response of its own kind
+(`trigger = 'bug'`), carries the page the user was on and the app version, and is read by
+platform admins in the Survey results feed (§14.11). Reports are **text only** (no
+screenshot or attachment), raise **no notification**, and admins can only **read and
+delete** them; there is no status or "handled" flag.
+
+- **The bug button.**
+  - An icon-only `<button type="button">` showing a small **inline-SVG bug glyph** drawn
+    on the §2.2 tokens (`currentColor` on `--muted`; `--accent` on hover and focus), so it
+    follows the theme. No emoji and no new token or icon dependency. It has
+    `aria-label="Report a bug"`, a matching `title` tooltip and
+    `data-testid="report-bug"`.
+  - It sits in the **bottom-right corner of the sidebar foot**, aligned with the
+    colophon's last line (*Powered by the community*) and to its right. It is small and
+    quiet like the colophon: no border, colophon size, reduced opacity at rest and full
+    opacity only on hover or focus, with a visible focus ring. The colophon's three lines
+    and their order are unchanged (§2.2).
+  - **Signed in only.** It is absent when signed out and while the session is still
+    loading. Like *Have your say*, it is shown **only past Quick start**
+    (`quickStartSeenAt` set). The §13.7 Quick start gate owns the screen before that.
+  - **Hidden** while the platform survey switch `survey_enabled` is off, or the platform
+    bug-report switch `bug_reports_enabled` is off (below). `GET /api/me` carries
+    **`bugReports: boolean`**, true only when both switches are on.
+  - The per-user **Ask me for feedback** opt-out does **not** hide it. That switch
+    governs random prompts only, and a bug report is the user's own initiative.
+  - On mobile it shows inside the nav drawer, in the same corner. A click also closes the
+    drawer, so the drawer doesn't hide the card.
+- **Bug is a picker category everywhere.** The on-demand picker gains **Bug**, directly
+  after *InnoBox in general* and before the catalog features, whenever `bugReports` is
+  true. That applies to the card the bug button opens and to every on-demand card (*Give
+  feedback*, *Have your say*, *Take the survey* on a `self` offer). A random offer's card
+  has no picker, so it never offers Bug.
+- **The card in Bug mode** (whenever Bug is selected):
+  - The heading reads ***"Report a bug"***. The sub-line reads *"Anonymous: your name
+    isn't stored with your report. We attach the page you were on and the app
+    version."*
+  - **All star questions are hidden** (the general section, the rotating question and
+    any feature section). Switching to Bug **discards any stars** already set, just as
+    changing a feature discards that feature's stars.
+  - The free-text box is relabelled ***"Describe the problem you found"*** and gets the
+    placeholder *"What did you do, what did you expect, and what happened instead?"*. It
+    is **required**: Submit stays disabled until the box holds non-whitespace. The
+    2 000-character cap and the live counter are unchanged.
+  - There is no *Don't ask me again* link, as on every on-demand card.
+  - **Success** shows *"Thanks, we'll look into it."* and closes the card after ~4 s.
+    Failures follow the card's rules: the text is kept, and an inline error with a retry
+    is shown.
+  - **The page path is captured when the card enters Bug mode** (when it opens from the
+    bug button, or when the user picks Bug). It is the page where the user found the
+    problem, even if they navigate while the card is open. It is `location.pathname`
+    only, **never the query string or the fragment**: a `?q=` search or a filter can hold
+    anything the user typed, and none of it belongs in a report.
+- **What a bug-button click does** depends on what is open. There is still at most one
+  card per tab. Like every on-demand click, it overrides `canShow`: an on-screen §13.9
+  notice is hidden **without being stamped**.
+  1. **No offer is open.** The card opens in Bug mode **without a server call**. Nothing
+     is stamped or counted, and the 7-day on-demand cooldown is neither checked nor used.
+     If the user then picks another category (*InnoBox in general* or a feature), the
+     card becomes an on-demand survey:
+     - If one can be started (`selfSurvey.nextAt` is `null`), the card calls `POST
+       /api/me/survey/start` at that moment. The cooldown is stamped, `shown_self` is
+       counted, and the card now holds that `self` offer with `via = 'popup'`.
+     - **While the cooldown runs**, every non-Bug option is **disabled**, and a hint under
+       the picker reads *"You can share other feedback again on {date}."*
+       (`useDateFmt()`). A `start` that loses a race and answers **409 `cooldown`** shows
+       the same hint and snaps the picker back to Bug.
+  2. **A `self` offer is open** (its card closed, or open in this tab). The card shows
+     that offer with **Bug selected**: it reopens like *Take the survey* (`via = 'menu'`),
+     or, if the card is already open, it simply switches to Bug (keeping its `via`). The
+     user can switch freely, since the offer already exists.
+  3. **A random offer is open.** If its card is open in this tab, it is closed first,
+     exactly like its ✕ (`POST /api/me/survey/close`, "not now"). Then the card opens in
+     Bug mode as in case 1, but **every non-Bug option is disabled**, with the hint *"A
+     survey is waiting for you: open Take the survey from the account menu."* The random
+     offer is otherwise untouched, and *Take the survey* stays available.
+  4. **A Bug-mode card with no offer is already open in this tab.** Nothing changes; it
+     gets focus.
+- **Bug reports have their own limits, not the survey cooldown.** Submitting a bug report
+  never reads or writes `survey_self_shown_at` or `survey_last_shown_at`. It is bounded
+  only by its own **`bug_report`** rate-limit bucket (§2.4): **3 per minute** and **20 per
+  day** per user. No per-user bug state is stored, so erasure has nothing new to clear.
+- **A submit ends the card's offer, if it has one.** A bug report sent from a card that
+  holds an open `self` offer (case 1 after a start, case 2, or *Give feedback* then Bug)
+  **clears that offer** in the same transaction, as any submit does. A bug report from an
+  offer-less card (cases 1 and 3) leaves every offer as it was.
+- **Storage.** A bug report is one `survey_responses` row:
+  - `trigger = 'bug'`, `feature = NULL`, `survey_version` = the current
+    `SURVEY_VERSION`;
+  - `free_text` = the trimmed description, **never null**;
+  - **no `survey_answers` rows**;
+  - `segment` computed as for every response, and `via` = `'popup'` for a card opened by
+    the bug button or *Give feedback*, or `'menu'` when a `self` offer was reopened;
+  - `answered_on` = the UTC date, with no time of day (as every response);
+  - two new nullable columns, set **only for bug reports**:
+    - **`page_path`** (text, ≤ 512 characters). The server validates it: it must start
+      with `/` and must not start with `/api/`. As a second line of defence it strips
+      anything from the first `?` or `#`. An invalid path is stored as `NULL` rather than
+      rejecting the report;
+    - **`app_version`** (text): the server's own `APP_VERSION` at submit time, never
+      client-supplied.
+- **The platform switch `bug_reports_enabled`** (`platform_settings`, default **`true`**).
+  It is written through `PATCH /api/admin/settings` (key `bugReportsEnabled`), platform
+  admins only, and audited as **`settings.bug_reports_enabled_changed`**
+  (`after: { enabled }`). It is a second §2.2 preference pill, labelled **Bug reports**,
+  in the **action slot of the Survey results card** (§14.11), beside the
+  `survey_enabled` switch, under the same rules: usable while the card is collapsed, and
+  its clicks never toggle the card.
+  - **Off**: the bug button and the picker's Bug option disappear on the next `me` read.
+    An open offer-less Bug-mode card is closed (its text is discarded), and an on-demand
+    card in Bug mode snaps back to *InnoBox in general*. The bug endpoint answers
+    **409 `bug_reports_off`**.
+  - **`survey_enabled` off** turns bug reports off too, whatever `bug_reports_enabled`
+    says: the survey switch is the master. The bug endpoint then answers
+    **409 `surveys_off`**.
+  - Turning either switch back on changes nothing else: no state was kept.
+- **API.**
+  - **`POST /api/me/survey/bug { description, pagePath, fromOffer }`** → `{ ok }`.
+    Auth-required, Origin-checked (§2.4).
+    - `description`: required, trimmed non-empty, ≤ 2 000 characters, otherwise **422**.
+    - `pagePath`: a string or `null`, validated as above (an invalid one is stored as
+      `NULL`).
+    - `fromOffer: true` means "this card holds the user's open `self` offer". The offer
+      is re-read under the user-row lock: **409 `no_open_survey`** if no `self` offer is
+      open (it expired meanwhile, or the open one is random). On success the offer is
+      cleared, and the response gets `via = 'menu'` if the offer had been closed before
+      (it was reopened), otherwise `'popup'`. With `fromOffer: false`, `via = 'popup'` and
+      no offer is touched.
+    - It stores the response and bumps `survey_daily.submitted_bug` in **one
+      transaction**.
+    - **409 `surveys_off`** / **`bug_reports_off`** while either switch is off.
+    - The `bug_report` bucket (above); **429** with `Retry-After`, and its warning omits
+      the user id.
+    - **Never audited and never logged with an identity**, exactly like the other survey
+      routes (Governance, below): its system-log rows carry no `user_id` and no actor
+      snapshot, and it is silent for presence (§14.5).
+  - **`GET /api/me`** gains **`bugReports`** (above).
+  - No MCP tool (§25): survey and bug data never leave through agent access.
+- **Governance.**
+  - **Visibility (invariant 2) still holds.** The page path can name a challenge or a
+    solution (`/challenges/…`), including a namespace-restricted one. It is shown **only
+    to platform admins**, who already see every item. No other surface shows it, and
+    nothing in a report is rendered as a link.
+  - **Anonymity is the survey's, knowingly weakened.** A page path (a user's own profile,
+    or the edit page of their own anonymous challenge), plus the date, the segment and
+    the free text, can point to the reporter. The card's sub-line says what is attached,
+    and the trade-off is accepted (*Accepted trade-offs*, below). The page path never
+    names an anonymous author: it names an item, and the item's masking (§9) is
+    untouched.
+  - Retention: indefinite, like every response. The only removal is the §14.11 admin
+    delete.
+- **Migration 0047:**
+  - widens the `survey_responses.trigger` CHECK to `('feature', 'visit', 'self', 'bug')`;
+  - adds `survey_responses.page_path text NULL` (`CHECK (char_length(page_path) <= 512)`)
+    and `survey_responses.app_version text NULL`;
+  - adds two shape CHECKs: `trigger <> 'bug' OR (free_text IS NOT NULL AND feature IS
+    NULL)`, and `trigger = 'bug' OR (page_path IS NULL AND app_version IS NULL)`;
+  - adds `survey_daily.submitted_bug int NOT NULL DEFAULT 0`;
+  - seeds `platform_settings` `bug_reports_enabled = true` (`ON CONFLICT DO NOTHING`).
+
+  Idempotent per the `db/migrations` README. No grant changes: the existing grants cover
+  the new columns, and `survey_responses` still has no UPDATE.
+- **Tests** (shipped with the change):
+  - **Unit (`@innobox/shared/survey`):** the `bugReports` gate (each switch, Quick start
+    not seen, the random opt-out not hiding it); the picker options with and without Bug;
+    bug-report validation (required, trimmed, the 2 000 cap); the page-path sanitizer
+    (query and fragment stripped, `/api/` rejected, a non-`/` start rejected, the 512
+    cap); the bug-button click decision for cases 1–4, including the cooldown and the
+    random-offer disabling of the non-Bug options; the Source filter and the bug-aware
+    withholding in the summary and feed builders; presence silence and the system-log
+    masking of the bug route.
+  - **Integration (`*.dbtest.ts`):** a bug submit stores `trigger = 'bug'`, a null
+    feature, the text, the path and the server version, with no answers and **no user
+    reference**; it bumps only `submitted_bug` and touches neither cooldown stamp;
+    `fromOffer` clears an open `self` offer, answers 409 for no offer or a random one,
+    and sets `via` correctly; 409 `surveys_off` / `bug_reports_off`, 422 for an empty
+    description, 429 past 3 a minute; the admin `source=bug` filter, `bugCount`, and
+    withholding that lists bug reports while survey comments are under 5; the delete
+    audit row carries `trigger` and neither the text nor the path;
+    `bug_reports_enabled` on the settings GET/PATCH, audited; the migration's CHECKs (a
+    bug row without text, and a non-bug row with a path, both fail).
+  - **e2e** (`e2e/survey.spec.ts`): the bug button is absent when signed out; signed in,
+    clicking it opens the card titled *Report a bug* with Bug selected and no star
+    questions; Submit is disabled until text is typed; a submit shows the thank-you, and
+    the button still works afterwards (no cooldown). From the bug card, picking *InnoBox
+    in general* starts an on-demand survey (the star questions appear); once that survey
+    is submitted, the bug card's non-Bug options are disabled with the date hint. *Give
+    feedback* then Bug shows Bug mode, and a submit ends the offer (*Take the survey* is
+    gone). An admin sees the *Bug reports* Source, the funnel's bug line and the header's bug
+    count; turning the **Bug reports** switch off hides the button and the endpoint answers
+    409. (Results lag by a day, so a report sent during the run is not listed yet: the feed's
+    **Bug** tag, page path and version are covered by the integration suite with backdated
+    rows.) The dev sign-in's `surveys_enabled = false` default
+    does not hide the button, so the specs that take screenshots are updated where it
+    shows.
+
 #### Opting out
 
 - **Profile → Feedback** (after the notification preferences, §13.5). Row 1, **Ask me for
@@ -3915,7 +4123,8 @@ everyone else (assignee is per-challenge and folds into `member`).
 - **`survey_responses`** — **no user column and no timestamp**: `id` (uuid,
   `gen_random_uuid()` — random, so ordering by id reveals nothing), `answered_on`
   (`date`, the UTC date of submission), `survey_version` (int), `trigger` (CHECK
-  `feature|visit|self`), `feature` (text null), `segment` (CHECK
+  `feature|visit|self`, widened to `bug` by migration 0047, which also adds the
+  bug-only `page_path` and `app_version` — *Bug reports*, above), `feature` (text null), `segment` (CHECK
   `admin|committee|member`), `via` (CHECK `popup|menu`), `free_text` (text null, CHECK
   ≤ 2 000 chars). Indexed on `answered_on`. **Immutable** — no UPDATE path; the only
   delete is the §14.11 admin delete.
@@ -3926,8 +4135,10 @@ everyone else (assignee is per-challenge and folds into `member`).
   `closed`, `submitted`, `submitted_from_menu`, `shown_self`, `submitted_self` (int, not
   null, default 0), bumped with `INSERT … ON CONFLICT (day) DO UPDATE`. **No user or
   feature dimension**, so the funnel can never be joined back to a person. On-demand
-  surveys bump only the `_self` columns.
-- **`platform_settings`** gains `survey_enabled` (default true).
+  surveys bump only the `_self` columns; bug reports bump only `submitted_bug`
+  (migration 0047).
+- **`platform_settings`** gains `survey_enabled` (default true), and `bug_reports_enabled`
+  (default true, migration 0047).
 - `answered_on` and `survey_daily.day` are `date`, a deliberate carve-out from §2.1
   invariant 10 (precedent: the §14.5 `presence_daily` table): a time of day would
   defeat the anonymity. They are UTC calendar dates and are displayed **verbatim** in the
@@ -3964,12 +4175,15 @@ All auth-required (401 otherwise), Origin-checked mutations (§2.4).
 - **`POST /api/me/survey/responses { answers: { [questionKey]: 1..5 }, freeText?, via,
   feature? }`** → `{ ok }` — as above. **409 `no_open_survey`**, **422** on validation.
   `survey` bucket.
+- **`POST /api/me/survey/bug { description, pagePath, fromOffer }`** → `{ ok }` — a bug
+  report (*Bug reports*, above). `bug_report` bucket.
 - **Offer payload:** `{ surveyVersion, trigger, feature: { key, label } | null,
   questions: [{ key, text, section: 'general' | 'feature' }], shownAt, expiresAt }`, the
   questions resolved server-side from the catalog.
 - **`GET /api/me`** carries `openSurvey` (the offer payload or null — null whenever the
   switch is off) and `selfSurvey` (null while the switch is off, else `{ nextAt }`, null
-  when a survey can start now). **`GET|PATCH /api/profile`** carries `surveysEnabled`.
+  when a survey can start now), and `bugReports` (both platform switches on).
+  **`GET|PATCH /api/profile`** carries `surveysEnabled`.
   AppShell invalidates its cached `me` after start, close, submit and opt-out.
 
 #### Governance, privacy & lifecycle
@@ -4003,7 +4217,11 @@ All auth-required (401 otherwise), Origin-checked mutations (§2.4).
   fallback keeps nobody out forever); features without history (`search`,
   `leaderboard`) are "first used" again after release (the stagger absorbs it); a
   `SURVEY_VERSION` change drops open offers; the funnel cannot be filtered by segment or
-  feature — the cost of keeping it free of per-user rows.
+  feature — the cost of keeping it free of per-user rows. **Bug reports are less
+  anonymous and less rate-limited:** the page path and app version make a report easier
+  to trace back, and the size-5 withholding is skipped for them so admins can act on
+  them (§14.11). The card says what is attached. Their 3-a-minute and 20-a-day limits
+  live in the web process (§2.4), so they reset on restart; an admin can delete noise.
 
 #### Tests
 
@@ -4595,9 +4813,11 @@ section, after **Currently online** (§14.5). **Platform admins only** — the A
 **403** to anyone else, namespace admins included; free text could otherwise leak
 across namespaces.
 
-- **Header.** The title, a compact *"N responses in range"*, and the **`survey_enabled`**
-  platform switch (the §2.2 preference pill) in the card's **action slot** — beside the
-  collapse button, never inside it, and usable while the card is collapsed. The switch
+- **Header.** The title, a compact *"N responses · M bug reports in range"* (the bug
+  count is in range and unfiltered), and the **`survey_enabled`** platform switch (the
+  §2.2 preference pill) in the card's **action slot** — beside the collapse button,
+  never inside it, and usable while the card is collapsed — followed by the **Bug
+  reports** switch (`bug_reports_enabled`, §13.10 *Bug reports*) under the same rules. The survey switch
   is audited as `settings.survey_enabled_changed` (`after: { enabled }`). **Off:** no
   offer is created; open offers count as expired (the menu items, profile button,
   colophon link and any open card disappear on the next `me` read); submissions answer
@@ -4607,16 +4827,25 @@ across namespaces.
   persisted to `localStorage` per browser.
 - **Range.** Its own **7d / 30d / 90d / All** toggle (the §14.5 ranges). **The current
   UTC day is always excluded** — results lag by one day — so a fresh response can never
-  be lined up with the people the §14.5 card shows online right now.
+  be lined up with the people the §14.5 card shows online right now. Bug reports follow
+  the same rule: a report appears the day after it was sent.
 - **Filters:** **Segment** (All / Admin / Committee / Member), **Feature** (All features /
   each catalog feature with responses in range) and **Source** (All / Prompted /
-  Self-initiated — *Prompted* covers `feature` and `visit`). They apply to the question
+  Self-initiated / Bug reports — *Prompted* covers `feature` and `visit`,
+  *Self-initiated* stays `self` only, and *Bug reports* is `bug` only; a feature filter
+  excludes bug reports, which have no feature). They apply to the question
   cards, the trend and the feed; **the funnel is unfiltered** (it has no such
   dimensions).
 - **Minimum group size: 5, applied server-side.** Any figure computed over **fewer than 5
   responses** is withheld — per question card (counting responses that answered it), per
   trend bucket (left as a gap), and for the free-text feed as a whole — and shows *"Not
   enough responses yet (fewer than 5)."* A withheld figure never reaches the browser.
+  **The withholding does not apply to bug reports.** A bug report is a problem to act
+  on, so it is listed as soon as it is in range, and the card told the reporter what is
+  attached. The feed's withholding is computed over the **survey** (non-bug) responses of
+  the filtered set only. When those are under 5, the survey comments are withheld as
+  before, and the bug reports in range are still listed, under the withheld notice. With no
+  survey comment at all there is nothing to withhold, so no notice shows.
 - **Data fetching.** The summary loads on mount (it feeds the header count); the feed
   loads on first expand. Both reload on range or filter change and on the console's
   refresh. Nothing polls.
@@ -4624,47 +4853,60 @@ across namespaces.
   1. **Funnel** (range-bound, unfiltered) — **Shown**, **Closed on sight**, **Submitted**
      (*"… of which later, from the menu"*) and the **response rate** (submitted ÷ shown);
      beside it the current **opted out** count (users with `surveys_enabled = false`, not
-     range-bound); and a separate line **Self-initiated: N opened · M submitted**. A
-     closed survey later submitted counts in both *Closed* and *Submitted*.
+     range-bound); a separate line **Self-initiated: N opened · M submitted**; and a
+     third line **Bug reports: N submitted**, from `survey_daily.submitted_bug`. A bug
+     report never bumps any other counter, so the prompted and self-initiated funnels
+     and their response rates stay about surveys. A closed survey later submitted counts
+     in both *Closed* and *Submitted*.
   2. **Satisfaction trend** — the average of `general.overall` per bucket with the
      response count as bars, **hand-rolled inline SVG on the brand tokens, no charting
      dependency** (as §14.5); day / week / month buckets by span; fewer than 3 points get
-     visible markers.
+     visible markers. Bug reports carry no stars and never count in it.
   3. **Question cards** — one per question with answers in range, in catalog order
      (general, rotating, then the feature questions — per the selected feature, or
      pooled under *All features*): the question text, the **average** (one decimal, ★),
-     **n**, and a 1–5 distribution histogram. Retired keys carry a *retired* tag.
+     **n**, and a 1–5 distribution histogram. Retired keys carry a *retired* tag. Bug
+     reports never count in them; with Source *Bug reports* the cards show their empty
+     state.
   4. **Free-text feed** — newest date first, random order within a day (by the random
      id), so it never reveals intra-day order. Each item shows the text (plain text), the
      **date only** (verbatim, the platform's date order), the feature (or *General*), the
-     segment, and a *Self-initiated* tag on `self` responses. **Paged 50 at a time.** Each
+     segment, and a *Self-initiated* tag on `self` responses. A **bug report** shows a
+     **Bug** tag in place of the feature, the segment and the date, plus two extra quiet
+     lines: the **page path** (monospace, plain text, **not a link**) and the **app
+     version**. **Paged 50 at a time.** Each
      item has **Delete** (confirm: *"Delete this response? Its star answers are removed
-     too."*).
+     too."*; for a bug report: *"Delete this bug report?"*).
 - **Delete.** Removes the whole response, answers included (cascade). This is a **new,
   deliberate hard-delete path**, separate from the §10.3 challenge/solution cascade —
   survey responses are not content anyone else depends on, and an abusive comment must be
   removable. Audited as **`survey.response_deleted`** (actor = the admin; `before` =
-  `{ answeredOn, feature, segment, surveyVersion, answerCount, textLength }`) — **the
-  text itself is never copied into the audit log**, so a deleted comment cannot survive
-  in an append-only table. The target never resolves and renders as plain text in the
+  `{ answeredOn, trigger, feature, segment, surveyVersion, answerCount, textLength }`) —
+  **the text itself, and a bug report's page path, are never copied into the audit
+  log**, so a deleted comment cannot survive in an append-only table. The target never resolves and renders as plain text in the
   audit browser.
 - **Empty state** — *"Responses appear here as people answer the survey."* No
   zero-filling.
 - **No export.** There is no CSV or other export of survey responses (§19).
 - **API** (platform admin, 403 otherwise):
   - `GET /api/admin/survey/summary?range=7|30|90|all&segment=&feature=&source=` →
-    `{ enabled, lastDate, bucket, funnel: { shown, closed, submitted, submittedFromMenu,
-    optedOut, shownSelf, submittedSelf }, series: [{ date, n, overallAvg | null }],
+    `{ enabled, bugReportsEnabled, lastDate, bucket, bugCount, funnel: { shown, closed,
+    submitted, submittedFromMenu, optedOut, shownSelf, submittedSelf, submittedBug },
+    series: [{ date, n, overallAvg | null }],
     questions: [{ key, text, retired, n, avg | null, distribution | null, withheld }],
-    features: [{ key, label, n }] }` — withheld figures are null with `withheld: true`.
+    features: [{ key, label, n }] }` — withheld figures are null with `withheld: true`;
+    `source` is `prompted|self|bug` or empty for All.
   - `GET /api/admin/survey/comments?range=&segment=&feature=&source=&offset=&limit=` →
-    `{ comments: [{ id, answeredOn, feature, segment, trigger, text }], total, hasMore,
-    withheld }`, `limit` ≤ 50.
+    `{ comments: [{ id, answeredOn, feature, segment, trigger, text, pagePath,
+    appVersion }], total, hasMore, withheld }`, `limit` ≤ 50; `pagePath` and `appVersion`
+    are null except on `trigger = 'bug'`, and `withheld` refers to the survey comments
+    only (bug reports are listed regardless).
   - `DELETE /api/admin/survey/responses/:id` → `{ ok }`; **404** for an unknown or
     malformed id.
-  - `GET|PATCH /api/admin/settings` carries `surveyEnabled`.
-- **Tests.** Unit: the size-5 withholding for cards, buckets and the feed; the
-  current-day exclusion; the Source filter. Integration: range, filters, withholding,
+  - `GET|PATCH /api/admin/settings` carries `surveyEnabled` and `bugReportsEnabled`.
+- **Tests.** Unit: the size-5 withholding for cards, buckets and the feed, and its
+  bug-report exemption; the current-day exclusion; the Source filter (the bug-specific
+  cases are listed under §13.10 *Bug reports*). Integration: range, filters, withholding,
   403 for a namespace admin, delete cascade and an audit row that carries no text, the
   switch's audit row. e2e: an admin sees the funnel and, with the seed topped past 5, the
   question cards and the comment; the switch is usable while the card is collapsed.
@@ -4704,8 +4946,9 @@ anomalies. Since v0.10 also:
   admin, null if system-driven, §13.2); `settings.featured_limit_changed` (§14.3);
 - **channel webhooks** — created, updated, deleted, tested (`webhook.*`, never the URL,
   §12.4);
-- **feedback survey** — `settings.survey_enabled_changed` and
-  `survey.response_deleted` (never the response text, §14.11);
+- **feedback survey** — `settings.survey_enabled_changed`,
+  `settings.bug_reports_enabled_changed` (§13.10) and `survey.response_deleted` (never
+  the response text or a bug report's page path, §14.11);
 - **AI integration** — `ai.config_updated` (never the token or its last 4),
   `ai.enabled`, `ai.disabled`, `ai.config_cleared`, and `settings.ai_*_changed` for the
   display name, timeouts and switches (§22.9);
@@ -4950,8 +5193,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   §13.9 marker; `me/challenges-seen` advances the §13.1 marker; `me/whats-new-seen`
   `POST {version}` advances the §13.9 marker — 400 on an invalid or future version,
   returns `{ previous, current }`; `me/features/used`, `me/survey/check`,
-  `me/survey/start`, `me/survey/close` and `me/survey/responses` drive the §13.10
-  feedback survey, and `GET` carries `openSurvey` and `selfSurvey`, plus the §23
+  `me/survey/start`, `me/survey/close`, `me/survey/responses` and `me/survey/bug` drive
+  the §13.10 feedback survey and bug reports, and `GET` carries `openSurvey`,
+  `selfSurvey` and `bugReports`, plus the §23
   `gamification` block and `newAchievements`; `me/achievements-seen` `POST` advances the
   §23.7 toast marker), `profile` (own and other users'
   profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the §12.1

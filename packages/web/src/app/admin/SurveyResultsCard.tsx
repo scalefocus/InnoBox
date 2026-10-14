@@ -1,7 +1,7 @@
 "use client";
 // The "Survey results" card (INNOBOX_SPEC.md §14.11) — platform admins only (the console renders
-// it only for them, and the API answers 403 to anyone else). The platform switch sits in the
-// card's action slot, usable while collapsed.
+// it only for them, and the API answers 403 to anyone else). The platform switches — the survey
+// and, beside it, bug reports (§13.10) — sit in the card's action slot, usable while collapsed.
 //
 // Privacy is enforced by the server: figures over fewer than 5 responses arrive already withheld
 // (null + `withheld`), the current UTC day is excluded, and the feed carries dates only. This file
@@ -15,8 +15,8 @@ import {
   SURVEY_SEGMENT_LABEL,
   surveyFeatureLabel,
   type SurveyFeature,
+  type SurveyResponseTrigger,
   type SurveySegment,
-  type SurveyTrigger,
 } from "@innobox/shared/survey";
 import {
   DEFAULT_SURVEY_RANGE,
@@ -35,8 +35,10 @@ import { AdminCard } from "./AdminCard";
 
 interface Summary {
   enabled: boolean;
+  bugReportsEnabled: boolean;
   lastDate: string | null;
   bucket: SurveyBucket;
+  bugCount: number;
   funnel: {
     shown: number;
     closed: number;
@@ -45,6 +47,7 @@ interface Summary {
     optedOut: number;
     shownSelf: number;
     submittedSelf: number;
+    submittedBug: number;
   };
   series: SurveySeriesPoint[];
   questions: { key: string; text: string; retired: boolean; n: number; avg: number | null; distribution: number[] | null; withheld: boolean }[];
@@ -56,8 +59,11 @@ interface Comment {
   answeredOn: string;
   feature: SurveyFeature | null;
   segment: SurveySegment;
-  trigger: SurveyTrigger;
+  trigger: SurveyResponseTrigger;
   text: string;
+  /** Bug reports only: the page path (plain text, never a link) and the app version. */
+  pagePath: string | null;
+  appVersion: string | null;
 }
 
 interface CommentsPage {
@@ -81,16 +87,8 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
   const [summaryError, setSummaryError] = useState(false);
   const [feed, setFeed] = useState<CommentsPage | null>(null);
   const [feedBusy, setFeedBusy] = useState(false);
-  const [enabled, setEnabledState] = useState<boolean | null>(null);
-  const [switchBusy, setSwitchBusy] = useState(false);
-  // Synchronous mirrors for the switch: a second click can arrive before React re-renders the
-  // busy state, and a summary fetched before a flip must not overwrite it.
-  const enabledRef = useRef<boolean | null>(null);
-  const busyRef = useRef(false);
-  const setEnabled = useCallback((value: boolean) => {
-    enabledRef.current = value;
-    setEnabledState(value);
-  }, []);
+  const surveySwitch = useSettingSwitch("surveyEnabled");
+  const bugSwitch = useSettingSwitch("bugReportsEnabled");
   // The feed loads on first expand, then follows the filters (re-collapsing never refetches).
   const [feedRequested, setFeedRequested] = useState(open);
   if (open && !feedRequested) setFeedRequested(true);
@@ -112,11 +110,12 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
       if (!res.ok) throw new Error();
       const json = (await res.json()) as Summary;
       setSummary(json);
-      if (!busyRef.current) setEnabled(json.enabled);
+      surveySwitch.sync(json.enabled);
+      bugSwitch.sync(json.bugReportsEnabled);
     } catch {
       setSummaryError(true);
     }
-  }, [query, setEnabled]);
+  }, [query, surveySwitch.sync, bugSwitch.sync]);
 
   const loadFeed = useCallback(
     async (offset: number) => {
@@ -147,35 +146,22 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
     if (feedRequested) void loadFeed(0);
   }, [loadFeed, feedRequested]);
 
-  const toggleSwitch = async () => {
-    const current = enabledRef.current;
-    if (current === null || busyRef.current) return;
-    busyRef.current = true;
-    setSwitchBusy(true);
-    const next = !current;
-    setEnabled(next); // optimistic
-    try {
-      const res = await fetch("/api/admin/settings", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyEnabled: next }),
-      });
-      if (!res.ok) throw new Error();
-      const saved = ((await res.json()) as { surveyEnabled?: boolean }).surveyEnabled === true;
-      setEnabled(saved);
-      onNotify(saved ? "Surveys are on" : "Surveys are off");
-    } catch {
-      setEnabled(current);
-      onNotify("Could not change the survey switch");
-    } finally {
-      busyRef.current = false;
-      setSwitchBusy(false);
-    }
+  const toggleSurvey = async () => {
+    const saved = await surveySwitch.toggle();
+    if (saved !== null) onNotify(saved ? "Surveys are on" : "Surveys are off");
+    else onNotify("Could not change the survey switch");
     void loadSummary();
   };
 
-  const remove = async (id: string) => {
-    if (!window.confirm("Delete this response? Its star answers are removed too.")) return;
+  const toggleBugs = async () => {
+    const saved = await bugSwitch.toggle();
+    if (saved !== null) onNotify(saved ? "Bug reports are on" : "Bug reports are off");
+    else onNotify("Could not change the bug-report switch");
+    void loadSummary();
+  };
+
+  const remove = async (id: string, isBug: boolean) => {
+    if (!window.confirm(isBug ? "Delete this bug report?" : "Delete this response? Its star answers are removed too.")) return;
     try {
       const res = await fetch(`/api/admin/survey/responses/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
@@ -188,27 +174,16 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
   };
 
   const responseCount = summary ? summary.series.reduce((sum, p) => sum + p.n, 0) : null;
-  const switchOn = enabled ?? true;
+  const bugCount = summary?.bugCount ?? 0;
+  const headerSummary =
+    responseCount === null
+      ? "…"
+      : `${responseCount} ${responseCount === 1 ? "response" : "responses"} · ${bugCount} ${bugCount === 1 ? "bug report" : "bug reports"} in range`;
 
   const action = (
-    <div className="toggle-field">
-      <span className={`toggle-state${switchOn ? " is-on" : ""}`} aria-hidden="true">
-        {switchOn ? "On" : "Off"}
-      </span>
-      <button
-        type="button"
-        className="toggle toggle-pref"
-        role="switch"
-        aria-checked={switchOn}
-        aria-label="Feedback survey"
-        data-testid="survey-switch"
-        disabled={enabled === null || switchBusy}
-        onClick={toggleSwitch}
-      >
-        <span className="toggle-knob" aria-hidden="true">
-          {switchOn ? "💬" : "🔕"}
-        </span>
-      </button>
+    <div className="survey-switches">
+      <PrefSwitch label="Feedback survey" testId="survey-switch" state={surveySwitch} onIcon="💬" offIcon="🔕" onToggle={toggleSurvey} />
+      <PrefSwitch label="Bug reports" visibleLabel testId="bug-reports-switch" state={bugSwitch} onIcon="🐞" offIcon="🔕" onToggle={toggleBugs} />
     </div>
   );
 
@@ -219,7 +194,7 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
     <AdminCard
       id="survey"
       title="Survey results"
-      summary={responseCount === null ? "…" : `${responseCount} ${responseCount === 1 ? "response" : "responses"} in range`}
+      summary={headerSummary}
       open={open}
       onToggle={onToggle}
       action={action}
@@ -267,8 +242,11 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
                 <strong>{f.optedOut}</strong>opted out
               </span>
             </div>
-            <p className="muted" style={{ fontSize: 13, margin: "0 0 14px" }}>
+            <p className="muted" style={{ fontSize: 13, margin: "0 0 4px" }}>
               Self-initiated: {f.shownSelf} opened · {f.submittedSelf} submitted
+            </p>
+            <p className="muted" style={{ fontSize: 13, margin: "0 0 14px" }} data-testid="survey-funnel-bugs">
+              Bug reports: {f.submittedBug} submitted
             </p>
           </>
         )}
@@ -344,8 +322,10 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
 
         <div className="stat-label">Comments</div>
         {!feed && feedBusy && <p className="muted">Loading…</p>}
-        {feed?.withheld && <p className="muted">{feed.total === 0 ? "No comments in range." : WITHHELD_NOTE}</p>}
-        {feed && !feed.withheld && (
+        {/* Survey comments under 5 are withheld; bug reports in range are still listed below the note. */}
+        {feed?.withheld && <p className="muted">{feed.total === 0 && feed.comments.length === 0 ? "No comments in range." : WITHHELD_NOTE}</p>}
+        {feed && !feed.withheld && feed.comments.length === 0 && <p className="muted">No comments in range.</p>}
+        {feed && feed.comments.length > 0 && (
           <>
             <div className="rows" style={{ marginTop: 8 }}>
               {feed.comments.map((c) => (
@@ -354,7 +334,15 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
                     {/* Plain text, always — never HTML. */}
                     <div className="survey-feed-text">{c.text}</div>
                     <div className="sub">
-                      {day(c.answeredOn)} · {c.feature ? capitalize(surveyFeatureLabel(c.feature)) : "General"} · {SURVEY_SEGMENT_LABEL[c.segment]}
+                      {day(c.answeredOn)} ·{" "}
+                      {c.trigger === "bug" ? (
+                        <span className="pill pill-warn">Bug</span>
+                      ) : c.feature ? (
+                        capitalize(surveyFeatureLabel(c.feature))
+                      ) : (
+                        "General"
+                      )}{" "}
+                      · {SURVEY_SEGMENT_LABEL[c.segment]}
                       {c.trigger === "self" && (
                         <>
                           {" "}
@@ -362,8 +350,15 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
                         </>
                       )}
                     </div>
+                    {c.trigger === "bug" && (
+                      <div className="survey-bug-meta" data-testid="survey-bug-meta">
+                        {/* Plain text, never a link. */}
+                        <div className="mono">{c.pagePath ?? "(page not recorded)"}</div>
+                        <div>Version {c.appVersion ?? "unknown"}</div>
+                      </div>
+                    )}
                   </span>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => remove(c.id)}>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => remove(c.id, c.trigger === "bug")}>
                     Delete
                   </button>
                 </div>
@@ -378,10 +373,112 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
         )}
 
         <p className="muted" style={{ fontSize: 12.5, marginBottom: 0, marginTop: 14 }}>
-          Responses are stored without names. Figures based on fewer than 5 responses are hidden, and today&apos;s answers appear tomorrow.
+          Responses are stored without names. Figures based on fewer than 5 responses are hidden (bug reports are always listed), and today&apos;s answers appear tomorrow.
         </p>
       </div>
     </AdminCard>
+  );
+}
+
+type SettingKey = "surveyEnabled" | "bugReportsEnabled";
+
+interface SettingSwitch {
+  value: boolean | null;
+  busy: boolean;
+  /** Adopts the server's value unless a flip is in flight. */
+  sync: (value: boolean) => void;
+  /** Flips optimistically and saves; resolves with the saved value, or null (reverted) on failure. */
+  toggle: () => Promise<boolean | null>;
+}
+
+/** One platform switch in the card's action slot. Synchronous mirrors: a second click can arrive
+ *  before React re-renders the busy state, and a summary fetched before a flip must not overwrite it. */
+function useSettingSwitch(key: SettingKey): SettingSwitch {
+  const [value, setValueState] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const valueRef = useRef<boolean | null>(null);
+  const busyRef = useRef(false);
+  const setValue = useCallback((v: boolean) => {
+    valueRef.current = v;
+    setValueState(v);
+  }, []);
+  const sync = useCallback(
+    (v: boolean) => {
+      if (!busyRef.current) setValue(v);
+    },
+    [setValue],
+  );
+  const toggle = useCallback(async (): Promise<boolean | null> => {
+    const current = valueRef.current;
+    if (current === null || busyRef.current) return current;
+    busyRef.current = true;
+    setBusy(true);
+    setValue(!current); // optimistic
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ [key]: !current }),
+      });
+      if (!res.ok) throw new Error();
+      const saved = ((await res.json()) as Partial<Record<SettingKey, boolean>>)[key] === true;
+      setValue(saved);
+      return saved;
+    } catch {
+      setValue(current);
+      return null;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [key, setValue]);
+  return { value, busy, sync, toggle };
+}
+
+/** The §2.2 preference pill, as the card's action slot uses it. */
+function PrefSwitch({
+  label,
+  visibleLabel = false,
+  testId,
+  state,
+  onIcon,
+  offIcon,
+  onToggle,
+}: {
+  label: string;
+  visibleLabel?: boolean;
+  testId: string;
+  state: SettingSwitch;
+  onIcon: string;
+  offIcon: string;
+  onToggle: () => void;
+}) {
+  const on = state.value ?? true;
+  return (
+    <div className="toggle-field">
+      {visibleLabel && (
+        <span className="survey-switch-label" aria-hidden="true">
+          {label}
+        </span>
+      )}
+      <span className={`toggle-state${on ? " is-on" : ""}`} aria-hidden="true">
+        {on ? "On" : "Off"}
+      </span>
+      <button
+        type="button"
+        className="toggle toggle-pref"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
+        data-testid={testId}
+        disabled={state.value === null || state.busy}
+        onClick={onToggle}
+      >
+        <span className="toggle-knob" aria-hidden="true">
+          {on ? onIcon : offIcon}
+        </span>
+      </button>
+    </div>
   );
 }
 

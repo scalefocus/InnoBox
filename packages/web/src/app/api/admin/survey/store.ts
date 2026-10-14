@@ -15,15 +15,15 @@ import {
   surveyFeatureLabel,
   surveyQuestionText,
   type SurveyFeature,
+  type SurveyResponseTrigger,
   type SurveySegment,
-  type SurveyTrigger,
 } from "@innobox/shared/survey";
 import {
   SURVEY_COMMENTS_PAGE,
   buildSurveySeries,
-  isWithheld,
   questionFigure,
   surveyBucketFor,
+  surveyFeedPlan,
   surveyRangeBounds,
   triggersForSource,
   type SurveyBucket,
@@ -33,7 +33,7 @@ import {
 } from "@innobox/shared/survey-results";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
-import { getSurveyEnabled } from "../../me/survey/store";
+import { getBugReportsEnabled, getSurveyEnabled } from "../../me/survey/store";
 
 export interface SurveyFilters {
   range: SurveyRange;
@@ -43,8 +43,13 @@ export interface SurveyFilters {
 }
 
 /** WHERE conditions over `survey_responses r` for the range and the filters. `withFeature: false`
- *  leaves the feature filter out (the feature list's own counts). */
-function responseConditions(filters: SurveyFilters, now: Date, opts: { withFeature?: boolean } = {}): { sql: string; params: unknown[] } {
+ *  leaves the feature filter out (the feature list's own counts); `kind` keeps only survey
+ *  responses or only bug reports, on top of the Source filter. */
+function responseConditions(
+  filters: SurveyFilters,
+  now: Date,
+  opts: { withFeature?: boolean; kind?: "survey" | "bug" } = {},
+): { sql: string; params: unknown[] } {
   const params: unknown[] = [];
   const push = (v: unknown) => {
     params.push(v);
@@ -57,6 +62,8 @@ function responseConditions(filters: SurveyFilters, now: Date, opts: { withFeatu
   if (filters.feature && opts.withFeature !== false) conds.push(`r.feature = ${push(filters.feature)}`);
   const triggers = triggersForSource(filters.source);
   if (triggers) conds.push(`r.trigger = any(${push(triggers)}::text[])`);
+  if (opts.kind === "survey") conds.push(`r.trigger <> 'bug'`);
+  if (opts.kind === "bug") conds.push(`r.trigger = 'bug'`);
   return { sql: conds.join(" and "), params };
 }
 
@@ -70,6 +77,7 @@ export interface SurveyFunnel {
   optedOut: number;
   shownSelf: number;
   submittedSelf: number;
+  submittedBug: number;
 }
 
 export interface SurveyQuestionResult {
@@ -84,9 +92,12 @@ export interface SurveyQuestionResult {
 
 export interface SurveySummary {
   enabled: boolean;
+  bugReportsEnabled: boolean;
   /** The last day with a response (current day excluded), whatever the filters. */
   lastDate: string | null;
   bucket: SurveyBucket;
+  /** Bug reports in range, unfiltered. */
+  bugCount: number;
   funnel: SurveyFunnel;
   series: SurveySeriesPoint[];
   questions: SurveyQuestionResult[];
@@ -95,22 +106,31 @@ export interface SurveySummary {
 
 export async function surveySummary(pool: Pool, filters: SurveyFilters, now: Date = new Date()): Promise<SurveySummary> {
   const { from, to } = surveyRangeBounds(filters.range, now);
-  const where = responseConditions(filters, now);
-  const whereNoFeature = responseConditions(filters, now, { withFeature: false });
+  // Bug reports carry no stars: the trend, the question cards and the feature list count surveys only.
+  const where = responseConditions(filters, now, { kind: "survey" });
+  const whereNoFeature = responseConditions(filters, now, { withFeature: false, kind: "survey" });
 
-  const [enabled, lastRows, funnelRows, optedRows, dailyRows, answerRows, featureRows] = await Promise.all([
+  const [enabled, bugReportsEnabled, lastRows, funnelRows, optedRows, bugRows, dailyRows, answerRows, featureRows] = await Promise.all([
     getSurveyEnabled(pool),
+    getBugReportsEnabled(pool),
     pool.query<{ last: string | null }>(`select max(answered_on)::text as last from survey_responses where answered_on < $1::date`, [to]),
     // The funnel is range-bound but UNFILTERED — it has no segment, feature or source dimension.
     pool.query<{ [K in keyof Omit<SurveyFunnel, "optedOut">]: string }>(
       `select coalesce(sum(shown), 0)::text as "shown", coalesce(sum(closed), 0)::text as "closed",
               coalesce(sum(submitted), 0)::text as "submitted", coalesce(sum(submitted_from_menu), 0)::text as "submittedFromMenu",
-              coalesce(sum(shown_self), 0)::text as "shownSelf", coalesce(sum(submitted_self), 0)::text as "submittedSelf"
+              coalesce(sum(shown_self), 0)::text as "shownSelf", coalesce(sum(submitted_self), 0)::text as "submittedSelf",
+              coalesce(sum(submitted_bug), 0)::text as "submittedBug"
          from survey_daily
         where day < $1::date and ($2::date is null or day >= $2::date)`,
       [to, from],
     ),
     pool.query<{ n: string }>(`select count(*)::text as n from users where not surveys_enabled`),
+    // The header's bug count: in range, unfiltered.
+    pool.query<{ n: string }>(
+      `select count(*)::text as n from survey_responses
+        where trigger = 'bug' and answered_on < $1::date and ($2::date is null or answered_on >= $2::date)`,
+      [to, from],
+    ),
     pool.query<{ day: string; n: string; overall_n: string; overall_sum: string }>(
       `select r.answered_on::text as day, count(*)::text as n, count(a.stars)::text as overall_n, coalesce(sum(a.stars), 0)::text as overall_sum
          from survey_responses r
@@ -144,6 +164,7 @@ export async function surveySummary(pool: Pool, filters: SurveyFilters, now: Dat
     optedOut: Number(optedRows.rows[0]?.n ?? 0),
     shownSelf: Number(f.shownSelf),
     submittedSelf: Number(f.submittedSelf),
+    submittedBug: Number(f.submittedBug),
   };
 
   const daily = dailyRows.rows.map((r) => ({ day: r.day, n: Number(r.n), overallN: Number(r.overall_n), overallSum: Number(r.overall_sum) }));
@@ -172,8 +193,10 @@ export async function surveySummary(pool: Pool, filters: SurveyFilters, now: Dat
 
   return {
     enabled,
+    bugReportsEnabled,
     lastDate: lastRows.rows[0]?.last ?? null,
     bucket,
+    bugCount: Number(bugRows.rows[0]?.n ?? 0),
     funnel,
     series: buildSurveySeries(daily, bucket),
     questions,
@@ -188,15 +211,19 @@ export interface SurveyComment {
   answeredOn: string;
   feature: SurveyFeature | null;
   segment: SurveySegment;
-  trigger: SurveyTrigger;
+  trigger: SurveyResponseTrigger;
   text: string;
+  /** Bug reports only (null otherwise): the page path, plain text — and the app version. */
+  pagePath: string | null;
+  appVersion: string | null;
 }
 
 export interface SurveyCommentsPage {
   comments: SurveyComment[];
   total: number;
   hasMore: boolean;
-  /** True when fewer than 5 comments match — the feed as a whole is withheld. */
+  /** True when fewer than 5 SURVEY comments match — those are withheld. Bug reports are listed
+   *  whatever their number. */
   withheld: boolean;
 }
 
@@ -207,19 +234,39 @@ export async function surveyComments(
   page: { offset: number; limit: number },
   now: Date = new Date(),
 ): Promise<SurveyCommentsPage> {
-  const where = responseConditions(filters, now);
+  // The size-5 rule counts the survey comments of the filtered set only (§14.11).
+  const surveyWhere = responseConditions(filters, now, { kind: "survey" });
   const { rows: countRows } = await pool.query<{ n: string }>(
+    `select count(*)::text as n from survey_responses r where ${surveyWhere.sql} and r.free_text is not null`,
+    surveyWhere.params,
+  );
+  const surveyCount = Number(countRows[0]?.n ?? 0);
+  const plan = surveyFeedPlan(filters.source, surveyCount);
+  if (!plan.listSurvey && !plan.listBugs) return { comments: [], total: surveyCount, hasMore: false, withheld: plan.withheld };
+  const kind = plan.listSurvey && plan.listBugs ? undefined : plan.listSurvey ? "survey" : "bug";
+  const where = responseConditions(filters, now, { kind });
+
+  const { rows: totalRows } = await pool.query<{ n: string }>(
     `select count(*)::text as n from survey_responses r where ${where.sql} and r.free_text is not null`,
     where.params,
   );
-  const total = Number(countRows[0]?.n ?? 0);
-  if (isWithheld(total)) return { comments: [], total, hasMore: false, withheld: true };
-
+  const total = Number(totalRows[0]?.n ?? 0);
+  // Withheld with no bug report to list: answer exactly as before bug reports existed.
+  if (plan.withheld && total === 0) return { comments: [], total: surveyCount, hasMore: false, withheld: true };
   const limit = Math.max(1, Math.min(SURVEY_COMMENTS_PAGE, Math.floor(page.limit)));
   const offset = Math.max(0, Math.floor(page.offset));
   const params = [...where.params, limit, offset];
-  const { rows } = await pool.query<{ id: string; answered_on: string; feature: string | null; segment: SurveySegment; trigger: SurveyTrigger; free_text: string }>(
-    `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.trigger, r.free_text
+  const { rows } = await pool.query<{
+    id: string;
+    answered_on: string;
+    feature: string | null;
+    segment: SurveySegment;
+    trigger: SurveyResponseTrigger;
+    free_text: string;
+    page_path: string | null;
+    app_version: string | null;
+  }>(
+    `select r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.trigger, r.free_text, r.page_path, r.app_version
        from survey_responses r
       where ${where.sql} and r.free_text is not null
       order by r.answered_on desc, r.id
@@ -234,10 +281,12 @@ export async function surveyComments(
       segment: r.segment,
       trigger: r.trigger,
       text: r.free_text,
+      pagePath: r.trigger === "bug" ? r.page_path : null,
+      appVersion: r.trigger === "bug" ? r.app_version : null,
     })),
     total,
     hasMore: offset + rows.length < total,
-    withheld: false,
+    withheld: plan.withheld,
   };
 }
 
@@ -246,13 +295,14 @@ export async function surveyComments(
 /**
  * Removes a whole response, its star answers by cascade — a deliberate hard-delete path of its own
  * (§14.11), separate from the §10.3 content cascade. Audited as `survey.response_deleted` with a
- * description of what went, but NEVER the text itself: a deleted comment must not survive in the
- * append-only audit log.
+ * description of what went, but NEVER the text itself or a bug report's page path: a deleted
+ * comment must not survive in the append-only audit log.
  */
 export async function deleteSurveyResponse(pool: Pool, id: string, actorUserId: string): Promise<"ok" | "not_found"> {
   return inTransaction(pool, async (client) => {
     const { rows } = await client.query<{
       answered_on: string;
+      trigger: string;
       feature: string | null;
       segment: string;
       survey_version: number;
@@ -265,10 +315,10 @@ export async function deleteSurveyResponse(pool: Pool, id: string, actorUserId: 
       // this one with no row → 404, never a second audit row.
       `with gone as (
          delete from survey_responses r where r.id = $1
-         returning r.id, r.answered_on::text as answered_on, r.feature, r.segment, r.survey_version,
+         returning r.id, r.answered_on::text as answered_on, r.trigger, r.feature, r.segment, r.survey_version,
                    coalesce(char_length(r.free_text), 0) as text_length
        )
-       select g.answered_on, g.feature, g.segment, g.survey_version, g.text_length,
+       select g.answered_on, g.trigger, g.feature, g.segment, g.survey_version, g.text_length,
               (select count(*)::int from survey_answers a where a.response_id = g.id) as answer_count
          from gone g`,
       [id],
@@ -282,6 +332,7 @@ export async function deleteSurveyResponse(pool: Pool, id: string, actorUserId: 
       targetId: id,
       before: {
         answeredOn: row.answered_on,
+        trigger: row.trigger,
         feature: row.feature,
         segment: row.segment,
         surveyVersion: row.survey_version,

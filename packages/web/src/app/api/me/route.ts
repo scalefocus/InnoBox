@@ -5,7 +5,8 @@
 // What's new marker + rollout boundary the AppShell update notice evaluates, and the open
 // feedback-survey offer (§13.10, `openSurvey` — null whenever the platform switch is off), so the
 // account menu's "Take the survey" needs no extra request — and `selfSurvey` (null while the
-// switch is off, else `{ nextAt }`, null when an on-demand survey can start now).
+// switch is off, else `{ nextAt }`, null when an on-demand survey can start now) — and
+// `bugReports` (true while both the survey and the bug-report switches are on).
 import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
@@ -13,7 +14,7 @@ import { getAiDisplayNameSetting } from "@/app/api/admin/ai/store";
 import { aiDisplayName } from "@innobox/shared/ai";
 import { APP_VERSION } from "@innobox/shared/version";
 import { markQuickStartSeen, markWhatsNewSeen } from "./store";
-import { readOpenSurvey, readSelfSurvey } from "./survey/store";
+import { readBugReports, readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { meGamification, newAchievements } from "@/lib/gamification-read";
 import { getMcpSettings, hasLiveConnection } from "@/lib/mcp/store";
 import { readJsonObject } from "@/lib/http";
@@ -24,11 +25,12 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, gamification, achievements, mcp, connected] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
     readSelfSurvey(pool, user.id),
+    readBugReports(pool),
     meGamification(pool, user.id),
     newAchievements(pool, user.id),
     getMcpSettings(pool),
@@ -64,6 +66,8 @@ async function handleGET(): Promise<Response> {
     aiDisplayName: aiDisplayName(aiName),
     openSurvey,
     selfSurvey,
+    // §13.10 *Bug reports*: the sidebar bug button and the picker's Bug option — both switches on.
+    bugReports,
     // §23.12: the sidebar ring's level (null while the feature is off) and the §23.7 toast queue.
     gamification,
     newAchievements: achievements,

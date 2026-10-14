@@ -1699,6 +1699,25 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 .colophon-link:hover, .colophon-link:focus-visible { color: var(--accent); border-bottom-color: var(--accent); }
 .survey-topic { width: 100%; }
+.survey-hint { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+/* Survey results (§14.11): the two platform switches side by side in the action slot, and a bug
+   report's quiet page-path and version lines in the feed. */
+.survey-switches { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.survey-switch-label { font-size: 12.5px; color: var(--muted); }
+.survey-bug-meta { margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.survey-bug-meta .mono { overflow-wrap: anywhere; }
+
+/* The bug button (§13.10 bug reports): icon-only, at the right end of the colophon's last line.
+   Quiet like the colophon — no border, reduced opacity at rest, full on hover and focus. */
+.colophon-last { display: flex; align-items: flex-end; gap: 8px; }
+.colophon-last .colophon-sub { flex: 1 1 auto; min-width: 0; }
+.colophon-bug {
+  flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none;
+  color: var(--muted); opacity: 0.6; cursor: pointer; transition: opacity 0.15s, color 0.15s;
+}
+.colophon-bug:hover, .colophon-bug:focus-visible { opacity: 1; color: var(--accent); }
+.colophon-bug:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── Gamification: points, levels & badges (INNOBOX_SPEC.md §23.5–§23.7) ────────────────────
    Tokens only. The level-progress ring wraps medium/large bubbles: an --accent arc on a --line
