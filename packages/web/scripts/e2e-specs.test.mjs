@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { pickQuick, specTests, testsInSource } from "./e2e-specs.mjs";
+import { QUICK_FRACTION, pickQuick, specTests, testsInSource } from "./e2e-specs.mjs";
 
 test("testsInSource reports each test call's own line and its unconditional skip", () => {
   const source = [
@@ -29,10 +29,10 @@ test("testsInSource reports each test call's own line and its unconditional skip
   ]);
 });
 
-test("pickQuick takes 20% of the runnable tests, rounded up, in file then line order", () => {
+test("pickQuick takes 10% of the runnable tests, rounded up, in file then line order", () => {
   const tests = Array.from({ length: 23 }, (_, i) => ({ file: `s${i % 3}.spec.ts`, line: i + 1, skipped: i >= 20 }));
   const picked = pickQuick(tests);
-  assert.equal(picked.length, 4); // ceil(20 × 0.2): the 3 skipped are not in the pool
+  assert.equal(picked.length, 2); // ceil(20 × 0.1): the 3 skipped are not in the pool
   assert.ok(picked.every((t) => !t.skipped));
   assert.equal(new Set(picked).size, picked.length);
   const sorted = [...picked].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -58,5 +58,5 @@ test("the real suite indexes every spec file and yields a non-empty quick pick",
   const all = specTests(e2eDir);
   assert.ok(new Set(all.map((t) => t.file)).size > 0);
   const picked = pickQuick(all);
-  assert.equal(picked.length, Math.ceil(all.filter((t) => !t.skipped).length * 0.2));
+  assert.equal(picked.length, Math.ceil(all.filter((t) => !t.skipped).length * QUICK_FRACTION));
 });
