@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Found something broken? Use the small bug button at the bottom of the sidebar, or pick Bug when giving feedback, to tell us what happened. Reports are anonymous; only the page you were on and the app version are attached. Platform admins see them under Survey results and can switch bug reports off there.",
   },
   {
+    version: "1.12.1",
+    date: "2026-10-14",
+    summary:
+      "Raising a challenge, proposing a solution, changing a status and every other action that notifies people is faster. The work no longer grows with the number of people being told, so it stays quick in large namespaces and on items with many followers. Who gets notified, and what they receive, is unchanged.",
+  },
+  {
     version: "1.12.0",
     date: "2026-10-14",
     summary:

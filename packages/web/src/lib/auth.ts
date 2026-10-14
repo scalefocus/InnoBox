@@ -39,46 +39,69 @@ async function getGlobalNamespaceId(): Promise<string> {
   return globalNamespaceId;
 }
 
-/** Resolves a RoleSet for an arbitrary user id (not just the session user) — used by
- *  notification dispatch (lib/notify.ts) to visibility-check candidate recipients. Same
- *  join + bootstrap logic getSessionUser uses for itself. */
-export async function resolveRolesForUser(userId: string): Promise<RoleSet> {
-  const { rows: grantRows } = await pool.query<{ role: Role; namespace_id: string | null }>(
-    `select rm.role, rm.namespace_id
+/** Resolves a RoleSet for each of many user ids in a fixed number of queries, whatever the count —
+ *  notification dispatch (lib/notify.ts) visibility-checks every candidate recipient of an event,
+ *  and a per-user lookup made that cost grow with the recipient list. Every id gets an entry; a
+ *  user with no grants gets the implicit-member RoleSet. The ONE place roles are resolved
+ *  (invariant 1): resolveRolesForUser and getSessionUser go through it too. */
+export async function resolveRolesForUsers(userIds: readonly string[]): Promise<Map<string, RoleSet>> {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return new Map();
+
+  const grants = new Map<string, RoleGrant[]>(ids.map((id) => [id, []]));
+  const { rows: grantRows } = await pool.query<{ user_id: string; role: Role; namespace_id: string | null }>(
+    `select gm.user_id, rm.role, rm.namespace_id
        from group_members gm
        join groups g         on g.id = gm.group_id
        join role_mappings rm on rm.group_external_id = g.external_id
-      where gm.user_id = $1`,
-    [userId],
+      where gm.user_id = any($1::uuid[])`,
+    [ids],
   );
-  const grants: RoleGrant[] = grantRows.map((g) => ({ role: g.role, namespaceId: g.namespace_id }));
+  for (const g of grantRows) grants.get(g.user_id)!.push({ role: g.role, namespaceId: g.namespace_id });
 
-  let bootstrapPlatformAdmin = false;
+  const bootstrapAdmins = new Set<string>();
   const bootstrapGroup = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
   if (bootstrapGroup) {
-    const { rows: b } = await pool.query(
-      `select 1
+    const { rows: b } = await pool.query<{ user_id: string }>(
+      `select distinct gm.user_id
          from group_members gm
          join groups g on g.id = gm.group_id
-        where gm.user_id = $1 and g.external_id = $2`,
-      [userId, bootstrapGroup],
+        where gm.user_id = any($1::uuid[]) and g.external_id = $2`,
+      [ids, bootstrapGroup],
     );
-    bootstrapPlatformAdmin = b.length > 0;
+    for (const r of b) bootstrapAdmins.add(r.user_id);
   }
 
   // §4.3 `people`: the challenges whose access list names the user — resolved per request with the
   // grants, so the visibility gate and its SQL twin read it exactly like namespace membership.
-  const { rows: accessRows } = await pool.query<{ challenge_id: string }>(
-    `select challenge_id from challenge_access where user_id = $1`,
-    [userId],
+  const access = new Map<string, string[]>(ids.map((id) => [id, []]));
+  const { rows: accessRows } = await pool.query<{ user_id: string; challenge_id: string }>(
+    `select user_id, challenge_id from challenge_access where user_id = any($1::uuid[])`,
+    [ids],
   );
+  for (const r of accessRows) access.get(r.user_id)!.push(r.challenge_id);
 
-  return buildRoleSet(grants, {
-    bootstrapPlatformAdmin,
-    globalNamespaceId: await getGlobalNamespaceId(),
-    accessListChallengeIds: accessRows.map((r) => r.challenge_id),
-  });
+  const globalNamespaceId = await getGlobalNamespaceId();
+  return new Map(
+    ids.map((id) => [
+      id,
+      buildRoleSet(grants.get(id)!, {
+        bootstrapPlatformAdmin: bootstrapAdmins.has(id),
+        globalNamespaceId,
+        accessListChallengeIds: access.get(id)!,
+      }),
+    ]),
+  );
 }
+
+/** Resolves a RoleSet for an arbitrary user id (not just the session user) — the assignee and
+ *  successor checks, and the shape every NotifyContext is built with. It carries the bulk resolver
+ *  as `.many`, so a notification fan-out given this function resolves all its recipients at once
+ *  (lib/notify.ts finalRecipients) without any caller changing. */
+export const resolveRolesForUser = Object.assign(
+  async (userId: string): Promise<RoleSet> => (await resolveRolesForUsers([userId])).get(userId)!,
+  { many: resolveRolesForUsers },
+);
 
 /** Presence stamp (§14.5), on the only per-request node-layer hook there is. The pathname
  *  arrives as a middleware-injected header because Next hands route handlers no matched
