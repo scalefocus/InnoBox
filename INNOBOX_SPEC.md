@@ -1281,7 +1281,8 @@ authenticated user. The page learns the state from `GET /api/public-submissions/
 
 Form: title, description, impact area (active areas), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
-`org`), attachments (**staged inline via a `draftKey`**, §11), **"Submit
+`org`), attachments (**staged inline via a `draftKey`**, §11 — picked, **dropped
+anywhere on the page, or pasted**, §11 *Drop and paste*), **"Submit
 anonymously"** checkbox (§9).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
@@ -1316,7 +1317,8 @@ Allowed **only while the challenge status is `valid`** (the UI hides/disables th
 action otherwise; the API enforces it).
 
 Form: description, cost vs benefits (optional), attachments (**staged inline via a
-`draftKey`**, §11), "Submit anonymously".
+`draftKey`**, §11 — picked, dropped, or pasted, §11 *Drop and paste*), "Submit
+anonymously".
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
@@ -2248,6 +2250,57 @@ trashed item is gone for everyone else from the moment it is trashed.
   scanned) the control is labelled **Remove**. While a file is **Scanning…** the
   control polls its status so the phase advances without a page reload, and the
   progress bar carries `role="progressbar"` with its value.
+- **Drop and paste** — on all three surfaces a file can reach an upload control three
+  ways: the file picker, **dropping it anywhere in the browser window**, or **pasting
+  it**. All three feed the same per-control path below, so the server side (limits,
+  allowlist, chunking, scan, binding) is unchanged and remains authoritative.
+  - **Several files, one at a time.** The picker accepts **multiple** files. Every
+    accepted file — however it arrived — joins the control's **queue** and uploads
+    **sequentially**, in order. A queued file shows as **Queued** with **Remove**
+    (nothing has been sent, so nothing is tombstoned); it then moves through the
+    phases above. A queued file blocks Submit exactly as an Uploading one does. A
+    failed or cancelled upload does not stop the queue — the next file starts.
+    Leaving the surface drops the queue and cancels the in-flight file (the existing
+    unmount rule). Controls on the same page keep separate queues.
+  - **Browser-side pre-checks.** Before queueing, each file is checked against the
+    extension allowlist, the max upload size, and the per-item cap — counting files
+    already attached plus those queued or uploading on that control. Folders are
+    refused. The files that pass are queued, **in the order given, up to the cap**;
+    the rest are skipped with **one** combined message naming each skipped file and
+    why (*"Skipped: setup.exe (file type not allowed), big.zip (over 10 MB),
+    notes.pdf (only 5 files can be attached)"*).
+  - **The drop overlay.** Dragging **files** (not text, links or images from the page)
+    over the window shows a full-window overlay listing **one labelled target per
+    control the viewer can upload to right now**: on `/challenges/new` that is always
+    exactly one, so the whole overlay is the target (*"Drop files to attach"*); on a
+    challenge detail page it may be *"This challenge"*, *"Your new solution"* (the open
+    proposal form) and *"Your solution SOL-0031"* for each of the viewer's own solutions
+    still in its edit window — never a control the viewer can't already see and use.
+    Dropping on a target queues the files there; dropping anywhere else attaches
+    nothing. The overlay closes on drop, on leaving the window, or on Escape.
+  - **Never lose the page.** Wherever an upload surface is mounted, a file dropped
+    anywhere in the window is **always intercepted** — even when nothing can take it
+    — so the browser never opens the file and navigates away from an unsaved form.
+    When no control can take a file (the §6.4 submission or resubmit lock is held, no
+    control is editable, or a modal dialog is open) **no overlay appears** and the
+    drop is silently swallowed. Drop and paste are available exactly when the
+    control's own picker is enabled. Text dragged within the page and dropped into a
+    field keeps the browser's normal behaviour.
+  - **Paste.** A clipboard carrying **files and no text** (a screenshot, a file copied
+    in Explorer or Finder) attaches on paste. A clipboard carrying **any text** pastes
+    as text only — so copying from Word, Excel or Outlook, which adds a rendered image
+    alongside the text, never attaches a stray picture. A pasted file goes to the
+    control in the same form or card as the **focused element**; with focus elsewhere
+    it goes to the page's only available control, and with several available nothing
+    is attached and a toast says *"Click into the form you want to attach to, then
+    paste"*. A pasted file carrying the browser's generic clipboard name
+    (`image.png` and the like) is renamed **`pasted-image-YYYY-MM-DD-HHMMSS.<ext>`**
+    in the viewer's local time — a label shown back to them, not a stored timestamp;
+    a real file keeps its name.
+  - **Hint and accessibility.** Under each enabled picker the control adds *"or drop
+    files anywhere on the page, or paste them"*. The overlay is pointer-only and
+    `aria-hidden` — the picker and paste remain the keyboard paths — and a polite live
+    region announces what was queued and skipped (*"2 files added, 1 skipped"*).
 
 ---
 

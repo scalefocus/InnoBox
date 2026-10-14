@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.11.0",
+    date: "2026-10-14",
+    summary:
+      "Attach files by dropping them anywhere on the page, or by pasting a screenshot, when raising a challenge, proposing a solution or editing your own. Several files can go at once and upload one after another; any that can't be attached are listed with the reason. Where a page has more than one place to attach to, you pick one as you drop.",
+  },
+  {
     version: "1.10.3",
     date: "2026-10-14",
     summary:

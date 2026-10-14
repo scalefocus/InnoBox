@@ -1220,6 +1220,32 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+/* Page-wide attachment drop overlay (<AttachmentDropZone>): raised only while files are dragged
+   over the window. One dashed target per upload control that can take files; with a single
+   target it fills the window. Above every other layer except modal dialogs (the top layer). */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 95; display: flex; flex-direction: column; gap: 14px;
+  padding: clamp(16px, 4vw, 40px);
+  background: color-mix(in oklab, var(--paper) 82%, transparent); backdrop-filter: blur(3px);
+  animation: drop-overlay-in 0.12s ease;
+}
+@keyframes drop-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+.drop-overlay-title {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); text-align: center;
+}
+.drop-target {
+  flex: 1; min-height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 16px; border-radius: var(--radius-lg); text-align: center;
+  border: 2px dashed var(--line-strong); background: var(--surface); color: var(--muted);
+  box-shadow: var(--shadow); transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.drop-target.over, .drop-overlay.single .drop-target { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-2); }
+.drop-target * { pointer-events: none; } /* the drop always lands on the target itself */
+.drop-target-label { font-family: var(--font-display); font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.drop-target-ico { flex-shrink: 0; }
+@media (prefers-reduced-motion: reduce) { .drop-overlay { animation: none; } }
+
 /* Maintainer cards (skill detail, §19). Desktop: one row [avatar | name | tag+reach | remove].
    Mobile (≤560px): the tag + Reach out wrap to a second row below the name, and the remove (✕)
    button spans both rows on the right, vertically centered. Replicates .row's padding/borders
