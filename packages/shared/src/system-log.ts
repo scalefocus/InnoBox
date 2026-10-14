@@ -79,6 +79,8 @@ export interface SystemEventInput {
   requestId?: string | null;
   durationMs?: number | null;
   source: SystemEventSource;
+  /** The real client address — set only on the worker's SCIM 401/403 rows (§14.7). */
+  clientIp?: string | null;
 }
 
 /** Strips the query string (and fragment) — never stored (§14.7 privacy). */

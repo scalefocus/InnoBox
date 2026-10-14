@@ -2,13 +2,17 @@
 // The "Identity sync" card body (INNOBOX_SPEC.md §14.10) — platform admin only; the card wrapper
 // and the gate live in admin/page.tsx. Answers "is Entra provisioning reaching InnoBox, and is it
 // sending what roles need?": provisioned user and group counts, mapped groups that never arrived,
-// the last accepted and last rejected SCIM request, and at most one fixed explanation. Read-only.
+// the last accepted and last rejected SCIM request (with the rejection's reason, and its fixed hint
+// while nothing has been accepted since), and at most one fixed explanation. Read-only.
 import { useCallback, useEffect, useState } from "react";
 import {
   IDENTITY_SYNC_EXPLANATIONS,
+  SCIM_REJECTION_LABELS,
   UNARRIVED_GROUP_HINT,
   identitySyncSummaryLabel,
+  scimRejectionHint,
   type IdentitySyncState,
+  type ScimRejectionReason,
 } from "@innobox/shared/identity-sync";
 import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
@@ -31,6 +35,7 @@ interface IdentitySync {
   unarrivedMappedGroups: { groupExternalId: string; role: Role; namespaceId: string | null; namespaceName: string | null }[];
   lastScimRequestAt: string | null;
   lastRejectedScimRequestAt: string | null;
+  lastRejectedScimReason: ScimRejectionReason | null;
   state: IdentitySyncState;
 }
 
@@ -73,6 +78,12 @@ export function IdentitySyncCard({ onSummary }: { onSummary?: (label: string) =>
   if (!data) return <p className="muted">Loading…</p>;
 
   const explanation = IDENTITY_SYNC_EXPLANATIONS[data.state];
+  const rejectedReason = data.lastRejectedScimRequestAt && data.lastRejectedScimReason ? data.lastRejectedScimReason : null;
+  const rejectionHint = scimRejectionHint({
+    reason: data.lastRejectedScimReason,
+    lastRejectedAt: data.lastRejectedScimRequestAt,
+    lastAcceptedAt: data.lastScimRequestAt,
+  });
   const when = (iso: string | null, none: string) =>
     iso ? (
       <span title={fmt.dateTime(iso)}>{relativeActive(iso, asOfMs)}</span>
@@ -107,8 +118,15 @@ export function IdentitySyncCard({ onSummary }: { onSummary?: (label: string) =>
         </div>
         <div>
           <span className="identity-sync-label">Last rejected SCIM request</span> {when(data.lastRejectedScimRequestAt, "None in the last 90 days")}
+          {rejectedReason && <span className="muted"> · {SCIM_REJECTION_LABELS[rejectedReason]}</span>}
         </div>
       </div>
+
+      {rejectionHint && (
+        <p className="identity-sync-explain" role="note">
+          {rejectionHint}
+        </p>
+      )}
 
       {explanation && (
         <p className="identity-sync-explain" role="note">
