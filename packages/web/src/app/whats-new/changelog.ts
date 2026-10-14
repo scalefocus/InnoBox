@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.12.1",
+    date: "2026-10-14",
+    summary:
+      "Raising a challenge, proposing a solution, changing a status and every other action that notifies people is faster. The work no longer grows with the number of people being told, so it stays quick in large namespaces and on items with many followers. Who gets notified, and what they receive, is unchanged.",
+  },
+  {
     version: "1.12.0",
     date: "2026-10-14",
     summary:

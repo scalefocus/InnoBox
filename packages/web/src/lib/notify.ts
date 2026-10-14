@@ -27,7 +27,7 @@ import {
   type NotificationTarget,
   type NotificationType,
 } from "@innobox/shared";
-import { getParentAccess, type Viewer } from "../app/api/challenges/store";
+import { loadParentVisibility, parentAccessFor, type Viewer } from "../app/api/challenges/store";
 
 type Db = Pool | PoolClient;
 
@@ -61,27 +61,44 @@ async function digestSlots(db: Db, userIds: string[], hold: DigestHold | undefin
   return new Map(rows.map((r) => [r.id, nextDigestSlot(r.email_delivery, now)]));
 }
 
-/** The outbox row for one recipient: immediate, or held until `slot` with the digest's facts. */
+/** The outbox row's payload for one recipient: immediate, or held until `slot` with the digest's facts. */
+function outboxPayload(payload: NotificationPayload, notificationId: string, slot: Date | undefined, hold: DigestHold | undefined): NotificationPayload {
+  return { ...payload, notificationId, ...(slot && hold ? { digest: hold.facts } : {}) };
+}
+
+/** The outbox row for one recipient. */
 async function writeOutbox(db: Db, userId: string, type: NotificationType, payload: NotificationPayload, notificationId: string, slot: Date | undefined, hold: DigestHold | undefined): Promise<void> {
-  const outboxPayload = { ...payload, notificationId, ...(slot && hold ? { digest: hold.facts } : {}) };
   await db.query(`insert into notification_outbox (user_id, type, payload, digest_due_at) values ($1, $2, $3, $4)`, [
     userId,
     type,
-    JSON.stringify(outboxPayload),
+    JSON.stringify(outboxPayload(payload, notificationId, slot, hold)),
     slot ?? null,
   ]);
 }
 
+/** The inbox row and the outbox row for every recipient — two multi-row inserts whatever the
+ *  count, so an event's cost does not grow with its recipient list. `userIds` are distinct
+ *  (finalizeRecipients dedupes), which is what keys each returned inbox id to its outbox row. */
 async function writeNotifications(db: Db, userIds: string[], type: NotificationType, payload: NotificationPayload, hold?: DigestHold): Promise<void> {
+  if (userIds.length === 0) return;
   const slots = await digestSlots(db, userIds, hold);
-  for (const userId of userIds) {
-    const { rows } = await db.query<{ id: string }>(`insert into notifications (user_id, type, payload) values ($1, $2, $3) returning id`, [
-      userId,
+  const { rows } = await db.query<{ id: string; user_id: string }>(
+    `insert into notifications (user_id, type, payload)
+     select u, $2, $3 from unnest($1::uuid[]) as u
+     returning id, user_id`,
+    [userIds, type, JSON.stringify(payload)],
+  );
+  const inboxIds = new Map(rows.map((r) => [r.user_id, r.id]));
+  await db.query(
+    `insert into notification_outbox (user_id, type, payload, digest_due_at)
+     select u, $2, p::jsonb, d from unnest($1::uuid[], $3::text[], $4::timestamptz[]) as t(u, p, d)`,
+    [
+      userIds,
       type,
-      JSON.stringify(payload),
-    ]);
-    await writeOutbox(db, userId, type, payload, rows[0]!.id, slots.get(userId), hold);
-  }
+      userIds.map((id) => JSON.stringify(outboxPayload(payload, inboxIds.get(id)!, slots.get(id), hold))),
+      userIds.map((id) => slots.get(id)?.toISOString() ?? null),
+    ],
+  );
 }
 
 export async function getNamespaceAdminUserIds(db: Db, namespaceId: string): Promise<string[]> {
@@ -149,8 +166,20 @@ export interface NotifyContext {
   pool: Pool;
   actorId: string | null;
   /** Resolves a user's RoleSet for the visibility check — injected so this module doesn't
-   *  duplicate getSessionUser's role-resolution SQL for arbitrary (non-session) user ids. */
-  resolveRoles: (userId: string) => Promise<Viewer["roles"]>;
+   *  duplicate getSessionUser's role-resolution SQL for arbitrary (non-session) user ids. The web
+   *  tier's resolveRolesForUser also carries `many`, the bulk form, which the fan-out uses to
+   *  resolve every recipient in a fixed number of queries; without it, one call per recipient. */
+  resolveRoles: ((userId: string) => Promise<Viewer["roles"]>) & {
+    many?: (userIds: readonly string[]) => Promise<Map<string, Viewer["roles"]>>;
+  };
+}
+
+/** Every recipient's RoleSet — in bulk when the resolver offers it, one call per user otherwise. */
+async function resolveAllRoles(resolveRoles: NotifyContext["resolveRoles"], userIds: string[]): Promise<Map<string, Viewer["roles"]>> {
+  if (resolveRoles.many) return resolveRoles.many(userIds);
+  const roles = new Map<string, Viewer["roles"]>();
+  for (const userId of userIds) roles.set(userId, await resolveRoles(userId));
+  return roles;
 }
 
 /** §12.1 per-event preferences: which mutable event this dispatch is, and who it is a duty for
@@ -200,14 +229,14 @@ async function finalRecipients(
   mute?: PreferenceMute,
 ): Promise<string[]> {
   const deduped = finalizeRecipients(candidates, ctx.actorId);
-  const visible: string[] = [];
-  for (const userId of deduped) {
-    const roles = await ctx.resolveRoles(userId);
-    // `live` only: a trashed item (§10.4) notifies nobody, platform admins included.
-    if ((await getParentAccess(ctx.pool, { userId, roles }, visibilityScope.parentType, visibilityScope.parentId)) === "live") {
-      visible.push(userId);
-    }
-  }
+  if (deduped.length === 0) return [];
+  // The item is read once and every recipient checked against it in memory, with all their
+  // roles resolved together — a fixed number of queries, whatever the recipient count.
+  const parent = await loadParentVisibility(ctx.pool, visibilityScope.parentType, visibilityScope.parentId);
+  if (!parent) return [];
+  const roles = await resolveAllRoles(ctx.resolveRoles, deduped);
+  // `live` only: a trashed item (§10.4) notifies nobody, platform admins included.
+  const visible = deduped.filter((userId) => parentAccessFor({ userId, roles: roles.get(userId)! }, parent) === "live");
   return mute ? applyPreferenceMute(visible, await optedOutOf(ctx.pool, mute.preference, visible), new Set(mute.exempt ?? [])) : visible;
 }
 
