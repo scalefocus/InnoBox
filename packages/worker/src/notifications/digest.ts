@@ -17,6 +17,7 @@ import type { Pool } from "pg";
 import {
   buildRoleSet,
   canSeeChallenge,
+  type ChallengeVisibility,
   canSeeSolution,
   getEmailWrapperHtml,
   isEmailDelivery,
@@ -104,9 +105,15 @@ async function resolveRoles(pool: Pool, userId: string, bootstrapAdminGroup: str
       )
     : { rows: [] };
   const { rows: global } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+  // §4.3 `people`: the challenges whose access list names the user.
+  const { rows: access } = await pool.query<{ challenge_id: string }>(`select challenge_id from challenge_access where user_id = $1`, [userId]);
   return buildRoleSet(
     grants.map((g) => ({ role: g.role, namespaceId: g.namespace_id })),
-    { bootstrapPlatformAdmin: bootstrap.length > 0, globalNamespaceId: global[0]?.id ?? "" },
+    {
+      bootstrapPlatformAdmin: bootstrap.length > 0,
+      globalNamespaceId: global[0]?.id ?? "",
+      accessListChallengeIds: access.map((r) => r.challenge_id),
+    },
   );
 }
 
@@ -115,8 +122,9 @@ async function resolveRoles(pool: Pool, userId: string, bootstrapAdminGroup: str
 async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet }, parentType: unknown, parentId: unknown): Promise<boolean> {
   if (typeof parentId !== "string" || (parentType !== "challenge" && parentType !== "solution")) return false;
   const { rows } = await pool.query<{
+    challenge_id: string;
     namespace_id: string;
-    visibility: "org" | "namespace";
+    visibility: ChallengeVisibility;
     challenge_status: ChallengeStatus;
     challenge_author_id: string;
     assignee_id: string | null;
@@ -125,10 +133,10 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
     trashed: boolean;
   }>(
     parentType === "challenge"
-      ? `select c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
+      ? `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
                 null as solution_status, null as solution_author_id, c.trashed_at is not null as trashed
            from challenges c where c.id = $1`
-      : `select c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
+      : `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
                 s.status as solution_status, s.author_id as solution_author_id,
                 (s.trashed_at is not null or c.trashed_at is not null) as trashed
            from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
@@ -137,10 +145,12 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
   const row = rows[0];
   if (!row || row.trashed) return false;
   const challengeVisible = canSeeChallenge(viewer, {
+    id: row.challenge_id,
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.challenge_status,
     authorId: row.challenge_author_id,
+    assigneeId: row.assignee_id,
     trashed: false,
   });
   if (!challengeVisible || parentType === "challenge") return challengeVisible;

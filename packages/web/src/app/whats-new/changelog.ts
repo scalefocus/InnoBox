@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.9.0",
+    date: "2026-10-13",
+    summary:
+      "Admins can now share a challenge with a named list of people instead of everyone: only they, the namespace's admins and committee and the assignee can see it, and the people listed are notified once it leaves triage. The public submission form also asks who should see a challenge — specific people, specific teams or everyone — and the reviewing admin decides on accept.",
+  },
+  {
     version: "1.8.0",
     date: "2026-10-13",
     summary:

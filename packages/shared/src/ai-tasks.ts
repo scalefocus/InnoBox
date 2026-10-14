@@ -300,12 +300,13 @@ export interface SimilarExplainCandidate {
   title: string;
   /** The first 500 characters of the description. */
   excerpt: string;
-  visibility: "org" | "namespace";
+  visibility: "org" | "namespace" | "people";
 }
 
-/** The candidates the AI may see: all of them, minus namespace-only ones while restricted content
- *  may not be sent. Never adds anything — the §6.1 set is closed. */
-export function similarExplainInput<T extends { visibility: "org" | "namespace" }>(candidates: readonly T[], restrictedOk: boolean): T[] {
+/** The candidates the AI may see: all of them, minus restricted ones (namespace-only or shared
+ *  with specific people, §4.3) while restricted content may not be sent. Never adds anything —
+ *  the §6.1 set is closed. */
+export function similarExplainInput<T extends { visibility: "org" | "namespace" | "people" }>(candidates: readonly T[], restrictedOk: boolean): T[] {
   return candidates.filter((c) => c.visibility === "org" || restrictedOk);
 }
 

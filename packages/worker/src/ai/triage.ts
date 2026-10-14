@@ -45,7 +45,7 @@ interface SubjectRow {
   title: string;
   description: string;
   namespace_id: string;
-  visibility: "org" | "namespace";
+  visibility: "org" | "namespace" | "people";
   impact_area: string;
   hash: string;
 }
@@ -136,9 +136,10 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
           system: prompt.system,
           messages: prompt.messages,
           json: true,
-          // Restricted when the subject or any candidate sent is namespace-only (only possible
-          // while the switch allows it; the helper re-checks).
-          restrictedContent: s.visibility === "namespace" || candidates.some((c) => c.visibility === "namespace"),
+          // Restricted when the subject or any candidate sent is not org-visible — namespace-only or
+          // shared with specific people (only possible while the switch allows it; the helper
+          // re-checks).
+          restrictedContent: s.visibility !== "org" || candidates.some((c) => c.visibility !== "org"),
         });
         model = result.model;
         payload = processTriageNotes(result.json, candidateList.map((c) => c.number), areas);

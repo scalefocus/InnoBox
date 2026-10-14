@@ -25,6 +25,10 @@ export interface RoleSet {
   isMemberOf(namespaceId: string): boolean;
   /** Namespace ids the user belongs to, always including global. */
   memberNamespaces(): string[];
+  /** §4.3 `people`: true when the user is a bound entry on this challenge's access list. */
+  isOnAccessList(challengeId: string): boolean;
+  /** §4.3 `people`: the challenges whose access list names the user (bound entries only). */
+  accessListChallenges(): string[];
 }
 
 export interface BuildRoleSetOptions {
@@ -32,6 +36,9 @@ export interface BuildRoleSetOptions {
   bootstrapPlatformAdmin?: boolean;
   /** id of the built-in 'global' namespace — every active user is an implicit member (§4.1). */
   globalNamespaceId: string;
+  /** §4.3 `people`: the challenges whose access list names the user, read per request beside the
+   *  grants. Absent = none, so a caller that forgets it fails closed (the list grants nothing). */
+  accessListChallengeIds?: readonly string[];
 }
 
 export function buildRoleSet(grants: RoleGrant[], opts: BuildRoleSetOptions): RoleSet {
@@ -61,6 +68,8 @@ export function buildRoleSet(grants: RoleGrant[], opts: BuildRoleSetOptions): Ro
     set.add(g.role);
   }
 
+  const accessList = new Set(opts.accessListChallengeIds ?? []);
+
   return {
     grants: Object.freeze(deduped),
     isPlatformAdmin,
@@ -80,6 +89,12 @@ export function buildRoleSet(grants: RoleGrant[], opts: BuildRoleSetOptions): Ro
     memberNamespaces(): string[] {
       // The injected implicit grant guarantees global is present exactly once.
       return [...rolesByNamespace.keys()];
+    },
+    isOnAccessList(challengeId: string): boolean {
+      return accessList.has(challengeId);
+    },
+    accessListChallenges(): string[] {
+      return [...accessList];
     },
   };
 }

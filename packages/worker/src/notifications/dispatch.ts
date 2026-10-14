@@ -43,15 +43,17 @@ interface OutboxRow {
 /** §24.7: the confirmation e-mail's outbox type — its link carries the token, scrubbed once sent. */
 const SUBMITTER_CONFIRM_TYPE = "public_submission_confirm";
 
-/** Subject and plain-text body of one outbox row. A user's row reads "innobox: <message>" and
- *  links into the app; a §24.7 submitter row carries its own fixed subject and links nowhere but,
- *  for the confirmation only, the public confirm page. */
+/** Subject and plain-text body of one outbox row. A user's row reads "innobox: <message>" — or its
+ *  own fixed subject when it carries one (§12.1 event 15) — and links into the app; a §24.7
+ *  submitter row carries its own fixed subject and links nowhere but, for the confirmation only,
+ *  the public confirm page. */
 export function composeOutboxEmail(row: Pick<OutboxRow, "recipient_email" | "payload">, baseUrl: string): { subject: string; body: string } {
   if (typeof row.recipient_email === "string") {
     const link = typeof row.payload.link === "string" && row.payload.link ? `\n\n${baseUrl}${row.payload.link}` : "";
     return { subject: String(row.payload.subject ?? "").slice(0, 200), body: `${row.payload.message}${link}` };
   }
-  return { subject: `innobox: ${row.payload.message}`.slice(0, 200), body: `${row.payload.message}\n\n${baseUrl}${row.payload.link}` };
+  const subject = typeof row.payload.subject === "string" && row.payload.subject ? row.payload.subject : `innobox: ${row.payload.message}`;
+  return { subject: subject.slice(0, 200), body: `${row.payload.message}\n\n${baseUrl}${row.payload.link}` };
 }
 
 /** Attempts after which a failed row is left `failed` for good (surfaced only via the admin

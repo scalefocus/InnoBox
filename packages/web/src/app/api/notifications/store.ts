@@ -67,8 +67,9 @@ export async function getInbox(pool: Pool, userId: string): Promise<Inbox> {
 
 /**
  * §25.6 list_my_notifications: a page of the caller's inbox, newest first. With `orgVisibleOnly`
- * (§25.5) a row about a namespace-restricted challenge — or a solution on one — is left out, so the
- * agent's view behaves as if those items did not exist. Read-only: nothing is marked read.
+ * (§25.5) a row about a restricted challenge (namespace-only or shared with specific people, §4.3)
+ * — or a solution on one — is left out, so the agent's view behaves as if those items did not
+ * exist. Read-only: nothing is marked read.
  */
 export async function listInboxPage(
   pool: Pool,
@@ -81,7 +82,7 @@ export async function listInboxPage(
   if (opts.orgVisibleOnly) {
     conditions.push(`not exists (
       select 1 from challenges c
-       where c.visibility = 'namespace'
+       where c.visibility <> 'org'
          and (c.id::text = n.payload->>'challengeId'
               or (n.payload->>'parentType' = 'challenge' and c.id::text = n.payload->>'parentId')
               or (n.payload->>'parentType' = 'solution'

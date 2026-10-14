@@ -69,7 +69,15 @@ test(
 
       const NAME = `Zed Outsider ${stamp}`;
       const EMAIL = `zed.${stamp}@outside.example`;
-      const fields = (title: string, email = EMAIL) => ({ title, description: `Our problem ${stamp} is the queue at reception`, name: NAME, email, company: "Acme Ltd", honeypot: "" });
+      const fields = (title: string, email = EMAIL) => ({
+        title,
+        description: `Our problem ${stamp} is the queue at reception`,
+        name: NAME,
+        email,
+        company: "Acme Ltd",
+        honeypot: "",
+        request: { visibility: "org" as const, emails: [], teams: [] },
+      });
       const salt = () => `${randomUUID().replace(/-/g, "").slice(0, 24)}?expires=${Date.now() + 600_000}`;
 
       // ── Receive ───────────────────────────────────────────────────────────────────────────
