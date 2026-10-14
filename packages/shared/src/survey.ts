@@ -30,8 +30,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────────────────
 
+/** The triggers an OFFER can have. */
 export const SURVEY_TRIGGERS = ["feature", "visit", "self"] as const;
 export type SurveyTrigger = (typeof SURVEY_TRIGGERS)[number];
+
+/** The triggers a stored RESPONSE can have: every offer trigger, plus `bug` — a bug report, which
+ *  is never an offer (§13.10 *Bug reports*). */
+export const SURVEY_RESPONSE_TRIGGERS = [...SURVEY_TRIGGERS, "bug"] as const;
+export type SurveyResponseTrigger = (typeof SURVEY_RESPONSE_TRIGGERS)[number];
 
 export const SURVEY_SEGMENTS = ["admin", "committee", "member"] as const;
 export type SurveySegment = (typeof SURVEY_SEGMENTS)[number];
@@ -401,4 +407,114 @@ export function selfSurveyGate(
   const nextAt = selfSurveyNextAt(state.selfShownAt, now);
   if (nextAt) return { ok: false, reason: "cooldown", nextAt };
   return { ok: true };
+}
+
+// ── Bug reports (§13.10 *Bug reports*) ───────────────────────────────────────────────────
+
+/** The longest page path stored with a bug report. */
+export const BUG_PAGE_PATH_MAX = 512;
+
+/** The picker value that selects Bug mode ("" is "InnoBox in general", a feature key a feature). */
+export const BUG_PICKER_VALUE = "bug";
+
+/** Bug reports are on only while BOTH platform switches are: the survey switch is the master.
+ *  The per-user random opt-out plays no part — a bug report is the user's own initiative. */
+export function bugReportsOn(surveyEnabled: boolean, bugReportsEnabled: boolean): boolean {
+  return surveyEnabled && bugReportsEnabled;
+}
+
+/** Whether the sidebar bug button shows: signed in (the shell has its `me`), past Quick start,
+ *  not behind the Quick start gate, and bug reports on. */
+export function bugButtonVisible(s: { shellReady: boolean; quickStartGate: boolean; quickStartSeen: boolean; bugReports: boolean }): boolean {
+  return s.shellReady && !s.quickStartGate && s.quickStartSeen && s.bugReports;
+}
+
+export interface SurveyPickerOption {
+  value: string;
+  label: string;
+}
+
+/** The on-demand picker, in order: InnoBox in general, then Bug (while bug reports are on), then
+ *  every catalog feature. */
+export function surveyPickerOptions(bugReports: boolean): SurveyPickerOption[] {
+  return [
+    { value: "", label: "InnoBox in general" },
+    ...(bugReports ? [{ value: BUG_PICKER_VALUE, label: "Bug" }] : []),
+    ...SURVEY_FEATURES.map((f) => ({ value: f.key, label: f.label.charAt(0).toUpperCase() + f.label.slice(1) })),
+  ];
+}
+
+/**
+ * The page path stored with a bug report, or null when it is invalid (the report is still
+ * stored). The path only: anything from the first `?` or `#` is dropped — a search or a filter
+ * can hold anything the user typed. It must start with `/`, must not be an API route, must hold
+ * no control characters, and must fit BUG_PAGE_PATH_MAX.
+ */
+export function sanitizeBugPagePath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const cut = raw.search(/[?#]/);
+  const path = cut === -1 ? raw : raw.slice(0, cut);
+  if (!path.startsWith("/") || path.startsWith("/api/")) return null;
+  // Control characters, and the bidi/format marks that could make the admin feed display a
+  // different path than the one stored.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f‎‏‪-‮⁦-⁩]/.test(path)) return null;
+  if (path.length > BUG_PAGE_PATH_MAX) return null;
+  return path;
+}
+
+export interface BugReportSubmission {
+  description: string;
+  pagePath: string | null;
+  /** The card holds the user's open `self` offer, which this submit ends. */
+  fromOffer: boolean;
+}
+
+/** Validates `{ description, pagePath, fromOffer }`: a description is required (trimmed, not
+ *  empty, at most SURVEY_FREE_TEXT_MAX characters); an invalid page path is stored as null rather
+ *  than rejecting the report. */
+export function validateBugReport(body: unknown): { ok: true; value: BugReportSubmission } | { ok: false; error: string } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return { ok: false, error: "request body must be a JSON object" };
+  const rec = body as Record<string, unknown>;
+  if (typeof rec.description !== "string") return { ok: false, error: "description is required" };
+  const description = rec.description.trim();
+  if (description === "") return { ok: false, error: "describe the problem you found" };
+  if (description.length > SURVEY_FREE_TEXT_MAX) return { ok: false, error: `description must be at most ${SURVEY_FREE_TEXT_MAX} characters` };
+  if (rec.fromOffer !== undefined && typeof rec.fromOffer !== "boolean") return { ok: false, error: "fromOffer must be a boolean" };
+  return { ok: true, value: { description, pagePath: sanitizeBugPagePath(rec.pagePath), fromOffer: rec.fromOffer === true } };
+}
+
+/** What the picker's non-Bug options do on a card that holds no offer: start an on-demand survey,
+ *  or stay disabled — during the cooldown, or while a random offer is open. */
+export type BugCardOthers = { state: "startable" } | { state: "cooldown"; nextAt: Date } | { state: "random" };
+
+/**
+ * What a bug-button click does (§13.10 *Bug reports*, cases 1–4). At most one card per tab.
+ *  - `focus`     — an offer-less bug card is already open (case 4);
+ *  - `switch`    — the open card holds the user's `self` offer: switch it to Bug, keeping its via;
+ *  - `reopen`    — a `self` offer is open but its card isn't: reopen it (via menu) with Bug selected;
+ *  - `offerless` — open a bug card with NO server call (cases 1 and 3); `closeRandom` closes an
+ *                  open random card first, like its ✕.
+ */
+export type BugClickDecision =
+  | { kind: "focus" }
+  | { kind: "switch" }
+  | { kind: "reopen" }
+  | { kind: "offerless"; closeRandom: boolean; others: BugCardOthers };
+
+export function bugClickDecision(s: {
+  /** The user's open offer's trigger, or null when none is open. */
+  openOffer: SurveyTrigger | null;
+  /** The card open in this tab: whether it holds the open offer. Null when no card is open. */
+  card: { holdsOffer: boolean } | null;
+  /** The end of the on-demand cooldown as last read (null when a survey could start then). */
+  selfNextAt: Date | null;
+  /** A cooldown read earlier may have ended since: one already past counts as over. */
+  now: Date;
+}): BugClickDecision {
+  if (s.card && !s.card.holdsOffer) return { kind: "focus" };
+  if (s.openOffer === "self") return s.card ? { kind: "switch" } : { kind: "reopen" };
+  if (s.openOffer !== null) return { kind: "offerless", closeRandom: s.card !== null, others: { state: "random" } };
+  const cooling = s.selfNextAt !== null && s.selfNextAt.getTime() > s.now.getTime();
+  return { kind: "offerless", closeRandom: false, others: cooling ? { state: "cooldown", nextAt: s.selfNextAt! } : { state: "startable" } };
 }

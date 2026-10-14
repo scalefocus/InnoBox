@@ -13,6 +13,8 @@ import {
   SURVEY_FALLBACK_DAYS,
   SURVEY_FLOOR_DAYS,
   SURVEY_GRACE_DAYS,
+  SURVEY_VERSION,
+  bugReportsOn,
   composeOffer,
   isOfferLive,
   isRandomSurveyEligible,
@@ -24,6 +26,7 @@ import {
   selfSurveyGate,
   selfSurveyNextAt,
   surveySegment,
+  validateBugReport,
   validateSurveySubmission,
   type StoredSurveyOffer,
   type SurveyFeature,
@@ -74,6 +77,42 @@ export async function setSurveyEnabled(pool: Pool, enabled: boolean, actorUserId
       after: { enabled },
     });
   });
+}
+
+// ── The bug-report switch (§13.10 *Bug reports*) ──────────────────────────────────────────
+
+const BUG_SWITCH_KEY = "bug_reports_enabled";
+
+export async function getBugReportsEnabled(db: Db): Promise<boolean> {
+  const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [BUG_SWITCH_KEY]);
+  return rows[0]?.value !== false; // default on
+}
+
+/** Audited as `settings.bug_reports_enabled_changed`. Clears nothing: bug reports keep no
+ *  per-user state, and open survey offers are the survey switch's business. */
+export async function setBugReportsEnabled(pool: Pool, enabled: boolean, actorUserId: string): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    await client.query(
+      `insert into platform_settings (key, value, updated_by, updated_at)
+       values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [BUG_SWITCH_KEY, JSON.stringify(enabled), actorUserId],
+    );
+    await appendAudit(client, {
+      actorUserId,
+      action: "settings.bug_reports_enabled_changed",
+      targetType: "platform_settings",
+      targetId: BUG_SWITCH_KEY,
+      after: { enabled },
+    });
+  });
+}
+
+/** `bugReports` for the `me` resource: true only while both platform switches are on. Reads no
+ *  user state — the random opt-out does not hide the bug button. */
+export async function readBugReports(db: Db): Promise<boolean> {
+  const [surveyEnabled, bugReportsEnabled] = await Promise.all([getSurveyEnabled(db), getBugReportsEnabled(db)]);
+  return bugReportsOn(surveyEnabled, bugReportsEnabled);
 }
 
 // ── The user's survey state ───────────────────────────────────────────────────────────────
@@ -152,7 +191,7 @@ export async function readSelfSurvey(db: Db, userId: string, now: Date = new Dat
 
 // ── The funnel (aggregate only) ───────────────────────────────────────────────────────────
 
-const DAILY_COLUMNS = ["shown", "closed", "submitted", "submitted_from_menu", "shown_self", "submitted_self"] as const;
+const DAILY_COLUMNS = ["shown", "closed", "submitted", "submitted_from_menu", "shown_self", "submitted_self", "submitted_bug"] as const;
 type DailyColumn = (typeof DAILY_COLUMNS)[number];
 
 /** Bumps today's (UTC) counters. Column names come from the fixed list above, never from input. */
@@ -301,8 +340,9 @@ export async function startSelfSurvey(pool: Pool, userId: string, opts: { rng: (
 
 // ── Close ─────────────────────────────────────────────────────────────────────────────────
 
-/** "Not now": the offer stays open (Take the survey). The FIRST close of a random offer flips its
- *  `closed` flag and counts once in the funnel; later closes and `self` closes count nothing. */
+/** "Not now": the offer stays open (Take the survey). The FIRST close of an offer flips its
+ *  `closed` flag; for a random offer that counts once in the funnel, while a `self` close counts
+ *  nothing (the flag only tells a bug report sent from a reopened `self` card to say `menu`). */
 export async function closeSurvey(pool: Pool, userId: string, now: Date = new Date()): Promise<"ok" | "no_open_survey"> {
   if (!(await getSurveyEnabled(pool))) return "no_open_survey";
   const row = await loadState(pool, userId);
@@ -312,13 +352,13 @@ export async function closeSurvey(pool: Pool, userId: string, now: Date = new Da
     await clearIfDead(pool, userId, row, now);
     return "no_open_survey";
   }
-  if (live.offer.trigger === "self" || live.offer.closed) return "ok";
+  if (live.offer.closed) return "ok";
   const { rowCount } = await pool.query(
     `update users set survey_offer = jsonb_set(survey_offer, '{closed}', 'true'::jsonb)
       where id = $1 and survey_offer = $2::jsonb`,
     [userId, JSON.stringify(row.survey_offer)],
   );
-  if (rowCount) await bumpDaily(pool, ["closed"]);
+  if (rowCount && live.offer.trigger !== "self") await bumpDaily(pool, ["closed"]);
   return "ok";
 }
 
@@ -369,6 +409,59 @@ export async function submitSurvey(
     await client.query(`update users set survey_offer = null where id = $1`, [user.id]);
     if (live.offer.trigger === "self") await bumpDaily(client, ["submitted_self"]);
     else await bumpDaily(client, via === "menu" ? ["submitted", "submitted_from_menu"] : ["submitted"]);
+    return { status: "ok" };
+  });
+}
+
+// ── Bug reports (§13.10 *Bug reports*) ────────────────────────────────────────────────────
+
+export type SubmitBugReportResult =
+  | { status: "ok" }
+  | { status: "surveys_off" }
+  | { status: "bug_reports_off" }
+  | { status: "no_open_survey" }
+  | { status: "invalid"; error: string };
+
+/**
+ * `POST /api/me/survey/bug`, in ONE transaction: the switches (the survey switch first — it is the
+ * master), validation (422), then — `fromOffer` only — the user's open `self` offer, re-read under
+ * the row lock (409 without one) and cleared on success. The response is a `bug` row with NO user
+ * reference, no feature, no answers, the sanitized page path and the SERVER's app version; only
+ * `submitted_bug` is bumped. Never reads or writes a cooldown stamp.
+ */
+export async function submitBugReport(
+  pool: Pool,
+  user: { id: string; roles: { isPlatformAdmin: boolean; grants: readonly { role: string }[] } },
+  body: unknown,
+  appVersion: string,
+  now: Date = new Date(),
+): Promise<SubmitBugReportResult> {
+  return inTransaction(pool, async (client) => {
+    if (!(await getSurveyEnabled(client))) return { status: "surveys_off" };
+    if (!(await getBugReportsEnabled(client))) return { status: "bug_reports_off" };
+    const parsed = validateBugReport(body);
+    if (!parsed.ok) return { status: "invalid", error: parsed.error };
+    const { description, pagePath, fromOffer } = parsed.value;
+
+    let via: "popup" | "menu" = "popup";
+    if (fromOffer) {
+      const row = await loadState(client, user.id, true);
+      const live = row ? liveOffer(row, now) : null;
+      if (!row || !live || live.offer.trigger !== "self") {
+        if (row) await clearIfDead(client, user.id, row, now);
+        return { status: "no_open_survey" };
+      }
+      // A `self` offer closed before was reopened from the menu.
+      via = live.offer.closed ? "menu" : "popup";
+    }
+
+    await client.query(
+      `insert into survey_responses (answered_on, survey_version, trigger, feature, segment, via, free_text, page_path, app_version)
+       values ((now() at time zone 'utc')::date, $1, 'bug', null, $2, $3, $4, $5, $6)`,
+      [SURVEY_VERSION, surveySegment(user.roles), via, description, pagePath, appVersion],
+    );
+    if (fromOffer) await client.query(`update users set survey_offer = null where id = $1`, [user.id]);
+    await bumpDaily(client, ["submitted_bug"]);
     return { status: "ok" };
   });
 }

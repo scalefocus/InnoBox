@@ -15,6 +15,7 @@ import {
   questionFigure,
   surveyBucketFor,
   surveyRangeBounds,
+  surveyFeedPlan,
   triggersForSource,
 } from "./survey-results.js";
 
@@ -50,6 +51,26 @@ test("Source: Prompted covers the random survey (feature + visit), Self-initiate
   assert.equal(triggersForSource("all"), null);
   assert.deepEqual(triggersForSource("prompted"), ["feature", "visit"]);
   assert.deepEqual(triggersForSource("self"), ["self"]);
+});
+
+test("the Bug reports source: bug only; Self-initiated stays self only", () => {
+  assert.equal(parseSurveySource("bug"), "bug");
+  assert.deepEqual(triggersForSource("bug"), ["bug"]);
+  assert.equal(triggersForSource("prompted")!.includes("bug"), false);
+});
+
+test("the feed's withholding counts survey comments only — bug reports are listed regardless", () => {
+  // All sources, fewer than 5 survey comments: those are withheld, the bug reports still listed.
+  assert.deepEqual(surveyFeedPlan("all", 4), { withheld: true, listSurvey: false, listBugs: true });
+  assert.deepEqual(surveyFeedPlan("all", 5), { withheld: false, listSurvey: true, listBugs: true });
+  // No survey comment at all: nothing is withheld (the feed shows its empty state, or the bug reports).
+  assert.deepEqual(surveyFeedPlan("all", 0), { withheld: false, listSurvey: true, listBugs: true });
+  assert.deepEqual(surveyFeedPlan("self", 0), { withheld: false, listSurvey: true, listBugs: false });
+  // Bug reports only: nothing to withhold.
+  assert.deepEqual(surveyFeedPlan("bug", 0), { withheld: false, listSurvey: false, listBugs: true });
+  // A survey-only source never lists bug reports.
+  assert.deepEqual(surveyFeedPlan("self", 4), { withheld: true, listSurvey: false, listBugs: false });
+  assert.deepEqual(surveyFeedPlan("prompted", 9), { withheld: false, listSurvey: true, listBugs: false });
 });
 
 test("question figures are withheld below 5 answers — no average, no distribution", () => {

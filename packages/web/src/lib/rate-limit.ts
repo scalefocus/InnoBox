@@ -12,6 +12,8 @@ export type RateLimitBucket =
   | "search"
   | "mutation"
   | "survey"
+  | "bug_report"
+  | "bug_report_day"
   | "csp-report"
   | "public-read"
   | "public-submit"
@@ -27,6 +29,9 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   search: { limit: 120, windowMs: 60 * 1000 }, // search, autocomplete, the §6.1 similarity check
   mutation: { limit: 120, windowMs: 60 * 1000 }, // every other state-changing request
   survey: { limit: 10, windowMs: 60 * 1000 }, // survey start + submit (§13.10)
+  // A bug report (§13.10): 3 a minute AND 20 a day — the route takes a token from both.
+  bug_report: { limit: 3, windowMs: 60 * 1000 },
+  bug_report_day: { limit: 20, windowMs: 24 * 60 * 60 * 1000 },
   // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
   // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
   "csp-report": { limit: 120, windowMs: 60 * 1000 },

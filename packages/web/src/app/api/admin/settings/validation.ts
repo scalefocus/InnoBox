@@ -16,6 +16,8 @@ export interface SettingsPatch {
   featuredLimit?: number;
   /** §14.11 the feedback-survey platform switch. */
   surveyEnabled?: boolean;
+  /** §13.10 the bug-report platform switch. */
+  bugReportsEnabled?: boolean;
   /** §23.10 the gamification switch. */
   gamificationEnabled?: boolean;
   /** §24.2 the public submissions card: the switch and/or the privacy notice. */
@@ -79,6 +81,11 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.surveyEnabled = rec.surveyEnabled;
   }
 
+  if (rec.bugReportsEnabled !== undefined) {
+    if (typeof rec.bugReportsEnabled !== "boolean") return fail("bugReportsEnabled must be a boolean");
+    value.bugReportsEnabled = rec.bugReportsEnabled;
+  }
+
   if (rec.gamificationEnabled !== undefined) {
     if (typeof rec.gamificationEnabled !== "boolean") return fail("gamificationEnabled must be a boolean");
     value.gamificationEnabled = rec.gamificationEnabled;
@@ -107,10 +114,11 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.attachmentLimits === undefined &&
     value.featuredLimit === undefined &&
     value.surveyEnabled === undefined &&
+    value.bugReportsEnabled === undefined &&
     value.gamificationEnabled === undefined &&
     value.publicSubmissions === undefined
   ) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, gamificationEnabled, publicSubmissions");
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions");
   }
 
   return { ok: true, value };

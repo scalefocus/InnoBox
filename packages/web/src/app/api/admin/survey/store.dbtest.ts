@@ -1,7 +1,8 @@
 // Live-DB integration tests (gated) for the Survey results card (INNOBOX_SPEC.md §14.11): range and
 // the current-day exclusion, the Segment/Feature/Source filters, the size-5 withholding (question
-// cards, trend buckets, the feed), and the delete — cascade plus an audit row that never carries
-// the text. Self-skips when DATABASE_URL is unset.
+// cards, trend buckets, the feed), bug reports (their source, the withholding exemption, bugCount),
+// and the delete — cascade plus an audit row that never carries the text. Self-skips when
+// DATABASE_URL is unset.
 //
 // Each test seeds its own backdated responses under a feature + segment combination no other suite
 // writes, and filters on it, so the assertions are exact in the harness's throwaway database
@@ -23,12 +24,21 @@ async function deps() {
 /** One response `daysAgo` UTC days back, with its star answers. */
 async function seed(
   pool: Pool,
-  r: { daysAgo: number; feature: string | null; segment: string; trigger?: string; text?: string | null; answers: Record<string, number> },
+  r: {
+    daysAgo: number;
+    feature: string | null;
+    segment: string;
+    trigger?: string;
+    text?: string | null;
+    answers: Record<string, number>;
+    pagePath?: string | null;
+    appVersion?: string | null;
+  },
 ): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
-    `insert into survey_responses (answered_on, survey_version, trigger, feature, segment, via, free_text)
-     values ((now() at time zone 'utc')::date - $1::int, 1, $2, $3, $4, 'popup', $5) returning id`,
-    [r.daysAgo, r.trigger ?? "feature", r.feature, r.segment, r.text ?? null],
+    `insert into survey_responses (answered_on, survey_version, trigger, feature, segment, via, free_text, page_path, app_version)
+     values ((now() at time zone 'utc')::date - $1::int, 1, $2, $3, $4, 'popup', $5, $6, $7) returning id`,
+    [r.daysAgo, r.trigger ?? "feature", r.feature, r.segment, r.text ?? null, r.pagePath ?? null, r.appVersion ?? null],
   );
   const id = rows[0]!.id;
   for (const [key, stars] of Object.entries(r.answers)) {
@@ -146,6 +156,7 @@ test("delete: the whole response goes (answers by cascade) and the audit row car
     assert.equal(rows[0]!.target_type, "survey_response");
     assert.deepEqual(rows[0]!.before, {
       answeredOn: rows[0]!.before.answeredOn,
+      trigger: "feature",
       feature: "comment",
       segment: "member",
       surveyVersion: 1,
@@ -153,6 +164,93 @@ test("delete: the whole response goes (answers by cascade) and the audit row car
       textLength: text.length,
     });
     assert.ok(!JSON.stringify(rows[0]).includes(text), "the text never reaches the append-only audit log");
+  } finally {
+    await pool.end();
+  }
+});
+
+test("bug reports: their own source, listed despite the size-5 rule, never in the stars; bugCount in range", { skip }, async () => {
+  const { Pool, randomUUID, store } = await deps();
+  const pool = new Pool({ connectionString: url });
+  try {
+    const stamp = randomUUID().slice(0, 8);
+    // "committee" × range 7 × free text is this test's slice: no other suite writes backdated
+    // committee comments, and every live submission is dated today (excluded).
+    const all = { range: "7" as const, segment: "committee" as const, feature: null, source: "all" as const };
+    const seriesN = async (filters: typeof all | (Omit<typeof all, "source"> & { source: "bug" })) =>
+      (await store.surveySummary(pool, filters, NOW())).series.reduce((n, p) => n + p.n, 0);
+    const before = await seriesN(all);
+    const bugsBefore = (await store.surveySummary(pool, all, NOW())).bugCount;
+
+    for (let i = 0; i < 2; i++) await seed(pool, { daysAgo: 2, feature: "search", segment: "committee", text: `survey ${stamp} ${i}`, answers: { "general.overall": 3 } });
+    const bugText = `bug ${stamp}`;
+    const bugId = await seed(pool, {
+      daysAgo: 2,
+      feature: null,
+      segment: "committee",
+      trigger: "bug",
+      text: bugText,
+      answers: {},
+      pagePath: "/challenges/42",
+      appVersion: "1.2.3",
+    });
+    await seed(pool, { daysAgo: 0, feature: null, segment: "committee", trigger: "bug", text: `today ${stamp}`, answers: {}, pagePath: "/", appVersion: "1.2.3" });
+
+    // The stars: bug reports never count in the trend.
+    assert.equal(await seriesN(all), before + 2, "only the two survey responses joined the trend");
+    assert.equal(await seriesN({ ...all, source: "bug" }), 0, "Bug reports as the Source: the cards' empty state");
+    const s = await store.surveySummary(pool, all, NOW());
+    assert.equal(s.bugCount, bugsBefore + 1, "in range, today excluded");
+    assert.equal(s.bugReportsEnabled, true);
+    const { rows: daily } = await pool.query<{ n: number }>(
+      `select coalesce(sum(submitted_bug), 0)::int as n from survey_daily where day < (now() at time zone 'utc')::date and day >= (now() at time zone 'utc')::date - 7`,
+    );
+    assert.equal(s.funnel.submittedBug, daily[0]!.n, "the funnel line reads survey_daily.submitted_bug");
+
+    // The feed, all sources: 2 survey comments are withheld, the bug report is listed anyway.
+    const feed = await store.surveyComments(pool, all, { offset: 0, limit: 50 }, NOW());
+    assert.equal(feed.withheld, true);
+    assert.deepEqual(
+      feed.comments.map((c) => c.text),
+      [bugText],
+    );
+    const bug = feed.comments[0]!;
+    assert.deepEqual([bug.trigger, bug.feature, bug.pagePath, bug.appVersion], ["bug", null, "/challenges/42", "1.2.3"]);
+
+    // Bug reports only: nothing withheld. Survey-only sources and a feature filter leave bugs out.
+    const bugsOnly = await store.surveyComments(pool, { ...all, source: "bug" }, { offset: 0, limit: 50 }, NOW());
+    assert.equal(bugsOnly.withheld, false);
+    assert.deepEqual(
+      bugsOnly.comments.map((c) => c.id),
+      [bugId],
+    );
+    const prompted = await store.surveyComments(pool, { ...all, source: "prompted" }, { offset: 0, limit: 50 }, NOW());
+    assert.deepEqual([prompted.withheld, prompted.comments.length, prompted.total], [true, 0, 2]);
+    const byFeature = await store.surveyComments(pool, { ...all, feature: "search" }, { offset: 0, limit: 50 }, NOW());
+    assert.deepEqual([byFeature.withheld, byFeature.comments.length], [true, 0], "a feature filter excludes bug reports");
+
+    // Past 5 survey comments, both kinds are listed together, survey comments carrying no path.
+    for (let i = 2; i < 5; i++) await seed(pool, { daysAgo: 2, feature: "search", segment: "committee", text: `survey ${stamp} ${i}`, answers: {} });
+    const full = await store.surveyComments(pool, all, { offset: 0, limit: 50 }, NOW());
+    assert.equal(full.withheld, false);
+    assert.equal(full.total, 6);
+    for (const c of full.comments.filter((x) => x.trigger !== "bug")) assert.deepEqual([c.pagePath, c.appVersion], [null, null]);
+
+    // Deleting a bug report: audited with its trigger, never its text or its page path.
+    const { rows: u } = await pool.query<{ id: string }>(
+      `insert into users (external_id, user_name, display_name, email) values ($1, $2, $3, $4) returning id`,
+      [`dbtest-survey-bugadmin-${stamp}`, `dbtest-survey-bugadmin-${stamp}@example.test`, `Dbtest Survey Bug Admin ${stamp}`, `survey-bugadmin-${stamp}@example.test`],
+    );
+    assert.equal(await store.deleteSurveyResponse(pool, bugId, u[0]!.id), "ok");
+    const { rows } = await pool.query<{ before: Record<string, unknown> }>(
+      `select before from audit_log where action = 'survey.response_deleted' and target_id = $1`,
+      [bugId],
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.before.trigger, "bug");
+    assert.equal(rows[0]!.before.answerCount, 0);
+    const audited = JSON.stringify(rows[0]);
+    assert.ok(!audited.includes(bugText) && !audited.includes("/challenges/42"), "neither the text nor the path reaches the audit log");
   } finally {
     await pool.end();
   }

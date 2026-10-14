@@ -21,8 +21,8 @@ import { SystemBanner } from "./SystemBanner";
 import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
-import { SurveyCard } from "./SurveyCard";
-import { isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
+import { SurveyCard, type BugCardOthers, type StartSelfOutcome } from "./SurveyCard";
+import { bugButtonVisible, bugClickDecision, isSurveyFeature, type SurveyFeature, type SurveyOfferPayload, type SurveyVia } from "@innobox/shared/survey";
 import { SURVEY_OPEN_EVENT, SURVEY_START_EVENT, announceSurveyChanged, claimFeatureReport, subscribeFeatureUse, surveyCanShow } from "../lib/survey-client";
 import { WHATS_NEW_SEEN_EVENT, WhatsNewNotice } from "./WhatsNewNotice";
 import { whatsNewAction } from "../lib/whats-new";
@@ -42,12 +42,29 @@ interface MeResponse {
   openSurvey?: SurveyOfferPayload | null;
   /** §13.10 on-demand survey: null while the switch is off, else the cooldown's end (null = now). */
   selfSurvey?: { nextAt: string | null } | null;
+  /** §13.10 bug reports: the sidebar bug button and the picker's Bug option (both switches on). */
+  bugReports?: boolean;
   /** §23.12: the sidebar ring's level (null while gamification is off) and the toast queue. */
   gamification?: { points: number; level: number; levelName: string; progress: number } | null;
   newAchievements?: Achievement[];
   /** §25.9: true while agent access is on, or while the user still holds a live connection —
    *  shows the account menu's AI agents item. */
   agentsMenu?: boolean;
+}
+
+/** The survey card the shell has open (§13.10). */
+interface SurveyCardState {
+  via: SurveyVia;
+  /** A fresh key per open: a reopened card starts blank. */
+  key: number;
+  /** False for an offer-less bug card (opened by the bug button with no usable offer). */
+  holdsOffer: boolean;
+  /** Open in Bug mode. */
+  bug: boolean;
+  /** Bumped by a bug-button click while the card is open. */
+  bugSignal: number;
+  /** Offer-less only: what the non-Bug picker options do. */
+  others?: BugCardOthers;
 }
 
 /** The mobile layout's breakpoint — where the nav becomes a drawer and the bell a full sheet. */
@@ -95,7 +112,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // §13.10 feedback survey: the open offer, the card (and how it was opened), the bell's open
   // state (its mobile sheet blocks the card), and the shell's toast.
   const [survey, setSurvey] = useState<SurveyOfferPayload | null>(null);
-  const [card, setCard] = useState<{ via: SurveyVia; key: number } | null>(null);
+  // `holdsOffer` false = an offer-less bug card (§13.10 *Bug reports*); `bugSignal` is bumped when
+  // the bug button is clicked while the card is open.
+  const [card, setCard] = useState<SurveyCardState | null>(null);
   const [bellOpen, setBellOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -213,7 +232,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const openCard = useCallback((offer: SurveyOfferPayload, via: SurveyVia) => {
     setSurvey(offer);
-    setCard({ via, key: Date.now() }); // a fresh key: a reopened card starts blank
+    setCard({ via, key: Date.now(), holdsOffer: true, bug: false, bugSignal: 0 }); // a fresh key: a reopened card starts blank
   }, []);
 
   // First-use reports: pages dispatch them after a successful action; the shell queues them until
@@ -315,17 +334,84 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canStartSelf = selfSurvey !== null && selfSurvey.nextAt === null && survey === null;
   const showHaveYourSay = shellReady && !quickStartGate && me?.quickStartSeenAt != null && selfSurvey !== null && (survey !== null || selfSurvey.nextAt === null);
 
-  // ✕ / Escape: "not now". Optimistic — a failed call is neither retried nor surfaced.
+  // ✕ / Escape: "not now". Optimistic — a failed call is neither retried nor surfaced. An
+  // offer-less bug card has nothing to close on the server.
+  const holdsOffer = card?.holdsOffer ?? false;
   const closeCard = useCallback(() => {
     setCard(null);
-    fetch("/api/me/survey/close", { method: "POST" }).catch(() => {});
-  }, []);
+    if (holdsOffer) fetch("/api/me/survey/close", { method: "POST" }).catch(() => {});
+  }, [holdsOffer]);
 
-  // Submitted, or expired meanwhile: the offer is gone.
+  // Submitted, or expired meanwhile: the card's offer (if it held one) is gone. A bug report from
+  // an offer-less card leaves every offer as it was.
   const finishCard = useCallback(() => {
     setCard(null);
-    setSurvey(null);
+    if (holdsOffer) setSurvey(null);
     refreshSurvey();
+  }, [holdsOffer, refreshSurvey]);
+
+  // ── §13.10 bug reports: the sidebar bug button ──────────────────────────────────────────────
+  const bugReports = me?.bugReports === true;
+  const showBugButton = bugButtonVisible({ shellReady, quickStartGate, quickStartSeen: me?.quickStartSeenAt != null, bugReports });
+  // Bug reports switched off meanwhile: an open offer-less bug card goes (its text is discarded).
+  useEffect(() => {
+    if (!bugReports && card && !card.holdsOffer) setCard(null);
+  }, [bugReports, card]);
+
+  /** What a bug-button click does depends on what is open (cases 1–4). Like every on-demand click
+   *  it overrides canShow: an on-screen What's new notice steps aside, unstamped. */
+  const reportBug = useCallback(() => {
+    setDrawerOpen(false);
+    setNoticeSuppressed(true);
+    const decision = bugClickDecision({
+      openOffer: survey?.trigger ?? null,
+      card: card ? { holdsOffer: card.holdsOffer } : null,
+      selfNextAt: me?.selfSurvey?.nextAt ? new Date(me.selfSurvey.nextAt) : null,
+      now: new Date(),
+    });
+    switch (decision.kind) {
+      case "focus":
+      case "switch":
+        setCard((c) => (c ? { ...c, bug: true, bugSignal: c.bugSignal + 1 } : c));
+        return;
+      case "reopen":
+        setCard({ via: "menu", key: Date.now(), holdsOffer: true, bug: true, bugSignal: 0 });
+        return;
+      case "offerless": {
+        // A random offer's open card closes first, exactly like its ✕ ("not now").
+        if (decision.closeRandom) fetch("/api/me/survey/close", { method: "POST" }).catch(() => {});
+        const others: BugCardOthers =
+          decision.others.state === "cooldown" ? { state: "cooldown", nextAt: decision.others.nextAt.toISOString() } : decision.others;
+        setCard({ via: "popup", key: Date.now(), holdsOffer: false, bug: true, bugSignal: 0, others });
+        return;
+      }
+    }
+  }, [survey, card, me]);
+
+  /** An offer-less bug card's user picked another category: start an on-demand survey now, and
+   *  hand the card the new `self` offer. */
+  const startSelfFromBugCard = useCallback(async (): Promise<StartSelfOutcome> => {
+    try {
+      const res = await fetch("/api/me/survey/start", { method: "POST" });
+      const json = (await res.json().catch(() => ({}))) as { survey?: SurveyOfferPayload; error?: string; nextAt?: string };
+      if (res.ok && json.survey?.trigger === "self") {
+        setSurvey(json.survey);
+        setCard((c) => (c ? { ...c, holdsOffer: true, bug: false } : c));
+        refreshSurvey();
+        return { ok: true };
+      }
+      if (res.ok && json.survey) {
+        // A random offer this tab didn't know about: the card stays on Bug, the others wait for it.
+        setSurvey(json.survey);
+        setCard((c) => (c ? { ...c, others: { state: "random" } } : c));
+        refreshSurvey();
+        return { ok: false, nextAt: null, random: true };
+      }
+      refreshSurvey();
+      return { ok: false, nextAt: json.error === "cooldown" ? (json.nextAt ?? null) : null };
+    } catch {
+      return { ok: false, nextAt: null };
+    }
   }, [refreshSurvey]);
 
   // "Don't ask me again": the profile opt-out, then the toast.
@@ -500,30 +586,38 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Link href="/whats-new">v{APP_VERSION}</Link>
             </span>
             <span className="colophon-sub">Created by Scalefocus</span>
-            <span className="colophon-sub">
-              Powered by the community
-              {showHaveYourSay && (
-                <>
-                  {" · "}
-                  <button
-                    type="button"
-                    className="colophon-link"
-                    data-testid="colophon-have-your-say"
-                    onClick={() => {
-                      // With an offer open it reopens that offer; otherwise it starts one.
-                      if (survey) {
-                        setDrawerOpen(false);
-                        reopenSurvey();
-                      } else {
-                        void startSurvey();
-                      }
-                    }}
-                  >
-                    Have your say
-                  </button>
-                </>
+            <div className="colophon-last">
+              <span className="colophon-sub">
+                Powered by the community
+                {showHaveYourSay && (
+                  <>
+                    {" · "}
+                    <button
+                      type="button"
+                      className="colophon-link"
+                      data-testid="colophon-have-your-say"
+                      onClick={() => {
+                        // With an offer open it reopens that offer; otherwise it starts one.
+                        if (survey) {
+                          setDrawerOpen(false);
+                          reopenSurvey();
+                        } else {
+                          void startSurvey();
+                        }
+                      }}
+                    >
+                      Have your say
+                    </button>
+                  </>
+                )}
+              </span>
+              {/* §13.10 bug reports: icon-only, quiet, bottom-right of the sidebar foot. */}
+              {showBugButton && (
+                <button type="button" className="colophon-bug" aria-label="Report a bug" title="Report a bug" data-testid="report-bug" onClick={reportBug}>
+                  <BugIcon />
+                </button>
               )}
-            </span>
+            </div>
           </div>
         </div>
       </aside>
@@ -544,8 +638,21 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="content">{quickStartPending ? null : children}</main>
       </div>
 
-      {authed && survey && card && (
-        <SurveyCard key={card.key} offer={survey} via={card.via} hidden={mobileOverlayOpen} onClose={closeCard} onDone={finishCard} onOptOut={optOut} />
+      {authed && card && (!card.holdsOffer || survey) && (
+        <SurveyCard
+          key={card.key}
+          offer={card.holdsOffer ? survey : null}
+          via={card.via}
+          hidden={mobileOverlayOpen}
+          bugReports={bugReports}
+          startInBug={card.bug}
+          others={card.others}
+          bugSignal={card.bugSignal}
+          onClose={closeCard}
+          onDone={finishCard}
+          onOptOut={optOut}
+          onStartSelf={startSelfFromBugCard}
+        />
       )}
       {toast && (
         <div className="toast" role="status">
@@ -725,6 +832,18 @@ function LogInIcon() {
       <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15" />
       <path d="M10 8l4 4-4 4" />
       <path d="M14 12H3" />
+    </svg>
+  );
+}
+
+/** §13.10 the bug button's glyph — drawn on currentColor, so it follows the theme. */
+function BugIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M9 7.5V6a3 3 0 0 1 6 0v1.5" />
+      <path d="M7.5 9.5a4.5 4.5 0 0 1 9 0V15a4.5 4.5 0 0 1-9 0V9.5Z" />
+      <path d="M12 10.5V19.5" />
+      <path d="M7.5 12H4M16.5 12H20M7.8 16.5 5 18.5M16.2 16.5 19 18.5M8 8.5 5.5 6.5M16 8.5l2.5-2" />
     </svg>
   );
 }
