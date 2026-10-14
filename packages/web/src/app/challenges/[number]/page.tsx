@@ -17,6 +17,7 @@ import { CommentThread } from "@/components/CommentThread";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
 import { AttachmentControl } from "@/components/AttachmentControl";
+import { AttachmentDropZone } from "@/components/AttachmentDropZone";
 import { LIKES_FROZEN_HINT, proposeDisabledReason, splitSolutions } from "@/lib/challenge-detail";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
@@ -501,7 +502,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
     const solutionPath = `/api/solutions/${s.number.replace("SOL-", "")}`;
     const solutionWhat = `${s.number} and all comments, likes, follows, and files attached to it`;
     return (
-    <div className="row" key={s.id} id={s.number} style={{ flexDirection: "column", alignItems: "stretch", gap: 10, scrollMarginTop: 80 }}>
+    <div className="row" key={s.id} id={s.number} data-attach-scope style={{ flexDirection: "column", alignItems: "stretch", gap: 10, scrollMarginTop: 80 }}>
       {s.trashed && (
         <TrashedBanner
           kind="solution"
@@ -635,6 +636,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       <AttachmentControl
         parentType="solution"
         target={{ kind: "bound", parentId: s.id, attachments: s.attachments, canUpload: s.canEdit, onChanged }}
+        disabled={resubmitLock.lockedFor(s.id)}
+        dropLabel={`Your solution ${s.number}`}
       />
       <CommentThread
         parentType="solution"
@@ -649,8 +652,9 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
   const challengeWhat = `${challenge.number}, every solution on it, and all comments, likes, follows, and files attached to any of them`;
 
+  // §11 Drop and paste: the page is one drop zone; each editable upload control is a target.
   return (
-    <>
+    <AttachmentDropZone>
       {challenge.trashed && (
         <TrashedBanner
           kind="challenge"
@@ -678,7 +682,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         </div>
       </div>
 
-      <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
+      <div className="card card-pad reveal" data-attach-scope style={{ marginBottom: 18 }}>
         <div className="row" style={{ border: 0, padding: 0, marginBottom: 16 }}>
           <AvatarBubble
             size="md"
@@ -785,6 +789,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <AttachmentControl
             parentType="challenge"
             target={{ kind: "bound", parentId: challenge.id, attachments: challenge.attachments, canUpload: challenge.canEdit, onChanged }}
+            disabled={challengeLocked}
+            dropLabel="This challenge"
           />
         </div>
 
@@ -953,7 +959,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
       {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}
       {toast && <div className="toast">{toast}</div>}
-    </>
+    </AttachmentDropZone>
   );
 }
 
@@ -1183,6 +1189,7 @@ function ProposeSolutionForm({
     <form
       onSubmit={onSubmit}
       className="card card-pad reveal form-lock"
+      data-attach-scope
       aria-busy={lock.locked}
       style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}
     >
@@ -1216,7 +1223,13 @@ function ProposeSolutionForm({
           maxLength={5000}
         />
         <ImproveWithAiBar ai={ai} disabled={lock.locked} />
-        <AttachmentControl parentType="solution" target={{ kind: "staged", draftKey }} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+        <AttachmentControl
+          parentType="solution"
+          target={{ kind: "staged", draftKey }}
+          disabled={lock.locked}
+          onBusyChange={setAttachmentsBusy}
+          dropLabel="Your new solution"
+        />
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
           <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
           Submit anonymously

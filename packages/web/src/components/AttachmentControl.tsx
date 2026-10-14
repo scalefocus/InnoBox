@@ -12,6 +12,12 @@
 // endpoint; once it has landed, Remove tombstones the stored row. On the submission forms `onBusyChange`
 // drives the Submit gate (blocksSubmit). Bytes are only ever downloadable through the gateway,
 // and only for a bound, clean file — a staged row is never served, so its name is plain text.
+//
+// Drop and paste (§11): files arrive from the picker (multiple), a page-wide drop, or a paste
+// (routed by <AttachmentDropZone>). Each batch is pre-checked (type, size, per-item cap, folders);
+// what passes joins this control's queue and uploads one file at a time, in order; the rest are
+// named in one "Skipped: …" message. A Queued file is removable and gates Submit like an
+// Uploading one; a failed or cancelled upload never stops the queue.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readJson } from "@/lib/api-client";
 import { isAbortError, uploadFileInChunks } from "@/lib/chunked-upload";
@@ -24,7 +30,9 @@ import {
   uploadMode,
   type AttachmentScanStatus,
 } from "@/lib/attachment-control";
+import { ATTACHMENT_ACCEPT, intakeAnnouncement, precheckFiles, skippedMessage } from "@/lib/attachment-intake";
 import { reportFeatureUse } from "@/lib/survey-client";
+import { useAttachmentDropTarget, type IntakeFile } from "./AttachmentDropZone";
 
 export interface AttachmentControlItem {
   id: string;
@@ -44,7 +52,13 @@ export type AttachmentTarget =
 interface UploadConfig {
   chunkSizeBytes: number;
   maxUploadSizeMb: number;
+  maxPerItem: number;
   scanEnforced: boolean;
+}
+
+interface QueuedFile {
+  key: number;
+  file: File;
 }
 
 interface ActiveUpload {
@@ -54,8 +68,6 @@ interface ActiveUpload {
   progress: number; // 0..1
 }
 
-// Client-side mirror of the §11 allowlist for the file-input hint (the server is authoritative).
-const ATTACHMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.rtf,.txt,.csv,.md,.png,.jpg,.jpeg,.gif,.webp,.zip";
 const DEFAULT_CHUNK_BYTES = 5 * 1024 * 1024;
 const POLL_MS = 4000;
 
@@ -93,9 +105,12 @@ export function AttachmentControl({
   target,
   disabled = false,
   onBusyChange,
+  dropLabel,
 }: {
   parentType: "challenge" | "solution";
   target: AttachmentTarget;
+  /** The control's name on the page-wide drop overlay (e.g. "Your solution SOL-0031"). */
+  dropLabel: string;
   /** Freezes the control (e.g. the §6.4 submission lock). */
   disabled?: boolean;
   /** Submission forms: true while Submit must stay disabled (see blocksSubmit). */
@@ -106,9 +121,14 @@ export function AttachmentControl({
   const [stagedItems, setStagedItems] = useState<AttachmentControlItem[]>([]);
   const [config, setConfig] = useState<UploadConfig | null>(null);
   const [active, setActive] = useState<ActiveUpload | null>(null);
+  const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
+  const queueKey = useRef(0);
 
   // Keep the latest bound re-read callback without re-arming effects on every parent render.
   const boundOnChanged = useRef<() => unknown>(() => {});
@@ -142,7 +162,7 @@ export function AttachmentControl({
     fetch("/api/attachments/config", { headers: { accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (j) setConfig({ chunkSizeBytes: j.chunkSizeMb * 1024 * 1024, maxUploadSizeMb: j.maxUploadSizeMb, scanEnforced: j.scanEnforced });
+        if (j) setConfig({ chunkSizeBytes: j.chunkSizeMb * 1024 * 1024, maxUploadSizeMb: j.maxUploadSizeMb, maxPerItem: j.maxPerItem, scanEnforced: j.scanEnforced });
       })
       .catch(() => {});
   }, [canUpload]);
@@ -160,7 +180,8 @@ export function AttachmentControl({
     return () => clearInterval(t);
   }, [polling, refresh]);
 
-  const uploading = active !== null;
+  // A Queued file gates Submit exactly as an Uploading one does.
+  const uploading = active !== null || queue.length > 0;
   const busy = blocksSubmit({ uploading, scanEnforced: config?.scanEnforced ?? false, statuses: ownStatuses });
   useEffect(() => {
     onBusyChange?.(busy);
@@ -173,12 +194,6 @@ export function AttachmentControl({
   };
 
   const upload = async (file: File) => {
-    setError(null);
-    if (config && file.size > config.maxUploadSizeMb * 1024 * 1024) {
-      setError(`That file exceeds the ${config.maxUploadSizeMb} MB limit.`);
-      if (fileRef.current) fileRef.current.value = "";
-      return;
-    }
     const mode = uploadMode(file.size, config?.chunkSizeBytes ?? DEFAULT_CHUNK_BYTES);
     const where = target.kind === "staged" ? { draftKey: target.draftKey } : { parentId: target.parentId };
     const controller = new AbortController();
@@ -209,17 +224,51 @@ export function AttachmentControl({
       if (controller.signal.aborted && createdId) await removeStored(createdId);
       else if (createdId) reportFeatureUse("attachments"); // §13.10: a completed upload
     } catch (err) {
-      if (!isAbortError(err)) setError(err instanceof Error ? err.message : "Could not upload attachment");
+      if (!isAbortError(err)) setError(`${file.name}: ${err instanceof Error ? err.message : "Could not upload attachment"}`);
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null;
-      if (fileRef.current) fileRef.current.value = "";
       setActive(null);
       // A cancelled single-shot request may still have landed — the re-read shows it, removable.
       await refresh();
     }
   };
 
+  // The queue runner: the next file starts once nothing is in flight. `upload` sets `active`
+  // synchronously before its first await, so the re-run sees it and never starts two at once.
+  const uploadRef = useRef(upload);
+  useEffect(() => {
+    uploadRef.current = upload;
+  });
+  useEffect(() => {
+    if (active !== null || queue.length === 0) return;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    void uploadRef.current(next!.file);
+  }, [active, queue]);
+
+  const enabled = canUpload && !disabled;
+
+  /** One batch from the picker, a drop or a paste: pre-check, queue what passes, name the rest. */
+  const enqueue = (files: IntakeFile[]) => {
+    if (!enabled || files.length === 0) return;
+    const { accepted, skipped: refused } = precheckFiles(
+      files.map((f) => ({ name: f.file.name, size: f.file.size, isDirectory: f.isDirectory, file: f.file })),
+      {
+        maxUploadSizeMb: config?.maxUploadSizeMb ?? null,
+        maxPerItem: config?.maxPerItem ?? null,
+        taken: items.length + queue.length + (active ? 1 : 0),
+      },
+    );
+    setError(null);
+    setSkipped(skippedMessage(refused));
+    setAnnouncement(intakeAnnouncement(accepted.length, refused.length));
+    if (accepted.length > 0) setQueue((q) => [...q, ...accepted.map((a) => ({ key: ++queueKey.current, file: a.file }))]);
+  };
+
+  const hasDropZone = useAttachmentDropTarget(rootRef, { label: dropLabel, enabled, accept: enqueue });
+
   const cancelUpload = () => controllerRef.current?.abort();
+  const unqueue = (key: number) => setQueue((q) => q.filter((f) => f.key !== key));
 
   const remove = async (id: string) => {
     setError(null);
@@ -235,14 +284,14 @@ export function AttachmentControl({
   if (!canUpload && items.length === 0) return null;
 
   return (
-    <div className="attachment-control">
+    <div className="attachment-control" ref={rootRef}>
       <label style={LABEL}>Attachments</label>
       {items.length === 0 && !active && !staged && (
         <p className="muted" style={{ margin: "0 0 8px", fontSize: 13 }}>
           No attachments yet.
         </p>
       )}
-      {(items.length > 0 || active) && (
+      {(items.length > 0 || active || queue.length > 0) && (
         <ul style={{ listStyle: "none", padding: 0, margin: "0 0 8px", display: "flex", flexDirection: "column", gap: 6 }}>
           {items.map((a) => {
             const downloadable = !staged && a.status === "clean";
@@ -299,6 +348,18 @@ export function AttachmentControl({
               </button>
             </li>
           )}
+          {queue.map((q) => (
+            <li key={`queued-${q.key}`} style={ROW}>
+              <span style={{ fontSize: 14 }}>{q.file.name}</span>
+              <span className="mono muted" style={{ fontSize: 12 }}>
+                {formatBytes(q.file.size)}
+              </span>
+              <span className="chip">Queued</span>
+              <button type="button" className="btn btn-sm btn-danger" disabled={disabled} onClick={() => unqueue(q.key)}>
+                Remove
+              </button>
+            </li>
+          ))}
         </ul>
       )}
       {canUpload && (
@@ -309,16 +370,19 @@ export function AttachmentControl({
               type="file"
               className="field"
               style={{ maxWidth: 340 }}
-              disabled={disabled || uploading}
+              disabled={disabled}
+              multiple
               accept={ATTACHMENT_ACCEPT}
-              aria-label="Attach a file"
+              aria-label="Attach files"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void upload(f);
+                const picked = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                enqueue(picked.map((file) => ({ file, isDirectory: false })));
               }}
             />
           </div>
           <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+            {hasDropZone && "You can also drop files anywhere on the page, or paste them. "}
             {staged
               ? config?.scanEnforced
                 ? "Each file is virus-scanned; you can submit once every file is Ready."
@@ -327,11 +391,19 @@ export function AttachmentControl({
           </p>
         </>
       )}
+      {skipped && (
+        <p className="muted" data-testid="attachment-skipped" style={{ color: "var(--warn)", fontSize: 13, margin: "6px 0 0", overflowWrap: "anywhere" }}>
+          {skipped}
+        </p>
+      )}
       {error && (
         <p className="muted" role="alert" style={{ color: "var(--danger)", fontSize: 13, margin: "6px 0 0" }}>
           {error}
         </p>
       )}
+      <span className="form-lock-status" aria-live="polite">
+        {announcement}
+      </span>
     </div>
   );
 }
