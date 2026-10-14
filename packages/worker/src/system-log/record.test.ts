@@ -7,7 +7,9 @@ import express from "express";
 import request from "supertest";
 import type { Pool } from "pg";
 import type { SystemEventInput } from "@innobox/shared";
-import { SCIM_ROUTE_TEMPLATE, createScimEventRecorder, scimStatusRecorded } from "./record.js";
+import { SCIM_ROUTE_TEMPLATE, createScimEventRecorder, scimRejectionRow, scimStatusRecorded } from "./record.js";
+import { bearerAuth } from "../scim/router.js";
+import { scimTokenFingerprint } from "../scim/token.js";
 import { systemErrorMessage } from "./alert.js";
 
 function buildApp(record: (pool: Pool, e: SystemEventInput) => Promise<void>) {
@@ -43,7 +45,7 @@ test("a 401 and a 403 are recorded without the query string; 200 and 404 are not
   assert.equal(recorded[0]!.path, "/scim/v2/Users", "the filter query string is never stored");
   assert.equal(recorded[0]!.route, SCIM_ROUTE_TEMPLATE);
   assert.equal(recorded[0]!.source, "worker");
-  assert.equal(recorded[0]!.errorCode, "scim_unauthorized");
+  assert.equal(recorded[0]!.errorCode, "scim_unauthorized", "a 401 without the bearer check's verdict keeps the old code");
   assert.equal(recorded[1]!.errorCode, "scim_forbidden");
   assert.equal(recorded[0]!.userId, undefined, "no person is behind a provisioning call");
 });
@@ -59,4 +61,61 @@ test("a failing recorder never changes the SCIM response", async () => {
 test("the alert message reads naturally for one and many", () => {
   assert.equal(systemErrorMessage(1), "1 new system log event needs a look.");
   assert.equal(systemErrorMessage(4), "4 new system log events need a look.");
+});
+
+// ── §14.7 SCIM rejection detail ─────────────────────────────────────────────────────────
+
+const CONFIGURED = "z".repeat(48);
+
+function buildBearerApp(record: (pool: Pool, e: SystemEventInput) => Promise<void>) {
+  const app = express();
+  app.set("trust proxy", 1);
+  app.use("/scim/v2", createScimEventRecorder({} as Pool, record));
+  app.use("/scim/v2", bearerAuth(CONFIGURED));
+  app.get("/scim/v2/Users", (_req, res) => res.json({ Resources: [] }));
+  return app;
+}
+
+test("each rejection reason gets its own code, fingerprints and the client IP — never the token", async () => {
+  const recorded: SystemEventInput[] = [];
+  const app = buildBearerApp(async (_pool, e) => {
+    recorded.push(e);
+  });
+  const fp = scimTokenFingerprint(CONFIGURED);
+  await request(app).get("/scim/v2/Users").set("X-Forwarded-For", "203.0.113.7").expect(401);
+  await request(app).get("/scim/v2/Users").set("authorization", "Basic abc").expect(401);
+  await request(app).get("/scim/v2/Users").set("authorization", "Bearer not-the-token").expect(401);
+  await request(app).get("/scim/v2/Users").set("authorization", "Bearer not the token").expect(401);
+  await request(app).get("/scim/v2/Users").set("authorization", `Bearer ${CONFIGURED}`).expect(200);
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(
+    recorded.map((e) => e.errorCode),
+    ["scim_no_token", "scim_not_bearer", "scim_token_mismatch", "scim_token_mismatch"],
+    "the accepted call is not recorded",
+  );
+  assert.equal(recorded[0]!.message, `SCIM request rejected: no token sent (configured ${fp})`);
+  assert.equal(recorded[1]!.message, `SCIM request rejected: not a bearer token (configured ${fp})`);
+  assert.equal(
+    recorded[2]!.message,
+    `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not-the-token")}, configured ${fp})`,
+  );
+  assert.equal(
+    recorded[3]!.message,
+    `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not the token")}, configured ${fp}; sent token contains whitespace)`,
+  );
+  assert.equal(recorded[0]!.clientIp, "203.0.113.7", "the proxy-selected client address");
+  assert.ok(recorded[1]!.clientIp, "a direct caller's address is recorded too");
+  for (const e of recorded) {
+    assert.equal(e.message.includes("not-the-token") || e.message.includes("not the token"), false, "never the sent token");
+    assert.equal(e.message.includes(CONFIGURED), false, "never the configured token");
+  }
+});
+
+test("scimRejectionRow: a 403 is scim_forbidden; a 401 without a verdict keeps the old wording", () => {
+  assert.deepEqual(scimRejectionRow(403, undefined), { errorCode: "scim_forbidden", message: "SCIM request forbidden" });
+  assert.deepEqual(scimRejectionRow(401, undefined), {
+    errorCode: "scim_unauthorized",
+    message: "SCIM request rejected: missing or invalid bearer token",
+  });
 });

@@ -81,7 +81,7 @@ test(
       const marker = `idsync ${stamp}`;
       const { rows: rejected } = await pool.query<{ created_at: Date }>(
         `insert into system_events (status, method, route, path, error_code, message, source)
-         values (401, 'GET', $1, '/scim/v2/Users', 'scim_unauthorized', $2, 'worker')
+         values (401, 'GET', $1, '/scim/v2/Users', 'scim_token_mismatch', $2, 'worker')
          returning created_at`,
         [SCIM_SYSTEM_LOG_ROUTE, marker],
       );
@@ -102,6 +102,7 @@ test(
       const after = await identitySyncSummary(pool);
       assert.deepEqual(Object.keys(after).sort(), [
         "groups",
+        "lastRejectedScimReason",
         "lastRejectedScimRequestAt",
         "lastScimRequestAt",
         "state",
@@ -114,6 +115,7 @@ test(
       assert.equal(after.state, "ok", "users and groups both present");
       assert.equal(after.lastScimRequestAt, acceptedAt);
       assert.equal(after.lastRejectedScimRequestAt, rejected[0]!.created_at.toISOString());
+      assert.equal(after.lastRejectedScimReason, "token_mismatch", "the newest SCIM rejection's reason");
 
       const mine = after.unarrivedMappedGroups.filter((g) => g.groupExternalId.startsWith(`idsync-${stamp}-`));
       assert.deepEqual(mine, [

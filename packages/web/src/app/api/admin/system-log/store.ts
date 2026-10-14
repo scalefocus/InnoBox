@@ -28,6 +28,8 @@ export interface SystemEventRecord {
   requestId: string | null;
   durationMs: number | null;
   source: SystemEventSource;
+  /** Set only on the worker's SCIM 401/403 rows (§14.7). */
+  clientIp: string | null;
 }
 
 export interface SystemLogFilters {
@@ -50,7 +52,7 @@ const SEARCH_EXPR =
   "(coalesce(e.path, '') || ' ' || coalesce(e.error_code, '') || ' ' || coalesce(e.message, '') || ' ' || coalesce(e.actor_email, '') || ' ' || coalesce(e.actor_name, ''))";
 
 const COLUMNS =
-  "e.id::text, e.created_at, e.status, e.method, e.route, e.path, e.user_id, e.actor_name, e.actor_email, e.error_code, e.message, e.request_id, e.duration_ms, e.source";
+  "e.id::text, e.created_at, e.status, e.method, e.route, e.path, e.user_id, e.actor_name, e.actor_email, e.error_code, e.message, e.request_id, e.duration_ms, e.source, e.client_ip";
 
 interface Row {
   id: string;
@@ -67,6 +69,7 @@ interface Row {
   request_id: string | null;
   duration_ms: number | null;
   source: SystemEventSource;
+  client_ip: string | null;
 }
 
 function mapRow(r: Row): SystemEventRecord {
@@ -85,6 +88,7 @@ function mapRow(r: Row): SystemEventRecord {
     requestId: r.request_id,
     durationMs: r.duration_ms,
     source: r.source,
+    clientIp: r.client_ip,
   };
 }
 

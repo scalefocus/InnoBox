@@ -58,14 +58,13 @@ test(
         requestId: `req-${stamp}`,
         source: "web",
       });
-      await recordSystemEvent(pool, {
-        status: 401,
-        method: "GET",
-        route: "/scim/v2/*",
-        path: "/scim/v2/Users",
-        message: `scim token ${marker}`,
-        source: "worker",
-      });
+      // The worker's SCIM rejection row — the only writer of client_ip (§14.7); written as the
+      // worker's recorder writes it, since the web capture never sets the column.
+      await pool.query(
+        `insert into system_events (status, method, route, path, error_code, message, source, client_ip)
+         values (401, 'GET', '/scim/v2/*', '/scim/v2/Users', 'scim_token_mismatch', $1, 'worker', '203.0.113.9')`,
+        [`scim token ${marker}`],
+      );
 
       assert.equal(await countUnseenSystemEvents(pool, adminId), 3, "three new events since the admin last looked");
 
@@ -74,6 +73,12 @@ test(
       assert.equal(all.events.length, 3);
       assert.equal(all.hasMore, false);
       assert.equal(all.events[0]!.source, "worker", "newest first");
+      assert.equal(all.events[0]!.clientIp, "203.0.113.9", "the SCIM row carries the client address");
+      assert.ok(
+        all.events.filter((e) => e.source === "web").every((e) => e.clientIp === null),
+        "web-tier rows never carry an address",
+      );
+      assert.equal((await listSystemEvents(pool, { status: "all", q: "203.0.113.9" })).total, 0, "client_ip is not searchable");
       const forbidden = all.events.find((e) => e.status === 403)!;
       assert.equal(forbidden.method, "GET", "method is normalised to upper case");
       assert.equal(forbidden.message, `forbidden ${marker}`, "one sanitized line");

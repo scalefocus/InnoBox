@@ -48,3 +48,54 @@ export function identitySyncSummaryLabel(counts: IdentitySyncCounts): string {
   if (users === 0 && groups === 0) return "Not synced";
   return `${users} ${users === 1 ? "user" : "users"} · ${groups} ${groups === 1 ? "group" : "groups"}`;
 }
+
+/** Why the newest rejected SCIM call was turned away (§14.7 reason codes, §14.10 card). */
+export type ScimRejectionReason = "no_token" | "not_bearer" | "token_mismatch" | "forbidden";
+
+/** The system-log `error_code` the worker writes for each reason. Rows written before reasons
+ *  were recorded carry `scim_unauthorized`, which maps to no reason. */
+export const SCIM_REJECTION_ERROR_CODES: Record<ScimRejectionReason, string> = {
+  no_token: "scim_no_token",
+  not_bearer: "scim_not_bearer",
+  token_mismatch: "scim_token_mismatch",
+  forbidden: "scim_forbidden",
+};
+
+export function scimRejectionReasonFromErrorCode(code: string | null | undefined): ScimRejectionReason | null {
+  for (const [reason, value] of Object.entries(SCIM_REJECTION_ERROR_CODES)) {
+    if (value === code) return reason as ScimRejectionReason;
+  }
+  return null;
+}
+
+/** The reason as the card shows it beside the rejection time. */
+export const SCIM_REJECTION_LABELS: Record<ScimRejectionReason, string> = {
+  no_token: "No token sent",
+  not_bearer: "Not a bearer token",
+  token_mismatch: "Wrong token",
+  forbidden: "Forbidden",
+};
+
+/** The fixed hint under the line per reason (null = none). User-facing — no spec references. */
+export const SCIM_REJECTION_HINTS: Record<ScimRejectionReason, string | null> = {
+  no_token:
+    "The last rejected call carried no token. If it came from Entra, check that the proxy in front of this site passes the Authorization header through. The System log shows the caller's address.",
+  not_bearer:
+    "The last rejected call used a different kind of credential. In the enterprise application's Provisioning settings, put the SCIM token in Secret Token.",
+  token_mismatch:
+    "The token sent doesn't match this deployment's SCIM token. The System log shows both fingerprints. Paste the deployment's token into Secret Token, or, if the token was just changed, check the new value is the one the running site was started with.",
+  forbidden: null,
+};
+
+/** The hint shows only while the newest rejection is later than the last accepted request (or
+ *  nothing was ever accepted): once an accepted request is newer, provisioning has got through. */
+export function scimRejectionHint(input: {
+  reason: ScimRejectionReason | null;
+  lastRejectedAt: string | null;
+  lastAcceptedAt: string | null;
+}): string | null {
+  const { reason, lastRejectedAt, lastAcceptedAt } = input;
+  if (!reason || !lastRejectedAt) return null;
+  if (lastAcceptedAt && Date.parse(lastAcceptedAt) >= Date.parse(lastRejectedAt)) return null;
+  return SCIM_REJECTION_HINTS[reason];
+}

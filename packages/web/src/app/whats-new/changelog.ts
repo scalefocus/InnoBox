@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.12.0",
+    date: "2026-10-14",
+    summary:
+      "For platform admins: rejected directory-sync calls now say why, whether no token was sent, the wrong kind of credential, or the wrong token, and the System log shows the caller's address and short fingerprints of both tokens to compare. Identity sync shows the reason and what to fix. Operators: the worker now refuses to start if its SCIM token begins or ends with a space or line break.",
+  },
+  {
     version: "1.11.0",
     date: "2026-10-14",
     summary:

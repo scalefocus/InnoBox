@@ -7,7 +7,9 @@ import {
   SCIM_LAST_REQUEST_AT_KEY,
   SYSTEM_LOG_RETENTION_DAYS,
   identitySyncState,
+  scimRejectionReasonFromErrorCode,
   type IdentitySyncState,
+  type ScimRejectionReason,
 } from "@innobox/shared";
 import type { Role } from "../validation";
 
@@ -30,6 +32,8 @@ export interface IdentitySyncSummary {
   unarrivedMappedGroups: UnarrivedMappedGroup[];
   lastScimRequestAt: string | null;
   lastRejectedScimRequestAt: string | null;
+  /** Why the newest rejection was turned away; null when there is none or it predates reasons. */
+  lastRejectedScimReason: ScimRejectionReason | null;
   state: IdentitySyncState;
 }
 
@@ -60,13 +64,15 @@ export async function identitySyncSummary(db: Pool): Promise<IdentitySyncSummary
         order by rm.group_external_id, rm.role, n.display_name nulls first`,
     ),
     db.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [SCIM_LAST_REQUEST_AT_KEY]),
-    db.query<{ at: Date | null }>(
-      `select max(created_at) as at
+    db.query<{ at: Date; error_code: string | null }>(
+      `select created_at as at, error_code
          from system_events
         where source = 'worker'
           and status in (401, 403)
           and route = $1
-          and created_at >= now() - make_interval(days => $2::int)`,
+          and created_at >= now() - make_interval(days => $2::int)
+        order by created_at desc, id desc
+        limit 1`,
       [SCIM_SYSTEM_LOG_ROUTE, SYSTEM_LOG_RETENTION_DAYS],
     ),
   ]);
@@ -85,6 +91,7 @@ export async function identitySyncSummary(db: Pool): Promise<IdentitySyncSummary
     })),
     lastScimRequestAt: isoOrNull(lastRequest.rows[0]?.value),
     lastRejectedScimRequestAt: isoOrNull(lastRejected.rows[0]?.at),
+    lastRejectedScimReason: scimRejectionReasonFromErrorCode(lastRejected.rows[0]?.error_code),
     state: identitySyncState({ users: active + deactivated, groups: groupCount }),
   };
 }
