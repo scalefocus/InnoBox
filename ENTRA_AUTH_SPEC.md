@@ -223,13 +223,19 @@ provisioning contract, including the Entra dialect quirks:
   (`crypto.timingSafeEqual`); failures → 401 SCIM error; the header/token is never logged.
   What *is* recorded about a failure (INNOBOX_SPEC.md §14.7): a fixed reason
   (`no_token | not_bearer | token_mismatch`), the 8-hex SHA-256 fingerprints of the
-  configured and (on a mismatch) the sent token, whitespace flags, and the real client
+  configured and (on a mismatch) the sent token, a flag for whitespace inside the sent
+  token, and the real client
   IP — never the header, the token, or its length.
   The token must be at least **32 characters**: the worker **refuses to start** with a
   shorter (or empty) `SCIM_BEARER_TOKEN`, logging a fatal error that names the variable
   but never its value. This is the only secret guarding a public endpoint that can create
   users and change group membership, so a guessable value is a configuration error, not
-  a preference. (`openssl rand -base64 48` yields a suitable value.)
+  a preference. (`openssl rand -base64 48` yields a suitable value.) It likewise
+  **refuses to start** when the value **begins or ends with whitespace** (a space, tab,
+  CR or LF — typically a paste or an editor artefact): HTTP strips whitespace around a
+  header value before the worker sees it, so no request could ever match, and every
+  provisioning call would fail as an unexplained 401. The fatal log names the variable
+  and the rule, never the value; the value is not trimmed silently.
 - **Endpoints**: `/Users` GET(filter)+POST, `/Users/{id}` GET+PUT+PATCH+DELETE, `/Groups`
   GET(filter)+POST, `/Groups/{id}` GET+PUT+PATCH+DELETE, `/ServiceProviderConfig`,
   `/ResourceTypes`, `/Schemas` (static; `patch.supported=true`, `filter.supported=true`).

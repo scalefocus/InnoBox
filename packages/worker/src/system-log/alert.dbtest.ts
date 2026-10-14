@@ -53,7 +53,22 @@ test(
 
       const ev = (status: number) => recordWorkerEvent(pool, { status, method: "GET", route: "/scim/v2/*", path: "/scim/v2/Users", message: `t ${stamp}`, source: "worker" });
       await ev(401);
-      await ev(401);
+      await recordWorkerEvent(pool, {
+        status: 401,
+        method: "GET",
+        route: "/scim/v2/*",
+        path: "/scim/v2/Users",
+        errorCode: "scim_token_mismatch",
+        message: `t ${stamp}`,
+        source: "worker",
+        clientIp: "198.51.100.4",
+      });
+      // §14.7: the SCIM recorder's client address lands in system_events.client_ip.
+      const { rows: ips } = await pool.query<{ client_ip: string | null }>(
+        `select client_ip from system_events where message = $1 order by created_at, id`,
+        [`t ${stamp}`],
+      );
+      assert.deepEqual(ips.map((r) => r.client_ip), [null, "198.51.100.4"]);
       const first = await runSystemLogAlertSweep(pool, { bootstrapAdminGroup: bootstrapGroup });
       assert.equal(first.newEvents, 2);
       assert.ok(first.adminsNotified >= 1);

@@ -10,6 +10,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { appendAudit, bindPendingAccess, revokeUserGrants } from "@innobox/shared";
 import { InvalidFilterError, parseFilter, requireAttr, type FilterAttr } from "./filter.js";
 import { normalizeGroupPatch, normalizeUserPatch } from "./patch.js";
+import { scimTokenFingerprint } from "./token.js";
 import {
   parseGroupWrite,
   parseUserWrite,
@@ -43,16 +44,40 @@ export function safeTokenEqual(provided: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/** Why a request failed the bearer check (INNOBOX_SPEC.md §14.7). Derived values only — the
+ *  header and the token themselves never leave `bearerAuth`. */
+export type ScimRejection =
+  | { reason: "no_token" | "not_bearer"; configuredFingerprint: string }
+  | { reason: "token_mismatch"; configuredFingerprint: string; sentFingerprint: string; sentHasWhitespace: boolean };
+
+/** The `res.locals` key the bearer check leaves its verdict under for the system-log recorder. */
+export const SCIM_REJECTION_LOCAL = "scimRejection";
+
 /** `Authorization: Bearer <token>` (scheme case-insensitive, RFC 7235). The token must
  *  start with a non-space, so `\s+` and the capture never compete for the same characters —
- *  `\s+(.+)` backtracks quadratically on a header of many spaces (polynomial ReDoS). */
+ *  `\s+(.+)` backtracks quadratically on a header of many spaces (polynomial ReDoS).
+ *  Returns null when the token matches, otherwise why it did not. */
+export function classifyBearer(header: string, bearerToken: string, configuredFingerprint: string): ScimRejection | null {
+  if (header.trim() === "") return { reason: "no_token", configuredFingerprint };
+  const provided = /^Bearer\s+(\S.*)$/i.exec(header)?.[1];
+  if (!provided) return { reason: "not_bearer", configuredFingerprint };
+  if (safeTokenEqual(provided, bearerToken)) return null;
+  return {
+    reason: "token_mismatch",
+    configuredFingerprint,
+    sentFingerprint: scimTokenFingerprint(provided),
+    sentHasWhitespace: /\s/.test(provided),
+  };
+}
+
 export function bearerAuth(bearerToken: string) {
+  const configuredFingerprint = scimTokenFingerprint(bearerToken);
   return (req: Request, res: Response, next: NextFunction): void => {
-    const header = req.header("authorization") ?? "";
-    const match = /^Bearer\s+(\S.*)$/i.exec(header);
-    const provided = match?.[1];
-    if (!provided || !safeTokenEqual(provided, bearerToken)) {
-      // Never log `header`/`provided` — not even in an error path.
+    const rejection = classifyBearer(req.header("authorization") ?? "", bearerToken, configuredFingerprint);
+    if (rejection) {
+      // Never log the header or the token — not even in an error path. The recorder gets
+      // only the derived verdict.
+      res.locals[SCIM_REJECTION_LOCAL] = rejection;
       res.status(401).json(scimError(401, "Missing or invalid bearer token"));
       return;
     }

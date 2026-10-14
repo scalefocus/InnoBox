@@ -12,7 +12,7 @@ import { parseSystemLogQuery } from "../validation";
 
 export const dynamic = "force-dynamic";
 
-const COLUMNS = ["id", "created_at", "status", "method", "route", "path", "user_id", "actor_name", "actor_email", "error_code", "message", "request_id", "duration_ms", "source"];
+const COLUMNS = ["id", "created_at", "status", "method", "route", "path", "user_id", "actor_name", "actor_email", "error_code", "message", "request_id", "duration_ms", "source", "client_ip"];
 
 async function handleGET(req: Request): Promise<Response> {
   const gate = await requirePlatformAdmin();
@@ -46,6 +46,7 @@ async function handleGET(req: Request): Promise<Response> {
         r.requestId ?? "",
         r.durationMs ?? "",
         r.source,
+        r.clientIp ?? "",
       ]),
     ),
   ];

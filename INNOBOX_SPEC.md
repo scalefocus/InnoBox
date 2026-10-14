@@ -4457,20 +4457,21 @@ console directly under Audit, never shown to namespace admins, and the API answe
     `printf %s "<token>" | sha256sum | cut -c1-8`. Thirty-two bits of a hash of a
     ≥ 32-character random secret gives no practical help in guessing it, and the
     fingerprint is only ever shown to platform admins.
-  - **Whitespace flags in `message`.** HTTP strips whitespace around a header value
+  - **Whitespace flag in `message`.** HTTP strips whitespace around a header value
     before the worker sees it, so a stray space or newline pasted at the *edge* of
-    Entra's Secret Token never arrives. The two cases that can be seen are flagged:
-    the **sent** token contains whitespace inside it, and the **configured** token
-    begins or ends with whitespace — which no request can ever match, so the flag
-    appears on every 401 row until the deployment's value is fixed.
+    Entra's Secret Token never arrives. What can be seen is a **sent** token with
+    whitespace *inside* it, and that is flagged. The configured side cannot carry
+    edge whitespace at all: no request could ever match such a value, so the worker
+    **refuses to start** with one (`ENTRA_AUTH_SPEC.md` §3 *Auth*).
   - **`client_ip`** — the real client address, chosen exactly as the SCIM rate
     limiter chooses it (`TRUST_PROXY` behind the bundled proxy, §2.4), so a call from
     Entra's provisioning service can be told apart from anyone else probing the
     endpoint. Stored in full (no /64 truncation). Web-tier rows and every other worker
     row leave it null.
   - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4,
-    configured e5f6a7b8)"*; *"SCIM request rejected: no token sent (configured
-    e5f6a7b8; configured token ends with whitespace)"*.
+    configured e5f6a7b8)"*; *"SCIM request rejected: token mismatch (sent 0c1d2e3f,
+    configured e5f6a7b8; sent token contains whitespace)"*; *"SCIM request rejected:
+    no token sent (configured e5f6a7b8)"*.
   - Nothing the caller controls reaches the row as free text: the reason is a fixed
     code, fingerprints are fixed-length hex, and the IP is the proxy-validated
     address. The row count is unchanged (one row per 401/403, as before) and stays

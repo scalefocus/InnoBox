@@ -117,7 +117,7 @@ repository**, so there is nothing of ours to un-configure.
 | `NEXTAUTH_SECRET` ⛔ | Session signing secret — `openssl rand -base64 32`. Rotating it signs everyone out. |
 | `ENTRA_TENANT_ID` · `ENTRA_CLIENT_ID` · `ENTRA_CLIENT_SECRET` | The Entra app registration for sign-in (and the worker's Graph reconciliation). See step 2. |
 | `INNOBOX_BOOTSTRAP_ADMIN_GROUP` | An Entra **group object id** whose members are Platform Admins from first boot, before any role mapping exists. |
-| `SCIM_BEARER_TOKEN` ⛔ | The secret Entra presents to `/scim/v2` — at least 32 characters, e.g. `openssl rand -base64 48`. |
+| `SCIM_BEARER_TOKEN` ⛔ | The secret Entra presents to `/scim/v2` — at least 32 characters with no leading or trailing whitespace, e.g. `openssl rand -base64 48`. |
 | `MINIO_ROOT_PASSWORD` ⛔ · `MINIO_ROOT_USER` · `S3_BUCKET` | Bundled MinIO credentials and the attachment bucket (created on first use). |
 
 **Optional** — leave unset to keep the default or keep the feature off.

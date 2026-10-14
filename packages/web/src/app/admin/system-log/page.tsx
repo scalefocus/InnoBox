@@ -32,6 +32,7 @@ interface SystemEvent {
   requestId: string | null;
   durationMs: number | null;
   source: "web" | "worker";
+  clientIp: string | null;
 }
 
 interface SystemLogPage {
@@ -323,6 +324,12 @@ function SystemLogBrowser() {
                     <dd style={{ margin: 0 }}>{e.durationMs == null ? "—" : `${e.durationMs} ms`}</dd>
                     <dt className="muted">source</dt>
                     <dd style={{ margin: 0 }}>{e.source}</dd>
+                    {e.clientIp && (
+                      <>
+                        <dt className="muted">client ip</dt>
+                        <dd style={{ margin: 0 }}>{e.clientIp}</dd>
+                      </>
+                    )}
                   </dl>
                 )}
               </div>
