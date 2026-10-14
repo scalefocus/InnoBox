@@ -20,6 +20,9 @@
 // Public form link (§6.1, §24.2): while public submissions are live, a link under the subtitle
 // copies `<PUBLIC_BASE_URL>/submit` so an employee can hand it to a customer. Absent while the
 // state is unknown, unavailable or off — never a placeholder above the form.
+//
+// Drop and paste (§11): the whole page is the drop zone for the form's attachments, and a file
+// paste attaches to them too — <AttachmentDropZone> owns the window listeners.
 import Link from "next/link";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useRouter } from "next/navigation";
@@ -27,6 +30,7 @@ import { useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { copyText } from "@/lib/clipboard";
 import { AttachmentControl } from "@/components/AttachmentControl";
+import { AttachmentDropZone } from "@/components/AttachmentDropZone";
 import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
@@ -187,7 +191,7 @@ export default function NewChallengePage() {
   };
 
   return (
-    <>
+    <AttachmentDropZone>
       <div className="page-head reveal">
         <div className="eyebrow">Challenges</div>
         <h1 className="page-title">Raise a challenge</h1>
@@ -202,6 +206,7 @@ export default function NewChallengePage() {
       <form
         onSubmit={onSubmit}
         className="card card-pad reveal form-lock"
+        data-attach-scope
         aria-busy={lock.locked}
         style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 640 }}
       >
@@ -305,7 +310,13 @@ export default function NewChallengePage() {
             </select>
           </div>
 
-          <AttachmentControl parentType="challenge" target={{ kind: "staged", draftKey }} disabled={lock.locked} onBusyChange={setAttachmentsBusy} />
+          <AttachmentControl
+            parentType="challenge"
+            target={{ kind: "staged", draftKey }}
+            disabled={lock.locked}
+            onBusyChange={setAttachmentsBusy}
+            dropLabel="Your new challenge"
+          />
 
           <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
             <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
@@ -366,6 +377,6 @@ export default function NewChallengePage() {
           {toast}
         </div>
       )}
-    </>
+    </AttachmentDropZone>
   );
 }
