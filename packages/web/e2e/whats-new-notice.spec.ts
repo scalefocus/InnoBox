@@ -143,6 +143,9 @@ for (const viewport of [
     const list = notice(page).locator(".update-notice-list");
     await expect(list).toHaveAttribute("tabindex", "0");
     await expect(list).toHaveAttribute("aria-label", "Release notes");
+    // Measure the resting card: mid slide-up it sits up to 16px low, and the mobile sheet has
+    // no bottom margin to absorb that.
+    await notice(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
     const box = await notice(page).boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y).toBeGreaterThanOrEqual(0);

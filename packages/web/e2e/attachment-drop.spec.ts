@@ -38,14 +38,21 @@ async function stubAttachments(page: Page, delayMs = 0): Promise<Posted[]> {
   return posted;
 }
 
-/** Start a file drag over the window (dragenter on <body>) carrying `names`. */
+/** Start a file drag over the window (dragenter on <body>) carrying `names`, and wait for the
+ *  overlay. The listeners attach on hydration while the page's hint is server-rendered, so a
+ *  dragenter can land first and be lost: re-dispatch until the overlay shows, closing any
+ *  half-open drag (a dragleave) so each attempt recomputes the targets. */
 async function dragFilesOver(page: Page, names: string[]): Promise<void> {
-  await page.evaluate((files) => {
-    const dt = new DataTransfer();
-    for (const n of files) dt.items.add(new File(["x"], n));
-    (window as unknown as { __dt: DataTransfer }).__dt = dt;
-    document.body.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
-  }, names);
+  await expect(async () => {
+    await page.evaluate((files) => {
+      const dt = new DataTransfer();
+      for (const n of files) dt.items.add(new File(["x"], n));
+      (window as unknown as { __dt: DataTransfer }).__dt = dt;
+      document.body.dispatchEvent(new DragEvent("dragleave", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      document.body.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    }, names);
+    await expect(page.getByTestId("drop-overlay")).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
 }
 
 /** Drop the dragged files on the overlay target labelled `label`. */
@@ -116,13 +123,17 @@ test("challenge form: a file-only paste attaches (renamed); a paste with text st
   await page.goto("/challenges/new");
   await page.locator("#description").focus();
 
-  // Copied from Word/Excel: text plus a rendered image — an ordinary text paste.
-  expect(await paste(page, { text: "copied cells", files: [{ name: "image.png", type: "image/png" }] })).toBe(false);
-  // A screenshot: attaches, with the generic clipboard name replaced.
-  expect(await paste(page, { files: [{ name: "image.png", type: "image/png" }] })).toBe(true);
+  // A screenshot: attaches, with the generic clipboard name replaced. Polled because the paste
+  // listener attaches on hydration — an earlier paste goes unhandled and attaches nothing.
+  await expect.poll(() => paste(page, { files: [{ name: "image.png", type: "image/png" }] })).toBe(true);
   await expect(page.getByText(/^pasted-image-\d{4}-\d{2}-\d{2}-\d{6}\.png$/)).toBeVisible();
   expect(posted).toHaveLength(1);
   expect(posted[0]!.name).toMatch(/^pasted-image-\d{4}-\d{2}-\d{2}-\d{6}\.png$/);
+
+  // Copied from Word/Excel: text plus a rendered image — an ordinary text paste.
+  await page.locator("#description").focus();
+  expect(await paste(page, { text: "copied cells", files: [{ name: "image.png", type: "image/png" }] })).toBe(false);
+  expect(posted).toHaveLength(1);
 
   await ctx.close();
 });
