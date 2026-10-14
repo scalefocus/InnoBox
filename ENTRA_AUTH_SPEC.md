@@ -221,6 +221,10 @@ provisioning contract, including the Entra dialect quirks:
 
 - **Auth**: `Authorization: Bearer` compared to `SCIM_BEARER_TOKEN` in constant time
   (`crypto.timingSafeEqual`); failures → 401 SCIM error; the header/token is never logged.
+  What *is* recorded about a failure (INNOBOX_SPEC.md §14.7): a fixed reason
+  (`no_token | not_bearer | token_mismatch`), the 8-hex SHA-256 fingerprints of the
+  configured and (on a mismatch) the sent token, whitespace flags, and the real client
+  IP — never the header, the token, or its length.
   The token must be at least **32 characters**: the worker **refuses to start** with a
   shorter (or empty) `SCIM_BEARER_TOKEN`, logging a fatal error that names the variable
   but never its value. This is the only secret guarding a public endpoint that can create
