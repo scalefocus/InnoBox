@@ -1230,7 +1230,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   method, route (matched template), path (concrete, no query string; the template
   only when the target is anonymous), user_id (nullable), actor_name, actor_email
   (point-in-time snapshot), error_code, message (one sanitized line), request_id,
-  duration_ms, source (`web | worker`). **Mutable** working data (no append-only
+  duration_ms, source (`web | worker`), client_ip (text, nullable — set **only** on the
+  worker's SCIM 401/403 rows, §14.7). **Mutable** working data (no append-only
   trigger): trimmed at 90 days by the worker, scrubbed by GDPR erasure (§3). Trigram
   GIN index for substring search.
 - **`user_activity_days`** — (user_id, day) unique; the transient per-person day set
@@ -4384,8 +4385,45 @@ console directly under Audit, never shown to namespace admins, and the API answe
 - **Data** — `system_events` (§5): `status`, `method`, `route` (matched template),
   `path` (concrete, **no query string**), `user_id` (null = anonymous) plus a
   point-in-time `actor_name` / `actor_email` snapshot, `error_code`, a one-line
-  sanitized `message` (**no stack trace**), `request_id`, `duration_ms`, `source`.
-  Never the body, the headers or the query string.
+  sanitized `message` (**no stack trace**), `request_id`, `duration_ms`, `source`, and
+  `client_ip` on SCIM rejections only (below). Never the body, the headers or the query
+  string.
+- **SCIM rejection detail.** The worker's SCIM 401/403 rows carry enough to tell *why*
+  provisioning is being turned away, without ever storing the `Authorization` header
+  or any token:
+  - **`error_code` names the reason** — `scim_no_token` (no `Authorization` header, or
+    an empty one), `scim_not_bearer` (a header whose scheme is not `Bearer`, or
+    `Bearer` with nothing after it), `scim_token_mismatch` (a bearer token that does
+    not match `SCIM_BEARER_TOKEN`), and `scim_forbidden` for a 403. Rows written
+    before this change keep `scim_unauthorized` and read as *reason unknown*.
+  - **Token fingerprints in `message`.** A fingerprint is the **first 8 lowercase hex
+    characters of the SHA-256** of the token's UTF-8 bytes, exactly as compared. Every
+    401 row names the **configured** token's fingerprint (computed once at worker
+    start); a `scim_token_mismatch` row also names the **sent** token's. An operator
+    checks a copy of the token locally with
+    `printf %s "<token>" | sha256sum | cut -c1-8`. Thirty-two bits of a hash of a
+    ≥ 32-character random secret gives no practical help in guessing it, and the
+    fingerprint is only ever shown to platform admins.
+  - **Whitespace flags in `message`.** HTTP strips whitespace around a header value
+    before the worker sees it, so a stray space or newline pasted at the *edge* of
+    Entra's Secret Token never arrives. The two cases that can be seen are flagged:
+    the **sent** token contains whitespace inside it, and the **configured** token
+    begins or ends with whitespace — which no request can ever match, so the flag
+    appears on every 401 row until the deployment's value is fixed.
+  - **`client_ip`** — the real client address, chosen exactly as the SCIM rate
+    limiter chooses it (`TRUST_PROXY` behind the bundled proxy, §2.4), so a call from
+    Entra's provisioning service can be told apart from anyone else probing the
+    endpoint. Stored in full (no /64 truncation). Web-tier rows and every other worker
+    row leave it null.
+  - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4,
+    configured e5f6a7b8)"*; *"SCIM request rejected: no token sent (configured
+    e5f6a7b8; configured token ends with whitespace)"*.
+  - Nothing the caller controls reaches the row as free text: the reason is a fixed
+    code, fingerprints are fixed-length hex, and the IP is the proxy-validated
+    address. The row count is unchanged (one row per 401/403, as before) and stays
+    bounded by the SCIM rate limit (§2.4).
+  - The SCIM rows have no user, so GDPR erasure (§3) does not touch them; the
+    90-day trim removes their IPs with the rest of the row.
 - **Anonymity (invariant 3 — the §14.5 rule).** When the request targeted an
   anonymous challenge or solution, `path` stores the **route template only**
   (`/challenges/[number]`), never the concrete number: a named user paired with an
@@ -4401,9 +4439,11 @@ console directly under Audit, never shown to namespace admins, and the API answe
   filters`** control shown while any filter is active, and infinite scroll in pages
   of 100. Rows show a colour-coded status pill, `METHOD path`, the error code, the
   user (click to filter by them) and a relative time; clicking a row expands the full
-  record. `GET /api/admin/system-log?q&status&from&to&limit&offset`.
+  record, including **Client IP** when the row has one. The search box does not match
+  on `client_ip`. `GET /api/admin/system-log?q&status&from&to&limit&offset`.
 - **CSV export** — `GET /api/admin/system-log/export`, same gate: honours the active
-  filters (exports what is on screen), capped at **50 000** rows newest-first;
+  filters (exports what is on screen), includes a `client_ip` column, capped at
+  **50 000** rows newest-first;
   `X-Total-Matching` / `X-Exported-Count` headers drive an in-app *"exported N of M —
   narrow the range"* notice when the filtered set exceeds the cap. RFC 4180 quoting,
   UTF-8 BOM. Audited `system_log.exported` (actor, filters, row count).
@@ -4447,7 +4487,24 @@ group object ids, no personal data (unlike the §14.5 presence read).
   absolute instant in a tooltip (shared formatter), or *"Never"*. Beside it, **last
   rejected SCIM request** — the newest worker 401/403 in the system log (§14.7;
   *"None in the last 90 days"* when absent). A wrong token shows up here while the
-  accepted-request time stays stale.
+  accepted-request time stays stale. The rejection time is followed by its **reason**,
+  taken from the row's `error_code` (§14.7): *"No token sent"*, *"Not a bearer
+  token"*, *"Wrong token"*, *"Forbidden"*, or nothing for a row written before reasons
+  were recorded. When the newest rejection is **later than the last accepted
+  request** (or no request was ever accepted), one fixed hint for that reason sits
+  under the line; once an accepted request is newer, the reason stays but the hint
+  goes, because provisioning has since got through:
+  - *No token sent* — *"The last rejected call carried no token. If it came from
+    Entra, check that the proxy in front of this site passes the Authorization
+    header through. The System log shows the caller's address."*
+  - *Not a bearer token* — *"The last rejected call used a different kind of
+    credential. In the enterprise application's Provisioning settings, put the SCIM
+    token in Secret Token."*
+  - *Wrong token* — *"The token sent doesn't match this deployment's SCIM token. The
+    System log shows both fingerprints. Paste the deployment's token into Secret
+    Token, or, if the token was just changed, check the new value is the one the
+    running site was started with."*
+  - *Forbidden* — no hint.
 - **Fixed explanations** — at most one, chosen by the counts:
   - **Nothing synced yet** (provisioned users = 0 and provisioned groups = 0):
     *"Nothing has been provisioned yet. In the enterprise application's
@@ -4471,8 +4528,11 @@ group object ids, no personal data (unlike the §14.5 presence read).
 - **API:** `GET /api/admin/identity-sync` →
   `{ users: { active, deactivated }, groups, unarrivedMappedGroups: [{
   groupExternalId, role, namespaceId, namespaceName }], lastScimRequestAt,
-  lastRejectedScimRequestAt, state: "ok" | "nothing_synced" | "users_no_groups" }`
-  (timestamps UTC ISO or `null`).
+  lastRejectedScimRequestAt, lastRejectedScimReason: "no_token" | "not_bearer" |
+  "token_mismatch" | "forbidden" | null, state: "ok" | "nothing_synced" |
+  "users_no_groups" }` (timestamps UTC ISO or `null`; the reason is `null` when there
+  is no rejection or the newest one predates reason codes). The card shows **no
+  fingerprint and no IP** — those stay in the system log.
 
 ### §14.11 Survey results (platform admin)
 
