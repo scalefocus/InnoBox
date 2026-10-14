@@ -354,8 +354,15 @@ export class ScanObjectReadError extends Error {
  *  went away without answering — an outage, so a plain Error (never counted). */
 export function parseClamdResponse(response: string): ClamdVerdict {
   const line = response.replace(/\0/g, "").trim();
-  const found = line.match(/^(?:stream:\s*)?(.+?)\s+FOUND$/);
-  if (found) return { clean: false, signature: found[1] };
+  // `[stream:] <sig> FOUND`, split with string ops: the obvious `(.+?)\s+FOUND$` pattern
+  // backtracks quadratically on a long run of whitespace (polynomial ReDoS).
+  if (line.endsWith("FOUND")) {
+    const head = line.slice(0, -"FOUND".length);
+    const sig = head.trimEnd();
+    if (sig !== "" && sig !== head) {
+      return { clean: false, signature: sig.replace(/^stream:\s*/, "") || sig };
+    }
+  }
   if (/(?:^|\s)OK$/.test(line)) return { clean: true };
   if (line === "") throw new Error("clamd closed the connection without a reply");
   throw new ClamdErrorReply(line);

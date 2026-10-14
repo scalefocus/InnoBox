@@ -226,7 +226,7 @@ test(
         [502, "webhook_key_missing"],
       ]);
       const allText = JSON.stringify(events);
-      assert.ok(!allText.includes("secret-token") && !allText.includes("hooks.example.com"), "never the URL");
+      assert.doesNotMatch(allText, /secret-token|hooks\.example\.com/, "never the URL");
 
       // 7. Teams format renders the card envelope.
       const teams = await mkHook("Teams", { format: "teams_workflows" });

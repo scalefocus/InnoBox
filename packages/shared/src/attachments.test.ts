@@ -148,6 +148,18 @@ test("parseClamdResponse: FOUND → infected with the signature", () => {
     clean: false,
     signature: "Win.Test.EICAR_HDB-1",
   });
+  assert.deepEqual(parseClamdResponse("Eicar-Test-Signature \t FOUND"), {
+    clean: false,
+    signature: "Eicar-Test-Signature",
+  });
+  assert.throws(() => parseClamdResponse("stream: NOTFOUND"), ClamdErrorReply, "FOUND needs a separator");
+});
+
+test("parseClamdResponse: a long whitespace run parses in linear time (no ReDoS)", () => {
+  const started = Date.now();
+  assert.throws(() => parseClamdResponse(`a${" ".repeat(100_000)}x`), ClamdErrorReply);
+  assert.deepEqual(parseClamdResponse(`stream: a${" ".repeat(100_000)}FOUND`), { clean: false, signature: "a" });
+  assert.ok(Date.now() - started < 1000, "linear in the input length");
 });
 
 test("parseClamdResponse: an error reply throws ClamdErrorReply (a per-file error)", () => {
