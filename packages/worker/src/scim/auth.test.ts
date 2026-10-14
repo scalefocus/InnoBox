@@ -167,7 +167,7 @@ test("scimTokenFatalLog: names the variable, never the value", () => {
 test("checkScimBearerToken: a value beginning or ending with whitespace is refused, never trimmed", () => {
   const good = "k".repeat(40);
   for (const bad of [`${good} `, ` ${good}`, `${good}
-`, `${good}`, `	${good}`]) {
+`, `${good}`, `	${good}`]) {
     assert.deepStrictEqual(checkScimBearerToken(bad), { ok: false, reason: "edge_whitespace" }, JSON.stringify(bad.slice(-2)));
   }
   assert.deepStrictEqual(checkScimBearerToken(good), { ok: true, token: good });
