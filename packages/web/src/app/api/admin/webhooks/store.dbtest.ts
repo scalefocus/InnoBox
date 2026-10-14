@@ -56,7 +56,7 @@ test(
       assert.equal(hook.lastDelivery, null);
       assert.ok(!JSON.stringify(hook).includes("SeCrEt"), "the URL never comes back");
       const { rows: stored } = await pool.query<{ url_enc: string }>(`select url_enc from channel_webhooks where id = $1`, [hook.id]);
-      assert.ok(!stored[0]!.url_enc.includes("logic.azure.com"), "ciphertext at rest");
+      assert.doesNotMatch(stored[0]!.url_enc, /logic\.azure\.com/, "ciphertext at rest");
       assert.equal(decryptWebhookUrl(stored[0]!.url_enc, key), TEAMS_URL);
 
       // Listing: global first, every namespace present, hint only.

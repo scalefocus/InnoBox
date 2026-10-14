@@ -3,29 +3,8 @@
 // the integration suite; this covers that invariant.
 import { test } from "node:test";
 import assert from "node:assert";
-import { createHash, timingSafeEqual } from "node:crypto";
-import express, { type Request, type Response } from "express";
+import { bearerAuth, safeTokenEqual } from "./router.js";
 import { checkScimBearerToken, scimTokenFatalLog, SCIM_TOKEN_MIN_LENGTH } from "./token.js";
-
-// Copied from router.ts — export these from there to avoid duplication if desired.
-function safeTokenEqual(provided: string, expected: string): boolean {
-  const a = createHash("sha256").update(provided, "utf8").digest();
-  const b = createHash("sha256").update(expected, "utf8").digest();
-  return timingSafeEqual(a, b);
-}
-
-function bearerAuth(bearerToken: string) {
-  return (req: Request, res: Response, next: express.NextFunction): void => {
-    const header = req.header("authorization") ?? "";
-    const match = /^Bearer\s+(.+)$/i.exec(header);
-    const provided = match?.[1];
-    if (!provided || !safeTokenEqual(provided, bearerToken)) {
-      res.status(401).json({ error: "Missing or invalid bearer token" });
-      return;
-    }
-    next();
-  };
-}
 
 test("safeTokenEqual: correct token accepted", () => {
   const token = "my-secret-token-12345";
@@ -129,6 +108,20 @@ test("bearerAuth: does not leak token in error response", (t, done) => {
         done();
       },
     }),
+  } as any;
+  middleware(req, res, () => done(new Error("should not call next()")));
+});
+
+test("bearerAuth: a header of many spaces is rejected in linear time (no ReDoS)", (t, done) => {
+  const middleware = bearerAuth("expected-token");
+  const req = { header: () => `bearer ${" ".repeat(100_000)}\n` } as any;
+  const started = Date.now();
+  const res = {
+    status: function (code: number) {
+      assert.strictEqual(code, 401);
+      assert.ok(Date.now() - started < 1000, "linear in the header length");
+      return { json: () => done() };
+    },
   } as any;
   middleware(req, res, () => done(new Error("should not call next()")));
 });

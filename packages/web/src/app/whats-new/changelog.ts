@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.3",
+    date: "2026-10-14",
+    summary:
+      "Security hardening: the directory-sync sign-in check and the virus-scanner reply reader now read unusually long, malformed input just as quickly as normal input, so a crafted request can no longer tie up the server. Nothing changes for users or operators.",
+  },
+  {
     version: "1.10.2",
     date: "2026-10-14",
     summary:

@@ -214,7 +214,7 @@ test("textToHtmlFragment: trailing punctuation is trimmed from links, and a long
 });
 
 test("renderEmailText: appends the manage line (absolute when base URL known)", () => {
-  assert.ok(renderEmailText("msg", "https://s.example.com").includes("https://s.example.com/profile"));
+  assert.match(renderEmailText("msg", "https://s.example.com"), /https:\/\/s\.example\.com\/profile/);
   assert.ok(renderEmailText("msg", "").includes("Manage email notifications"));
 });
 

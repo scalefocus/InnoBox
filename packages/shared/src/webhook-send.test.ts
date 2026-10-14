@@ -70,7 +70,7 @@ test("vetting: form rules, DNS failure, any private address refuses the host", a
     throw new Error("ENOTFOUND hooks.example.com");
   });
   assert.equal(!dns.ok && dns.reason, "dns");
-  assert.equal(!dns.ok && dns.message.includes("hooks.example.com"), false, "never echoes the library message");
+  if (!dns.ok) assert.doesNotMatch(dns.message, /hooks\.example\.com/, "never echoes the library message");
   const none = await vetWebhookUrl("https://hooks.example.com", resolveTo());
   assert.equal(!none.ok && none.reason, "dns");
   const mixed = await vetWebhookUrl("https://hooks.example.com", resolveTo(PUBLIC, { address: "10.0.0.5", family: 4 }));
@@ -226,7 +226,7 @@ test("URL encryption: the shared v1 AES-GCM format under WEBHOOK_ENC_KEY; a wron
   assert.ok(key);
   const enc = encryptWebhookUrl("https://hooks.example.com/in?sig=abc", key);
   assert.match(enc, /^v1:[^:]+:[^:]+:[^:]+$/);
-  assert.ok(!enc.includes("hooks.example.com"));
+  assert.doesNotMatch(enc, /hooks\.example\.com/);
   assert.equal(decryptWebhookUrl(enc, key), "https://hooks.example.com/in?sig=abc");
   assert.equal(decryptWebhookUrl(enc, randomBytes(32)), null, "a rotated key cannot decrypt");
   assert.equal(decryptWebhookUrl("garbage", key), null);

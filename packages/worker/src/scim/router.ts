@@ -37,16 +37,19 @@ export interface CreateScimRouterOptions {
 
 /** Fixed-length digest compare avoids leaking the expected token's length via timing, on
  *  top of the constant-time comparison itself. */
-function safeTokenEqual(provided: string, expected: string): boolean {
+export function safeTokenEqual(provided: string, expected: string): boolean {
   const a = createHash("sha256").update(provided, "utf8").digest();
   const b = createHash("sha256").update(expected, "utf8").digest();
   return timingSafeEqual(a, b);
 }
 
-function bearerAuth(bearerToken: string) {
+/** `Authorization: Bearer <token>` (scheme case-insensitive, RFC 7235). The token must
+ *  start with a non-space, so `\s+` and the capture never compete for the same characters —
+ *  `\s+(.+)` backtracks quadratically on a header of many spaces (polynomial ReDoS). */
+export function bearerAuth(bearerToken: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = req.header("authorization") ?? "";
-    const match = /^Bearer\s+(.+)$/i.exec(header);
+    const match = /^Bearer\s+(\S.*)$/i.exec(header);
     const provided = match?.[1];
     if (!provided || !safeTokenEqual(provided, bearerToken)) {
       // Never log `header`/`provided` — not even in an error path.
