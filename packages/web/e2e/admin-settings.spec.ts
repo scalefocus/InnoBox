@@ -7,25 +7,25 @@ import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, getImpactAreaId } from "./helpers/api";
 
 // Impact-area rows all share the aria-label "Impact area name" (exact, to exclude the "New impact
-// area name" create box), so a row is identified by its input's current value. Poll until a row
-// with that value exists (the list re-fetches after each mutation), then return its `.row` parent.
+// area name" create box), so a row is identified by its input's current value.
+function impactAreaInputs(page: Page): Locator {
+  return page.getByRole("textbox", { name: "Impact area name", exact: true });
+}
+
+// Every row's current name, read in one snapshot. Never count() then nth(i).inputValue(): when the
+// list re-renders shorter in between (a Delete's refetch landing), nth(i) no longer exists and
+// inputValue() waits for it indefinitely — hanging the enclosing poll until its deadline.
+async function impactAreaNames(page: Page): Promise<string[]> {
+  return impactAreaInputs(page).evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value));
+}
+
+// Poll until a row with that value exists (the list re-fetches after each mutation), then return
+// its `.row` parent.
 async function impactAreaRow(page: Page, value: string): Promise<Locator> {
-  const inputs = page.getByRole("textbox", { name: "Impact area name", exact: true });
-  await expect
-    .poll(
-      async () => {
-        const n = await inputs.count();
-        for (let i = 0; i < n; i++) if ((await inputs.nth(i).inputValue()) === value) return true;
-        return false;
-      },
-      { timeout: 15_000 },
-    )
-    .toBe(true);
-  const n = await inputs.count();
-  for (let i = 0; i < n; i++) {
-    if ((await inputs.nth(i).inputValue()) === value) return inputs.nth(i).locator("xpath=..");
-  }
-  throw new Error(`impact-area row "${value}" not found`);
+  await expect.poll(async () => (await impactAreaNames(page)).includes(value), { timeout: 15_000 }).toBe(true);
+  const index = (await impactAreaNames(page)).indexOf(value);
+  if (index < 0) throw new Error(`impact-area row "${value}" not found`);
+  return impactAreaInputs(page).nth(index).locator("xpath=..");
 }
 
 test("platform settings are refused to a non-platform-admin", async ({ browser }) => {
@@ -64,15 +64,9 @@ test("impact areas: create, retire, then delete a zero-reference area", async ({
   // Delete — with zero references there is no reassignment picker; the row disappears.
   await row.getByRole("button", { name: "Delete", exact: true }).click();
   await expect
-    .poll(
-      async () => {
-        const inputs = page.getByRole("textbox", { name: "Impact area name", exact: true });
-        const n = await inputs.count();
-        for (let i = 0; i < n; i++) if ((await inputs.nth(i).inputValue()) === name) return true;
-        return false;
-      },
-      { timeout: 60_000 }, // absorbs the cold-compile of the DELETE route on its first hit
-    )
+    .poll(async () => (await impactAreaNames(page)).includes(name), {
+      timeout: 60_000, // absorbs the cold-compile of the DELETE route on its first hit
+    })
     .toBe(false);
 
   await ctx.close();
