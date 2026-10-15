@@ -41,9 +41,13 @@ async function openFilledForm(browserCtx: BrowserContext, title: string): Promis
   return { page, counts };
 }
 
-/** The persona's own challenges with this exact title, read back from the real API. */
+/** The persona's own challenges with this exact title, read back from the real API.
+ *  `maxRetries`: the context's request client keeps its socket from sign-in alive, and this read
+ *  comes several seconds of browser work later — right around the dev server's 5 s keep-alive
+ *  timeout, so the reused socket can be reset under it (ECONNRESET). The GET is idempotent, so
+ *  Playwright's own ECONNRESET retry is safe here. */
 async function countMine(ctx: BrowserContext, title: string): Promise<number> {
-  const res = await ctx.request.get(`${BASE}/api/challenges?tab=mine`, { headers: { accept: "application/json" } });
+  const res = await ctx.request.get(`${BASE}/api/challenges?tab=mine`, { headers: { accept: "application/json" }, maxRetries: 2 });
   expect(res.status()).toBe(200);
   const body = (await res.json()) as { challenges: { title: string }[] };
   return body.challenges.filter((c) => c.title === title).length;
