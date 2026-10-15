@@ -7,7 +7,7 @@
 //
 // Personas: dev users are keyed by a slug of the display name (external_id = dev-<slug>), so a
 // distinct name is a distinct user. `admin: true` grants platform_admin (dev group + mapping).
-import type { BrowserContext } from "@playwright/test";
+import { expect, type BrowserContext } from "@playwright/test";
 
 export function devSlug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -36,7 +36,15 @@ export async function signIn(
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
   const page = await context.newPage();
   try {
-    await page.goto(`${base}/`);
+    // The dev panel is client-rendered: it appears only once the page has hydrated, the session
+    // has resolved as signed out and /api/auth/providers has listed `dev`. Nothing renders it later
+    // if that chain breaks — e.g. a page loaded while Next compiles /_error mid-run (it does so on
+    // the first aborted request) never hydrates — so a load showing no panel within 20 s is
+    // retried with a fresh navigation instead of being waited on until the test times out.
+    await expect(async () => {
+      await page.goto(`${base}/`);
+      await page.locator("#dev-name").waitFor({ state: "visible", timeout: 20_000 });
+    }).toPass({ timeout: 75_000 });
     await page.locator("#dev-name").fill(opts.name);
     await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
     await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");

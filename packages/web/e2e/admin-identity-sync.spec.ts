@@ -30,8 +30,17 @@ test("identity sync: the card shows counts, request times, the never-arrived lis
   const api = await adminCtx.request.get("/api/admin/identity-sync", { headers: { accept: "application/json" } });
   expect(api.status()).toBe(200);
   const body = await api.json();
-  expect(Object.keys(body).sort()).toEqual(["groups", "lastRejectedScimRequestAt", "lastScimRequestAt", "state", "unarrivedMappedGroups", "users"]);
+  expect(Object.keys(body).sort()).toEqual([
+    "groups",
+    "lastRejectedScimReason",
+    "lastRejectedScimRequestAt",
+    "lastScimRequestAt",
+    "state",
+    "unarrivedMappedGroups",
+    "users",
+  ]);
   expect(["ok", "nothing_synced", "users_no_groups"]).toContain(body.state);
+  expect([null, "no_token", "not_bearer", "token_mismatch", "forbidden"]).toContain(body.lastRejectedScimReason);
   expect(typeof body.users.active).toBe("number");
   expect(typeof body.users.deactivated).toBe("number");
 
