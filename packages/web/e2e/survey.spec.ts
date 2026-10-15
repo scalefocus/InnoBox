@@ -380,7 +380,8 @@ test("admin: Bug reports as a Source and in the funnel; the Bug reports switch h
   try {
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await memberPage.reload();
-    await expect(memberPage.getByRole("link", { name: "Leaderboard" })).toBeVisible();
+    // Exact: Home also carries a "See the leaderboard" button, which a substring match would hit.
+    await expect(memberPage.getByRole("link", { name: "Leaderboard", exact: true })).toBeVisible();
     await expect(memberPage.getByTestId("report-bug")).toHaveCount(0);
     const refused = await member.request.post("/api/me/survey/bug", {
       data: { description: "x", pagePath: "/", fromOffer: false },
