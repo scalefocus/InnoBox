@@ -264,14 +264,46 @@ pipeline {
               #                   of disposing them after 60 s idle (a dev-only setting)
               #   setsid        : its own process group, so cleanup also kills next's child
               #                   processes, not just the pnpm wrapper
+              #   nohup, </dev/null, JENKINS_NODE_COOKIE=dontKillMe : the server must outlive an
+              #                   agent-connection blip. `next dev` exits 0 on SIGINT/SIGTERM, and
+              #                   one such signal has stopped it mid-suite right after Jenkins logged
+              #                   "<node> seems to be removed or offline … is back online". So: ignore
+              #                   SIGHUP, never read a stdin that may be closed under us, and opt out
+              #                   of Jenkins' process-tree killer (which matches processes on the
+              #                   node's cookie and sends SIGTERM) — the pid file + EXIT trap + post
+              #                   step below still stop the server on every exit path.
               #   WEB_EXIT      : gets the server's exit status when it dies — the watchdog polls it
               #                   (a dead child can linger as a zombie, which `kill -0` still finds)
+              #   WEB_PIDFILE   : the server's process-group id, for the post step (which runs after
+              #                   this script is gone) and for the leftover check below.
               WEB_EXIT="${PWD}/e2e-web.exit"
+              WEB_PIDFILE="${PWD}/e2e-web.pid"
               rm -f "${WEB_EXIT}" "${PWD}"/e2e-shard-*.exit
+
+              # A server opted out of the process-tree killer can outlive a hard-aborted build. Stop
+              # one left by a previous build (only if that pid still is an InnoBox dev server — pids
+              # get reused), then refuse to run against anything else already on the port: Next
+              # would silently move to 3001 and the suite would test the stale server on 3000.
+              if [ -f "${WEB_PIDFILE}" ]; then
+                OLD_PGID="$(cat "${WEB_PIDFILE}")"
+                if ps -o args= -p "${OLD_PGID}" 2>/dev/null | grep -q 'innobox/web dev'; then
+                  echo "=== stopping a dev server left by a previous build (pgid ${OLD_PGID}) ==="
+                  kill -TERM -"${OLD_PGID}" >/dev/null 2>&1 || true
+                  for i in $(seq 1 10); do kill -0 "${OLD_PGID}" >/dev/null 2>&1 || break; sleep 1; done
+                  kill -KILL -"${OLD_PGID}" >/dev/null 2>&1 || true
+                fi
+                rm -f "${WEB_PIDFILE}"
+              fi
+              if curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null 2>&1; then
+                echo "something already answers on ${E2E_BASE_URL} — refusing to run the suite against a server this build did not start"
+                exit 1
+              fi
+
               export E2E_KEEP_ROUTES_COMPILED=1
-              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" \
-                setsid sh -c 'pnpm --filter @innobox/web dev > e2e-web.log 2>&1; echo $? > "$0"' "${WEB_EXIT}" &
+              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" JENKINS_NODE_COOKIE=dontKillMe \
+                nohup setsid sh -c 'pnpm --filter @innobox/web dev > e2e-web.log 2>&1; echo $? > "$0"' "${WEB_EXIT}" </dev/null &
               WEB_PID=$!
+              echo "${WEB_PID}" > "${WEB_PIDFILE}"
               # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
               stop_shards() {
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -362,10 +394,21 @@ pipeline {
                 echo "=== dev server log (e2e-web.log) ==="
                 cat e2e-web.log
                 if [ "${SERVER_DIED}" = 1 ]; then
-                  # No "heap limit" error in the log above + a SIGKILL status (137) = killed from
-                  # outside, most likely the kernel OOM killer (dmesg may be unreadable for this user).
-                  echo "=== kernel OOM-killer messages (if readable) ==="
-                  dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory' | tail -n 5 || true
+                  case "$(cat "${WEB_EXIT}")" in
+                    0|130|143)
+                      # `next dev` exits 0 when IT gets SIGINT/SIGTERM (its child's 130/143 surface
+                      # when the child is signalled instead). Either way: not a crash — something
+                      # outside this script told the server to stop. Known trigger: an agent
+                      # disconnect/reconnect ("seems to be removed or offline") just before.
+                      echo "=== the server was told to stop (SIGINT/SIGTERM) — it did not crash; check the build log just before this for an agent disconnect/reconnect ==="
+                      ;;
+                    *)
+                      # No "heap limit" error in the log above + a SIGKILL status (137) = killed from
+                      # outside, most likely the kernel OOM killer (dmesg may be unreadable for this user).
+                      echo "=== kernel OOM-killer messages (if readable) ==="
+                      dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory' | tail -n 5 || true
+                      ;;
+                  esac
                 fi
                 exit 1
               fi
@@ -374,6 +417,12 @@ pipeline {
           post {
             always {
               sh '''
+                # The dev server opts out of Jenkins' process-tree killer (see the stage), so stop it
+                # here too — this runs even when the stage's own EXIT trap never did (hard abort).
+                if [ -f e2e-web.pid ]; then
+                  kill -TERM -"$(cat e2e-web.pid)" >/dev/null 2>&1 || true
+                  rm -f e2e-web.pid
+                fi
                 docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
               '''
