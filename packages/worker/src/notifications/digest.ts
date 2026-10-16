@@ -197,8 +197,9 @@ export async function runDigestSweep(
       );
       if (held.length === 0) continue;
 
+      // §12.1: a deactivated or erased recipient's held rows are discarded at the slot.
       const { rows: users } = await pool.query<{ email: string | null; email_notifications_enabled: boolean; email_delivery: string; active: boolean }>(
-        `select email, email_notifications_enabled, email_delivery, active from users where id = $1`,
+        `select email, email_notifications_enabled, email_delivery, (active and scrubbed_at is null) as active from users where id = $1`,
         [userId],
       );
       const user = users[0];

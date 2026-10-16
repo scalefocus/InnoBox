@@ -162,6 +162,59 @@ test(
       assert.equal(put.body.externalId, userExternalId, "externalId preserved from the stored row");
       assert.equal(put.body.displayName, "Ada Lovelace, Countess of Lovelace");
 
+      // ── ENTRA_AUTH_SPEC.md §5: a full-resource write silent on `active` keeps the stored value ─
+      // Deactivate, then PUT without `active`: the leaver must stay a leaver. A replayed POST
+      // with Entra's string "False" is read like PATCH reads it; a PUT with "True" reactivates.
+      const leaver = await auth(
+        request(app)
+          .patch(`/scim/v2/Users/${userId}`)
+          .send({ Operations: [{ op: "replace", path: "active", value: "False" }] }),
+      );
+      assert.equal(leaver.body.active, false);
+      const putSilent = await auth(
+        request(app)
+          .put(`/scim/v2/Users/${userId}`)
+          .send({
+            schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            userName,
+            displayName: "Ada Lovelace, Countess of Lovelace",
+            emails: [{ value: userName, type: "work", primary: true }],
+          }),
+      );
+      assert.equal(putSilent.status, 200, JSON.stringify(putSilent.body));
+      assert.equal(putSilent.body.active, false, "a PUT that omits active never reactivates a leaver");
+      const putGarbage = await auth(
+        request(app)
+          .put(`/scim/v2/Users/${userId}`)
+          .send({ schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"], userName, displayName: "Ada Lovelace, Countess of Lovelace", active: "maybe" }),
+      );
+      assert.equal(putGarbage.body.active, false, "an unparseable active keeps the stored value");
+      const postReplay = await auth(
+        request(app)
+          .post("/scim/v2/Users")
+          .send({ ...createPayload, displayName: "Ada Lovelace, Countess of Lovelace", active: "False" }),
+      );
+      assert.equal(postReplay.status, 200, JSON.stringify(postReplay.body));
+      assert.equal(postReplay.body.active, false, "the string False on a replayed POST is read as PATCH reads it");
+      const { rows: stillLeaver } = await pool.query(`select active, deactivated_at from users where id = $1`, [userId]);
+      assert.equal(stillLeaver[0].active, false);
+      assert.ok(stillLeaver[0].deactivated_at, "deactivated_at kept through the silent writes");
+      const putTrue = await auth(
+        request(app)
+          .put(`/scim/v2/Users/${userId}`)
+          .send({
+            schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            userName,
+            active: "True",
+            displayName: "Ada Lovelace, Countess of Lovelace",
+            emails: [{ value: userName, type: "work", primary: true }],
+          }),
+      );
+      assert.equal(putTrue.body.active, true, "an explicit True string reactivates");
+      const { rows: backActive } = await pool.query(`select active, deactivated_at from users where id = $1`, [userId]);
+      assert.equal(backActive[0].active, true);
+      assert.equal(backActive[0].deactivated_at, null);
+
       const { rows: afterScimWrites } = await pool.query<{ office_location: string | null }>(
         `select office_location from users where id = $1`,
         [userId],

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.15.0",
+    date: "2026-10-16",
+    summary:
+      "Security hardening from a code review. Deactivated and erased accounts no longer receive any notification, in-app or by e-mail, and a provisioning update that says nothing about a user's active state keeps it as it is. Attachment downloads are now rate-limited, a made-up attachment id no longer writes an audit entry, and the AI-agent tools no longer list your own solutions that an admin moved to the trash. Operators: the bundled MinIO console is now reachable from the host only.",
+  },
+  {
     version: "1.14.0",
     date: "2026-10-16",
     summary:

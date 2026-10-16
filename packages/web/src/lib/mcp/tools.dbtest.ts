@@ -23,6 +23,7 @@ test(
     const store = await import("../../app/api/challenges/store");
     const { listComments } = await import("../../app/api/comments/store");
     const { findTool, runTool } = await import("./tools");
+    const { trashSolution, restoreSolution } = await import("../../app/api/challenges/trash");
     type ToolContext = import("./tools").ToolContext;
 
     const pool = new Pool({ connectionString: url });
@@ -238,6 +239,19 @@ test(
       assert.ok(!offInbox.some((n) => n.message === "restricted note"));
       const onInbox = data(await call(ctx(member, true), "list_my_notifications", {})).notifications as { message: string }[];
       assert.ok(onInbox.some((n) => n.message === "restricted note"));
+
+      // ── §25.6 / §10.4: an item in the trash does not exist to an agent, its own author included ──
+      const platformAdmin = viewer(await mkUser("padmin"), [{ role: "platform_admin", namespaceId: null }]);
+      const trashDeps = { pool, storage: { deleteObject: async () => {}, abortMultipartUpload: async () => {} } };
+      const mineBefore = data(await call(ctx(outsider, true), "list_my_items")).solutions as { number: string; challengeNumber: string }[];
+      assert.ok(mineBefore.some((s) => s.number === sol.number), "the author's live solution is listed");
+      assert.equal((await trashSolution(trashDeps, platformAdmin, sNum, "dbtest")).status, "ok");
+      const mineTrashed = data(await call(ctx(outsider, true), "list_my_items")).solutions as { number: string }[];
+      assert.ok(!mineTrashed.some((s) => s.number === sol.number), "a solution trashed on its own under a live challenge is omitted from list_my_items");
+      assert.equal(statusOf(await call(ctx(outsider, true), "get_solution", { number: sNum })), 404, "and get_solution agrees");
+      assert.equal((await restoreSolution(pool, platformAdmin, sNum)).status, "ok");
+      const mineRestored = data(await call(ctx(outsider, true), "list_my_items")).solutions as { number: string }[];
+      assert.ok(mineRestored.some((s) => s.number === sol.number), "restored, it is listed again");
 
       // ── reference data and argument errors ──
       const ref = data(await call(ctx(member, false), "get_reference_data"));

@@ -150,18 +150,21 @@ async function auditScrubbedRefusal(pool: Pool, userId: string, request: string)
 // the column here would wipe it on every sync cycle. scim.dbtest.ts pins that contract.
 async function insertUser(pool: Pool, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
   const userName = data.userName ?? data.email ?? data.externalId;
+  // ENTRA_AUTH_SPEC.md §5: a new row with no parseable `active` starts active — insert is the
+  // only place that defaults it.
+  const active = data.active ?? true;
   const { rows } = await pool.query<UserRow>(
     `insert into users (external_id, user_name, email, display_name, department, job_title, active, scim_synced, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, true, now())
      returning *`,
-    [data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, data.active],
+    [data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, active],
   );
   // §4.3: a pending access-list entry for this address now names a user.
   await bindPendingAccess(pool, rows[0]!.id);
   return rows[0]!;
 }
 
-async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
+async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedUserWrite & { externalId: string; active: boolean }): Promise<UserRow> {
   const userName = data.userName ?? data.email ?? data.externalId;
   const { rows } = await pool.query<UserRow>(
     `update users
@@ -521,7 +524,8 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
         }
       }
       const updated = await atomically(pool, async (db) => {
-        const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+        // ENTRA_AUTH_SPEC.md §5: a payload silent on `active` keeps the stored value.
+        const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId, active: parsedBody.active ?? existing.active });
         await auditUserTransition(db, existing, row);
         return row;
       });
@@ -583,7 +587,9 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       }
     }
     const updated = await atomically(pool, async (db) => {
-      const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+      // ENTRA_AUTH_SPEC.md §5: a PUT that omits `active` (or sends something unparseable) keeps
+      // the stored value — never a silent reactivation.
+      const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId, active: parsedBody.active ?? existing.active });
       await auditUserTransition(db, existing, row);
       return row;
     });

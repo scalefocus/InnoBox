@@ -10,6 +10,7 @@ export type RateLimitBucket =
   | "comment"
   | "upload"
   | "search"
+  | "download"
   | "mutation"
   | "survey"
   | "bug_report"
@@ -27,6 +28,9 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   comment: { limit: 60, windowMs: 60 * 60 * 1000 },
   upload: { limit: 60, windowMs: 60 * 60 * 1000 }, // single-shot or chunked initiate
   search: { limit: 120, windowMs: 60 * 1000 }, // search, autocomplete, the §6.1 similarity check
+  // §11 attachment download gateway: every denial is an audit row, so the GET is the other
+  // limited read — a loop over made-up ids must not become an audit flood.
+  download: { limit: 120, windowMs: 60 * 1000 },
   mutation: { limit: 120, windowMs: 60 * 1000 }, // every other state-changing request
   survey: { limit: 10, windowMs: 60 * 1000 }, // survey start + submit (§13.10)
   // A bug report (§13.10): 3 a minute AND 20 a day — the route takes a token from both.

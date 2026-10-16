@@ -4,7 +4,7 @@
 // skip, and the failed-row bookkeeping when no transport is configured at all).
 //
 // The outbox query LEFT JOINs users, so each fake outbox row carries its recipient's
-// email/email_notifications_enabled directly (a "missing user" row just has both null).
+// email/email_notifications_enabled/active directly (a "missing user" row just has them null).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -79,6 +79,25 @@ test("runNotificationSweep: user with no email is treated as opted-out (skipped,
   assert.deepEqual(summary, { sent: 0, skippedOptOut: 1, failed: 0 });
 });
 
+test("runNotificationSweep: a deactivated or erased recipient is skipped like an opt-out (§12.1)", async () => {
+  const { pool, updates } = makeFakePool([
+    {
+      id: "o1",
+      user_id: "u1",
+      type: "comment_posted",
+      payload: { message: "hi", link: "/challenges/1" },
+      attempts: 0,
+      email: "a@example.com",
+      email_notifications_enabled: true,
+      active: false, // the LEFT JOIN's `(u.active and u.scrubbed_at is null)`
+    },
+  ]);
+  const summary = await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
+  assert.deepEqual(summary, { sent: 0, skippedOptOut: 1, failed: 0 });
+  assert.equal(updates.length, 1);
+  assert.match(updates[0]!.sql, /set status = 'sent'/, "marked sent, never attempted");
+});
+
 test("runNotificationSweep: no transport configured marks the row failed with attempts incremented", async () => {
   const { pool, updates } = makeFakePool([
     {
@@ -89,6 +108,7 @@ test("runNotificationSweep: no transport configured marks the row failed with at
       attempts: 2,
       email: "a@example.com",
       email_notifications_enabled: true,
+      active: true,
     },
   ]);
   const summary = await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
@@ -148,6 +168,7 @@ test("runNotificationSweep: a failure backs off next_attempt_at by the row's att
       attempts: 3,
       email: "a@example.com",
       email_notifications_enabled: true,
+      active: true,
     },
   ]);
   await runNotificationSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });

@@ -698,8 +698,11 @@ these rules close the generic web-platform paths by which it could.
     declared size instead) — **60 per hour**;
   - search, autocomplete — the topbar search **and** the user-directory search behind
     every assignee/successor picker (`GET /api/users?q=`) — and the §6.1 similarity
-    check — **120 per minute** (the one limited read: each is a query a script could
+    check — **120 per minute** (a limited read: each is a query a script could
     hammer, and the directory search could otherwise enumerate every user);
+  - downloading an attachment through the §11 gateway — **120 per minute** (the
+    `download` bucket; the other limited read: every denial is an audit row, and the
+    limit keeps a loop over made-up ids from becoming an audit flood);
   - starting an on-demand survey or submitting a survey response (§13.10) — **10 per
     minute** (the `survey` bucket; its 429 warning omits the user id);
   - submitting a bug report (§13.10) — **3 per minute and 20 per day** (the `bug_report`
@@ -2236,7 +2239,13 @@ trashed item is gone for everyone else from the moment it is trashed.
   re-checks parent visibility, and streams the object **only when `scan_status=clean`
   and `removed_at is null`** (Content-Disposition: attachment). Any denial (not
   visible / not clean / removed) returns the same 404 and is audited
-  `attachment.download_denied`. No presigned/direct MinIO URLs are ever emitted.
+  `attachment.download_denied`. A **malformed id** (not a well-formed UUID) is the
+  same 404 but is **not audited**: there is no attachment to target, and an audit row
+  would otherwise carry caller-chosen text into the append-only, hash-chained log
+  (§15). Such a request is still an ordinary 404 to the system log (§14.7). The GET
+  draws on its own **`download`** rate-limit bucket — **120 per minute** per user
+  (§2.4) — so a loop over the gateway can neither flood the audit log with denials
+  nor contend its chain lock. No presigned/direct MinIO URLs are ever emitted.
   The bytes are **streamed** from MinIO to the client, never buffered whole in memory.
   A served attachment always carries `X-Content-Type-Options: nosniff` and
   `Content-Security-Policy: sandbox; default-src 'none'`, on top of the §2.4 baseline.
@@ -2381,7 +2390,18 @@ right, not only through an auto-follow.
 
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
-rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`:
+rendering (§9). **A deactivated user (`active = false`, the §3 leaver) or an erased
+one (`scrubbed_at` set) is never a recipient**, on any channel: the dispatch drops
+them at insert time, beside the visibility drop, so neither the inbox row nor the
+outbox row is written; the role-resolving recipient helpers (namespace admins,
+committee, platform admins) return active, not-erased users only; and the e-mail
+sweep re-checks `active` at send time — immediate and digest alike — and discards a
+row whose user has been deactivated since it was written, exactly as it discards an
+opt-out. Deactivation is where e-mail stops too, not only sign-in
+(`ENTRA_AUTH_SPEC.md` §2): a disabled mailbox is routinely delegated or converted to
+a shared one during offboarding, and nothing about a restricted challenge may reach
+it. Reactivation restores delivery from that moment; the events of the inactive
+period are not backfilled. Deep links point to the canonical routes under `PUBLIC_BASE_URL`:
 `<PUBLIC_BASE_URL>/challenges/:number` for a challenge, and
 `<PUBLIC_BASE_URL>/challenges/:number#SOL-<n>` for **anything about a solution** —
 its status, a comment on it, its proposal (there is no standalone solution page,
@@ -2421,8 +2441,9 @@ a day or a week.
   - the recipient has **already read** the matching inbox row. They have seen it, so
     the digest is not a second copy.
   
-  When nothing is left, no e-mail is sent. When the e-mail switch (§13.5) is off, held
-  rows are discarded at the slot, as an immediate row would be.
+  When nothing is left, no e-mail is sent. When the e-mail switch (§13.5) is off, or
+  the recipient has been deactivated or erased (above), held rows are discarded at the
+  slot, as an immediate row would be.
 - **Content.** Subject: *"Your daily InnoBox digest — N updates"* (or *weekly*). The
   body groups the updates **by item**, most recently active first. Each item gets a
   heading with its number and title, linked, and one line per kind of update:
@@ -5174,7 +5195,11 @@ detectable:
   - `created_at` — UTC, `YYYY-MM-DDTHH:MM:SS.ffffffZ`, always six fractional digits
     (`to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`).
   - `actor_user_id` — the canonical lowercase hyphenated UUID text.
-  - `action`, `target_type`, `target_id` — the stored text verbatim.
+  - `action`, `target_type`, `target_id` — the stored text verbatim. The writer
+    **caps `target_id` at 256 characters** (a UUID is 36; every targeted id is far
+    shorter), truncating a longer value before the insert, so no caller can plant an
+    unbounded string in a chained row. The rule binds the writer, not the chain: a row
+    is hashed as stored.
   - `before`, `after` — PostgreSQL's own `jsonb` text output (`before::text`). It is
     deterministic for a stored value: keys are de-duplicated and ordered, and the
     separators are fixed. A verifier obtains it by selecting `::text`, **never** by
@@ -7144,7 +7169,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
-| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items. |
+| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
 | `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
 

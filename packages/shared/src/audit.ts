@@ -12,10 +12,22 @@ export interface AuditEntry {
   action: string;
   /** Entity kind the event targets, e.g. "user", "role_mapping". */
   targetType: string;
+  /** Capped at AUDIT_TARGET_ID_MAX_LENGTH characters by the writer (§15). */
   targetId?: string | null;
   /** Structured payload halves: state before/after (diffs, from → to, override flags). */
   before?: unknown;
   after?: unknown;
+}
+
+/** §15: the longest `target_id` the writer stores. A UUID is 36 characters and every targeted id
+ *  is far shorter than this; a longer value is truncated before the insert, so no caller can
+ *  plant an unbounded string in a hash-chained row. */
+export const AUDIT_TARGET_ID_MAX_LENGTH = 256;
+
+/** The stored form of a target id: null when absent, else at most AUDIT_TARGET_ID_MAX_LENGTH. */
+export function auditTargetId(targetId: string | null | undefined): string | null {
+  if (targetId === null || targetId === undefined) return null;
+  return targetId.length > AUDIT_TARGET_ID_MAX_LENGTH ? targetId.slice(0, AUDIT_TARGET_ID_MAX_LENGTH) : targetId;
 }
 
 /** Accepts any DbClient (pg Pool or a checked-out PoolClient) so audit rows can join the
@@ -30,7 +42,7 @@ export async function appendAudit(db: DbClient, entry: AuditEntry): Promise<void
       entry.actorUserId ?? null,
       entry.action,
       entry.targetType,
-      entry.targetId ?? null,
+      auditTargetId(entry.targetId),
       entry.before === undefined ? null : JSON.stringify(entry.before),
       entry.after === undefined ? null : JSON.stringify(entry.after),
     ],
