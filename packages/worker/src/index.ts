@@ -175,7 +175,7 @@ const leaderElection = startLeaderElection(dbUrl, {
     const runHousekeeping = async () => {
       try {
         const summary = await runPresenceRollupSweep(pool);
-        if (summary.rolled || summary.purged) {
+        if (summary.rolled || summary.snapshot || summary.purged) {
           console.log(JSON.stringify({ level: "info", msg: "presence rollup sweep", ...summary }));
         }
       } catch (err) {

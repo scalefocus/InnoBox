@@ -94,6 +94,11 @@ export * from "./smtp-env.js";
 // `@innobox/shared/survey-results`.
 export * from "./survey.js";
 export * from "./survey-results.js";
+// §2 bare UTC calendar days in the platform's EU/US order (client-safe, also at
+// `@innobox/shared/calendar-day`), and the §14.5 presence person filter and window lengths web
+// and worker share (also at `@innobox/shared/presence`).
+export * from "./calendar-day.js";
+export * from "./presence.js";
 // §23 gamification: the fixed weights, caps, level curve and badge catalogue (client-safe, also at
 // `@innobox/shared/gamification`) and the server-only award writer web and worker share.
 export * from "./gamification.js";
