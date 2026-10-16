@@ -1,10 +1,12 @@
 // Unit tests for the §14.7 route wrapper against fake dependencies: what gets recorded, what
 // never does, the throw → 500 path, anonymity masking (and its mask-by-default fallback), and
-// the fire-and-forget guarantee that a failing recorder never touches the response.
+// the fire-and-forget guarantee that a failing recorder never touches the response — and the §2.4
+// CSRF re-check the wrapper runs before every handler (the second of the two independent checks).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SystemEventInput } from "@innobox/shared";
-import { INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, noteSystemEvent, type SystemLogDeps } from "./system-log-core";
+import { CSRF_FORBIDDEN_MESSAGE, INTERNAL_ERROR_MESSAGE, createSystemLogWrapper, noteSystemEvent, type SystemLogDeps } from "./system-log-core";
+import { isRequestOriginAllowed } from "./csrf";
 
 function fakeDeps(overrides: Partial<SystemLogDeps> = {}) {
   const recorded: SystemEventInput[] = [];
@@ -15,6 +17,9 @@ function fakeDeps(overrides: Partial<SystemLogDeps> = {}) {
     },
     resolveActor: async () => ({ userId: "u-1", name: "Alice", email: "alice@example.test" }),
     isAnonymousTarget: async () => false,
+    // The recording tests are about what happens AFTER the gate; the CSRF tests below bind the
+    // real rule instead.
+    originAllowed: () => true,
     log: (line) => {
       logged.push(line);
     },
@@ -224,4 +229,92 @@ test("a noted response is recorded with the note's status, code and message — 
   await settle();
   assert.equal(recorded.length, 2, "one row, never two");
   assert.deepEqual([recorded[1]!.status, recorded[1]!.errorCode, recorded[1]!.message], [422, "ai_test_failed", "AI save test failed: x"]);
+});
+
+// ── §2.4 CSRF: the wrapper's own Origin check, bound to the real rule ──────────────────────
+
+const PROD = { PUBLIC_BASE_URL: "https://innobox.example.com", NODE_ENV: "production" };
+
+/** The real rule with a fixed production environment, the way lib/system-log.ts binds it. */
+function csrfDeps() {
+  let handlerRuns = 0;
+  const base = fakeDeps({ originAllowed: (r) => isRequestOriginAllowed(r, PROD) });
+  const handler = async (_req: Request) => {
+    handlerRuns += 1;
+    return Response.json({ ok: true });
+  };
+  return { ...base, handler, runs: () => handlerRuns };
+}
+
+const prodReq = (method: string, path: string, headers: Record<string, string> = {}) =>
+  new Request(`https://innobox.example.com${path}`, { method, headers });
+
+test("§2.4: a POST without an Origin is refused with the middleware's 403 body and the handler never runs", async () => {
+  const { withSystemLog, handler, runs, recorded } = csrfDeps();
+  const POST = withSystemLog("/api/challenges", handler);
+  const res = await POST(prodReq("POST", "/api/challenges"));
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: "forbidden" });
+  assert.equal(CSRF_FORBIDDEN_MESSAGE, "forbidden");
+  assert.equal(runs(), 0, "the handler is never invoked");
+  await settle();
+  assert.equal(recorded.length, 1, "the refusal is recorded like any other 403");
+  assert.equal(recorded[0]!.status, 403);
+  assert.equal(recorded[0]!.errorCode, "forbidden");
+  assert.equal(recorded[0]!.route, "/api/challenges");
+  assert.equal(recorded[0]!.message, "forbidden");
+});
+
+test("§2.4: a different or sibling-subdomain Origin is refused too", async () => {
+  const { withSystemLog, handler, runs } = csrfDeps();
+  const POST = withSystemLog("/api/challenges", handler);
+  for (const origin of ["https://evil.example.com", "https://innobox.example.com.evil.test", "null"]) {
+    const res = await POST(prodReq("POST", "/api/challenges", { origin }));
+    assert.equal(res.status, 403, origin);
+  }
+  assert.equal(runs(), 0);
+});
+
+test("§2.4: a GET passes without any Origin", async () => {
+  const { withSystemLog, handler, runs } = csrfDeps();
+  const GET = withSystemLog("/api/challenges", handler);
+  const res = await GET(prodReq("GET", "/api/challenges"));
+  assert.equal(res.status, 200);
+  assert.equal(runs(), 1);
+});
+
+test("§2.4: a POST with the right Origin runs the handler", async () => {
+  const { withSystemLog, handler, runs, recorded } = csrfDeps();
+  const POST = withSystemLog("/api/challenges", handler);
+  const res = await POST(prodReq("POST", "/api/challenges", { origin: "https://innobox.example.com" }));
+  assert.equal(res.status, 200);
+  assert.equal(runs(), 1);
+  await settle();
+  assert.equal(recorded.length, 0);
+});
+
+test("§2.4: /api/auth/* and the CSP report sink are exempt; the agent-access routes are exempt by path, the consent POST is not", async () => {
+  const { withSystemLog, handler, runs } = csrfDeps();
+  for (const path of ["/api/auth/callback/azure-ad", "/api/auth/signin", "/api/csp-report", "/mcp", "/oauth/register", "/oauth/token", "/oauth/revoke"]) {
+    const POST = withSystemLog(path, handler);
+    const res = await POST(prodReq("POST", path));
+    assert.equal(res.status, 200, `${path} must pass without an Origin`);
+  }
+  assert.equal(runs(), 7);
+  const consent = withSystemLog("/oauth/consent", handler);
+  assert.equal((await consent(prodReq("POST", "/oauth/consent"))).status, 403, "the consent form carries the session, so it keeps the check");
+  assert.equal((await consent(prodReq("POST", "/oauth/consent", { origin: "https://innobox.example.com" }))).status, 200);
+  // The exact-path sink exemption does not widen to a sub-path.
+  assert.equal((await withSystemLog("/api/csp-report/x", handler)(prodReq("POST", "/api/csp-report/x"))).status, 403);
+});
+
+test("§2.4: the check applies to PUT, PATCH and DELETE alike, and a handler called without a Request is not gated", async () => {
+  const { withSystemLog, handler, runs } = csrfDeps();
+  for (const method of ["PUT", "PATCH", "DELETE"]) {
+    const H = withSystemLog("/api/challenges/[number]", handler);
+    assert.equal((await H(prodReq(method, "/api/challenges/42"))).status, 403, method);
+  }
+  assert.equal(runs(), 0);
+  const bare = withSystemLog("/api/x", async () => Response.json({ ok: true }));
+  assert.equal((await bare()).status, 200);
 });

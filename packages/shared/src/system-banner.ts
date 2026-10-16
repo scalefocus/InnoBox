@@ -56,10 +56,11 @@ export function isSystemBannerDuration(v: unknown): v is SystemBannerDuration {
   return typeof v === "string" && (SYSTEM_BANNER_DURATIONS as readonly string[]).includes(v);
 }
 
-/** `https://…` or an app-relative path (`/…`, never `//…`). Anything else — `http:`,
- *  `javascript:`, `data:` — is refused. */
+/** `https://…` or an app-relative path: `/` followed by neither `/` nor `\` (§14.6 — browsers
+ *  resolve `/\host` as `//host`, a different origin). Anything else — `http:`, `javascript:`,
+ *  `data:` — is refused. */
 export function isAllowedBannerUrl(raw: string): boolean {
-  if (raw.startsWith("/")) return !raw.startsWith("//") && !/[\s<>"']/.test(raw);
+  if (raw.startsWith("/")) return !/^\/[/\\]/.test(raw) && !/[\s<>"']/.test(raw);
   try {
     const u = new URL(raw);
     return u.protocol === "https:";

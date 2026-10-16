@@ -17,6 +17,7 @@ import {
   notificationLinkScope,
   solutionRestoreBlocked,
   trashPurgesOn,
+  escapeLike,
   type MaskedAuthor,
 } from "@innobox/shared";
 import { abortUploadSessions, dropUploadSessions, removeUnsentAbout, unpinChallenge, type PurgeStorage } from "@innobox/shared/item-delete";
@@ -269,10 +270,10 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
      ) t
      where ($1::text = ''
             or (t.number = $2::text and ($3::text is null or t.type = $3::text))
-            or t.title ilike '%' || $1 || '%')
+            or t.title ilike '%' || $4 || '%') -- §2.4: literal substring ($4 = escapeLike(q))
      order by t.trashed_at desc
      limit ${TRASH_LIST_LIMIT}`,
-    [q, digits, numberType],
+    [q, digits, numberType, escapeLike(q)],
   );
   return rows.map((r) => ({
     type: r.type,

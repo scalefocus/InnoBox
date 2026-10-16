@@ -9,6 +9,7 @@ import { buildRoleSet, type Role, type RoleGrant, type RoleSet } from "@innobox/
 import { authOptions } from "./authOptions";
 import { pool } from "./db";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER, touchPresence } from "./presence-touch";
+import { isSessionRevoked } from "./session-revocation";
 
 export interface SessionUser {
   id: string;
@@ -117,7 +118,8 @@ async function stampPresence(userId: string): Promise<void> {
 }
 
 /** The signed-in, ACTIVE user with DB-resolved roles — or null (unauthenticated, or the
- *  user row is missing/deactivated: same outcome, no session). */
+ *  user row is missing/deactivated, or the token was issued before the row's
+ *  `sessions_valid_from` — "Sign out everywhere", INNOBOX_SPEC.md §3: same outcome, no session). */
 export async function getSessionUser(): Promise<SessionUser | null> {
   const session = await getServerSession(authOptions);
   const oid = session?.oid;
@@ -130,6 +132,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     email: string | null;
     display_name: string;
     active: boolean;
+    sessions_valid_from: Date | null;
     email_notifications_enabled: boolean;
     quick_start_seen_at: Date | null;
     whats_new_seen_version: string | null;
@@ -137,7 +140,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   }>(
     // The rollout boundary is a bare calendar date: read it as text, never through a JS Date,
     // which would shift it by the server's offset.
-    `select id, external_id, user_name, email, display_name, active, email_notifications_enabled, quick_start_seen_at,
+    `select id, external_id, user_name, email, display_name, active, sessions_valid_from, email_notifications_enabled, quick_start_seen_at,
             whats_new_seen_version, to_char(whats_new_since_date, 'YYYY-MM-DD') as whats_new_since_date
        from users
       where external_id = $1`,
@@ -145,6 +148,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   );
   const row = rows[0];
   if (!row || !row.active) return null;
+  // §3 Sign out everywhere / erasure / SCIM deactivation stamp: a token minted before it is no
+  // session, whatever the cookie says — the API answers 401, a page redirects to Home.
+  if (isSessionRevoked({ issuedAt: session.issuedAt, sessionsValidFrom: row.sessions_valid_from })) return null;
 
   await stampPresence(row.id);
 

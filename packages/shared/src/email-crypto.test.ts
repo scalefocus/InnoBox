@@ -6,11 +6,15 @@ import { decryptToken, encryptToken, parseEmailTokenKey } from "./email-crypto.j
 
 const key = randomBytes(32);
 
-test("parseEmailTokenKey: accepts exactly 32 bytes of base64, else null", () => {
+test("parseEmailTokenKey: accepts exactly 32 bytes of strict base64, else null", () => {
   assert.ok(parseEmailTokenKey(key.toString("base64")));
   assert.equal(parseEmailTokenKey(undefined), null);
   assert.equal(parseEmailTokenKey(""), null);
   assert.equal(parseEmailTokenKey(randomBytes(16).toString("base64")), null);
+  // §2.3 key validation: a stray character is refused rather than skipped (Buffer.from would
+  // decode the newline-suffixed value to the same 32 bytes).
+  assert.equal(parseEmailTokenKey(`${key.toString("base64")}\n`), null);
+  assert.equal(parseEmailTokenKey(key.toString("base64url")), null, "URL-safe alphabet is not the standard one");
 });
 
 test("encryptToken/decryptToken: round-trips, with a fresh IV each time", () => {

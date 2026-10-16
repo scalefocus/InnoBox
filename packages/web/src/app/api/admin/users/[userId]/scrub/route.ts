@@ -3,7 +3,8 @@
 // The audit_log is exempt from erasure (§15) — this action is itself audited as user.scrubbed.
 // Body `{ reassignTo?: uuid | null }` (an empty body or `{}` = no successor): the open
 // assignments the successor can see move to them in the same transaction, and the successor
-// gets one summary notification after commit (§12.1 event 12).
+// gets one summary notification after commit (§12.1 event 12). Two refusals come first (§3,
+// v1.16): erasing your own account (400) and erasing the last active platform admin (409).
 import { requirePlatformAdmin, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { scrubUser } from "../../../../users/store";
@@ -56,6 +57,11 @@ async function handlePOST(req: Request, context: { params: Promise<{ userId: str
       return Response.json({ error: "user not found" }, { status: 404 });
     case "already_scrubbed":
       return Response.json({ error: "this user's info has already been deleted" }, { status: 409 });
+    // §3 (v1.16): the two refusals checked inside the erasure transaction before anything changes.
+    case "cannot_erase_self":
+      return Response.json({ error: "you cannot erase your own account" }, { status: 400 });
+    case "last_platform_admin":
+      return Response.json({ error: "this is the last active platform admin" }, { status: 409 });
     case "invalid_successor":
       return Response.json({ error: "open assignments can only be reassigned to an active user" }, { status: 400 });
   }

@@ -449,7 +449,9 @@ pipeline {
 cd __DEPLOY_PATH__/deploy || exit 1
 set -a; . ./.env; set +a
 for i in $(seq 1 20); do
-  if docker compose exec -T -e S3_BUCKET="${S3_BUCKET:-innobox-attachments}" minio sh -c 'mc alias set s3 http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" && mc mb -p s3/${S3_BUCKET:-innobox-attachments}'; then
+  # The root credentials reach mc through MC_HOST_s3 in the exec environment, never on a command
+  # line (visible via ps / docker inspect of the exec).
+  if docker compose exec -T -e S3_BUCKET="${S3_BUCKET:-innobox-attachments}" -e MC_HOST_s3="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@localhost:9000" minio sh -c 'mc mb -p s3/${S3_BUCKET:-innobox-attachments}'; then
     exit 0
   fi
   sleep 3

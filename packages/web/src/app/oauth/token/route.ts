@@ -1,7 +1,8 @@
 // POST /oauth/token (INNOBOX_SPEC.md §25.3): the authorization-code exchange (PKCE) and refresh-token
 // rotation, for public clients. No session and no Origin check (called by programs); 60 requests per
-// IP per minute. A refresh token presented again after rotation revokes the whole grant and writes
-// the `mcp_refresh_reuse_detected` system-log row; a blocked client is refused and logged as
+// IP per minute. A refresh token presented again after rotation, or an authorization code presented
+// a second time, revokes the whole grant and writes the `mcp_refresh_reuse_detected` /
+// `mcp_code_reuse_detected` system-log row; a blocked client is refused and logged as
 // `mcp_client_blocked` (§25.11). Token issue and rotation are metrics, not audit rows. Nothing
 // here ever logs a code, verifier or token.
 import { pool } from "@/lib/db";
@@ -56,8 +57,11 @@ export async function POST(req: Request): Promise<Response> {
       recordMcpEvent({
         status: 400,
         route: ROUTE,
-        errorCode: "mcp_refresh_reuse_detected",
-        message: `a rotated refresh token of client "${result.clientName}" was presented again; the connection was revoked`,
+        errorCode: result.of === "code" ? "mcp_code_reuse_detected" : "mcp_refresh_reuse_detected",
+        message:
+          result.of === "code"
+            ? `an already-exchanged authorization code of client "${result.clientName}" was presented again; the connection was revoked`
+            : `a rotated refresh token of client "${result.clientName}" was presented again; the connection was revoked`,
         userId: result.userId,
       });
       return oauthError(400, "invalid_grant");

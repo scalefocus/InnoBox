@@ -3,21 +3,18 @@
 // "@innobox/shared/email" subpath, never from the client-reachable main index.
 // Plaintext tokens never touch the database, logs, or audit payloads. INNOBOX_SPEC.md §12/§22.
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { parseEncryptionKey } from "./enc-keys.js";
 
 export const EMAIL_TOKEN_ENC_KEY_ENV = "EMAIL_TOKEN_ENC_KEY";
 
 /** AES-GCM authentication tag length, in bytes — the full 128-bit tag. */
 const GCM_TAG_BYTES = 16;
 
-/** Parse + validate the base64 key. Returns null when unset/invalid (channel stays off). */
+/** Parse + validate the base64 key. Returns null when unset/invalid (channel stays off). §2.3 key
+ *  validation: strict base64 only — a value with stray characters is invalid, not decoded to
+ *  fewer bytes — and exactly 32 bytes. The webhook, AI and public-intake parsers share it. */
 export function parseEmailTokenKey(keyB64: string | undefined): Buffer | null {
-  if (!keyB64) return null;
-  try {
-    const key = Buffer.from(keyB64, "base64");
-    return key.length === 32 ? key : null;
-  } catch {
-    return null;
-  }
+  return parseEncryptionKey(keyB64);
 }
 
 /** Encrypt a token → "v1:<iv b64>:<tag b64>:<ciphertext b64>". */

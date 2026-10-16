@@ -41,3 +41,10 @@ export function scimTokenFatalLog(reason: ScimTokenFailure): string {
 export function scimTokenFingerprint(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex").slice(0, 8);
 }
+
+/** The one place the configured token's fingerprint is surfaced (§14.7, v1.16): a structured
+ *  stdout line printed once at worker start, for the operator who holds `deploy/.env`. It is not
+ *  stored in the system log. Never the token itself. */
+export function scimTokenLoadedLog(token: string): string {
+  return JSON.stringify({ level: "info", msg: "scim bearer token loaded", fingerprint: scimTokenFingerprint(token) });
+}
