@@ -264,26 +264,57 @@ pipeline {
               #                   of disposing them after 60 s idle (a dev-only setting)
               #   setsid        : its own process group, so cleanup also kills next's child
               #                   processes, not just the pnpm wrapper
+              #   nohup, </dev/null, JENKINS_NODE_COOKIE=dontKillMe : the server must outlive an
+              #                   agent-connection blip. `next dev` exits 0 on SIGINT/SIGTERM, and
+              #                   one such signal has stopped it mid-suite right after Jenkins logged
+              #                   "<node> seems to be removed or offline … is back online". So: ignore
+              #                   SIGHUP, never read a stdin that may be closed under us, and opt out
+              #                   of Jenkins' process-tree killer (which matches processes on the
+              #                   node's cookie and sends SIGTERM) — the pid file + EXIT trap + post
+              #                   step below still stop the server on every exit path.
               #   WEB_EXIT      : written by the sh wrapper when the server exits - its exit status
               #                   on line 1, the UTC time on line 2 - and polled by the watchdog (a
               #                   dead child can linger as a zombie, which `kill -0` still finds)
+              #   WEB_PIDFILE   : the server's process-group id, for the post step (which runs after
+              #                   this script is gone) and for the leftover check below.
               #   WEB_POSTMORTEM: written by the wrapper just before WEB_EXIT - host memory, load,
               #                   the kernel log tail and what became of the next PIDs
               #   WEB_PIDS      : the `next dev` parent and its server child, recorded once the
               #                   server is ready (the watchdog samples their RSS every tick)
               #   HOST_STATS    : one line per watchdog tick - host memory, the next RSS, load
               WEB_EXIT="${PWD}/e2e-web.exit"
+              WEB_PIDFILE="${PWD}/e2e-web.pid"
               WEB_POSTMORTEM="${PWD}/e2e-web-exit.log"
               WEB_PIDS="${PWD}/e2e-web.pids"
               HOST_STATS="${PWD}/e2e-host-stats.log"
               rm -f "${WEB_EXIT}" "${WEB_POSTMORTEM}" "${WEB_PIDS}" "${HOST_STATS}" "${PWD}"/e2e-shard-*.exit
+
+              # A server opted out of the process-tree killer can outlive a hard-aborted build. Stop
+              # one left by a previous build (only if that pid still is an InnoBox dev server — pids
+              # get reused), then refuse to run against anything else already on the port: Next
+              # would silently move to 3001 and the suite would test the stale server on 3000.
+              if [ -f "${WEB_PIDFILE}" ]; then
+                OLD_PGID="$(cat "${WEB_PIDFILE}")"
+                if ps -o args= -p "${OLD_PGID}" 2>/dev/null | grep -q 'innobox/web dev'; then
+                  echo "=== stopping a dev server left by a previous build (pgid ${OLD_PGID}) ==="
+                  kill -TERM -"${OLD_PGID}" >/dev/null 2>&1 || true
+                  for i in $(seq 1 10); do kill -0 "${OLD_PGID}" >/dev/null 2>&1 || break; sleep 1; done
+                  kill -KILL -"${OLD_PGID}" >/dev/null 2>&1 || true
+                fi
+                rm -f "${WEB_PIDFILE}"
+              fi
+              if curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null 2>&1; then
+                echo "something already answers on ${E2E_BASE_URL} — refusing to run the suite against a server this build did not start"
+                exit 1
+              fi
+
               export E2E_KEEP_ROUTES_COMPILED=1
               # The wrapper is the single-quoted script below (double quotes only inside it):
               # $1 = WEB_EXIT, $2 = WEB_PIDS, $3 = WEB_POSTMORTEM. It writes the post-mortem first
               # and the exit file last (via a rename), so whoever sees the exit file has both.
               # shellcheck disable=SC2016 # the body expands when the wrapper's own sh runs it
-              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" \
-                setsid sh -c '
+              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" JENKINS_NODE_COOKIE=dontKillMe \
+                nohup setsid sh -c '
                   pnpm --filter @innobox/web dev > e2e-web.log 2>&1
                   rc=$?
                   at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -309,8 +340,9 @@ pipeline {
                     rm -f e2e-kernel.tmp
                   } > "$3" 2>&1
                   { echo "${rc}"; echo "${at}"; } > "$1.tmp" && mv "$1.tmp" "$1"
-                ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" &
+                ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" </dev/null &
               WEB_PID=$!
+              echo "${WEB_PID}" > "${WEB_PIDFILE}"
               # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
               stop_shards() {
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -477,12 +509,16 @@ pipeline {
                     echo "so the status above comes from that kill, not from the original death."
                   else
                     case "${WEB_STATUS}" in
-                      0)
-                        echo "Status 0 means next dev shut down cleanly: a SIGINT or SIGTERM reached the parent"
-                        echo "process (Next exits 0 on either). This is NOT an OOM kill - the kernel's SIGKILL"
-                        echo "would show as 137, and a V8 heap-limit abort as 134 with 'Reached heap limit' in"
-                        echo "the log above. Look for who signalled it: a Jenkins abort or agent reconnect, a"
-                        echo "stalled host, or a hand kill."
+                      0|130|143)
+                        # `next dev` exits 0 when IT gets SIGINT/SIGTERM (its child's 130/143 surface
+                        # when the child is signalled instead). Either way: not a crash.
+                        echo "Status ${WEB_STATUS} means the server was told to stop - it did not crash. next dev"
+                        echo "exits 0 when a SIGINT or SIGTERM reaches the parent process (its child's 130/143"
+                        echo "surface when the child is signalled instead). This is NOT an OOM kill - the kernel's"
+                        echo "SIGKILL would show as 137, and a V8 heap-limit abort as 134 with 'Reached heap limit'"
+                        echo "in the log above. Look for who signalled it: a Jenkins abort, an agent"
+                        echo "disconnect/reconnect ('seems to be removed or offline' in the build log just before"
+                        echo "this), a stalled host, or a hand kill."
                         ;;
                       137)
                         echo "Status 137 is SIGKILL from outside the process: the kernel OOM killer (see the"
@@ -493,8 +529,7 @@ pipeline {
                         echo "was reached - look for 'Reached heap limit' in the log above."
                         ;;
                       *)
-                        echo "An unexpected status: 128+N is death by signal N (143 = SIGTERM reported by the"
-                        echo "shell, i.e. it hit the pnpm wrapper rather than next); anything else is next's own"
+                        echo "An unexpected status: 128+N is death by signal N; anything else is next's own"
                         echo "exit - read the log above."
                         ;;
                     esac
@@ -513,6 +548,12 @@ pipeline {
           post {
             always {
               sh '''
+                # The dev server opts out of Jenkins' process-tree killer (see the stage), so stop it
+                # here too — this runs even when the stage's own EXIT trap never did (hard abort).
+                if [ -f e2e-web.pid ]; then
+                  kill -TERM -"$(cat e2e-web.pid)" >/dev/null 2>&1 || true
+                  rm -f e2e-web.pid
+                fi
                 docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
               '''
