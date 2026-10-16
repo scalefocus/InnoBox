@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.16 — draft for review** (2026-10-14; v0.2 added the UI and CI/CD
+> Status: **v0.17 — draft for review** (2026-10-16; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -45,9 +45,11 @@
 > solutions (§10.4), lifting the matching §19 non-goals; v0.15 (2026-10-13) specified
 > agent access through an MCP server — OAuth sign-in, 15 read-and-contribute tools,
 > "via agent" attribution and four agent badges — as a new-feature gap (§25); v0.16
-(2026-10-14) added bug reports to the feedback survey — a sidebar bug button, a Bug
-category in the survey card, and their own source in the admin results (§13.10,
-§14.11)).
+> (2026-10-14) added bug reports to the feedback survey — a sidebar bug button, a Bug
+> category in the survey card, and their own source in the admin results (§13.10,
+> §14.11); v0.17 (2026-10-16) moved both admin charts to Apache ECharts and added
+> weekly and monthly active-user lines, sampled once a day, to the Currently online
+> chart (§14.5, §14.11), and ruled out proprietary dependency licences (§21.1)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
