@@ -255,7 +255,12 @@ provisioning contract, including the Entra dialect quirks:
   never written or returned: every id-addressed `/Users/{id}` verb answers 404, a POST
   matching it by `externalId` answers 409, and a group membership add naming it is
   treated as an unknown member — nothing written (INNOBOX_SPEC.md §3). Each refusal is
-  audited `scim.anomaly`.
+  audited `scim.anomaly`. **`active` on a full-resource write** (POST, PUT) is read the
+  way PATCH reads it: a boolean, or the strings `"True"` / `"False"` Entra is known to
+  send. When the attribute is **absent or unparseable** on a write that lands on an
+  **existing** row (a replayed POST, a PUT that omits it), the **stored value is kept** —
+  a leaver is never reactivated by a payload that says nothing about it. It defaults
+  to `true` only when the write **creates** the row.
 - **PATCH quirks handled**: case-insensitive `op`; `active` deactivation in all three
   serializations (bool, string `"False"`, path-less `{value:{active:false}}`); the work
   e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less

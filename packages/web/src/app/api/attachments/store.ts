@@ -510,17 +510,18 @@ export type DownloadAttachmentResult =
 /** Serve bytes ONLY when the row is clean, not removed, and the viewer can see the parent.
  *  Every other outcome is folded into a single `denied` (mapped to an identical 404 by the
  *  route) and audited `attachment.download_denied` — no not-found / not-visible / not-clean
- *  oracle. Never emits a presigned/direct MinIO URL. The object is opened as a STREAM (§11):
+ *  oracle — except a malformed id, which is denied unaudited (§11; the route's `download`
+ *  rate-limit bucket bounds the rest). Never emits a presigned/direct MinIO URL. The object is opened as a STREAM (§11):
  *  the route pipes it to the client, never buffering the whole file in memory. */
 export async function getAttachmentForDownload(
   deps: AttachmentDeps,
   viewer: Viewer,
   attachmentId: string,
 ): Promise<DownloadAttachmentResult> {
-  if (!isUuid(attachmentId)) {
-    await auditDownloadDenied(deps.pool, viewer.userId, attachmentId);
-    return { status: "denied" };
-  }
+  // A malformed id is the same denial but is NOT audited (§11): there is no attachment to
+  // target, and the row would carry caller-chosen text into the append-only, hash-chained log.
+  // The request still reaches the system log as an ordinary 404 (§14.7).
+  if (!isUuid(attachmentId)) return { status: "denied" };
   const { rows } = await deps.pool.query<AttachmentDbRow>(
     `select ${ATTACHMENT_COLUMNS} from attachments where id = $1`,
     [attachmentId],

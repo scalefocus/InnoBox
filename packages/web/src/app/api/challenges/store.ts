@@ -1581,14 +1581,16 @@ export interface OwnSolutionItem {
 }
 
 /** §25.6 list_my_items: the viewer's own solutions, newest first, whose parent challenge they can
- *  still see (the same §4.3 predicate; §25.5 on an agent's viewer). */
+ *  still see (the same §4.3 predicate; §25.5 on an agent's viewer) — never one in the trash
+ *  (§10.4), whether through its challenge or trashed on its own: the trash does not exist to an
+ *  agent, the author's own items included. */
 export async function listOwnSolutions(pool: Pool, viewer: Viewer, limit = 100): Promise<OwnSolutionItem[]> {
   const params: unknown[] = [viewer.userId];
   const push = (v: unknown): string => {
     params.push(v);
     return `$${params.length}`;
   };
-  const conditions = [`s.author_id = $1`];
+  const conditions = [`s.author_id = $1`, `s.trashed_at is null`];
   pushChallengeVisibilityConditions(viewer, push, conditions);
   const { rows } = await pool.query<{ number: string; status: string; challenge_number: string; challenge_title: string; created_at: Date }>(
     `select s.number::text, s.status, c.number::text as challenge_number, c.title as challenge_title, s.created_at

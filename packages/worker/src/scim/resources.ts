@@ -3,6 +3,7 @@
 // endpoint returns. Keeps router.ts free of schema/URN string literals.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { publicBaseUrl } from "@innobox/shared/public-url";
+import { parseActiveValue } from "./patch.js";
 
 export const USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User";
 export const ENTERPRISE_USER_SCHEMA = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User";
@@ -82,7 +83,11 @@ export interface ParsedUserWrite {
   displayName: string;
   department: string | null;
   jobTitle: string | null;
-  active: boolean;
+  /** `active` as sent — a boolean, or Entra's `"True"` / `"False"` strings, read exactly as PATCH
+   *  reads them. `undefined` when absent or unparseable: the router keeps the stored value on an
+   *  existing row and defaults to true only on insert (ENTRA_AUTH_SPEC.md §5), so a replayed POST
+   *  or a PUT that says nothing about `active` never reactivates a leaver. */
+  active: boolean | undefined;
 }
 
 /** `externalId`, falling back to `id` — the one contract-mandated key fallback. Neither
@@ -111,7 +116,7 @@ export function parseUserWrite(body: any): ParsedUserWrite {
   const enterprise = body?.[ENTERPRISE_USER_SCHEMA];
   const department = typeof enterprise?.department === "string" ? enterprise.department : null;
   const jobTitle = typeof body?.title === "string" ? body.title : null;
-  const active = typeof body?.active === "boolean" ? body.active : true;
+  const active = parseActiveValue(body?.active);
   return { externalId, userName, email, displayName, department, jobTitle, active };
 }
 

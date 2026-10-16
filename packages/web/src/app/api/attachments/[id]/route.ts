@@ -1,7 +1,9 @@
 // GET/DELETE /api/attachments/:id (INNOBOX_SPEC.md §11).
 //   GET    — the authenticated download gateway (invariant 4): streams bytes only when the row
 //            is clean, not removed, and the viewer can see the parent; any denial is an identical
-//            404 (no not-found / not-visible / not-clean oracle) and is audited. No presigned/
+//            404 (no not-found / not-visible / not-clean oracle) and is audited (a malformed id
+//            is not — nothing to target). Draws on the §2.4 `download` bucket, so a loop over the
+//            gateway can neither flood the audit log nor contend its chain lock. No presigned/
 //            direct MinIO URLs are ever emitted. The bytes are streamed (never buffered whole)
 //            under `nosniff` + a sandboxing CSP.
 //   DELETE — author removal: uploader-only, only within the parent's §10.1 edit window.
@@ -27,6 +29,8 @@ function contentDisposition(filename: string): string {
 async function handleGET(_req: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
   const gate = await requireUser();
   if (!gate.ok) return gate.response;
+  const limited = rateLimit(gate.user.id, "download");
+  if (limited) return limited;
   const { id } = await context.params;
 
   const result = await getAttachmentForDownload(
