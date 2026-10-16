@@ -9,6 +9,7 @@
 //     and the decision to withhold it — is resolved HERE, where the anonymity flag is in
 //     reach, never on the write path.
 import type { Pool } from "pg";
+import { PRESENCE_MAU_DAYS, PRESENCE_REAL_PEOPLE_SQL, PRESENCE_WAU_DAYS } from "@innobox/shared/presence";
 import {
   PRESENCE_LIST_CAP,
   categoryLabel,
@@ -44,16 +45,17 @@ export interface PresenceSummary {
 export interface PresencePoint {
   day: string;
   activeUsers: number;
+  /** Rolling 7- / 30-day distinct users, sampled once per closed day by the worker (§14.5);
+   *  null where no sample exists — before the snapshot shipped, or a day never swept. */
+  wau: number | null;
+  mau: number | null;
 }
 
-// Scrubbed users are gone from presence entirely (§3 — the erasure wipes their timestamps,
-// so this is belt-and-braces), and the e-mail service mailbox (§12) is not a person: it is
-// matched by the Entra object id the admin connected, so it needs no magic name list.
-const REAL_PEOPLE = `
-  u.scrubbed_at is null
-  and u.last_seen_at is not null
-  and not exists (select 1 from email_service_account esa where esa.account_oid = u.external_id)
-`;
+const DAY_SECONDS = 24 * 60 * 60;
+
+// The person filter — scrubbed users and the e-mail service mailbox excluded — is shared with
+// the worker's daily snapshot, which is defined as these tiles sampled once a day.
+const REAL_PEOPLE = PRESENCE_REAL_PEOPLE_SQL;
 
 async function countActiveWithin(pool: Pool, seconds: number): Promise<number> {
   const { rows } = await pool.query<{ n: string }>(
@@ -118,9 +120,9 @@ export async function presenceSummary(pool: Pool, window: PresenceWindow): Promi
   const seconds = windowSeconds(window);
 
   const [dau, wau, mau, total] = await Promise.all([
-    countActiveWithin(pool, 24 * 60 * 60),
-    countActiveWithin(pool, 7 * 24 * 60 * 60),
-    countActiveWithin(pool, 30 * 24 * 60 * 60),
+    countActiveWithin(pool, DAY_SECONDS),
+    countActiveWithin(pool, PRESENCE_WAU_DAYS * DAY_SECONDS),
+    countActiveWithin(pool, PRESENCE_MAU_DAYS * DAY_SECONDS),
     countActiveWithin(pool, seconds),
   ]);
 
@@ -165,31 +167,51 @@ export async function presenceSummary(pool: Pool, window: PresenceWindow): Promi
 }
 
 /**
- * The chart series: one point per UTC day (invariant 8). Closed days come from the
- * worker-maintained aggregate `presence_daily`; TODAY is computed live from the transient
- * `user_activity_days` detail, which always still holds it (purge is 3 days behind), so the
- * chart's last point is the day in progress rather than yesterday.
+ * The chart series: one point per UTC day (invariant 8), CONTIGUOUS from the first recorded day
+ * to today, so the time axis never bridges a gap with a straight line (§14.5).
+ *
+ *   • Closed days come from the worker-maintained aggregate `presence_daily`. A day with no row
+ *     is a day nobody was active — the rollup repairs every day still inside the 3-day detail
+ *     window — so its daily count is 0. Its weekly/monthly values stay NULL: no sample exists,
+ *     and the chart draws a break rather than inventing one.
+ *   • TODAY is the day in progress: its daily count is computed live from the transient
+ *     `user_activity_days` detail (which always still holds it — the purge is 3 days behind),
+ *     and its weekly/monthly values are the live tiles, so the lines end where the tiles stand.
  */
 export async function presenceHistory(pool: Pool, range: PresenceRange): Promise<PresencePoint[]> {
   const days = rangeDays(range);
-  const { rows } = await pool.query<{ day: string; active_users: string }>(
-    `with today as (
-       select (now() at time zone 'utc')::date as day,
-              count(distinct user_id)::int      as active_users
-         from user_activity_days
-        where day = (now() at time zone 'utc')::date
+  const { rows } = await pool.query<{ day: string; active_users: number; wau: number | null; mau: number | null }>(
+    `with b as (select (now() at time zone 'utc')::date as today),
+     bounds as (
+       select greatest(
+                coalesce((select min(day) from presence_daily), b.today),
+                case when $1::int is null then '-infinity'::date else b.today - $1::int end
+              ) as first_day,
+              b.today
+         from b
      ),
-     series as (
-       select day, active_users from presence_daily
-        where day < (now() at time zone 'utc')::date
-          and ($1::int is null or day >= (now() at time zone 'utc')::date - $1::int)
-       union all
-       select day, active_users from today where active_users > 0
+     live as (
+       select (select count(distinct user_id)::int from user_activity_days, b where day = b.today) as active_users,
+              count(*) filter (where u.last_seen_at > now() - make_interval(secs => $2))::int as wau,
+              count(*) filter (where u.last_seen_at > now() - make_interval(secs => $3))::int as mau
+         from users u
+        where ${REAL_PEOPLE}
      )
-     select to_char(day, 'YYYY-MM-DD') as day, active_users::text as active_users
-       from series
-      order by day`,
-    [days],
+     select to_char(g.day, 'YYYY-MM-DD') as day,
+            case when g.day = bounds.today then live.active_users else coalesce(pd.active_users, 0) end as active_users,
+            case when g.day = bounds.today then live.wau else pd.wau end as wau,
+            case when g.day = bounds.today then live.mau else pd.mau end as mau
+       from bounds
+      cross join live
+      cross join lateral (
+        -- Plain timestamps, never timestamptz: a bare date would resolve to the timestamptz
+        -- overload and walk the days in the session TimeZone (invariant 8).
+        select d::date as day
+          from generate_series(bounds.first_day::timestamp, bounds.today::timestamp, interval '1 day') as d
+      ) g
+       left join presence_daily pd on pd.day = g.day and g.day < bounds.today
+      order by g.day`,
+    [days, PRESENCE_WAU_DAYS * DAY_SECONDS, PRESENCE_MAU_DAYS * DAY_SECONDS],
   );
-  return rows.map((r) => ({ day: r.day, activeUsers: Number(r.active_users) }));
+  return rows.map((r) => ({ day: r.day, activeUsers: r.active_users, wau: r.wau, mau: r.mau }));
 }

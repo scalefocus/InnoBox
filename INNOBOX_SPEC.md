@@ -110,7 +110,7 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   delivery (§12.4). **Singleton, leader-locked** via Postgres advisory lock. Its
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
-  (presence rollup §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
+  (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
   upload sessions §11). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
@@ -150,7 +150,11 @@ Cross-cutting requirements:
   host, role, or other connection detail; the detail goes to the structured log.
 - **Timestamps: store UTC (`timestamptz`), serialize UTC ISO, convert in the browser**
   via a shared formatter. Display style (EU dd/mm/yyyy 24h vs US mm/dd/yyyy AM/PM) is
-  a platform setting (§14.3).
+  a platform setting (§14.3). **Bare UTC calendar days** (`date` columns — §14.5,
+  §14.11) are the exception: they render in that EU/US order through the shared
+  calendar-day formatter (`formatCalendarDay`), never through a time zone, which would
+  shift them back a day west of UTC. (Release dates, §13.9, go further and show
+  `YYYY-MM-DD` as is.)
 - `APP_VERSION` in `packages/shared/src/version.ts`, shown in the sidebar colophon;
   bumped on every behavior change; matching entry in the **What's new** changelog
   (`/whats-new`) in the same commit. Commit subjects `type(scope): summary (vX.Y.Z)`.
@@ -1243,9 +1247,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`user_activity_days`** — (user_id, day) unique; the transient per-person day set
   that makes "distinct users per day" computable (§14.5). **Deleted by the worker once
   older than 3 days** — long-lived presence history is aggregate-only.
-- **`presence_daily`** — (day) unique, active_users int; the rolled-up daily
-  distinct-active-user count behind the §14.5 chart. Carries **no user ids** and is
-  retained indefinitely.
+- **`presence_daily`** — (day) unique, active_users int, wau int null, mau int null;
+  the rolled-up daily distinct-active-user count behind the §14.5 chart, plus the
+  rolling 7- and 30-day counts the daily snapshot writes once per closed day (§14.5).
+  Carries **no user ids** and is retained indefinitely.
 - **`platform_settings`** (called `settings` elsewhere in this document) — key/value
   platform configuration (§14.3); also holds the
   `system_banner` singleton (§14.6), the `system_log_notify_at` watermark (§14.7), the
@@ -4481,22 +4486,58 @@ non-admin surface for presence anywhere in the app (§13.8).
 
 Four blocks, top to bottom:
 
-1. **Active-users chart.** A line chart of **daily distinct active users** with a
-   **7d / 30d / 90d / All** range toggle, read from `presence_daily`. Hand-rolled inline
-   SVG on the brand tokens — **no charting dependency**. Days are **UTC** buckets
-   (the store-UTC-convert-at-display rule, §2): a point labelled `07-13` is a UTC day,
-   not the viewer's local day, and
-   the axis is labelled to say so.
+1. **Active-users chart.** Three lines over **UTC days**, read from `presence_daily`:
+   **Daily active** (distinct users that UTC day), **Weekly active (rolling 7 days)** and
+   **Monthly active (rolling 30 days)** — the last two from the daily snapshot below.
+   Drawn with **Apache ECharts** through the shared chart wrapper (below), the same
+   wrapper the survey satisfaction trend uses (§14.11). Days are **UTC** buckets (the
+   store-UTC-convert-at-display rule, §2): the point for 13 July is a UTC day, not the
+   viewer's local day, and the axis and tooltip say "(UTC)".
+   - **Series.** Daily `--accent` solid, Weekly `--anchor` dashed, Monthly `--muted`
+     dotted — a dash pattern as well as a colour, so no line is told apart by colour
+     alone. A clickable legend hides and shows a series.
+   - **Date axis.** A real time axis whose ticks adapt to the visible span. Tick labels
+     are the short day-month in the platform's EU/US order (`13/07` / `07/13`), formatted
+     from the bare `YYYY-MM-DD` by the shared calendar-day formatter — **never through a
+     time zone**, which would shift every label west of UTC back a day (the same rule as
+     the §13.9 release dates and the §14.11 survey dates).
+   - **Tooltip.** Hover (tap on touch) anywhere over a day shows its three values:
+     *"13/07/2026 (UTC) · Daily active 42 · Weekly active 118 · Monthly active 260"*. A
+     missing value reads "—".
+   - **Zoom & pan.** The series is fetched **once, in full** (`range=all` — a few hundred
+     rows a year). The **7d / 30d / 90d / All** buttons are **presets that move the zoom
+     window** to the trailing 7, 30 or 90 days or the whole series; default **30d**, not
+     persisted. A **slider** under the plot selects any window. On a fine pointer the
+     plot also **pans by drag** and **zooms with the wheel only while Ctrl is held** — a
+     bare wheel scrolls the page, never the chart. On a coarse (touch) pointer, drag on
+     the plot does not pan, so a swipe over the chart still scrolls the page; the slider
+     is the zoom control there. Zooming by hand **un-presses** the preset (no button is
+     pressed until one is clicked again). Presets never refetch; **Refresh** refetches the
+     series and keeps the current window.
+   - **Gaps are breaks, quiet days are zeros.** The API returns **one point per UTC day,
+     contiguous** from the first recorded day to today. A day with no activity is a **0**
+     on the daily line — the rollup repairs any day still inside the 3-day detail window,
+     so a missing `presence_daily` row is a day nobody was active, and a quiet weekend dips
+     to zero instead of being skipped. A day with **no weekly/monthly value** (before the
+     snapshot shipped, or a day the worker never swept, below) is a **break in that
+     line** — never a zero, never interpolated across. A sample with a break on both
+     sides is drawn as a dot, so a recorded value never vanishes between its gaps.
+   - **Today** is the day in progress: its daily value is computed live from
+     `user_activity_days`, and its weekly/monthly values are the live tile values, so the
+     line ends exactly where the tiles stand.
    - **Cold start is explicit.** There is **no backfill** — the series begins the day
      tracking ships and grows one point per day. Under **7 days** of history the chart
      is replaced by a muted **"Not enough history yet — the chart starts filling from
-     the day presence tracking shipped."** The range toggles stay visible and simply
-     resolve to the same short series (`90d` and `All` are identical for the first three
+     the day presence tracking shipped."** The preset buttons stay visible and simply
+     cover the whole short series (`90d` and `All` are identical for the first three
      months); they are not hidden, so the control never changes shape under the admin.
+     The weekly and monthly lines start later still — the day the snapshot ships — and
+     until then the legend lists them and the plot draws the daily line alone.
 2. **DAU / WAU / MAU tiles** — distinct users active in the **last 24 h / 7 d / 30 d**,
    as rolling windows labelled with those windows. Computed **directly from
    `users.last_seen_at`** (`last_seen_at > now() - interval`), needing no history table:
-   a user last active three days ago counts in WAU and MAU but not DAU.
+   a user last active three days ago counts in WAU and MAU but not DAU. The chart's
+   weekly and monthly lines are this same formula, sampled once a day (below).
 3. **Window selector** — **5m / 1h / 8h / 24h / 30d** for the list below. **Default 5m**,
    and the chosen window is **persisted to localStorage** per browser, like the console's
    card collapse state. Copy states the window in words ("Users active within the last 5
@@ -4557,6 +4598,92 @@ Each row shows where that user last was: a **route category** (`Challenges`, `Tr
   activity, that per-person history is kept for 3 days, and that only platform admins
   can see it. Covert monitoring is not on the table; the wider DPIA / works-council
   position is an organizational decision outside this spec.
+
+#### Weekly / monthly history (the daily snapshot)
+
+A rolling 7- or 30-day distinct count cannot be rebuilt from `presence_daily`: distinct
+users do not add up across days, and the per-person detail that could answer it is
+purged after 3 days. Keeping 30 days of per-person detail instead would grow the
+personal history tenfold, so the weekly and monthly lines are **sampled** rather than
+reconstructed:
+
+- **Two nullable counts on `presence_daily`** — `wau` and `mau` — beside `active_users`.
+- **Written by the hourly housekeeping sweep, once per day.** The **first sweep of each
+  UTC day**, after the daily rollup, writes the **just-closed day's** `wau` / `mau`
+  with the tiles' own formula and person filter — `last_seen_at` within the trailing
+  7 / 30 days; scrubbed users and the e-mail service mailbox excluded, deactivated users
+  counted, as the tiles count them. If that day has no row yet (nobody was active), the
+  snapshot inserts one with `active_users = 0`; it never touches `active_users`
+  otherwise.
+- **Why it is exact.** `last_seen_at` only moves forward, so "last seen within the
+  trailing 7 days", measured at any instant, is exactly the number of distinct people
+  active in the 7 days ending at that instant. The sampled window ends at the sweep —
+  within the hour after midnight UTC, or later if the worker was down — rather than at
+  midnight itself: a true rolling window, shifted by that lag, never a double count.
+- **Write-once.** A value, once written, is never overwritten: a later sweep would
+  measure a later window and silently move the point. If the worker does not sweep at
+  all during the following UTC day, that day's `wau` / `mau` stay null and draw as a
+  break. They **cannot be backfilled**, because nothing retains who was active then —
+  which is the point.
+- **Still non-personal.** Counts only, no user ids; `user_activity_days` retention stays
+  at 3 days, the in-panel disclosure is unchanged, and the series stays unaudited.
+  Leader-only and pure-DB like the rest of the housekeeping sweep, so it runs without
+  Entra credentials.
+
+#### The chart wrapper (shared)
+
+Both admin charts — this one and the survey satisfaction trend (§14.11) — render through
+one client component, `components/EChart.tsx`, on **Apache ECharts** (Apache-2.0,
+§21.1). Highcharts was considered and rejected: it is not open source, and every
+organization self-hosting InnoBox would need its own commercial licence.
+
+- **Loaded lazily, tree-shaken.** The wrapper imports only the ECharts modules the two
+  charts use (line and bar series; grid, tooltip, legend, slider and inside data-zoom,
+  and aria components; the canvas renderer) from `echarts/core`, and loads them on first
+  mount — only the Administration console downloads them. Nothing else in the app
+  imports ECharts.
+- **Canvas renderer.** Each chart is one `<canvas>` inside a container carrying the
+  chart's class (`.presence-chart`) and a `data-testid`.
+- **Brand tokens resolved, not referenced.** ECharts derives hover and emphasis shades
+  from the colour value, so it cannot take `var(--accent)`. The wrapper reads the §2.2
+  tokens it needs (colours, `--font-body`) with `getComputedStyle` and passes the
+  resolved values to the chart's option builder. It **re-applies** them whenever
+  `<html data-theme>` changes — the theme toggle flips it at runtime — and resizes with
+  its container. Disposed on unmount.
+- **UTC everywhere.** The wrapper always sets ECharts' `useUTC: true`; no chart can
+  forget it. Date labels come from the shared calendar-day formatter
+  (`formatCalendarDay`, moved out of the survey module into its own shared module now
+  that two charts use it), which gains the short day-month form the axis ticks need.
+- **Motion.** No animation under `prefers-reduced-motion: reduce`.
+- **Accessibility.** ECharts' `aria` is on, and the container's label is a **one-sentence
+  summary each chart's option builder writes** — what it shows, its date span and its
+  latest values (*"Daily, weekly and monthly active users per UTC day, 75 days from
+  01/08/2026 to 15/10/2026. Latest day: 42 daily, 118 weekly and 260 monthly active
+  users."*). ECharts' own generated description is not used: it reads the raw axis values
+  aloud, epoch timestamps included. There is no hidden data table.
+- **Tooltips carry no user text.** Tooltip content is numbers and formatted dates only;
+  the formatter escapes it anyway, because ECharts renders it as HTML.
+- **CSP unchanged (§2.4).** Canvas drawing needs no `eval`, no inline script and no new
+  source; the tooltip is styled through the CSSOM, which the policy does not govern.
+- **Option builders are pure.** Each chart's option is a pure function of its points,
+  the resolved tokens and the formatters, so it is unit-tested without a DOM.
+- **No other charting dependency.** The unused `recharts` dependency is removed.
+
+#### Tests
+
+- **Unit:** the presence option builder (series styles; null `wau` / `mau` stay null so
+  the line breaks; preset → zoom-window maths; Ctrl-only wheel zoom; no drag-pan on a
+  coarse pointer; the preset un-presses after a manual zoom); the survey option builder
+  (withheld averages break the line; markers under 3 points and on isolated points; no
+  data-zoom); the short calendar-day form in both EU and US order.
+- **Integration (DB):** the snapshot writes the just-closed day once and never again;
+  inserts a zero row for a day with no activity without disturbing a later rollup;
+  excludes scrubbed users and the service mailbox; runs after the rollup in the same
+  sweep. The history endpoint returns contiguous days with `0` daily counts on quiet
+  days, `null` weekly/monthly values before the snapshot, and today's live values.
+- **e2e** (`e2e/admin-presence.spec.ts`): the chart container renders a canvas — or the
+  "not enough history" note on a young install — and the preset buttons switch their
+  pressed state.
 
 ### §14.6 System banner (platform admin)
 
@@ -4858,10 +4985,15 @@ across namespaces.
      report never bumps any other counter, so the prompted and self-initiated funnels
      and their response rates stay about surveys. A closed survey later submitted counts
      in both *Closed* and *Submitted*.
-  2. **Satisfaction trend** — the average of `general.overall` per bucket with the
-     response count as bars, **hand-rolled inline SVG on the brand tokens, no charting
-     dependency** (as §14.5); day / week / month buckets by span; fewer than 3 points get
-     visible markers. Bug reports carry no stars and never count in it.
+  2. **Satisfaction trend** — the average of `general.overall` per bucket as a line on a
+     1–5★ axis, with the response count as bars on a second axis, drawn through the
+     shared ECharts wrapper (§14.5); day / week / month buckets by span; fewer than 3
+     points get visible markers, as does any point with no drawn neighbour. A bucket
+     whose average is withheld (fewer than 5 responses, above) is a **break in the line**, never
+     interpolated. Hover shows the bucket's date (verbatim, the platform's date order),
+     its response count and, unless withheld, its average. **No zoom** — the buckets
+     already adapt to the range, and zooming would only stretch a week or month bucket.
+     Bug reports carry no stars and never count in it.
   3. **Question cards** — one per question with answers in range, in catalog order
      (general, rotating, then the feature questions — per the selected feature, or
      pooled under *All features*): the question text, the **average** (one decimal, ★),
@@ -4906,7 +5038,8 @@ across namespaces.
   - `GET|PATCH /api/admin/settings` carries `surveyEnabled` and `bugReportsEnabled`.
 - **Tests.** Unit: the size-5 withholding for cards, buckets and the feed, and its
   bug-report exemption; the current-day exclusion; the Source filter (the bug-specific
-  cases are listed under §13.10 *Bug reports*). Integration: range, filters, withholding,
+  cases are listed under §13.10 *Bug reports*); the trend's option builder (§14.5
+  *Tests*). Integration: range, filters, withholding,
   403 for a namespace admin, delete cascade and an audit row that carries no text, the
   switch's audit row. e2e: an admin sees the funnel and, with the seed topped past 5, the
   question cards and the comment; the switch is usable while the card is collapsed.
@@ -5209,7 +5342,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   pins, §13.2)
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
-  and `admin/presence/history?range=7d|30d|90d|all` → `{ points[] }`** — platform admin
+  and `admin/presence/history?range=7d|30d|90d|all` → `{ range, enoughHistory,
+  points[{ day, activeUsers, wau, mau }] }`** (one point per UTC day, contiguous;
+  `wau`/`mau` null where no snapshot exists; the console requests `all`) — platform admin
   only (**403** for namespace admins), anonymity-masked locations, §14.5;
   **`admin/audit` with `q`/`category`/`from`/`to` + `admin/audit/export`** (§15);
   **`admin/system-banner` `PUT`/`DELETE`** (§14.6); **`admin/system-log` +
@@ -5402,7 +5537,10 @@ removed, or altered by §21.
   attribution clause.
 - **`LICENSE`** at the repository root: the unmodified Apache-2.0 text including the
   appendix, naming the organization as copyright holder for the current year.
-- **`NOTICE`** at the repository root: the copyright line, per Apache-2.0 §4(d).
+- **`NOTICE`** at the repository root: the copyright line, per Apache-2.0 §4(d),
+  followed by a **Third-party notices** section carrying, verbatim, the NOTICE text of
+  any bundled dependency whose licence requires it to travel (today: Apache ECharts,
+  below).
 - **Manifests.** All four `package.json` files keep `"private": true` — it is the
   guard against an accidental `npm publish`, and nothing here is intended for the
   registry — and gain `"license": "Apache-2.0"`. Their `"version"` fields stay at
@@ -5412,9 +5550,12 @@ removed, or altered by §21.
   states this so the mismatch does not read as an oversight.
 - **Dependency licences.** Before publication, `pnpm licenses list --prod` is
   reviewed across the workspace and the result recorded in the publication checklist
-  (§21.9). The production tree must contain no copyleft licence. `NOTICE` carries
-  nothing beyond the project's own copyright unless that review surfaces a dependency
-  whose licence requires attribution. Fonts are **not** an issue: Montserrat, Open
+  (§21.10). The production tree must contain no copyleft licence, and **no proprietary
+  one either** — nothing a deployer would need a paid, evaluation-only or
+  non-commercial-only licence to run, since every self-hosting organization would have to
+  buy its own. (Highcharts was rejected for the admin charts on exactly this ground,
+  §14.5.) `NOTICE` carries nothing beyond the project's own copyright unless that review
+  surfaces a dependency whose licence requires attribution. Fonts are **not** an issue: Montserrat, Open
   Sans, and JetBrains Mono arrive as `@fontsource-variable/*` npm dependencies, so no
   font binaries are vendored into the repository and their licences travel with the
   packages.
@@ -5427,6 +5568,14 @@ removed, or altered by §21.
   `images.unoptimized` so Next never looks for it. Nothing is lost — InnoBox renders no
   `next/image`. Re-run the review after any upgrade of `next`, since a new optional
   dependency would arrive the same way.
+- **Review outcome (admin charts).** Apache ECharts (`echarts`, Apache-2.0) and its
+  renderer `zrender` (BSD-3-Clause) join the production tree for the two admin charts
+  (§14.5); both licences are already on the list above, and the unused `recharts` (MIT)
+  leaves it. ECharts ships a NOTICE file, and Apache-2.0 §4(d) obliges anyone
+  redistributing it to pass that on, so its text is copied into `NOTICE` under
+  *Third-party notices*. The **web image** redistributes the bundled code, so its
+  Dockerfile now copies `LICENSE` and `NOTICE` into the image beside the server. Re-check
+  the ECharts NOTICE text on every ECharts upgrade.
 
 ### §21.2 Brand, trademark & rebranding
 

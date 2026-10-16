@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.14.0",
+    date: "2026-10-16",
+    summary:
+      "For platform admins: the Currently online chart now shows weekly and monthly active users beside the daily line. Hover to see exact numbers, and zoom with 7d, 30d, 90d and All, the slider below the chart, or Ctrl and the mouse wheel. The weekly and monthly lines start filling in from today. The survey satisfaction trend also shows its values on hover.",
+  },
+  {
     version: "1.13.0",
     date: "2026-10-14",
     summary:

@@ -1000,7 +1000,8 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
 }
 .presence-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
-.presence-chart { width: 100%; height: auto; display: block; }
+/* The ECharts host (components/EChart.tsx) for both admin charts; its height is set per chart. */
+.presence-chart { width: 100%; display: block; }
 .presence-chart-empty {
   border: 1px dashed var(--line); border-radius: var(--radius);
   padding: 26px 20px; text-align: center; font-size: 13.5px;

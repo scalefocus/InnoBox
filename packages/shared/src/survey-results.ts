@@ -173,12 +173,3 @@ export function buildSurveySeries(rows: readonly DailySurveyRow[], bucket: Surve
       overallAvg: isWithheld(acc.overallN) ? null : Math.round((acc.overallSum / acc.overallN) * 10) / 10,
     }));
 }
-
-/** A UTC calendar day shown VERBATIM in the platform's date order — never converted through a
- *  time zone (a `date` has none): `2026-10-05` → `05/10/2026` (EU) / `10/05/2026` (US). */
-export function formatCalendarDay(day: string, style: "eu" | "us"): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-  if (!m) return day;
-  const [, y, mo, d] = m;
-  return style === "us" ? `${mo}/${d}/${y}` : `${d}/${mo}/${y}`;
-}

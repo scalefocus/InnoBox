@@ -101,6 +101,14 @@
     "./comment-threads": {
       "types": "./dist/comment-threads.d.ts",
       "default": "./dist/comment-threads.js"
+    },
+    "./calendar-day": {
+      "types": "./dist/calendar-day.d.ts",
+      "default": "./dist/calendar-day.js"
+    },
+    "./presence": {
+      "types": "./dist/presence.d.ts",
+      "default": "./dist/presence.js"
     }
   },
   "scripts": {

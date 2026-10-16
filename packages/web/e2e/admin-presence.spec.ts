@@ -45,11 +45,21 @@ test("presence panel: lists who is active, with the window, search and Refresh �
   const card = admin.locator(".card", { has: admin.getByRole("heading", { name: "Currently online" }) });
   await expect(card).toBeVisible();
 
-  // Block 1 — the chart, or the honest "no history yet" note on a young install. One or the
-  // other must render; a blank space would mean the fetch failed.
-  const chart = card.locator("svg.presence-chart");
+  // Block 1 — the chart (an ECharts canvas, loaded on demand), or the honest "no history yet"
+  // note on a young install. One or the other must render; a blank space would mean the fetch
+  // or the chart chunk failed.
+  const chart = card.getByTestId("presence-chart").locator("canvas");
   const chartNote = card.locator(".presence-chart-empty");
   await expect(chart.or(chartNote).first()).toBeVisible();
+
+  // The range buttons are zoom presets over the one fetched series: 30d by default, and a click
+  // moves the pressed state without a refetch. (Scoped to the chart's own toggle row: the list's
+  // window selector below has a "30d" button too.)
+  const presets = card.locator(".presence-head").first();
+  await expect(presets.getByRole("button", { name: "30d", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await presets.getByRole("button", { name: "7d", exact: true }).click();
+  await expect(presets.getByRole("button", { name: "7d", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(presets.getByRole("button", { name: "30d", exact: true })).toHaveAttribute("aria-pressed", "false");
 
   // Block 2 — the rolling tiles.
   for (const label of ["DAU · last 24h", "WAU · last 7d", "MAU · last 30d"]) {

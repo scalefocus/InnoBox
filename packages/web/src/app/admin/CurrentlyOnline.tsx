@@ -6,11 +6,24 @@
 // hour is worse than a stale one you can see, so the panel is an explicit snapshot with a
 // "Refresh" button and an "as of" stamp. Nothing here polls.
 //
+// The active-users chart fetches the whole series once and zooms on the client: the
+// 7d / 30d / 90d / All buttons are presets that move the zoom window, never a refetch (§14.5).
+//
 // There is no "Reach out" action, unlike the sibling app this panel is modelled on: the panel
 // answers *who is around*, and InnoBox has no direct-message channel to hand off to.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { useDateFmt } from "@/components/DateFormat";
+import { EChart } from "@/components/EChart";
+import type { ChartEnv } from "@/lib/charts/chart-env";
+import {
+  applyManualZoom,
+  buildPresenceOption,
+  presetWindow,
+  seriesExtent,
+  type PresenceChartPoint,
+  type ZoomWindow,
+} from "@/lib/charts/presence-chart";
 import {
   DEFAULT_PRESENCE_RANGE,
   DEFAULT_PRESENCE_WINDOW,
@@ -47,7 +60,7 @@ interface PresenceSummary {
 
 interface PresenceHistory {
   range: PresenceRange;
-  points: { day: string; activeUsers: number }[];
+  points: PresenceChartPoint[];
   enoughHistory: boolean;
 }
 
@@ -63,7 +76,12 @@ function loadWindow(): PresenceWindow {
 
 export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) => void }) {
   const [window_, setWindow] = useState<PresenceWindow>(loadWindow);
-  const [range, setRange] = useState<PresenceRange>(DEFAULT_PRESENCE_RANGE);
+  // The pressed preset — null once the admin zooms by hand. `zoomRequest` changes only on a
+  // click, so un-pressing never rebuilds the chart mid-drag.
+  const [pressed, setPressed] = useState<PresenceRange | null>(DEFAULT_PRESENCE_RANGE);
+  const [zoomRequest, setZoomRequest] = useState(0);
+  const pressedRef = useRef<PresenceRange | null>(DEFAULT_PRESENCE_RANGE);
+  const zoomWindow = useRef<ZoomWindow | null>(null);
   const [summary, setSummary] = useState<PresenceSummary | null>(null);
   const [history, setHistory] = useState<PresenceHistory | null>(null);
   const [query, setQuery] = useState("");
@@ -81,32 +99,84 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
     reportTotal.current = onTotal;
   }, [onTotal]);
 
-  const load = useCallback(
-    async (w: PresenceWindow, r: PresenceRange) => {
-      setBusy(true);
-      setError(null);
-      try {
-        const [s, h] = await Promise.all([
-          fetch(`/api/admin/presence?window=${w}`, { cache: "no-store", headers: { accept: "application/json" } }),
-          fetch(`/api/admin/presence/history?range=${r}`, { cache: "no-store", headers: { accept: "application/json" } }),
-        ]);
-        if (!s.ok || !h.ok) throw new Error("Could not load presence");
-        const summaryJson = (await s.json()) as PresenceSummary;
-        setSummary(summaryJson);
-        setHistory((await h.json()) as PresenceHistory);
-        reportTotal.current?.(summaryJson.total);
-      } catch {
-        setError("Could not load who is online.");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
+  const loadSummary = useCallback(async (w: PresenceWindow) => {
+    const res = await fetch(`/api/admin/presence?window=${w}`, { cache: "no-store", headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error("Could not load presence");
+    const summaryJson = (await res.json()) as PresenceSummary;
+    setSummary(summaryJson);
+    reportTotal.current?.(summaryJson.total);
+  }, []);
+
+  // The whole series, once: the presets zoom over it on the client.
+  const loadHistory = useCallback(async () => {
+    const res = await fetch("/api/admin/presence/history?range=all", { cache: "no-store", headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error("Could not load presence history");
+    setHistory((await res.json()) as PresenceHistory);
+  }, []);
+
+  // The list and the series load independently; "busy" holds until both have settled.
+  const pending = useRef(0);
+  const run = useCallback(async (work: () => Promise<unknown>) => {
+    pending.current += 1;
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+    } catch {
+      setError("Could not load who is online.");
+    } finally {
+      pending.current -= 1;
+      if (pending.current === 0) setBusy(false);
+    }
+  }, []);
+
+  // The window drives the list only; the chart series does not depend on it.
+  useEffect(() => {
+    void run(() => loadSummary(window_));
+  }, [run, loadSummary, window_]);
 
   useEffect(() => {
-    void load(window_, range);
-  }, [load, window_, range]);
+    void run(loadHistory);
+  }, [run, loadHistory]);
+
+  const refresh = () => void run(() => Promise.all([loadSummary(window_), loadHistory()]));
+
+  const choosePreset = (r: PresenceRange) => {
+    pressedRef.current = r;
+    setPressed(r);
+    setZoomRequest((n) => n + 1);
+  };
+
+  const points = history?.points;
+  // A pressed preset is re-applied to fresh data (Refresh adds today); a hand-picked window is
+  // kept as it is. The refs are read at build time, so un-pressing alone never rebuilds.
+  const buildChart = useCallback(
+    (env: ChartEnv) => {
+      const series = points ?? [];
+      const preset = pressedRef.current;
+      const zoom = preset
+        ? presetWindow(series, preset)
+        : (zoomWindow.current ?? presetWindow(series, DEFAULT_PRESENCE_RANGE));
+      zoomWindow.current = zoom;
+      return buildPresenceOption({ points: series, window: zoom, style: fmt.style, env });
+    },
+    // zoomRequest is not read inside: it is the signal that a preset click must rebuild even
+    // when the series is unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [points, fmt.style, zoomRequest],
+  );
+
+  const onDataZoom = useCallback(
+    (params: unknown) => {
+      const extent = seriesExtent(points ?? []);
+      if (!extent) return;
+      const next = applyManualZoom(params, extent, zoomWindow.current);
+      zoomWindow.current = next.window;
+      pressedRef.current = next.pressed;
+      setPressed(next.pressed);
+    },
+    [points],
+  );
 
   useEffect(() => {
     try {
@@ -139,9 +209,9 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
             <button
               key={r}
               type="button"
-              className={range === r ? "btn btn-sm btn-primary" : "btn btn-sm"}
-              onClick={() => setRange(r)}
-              aria-pressed={range === r}
+              className={pressed === r ? "btn btn-sm btn-primary" : "btn btn-sm"}
+              onClick={() => choosePreset(r)}
+              aria-pressed={pressed === r}
             >
               {r === "all" ? "All" : r}
             </button>
@@ -149,7 +219,7 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
         </div>
       </div>
 
-      <ActiveUsersChart history={history} />
+      <ActiveUsersChart history={history} build={buildChart} onDataZoom={onDataZoom} />
 
       <div className="stat-row" style={{ marginTop: 16 }}>
         <div className="stat">
@@ -228,7 +298,7 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
           )}
           {summary && <>as of {fmt.time(summary.asOf)}</>}
         </span>
-        <button type="button" className="btn btn-sm" onClick={() => void load(window_, range)} disabled={busy}>
+        <button type="button" className="btn btn-sm" onClick={refresh} disabled={busy}>
           {busy ? "Refreshing…" : "Refresh"}
         </button>
       </div>
@@ -243,9 +313,17 @@ export function CurrentlyOnline({ onTotal }: { onTotal?: (total: number | null) 
   );
 }
 
-/** The active-users line chart: hand-rolled SVG on the brand tokens, no charting dependency.
- *  Days are UTC buckets (invariant 8), which the axis says out loud. */
-function ActiveUsersChart({ history }: { history: PresenceHistory | null }) {
+/** The active-users chart (§14.5): daily, weekly and monthly lines on the shared ECharts
+ *  wrapper. Days are UTC buckets (invariant 8), which the axis and tooltip say out loud. */
+function ActiveUsersChart({
+  history,
+  build,
+  onDataZoom,
+}: {
+  history: PresenceHistory | null;
+  build: (env: ChartEnv) => ReturnType<typeof buildPresenceOption>;
+  onDataZoom: (params: unknown) => void;
+}) {
   if (!history) return <div className="presence-chart-empty muted">Loading chart…</div>;
 
   // No backfill: the series begins the day tracking shipped, so a young install has nothing
@@ -259,69 +337,19 @@ function ActiveUsersChart({ history }: { history: PresenceHistory | null }) {
     );
   }
 
-  const W = 720;
-  const H = 200;
-  const padL = 34;
-  const padR = 8;
-  const padT = 10;
-  const padB = 24;
-  const points = history.points;
-
-  // A "nice" ceiling so the gridline labels are whole numbers.
-  const peak = Math.max(...points.map((p) => p.activeUsers), 1);
-  const step = peak <= 5 ? 1 : peak <= 20 ? 5 : peak <= 100 ? 10 : 50;
-  const top = Math.ceil(peak / step) * step;
-  const ticks: number[] = [];
-  for (let v = 0; v <= top; v += step) ticks.push(v);
-
-  const x = (i: number) => padL + (i * (W - padL - padR)) / Math.max(1, points.length - 1);
-  const y = (v: number) => padT + (1 - v / top) * (H - padT - padB);
-
-  // Midpoint smoothing (quadratic through segment midpoints) — the curve reads as a trend
-  // without inventing values between days, which a spline through the points would.
-  const path = points
-    .map((p, i) => {
-      const px = x(i);
-      const py = y(p.activeUsers);
-      if (i === 0) return `M ${px} ${py}`;
-      const prevX = x(i - 1);
-      const prevY = y(points[i - 1]!.activeUsers);
-      const midX = (prevX + px) / 2;
-      return `Q ${prevX} ${prevY} ${midX} ${(prevY + py) / 2} T ${px} ${py}`;
-    })
-    .join(" ");
-
-  // First / middle / last, so a 90-day axis stays readable. MM-DD is unambiguous here
-  // because the whole axis is one UTC series, and the label says UTC.
-  const labelIndexes = points.length > 2 ? [0, Math.floor((points.length - 1) / 2), points.length - 1] : [0, points.length - 1];
-
   return (
     <>
-      <svg className="presence-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Daily active users">
-        {ticks.map((v) => (
-          <g key={v}>
-            <line
-              x1={padL}
-              x2={W - padR}
-              y1={y(v)}
-              y2={y(v)}
-              stroke="var(--line)"
-              strokeDasharray={v === 0 ? undefined : "3 4"}
-            />
-            <text x={padL - 8} y={y(v) + 4} textAnchor="end" fill="var(--faint)" fontSize="11">
-              {v}
-            </text>
-          </g>
-        ))}
-        {labelIndexes.map((i) => (
-          <text key={i} x={x(i)} y={H - 6} textAnchor={i === 0 ? "start" : i === points.length - 1 ? "end" : "middle"} fill="var(--faint)" fontSize="11">
-            {points[i]!.day.slice(5)}
-          </text>
-        ))}
-        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-      <div className="stat-label" style={{ marginTop: 0 }}>
-        Distinct users per UTC day · {history.points.length} days shown
+      <EChart
+        className="presence-chart"
+        testId="presence-chart"
+        title="Daily, weekly and monthly active users"
+        height={260}
+        build={build}
+        onDataZoom={onDataZoom}
+      />
+      <div className="stat-label" style={{ marginTop: 4 }}>
+        UTC days · {history.points.length} days recorded · weekly and monthly lines are rolling
+        counts, taken once a day
       </div>
     </>
   );

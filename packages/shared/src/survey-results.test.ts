@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import {
   SURVEY_MIN_GROUP,
   bucketStart,
-  formatCalendarDay,
   buildSurveySeries,
   isWithheld,
   parseSurveyFeatureFilter,
@@ -112,10 +111,4 @@ test("buckets: days to a month, weeks to half a year, months beyond; weeks start
   assert.equal(bucketStart("2026-10-11", "week"), "2026-10-05"); // a Sunday → its Monday
   assert.equal(bucketStart("2026-10-05", "week"), "2026-10-05");
   assert.equal(bucketStart("2026-10-11", "month"), "2026-10-01");
-});
-
-test("calendar days are shown verbatim in the platform's date order, never shifted by a time zone", () => {
-  assert.equal(formatCalendarDay("2026-10-05", "eu"), "05/10/2026");
-  assert.equal(formatCalendarDay("2026-10-05", "us"), "10/05/2026");
-  assert.equal(formatCalendarDay("garbage", "eu"), "garbage");
 });
