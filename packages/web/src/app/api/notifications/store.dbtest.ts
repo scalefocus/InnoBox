@@ -11,11 +11,14 @@ test(
   { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
   async () => {
     const { Pool, randomUUID } = await importDeps();
+    const { buildRoleSet } = await import("@innobox/shared");
     const { getInbox, markAllRead, markOneRead } = await import("./store");
 
     const pool = new Pool({ connectionString: url });
     try {
       const stamp = randomUUID().slice(0, 8);
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const roles = buildRoleSet([], { globalNamespaceId: g[0]!.id });
 
       const mkUser = async (label: string) => {
         const { rows } = await pool.query<{ id: string }>(
@@ -26,6 +29,8 @@ test(
       };
       const userId = await mkUser("owner");
       const otherUserId = await mkUser("other");
+      // §12.1: the inbox takes the viewer (roles ride along for the read-time visibility gate).
+      const viewer = { userId, roles };
 
       const insertNotification = async (forUserId: string, message: string) => {
         const { rows } = await pool.query<{ id: string }>(
@@ -39,7 +44,7 @@ test(
       const n2 = await insertNotification(userId, `second ${stamp}`);
       const otherUsersNotification = await insertNotification(otherUserId, `not yours ${stamp}`);
 
-      const inbox = await getInbox(pool, userId);
+      const inbox = await getInbox(pool, viewer);
       assert.equal(inbox.unreadCount, 2);
       assert.equal(inbox.notifications.some((n) => n.id === n1), true);
       assert.equal(inbox.notifications.some((n) => n.id === n2), true);
@@ -54,13 +59,13 @@ test(
 
       const ownAttempt = await markOneRead(pool, userId, n1);
       assert.equal(ownAttempt, true);
-      const afterOneRead = await getInbox(pool, userId);
+      const afterOneRead = await getInbox(pool, viewer);
       assert.equal(afterOneRead.unreadCount, 1);
       assert.equal(afterOneRead.notifications.find((n) => n.id === n1)!.read, true);
       assert.equal(afterOneRead.notifications.find((n) => n.id === n2)!.read, false);
 
-      await markAllRead(pool, userId);
-      const afterAllRead = await getInbox(pool, userId);
+      await markAllRead(pool, viewer);
+      const afterAllRead = await getInbox(pool, viewer);
       assert.equal(afterAllRead.unreadCount, 0);
 
       // markOneRead on a nonexistent id returns false rather than throwing.

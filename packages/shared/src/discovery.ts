@@ -42,9 +42,10 @@ export const SEARCH_QUERY_MAX = 200;
 // ── CSV export (§14.1) ───────────────────────────────────────────────────────────────────
 
 /** Leading characters a spreadsheet application treats as the start of a formula (§14.1
- *  *CSV formula neutralization*). Tab and carriage return are included because some
- *  spreadsheets strip them and then evaluate what follows. */
-const CSV_FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+ *  *CSV formula neutralization*): `=`, `+`, `-`, `@`, `|` (the legacy DDE trigger), tab and
+ *  carriage return — or any of those after leading whitespace, because some applications trim
+ *  first and then evaluate what follows. */
+const CSV_FORMULA_TRIGGER = /^\s*[=+\-@|\t\r]/;
 
 /** Neutralize a would-be formula by prefixing a single quote (§14.1). Applied to every cell,
  *  header included, before RFC 4180 quoting — no per-column exceptions. */

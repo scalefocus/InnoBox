@@ -109,6 +109,20 @@ export async function findClientById(db: Db, id: string): Promise<OauthClient | 
   return rows[0] ? toClient(rows[0]) : null;
 }
 
+/** §25.3 consent-phishing notice: whether any person has ever approved the client (an
+ *  `oauth_grants` row, revoked or not) and when it registered. The page warns on a client that is
+ *  either never approved or under 24 hours old. */
+export async function clientApprovalHistory(db: Db, clientRowId: string): Promise<{ everApproved: boolean; createdAt: Date }> {
+  const { rows } = await db.query<{ created_at: Date; ever_approved: boolean }>(
+    `select c.created_at, exists (select 1 from oauth_grants g where g.client_id = c.id) as ever_approved
+       from oauth_clients c where c.id = $1`,
+    [clientRowId],
+  );
+  const row = rows[0];
+  if (!row) return { everApproved: false, createdAt: new Date() };
+  return { everApproved: row.ever_approved, createdAt: row.created_at };
+}
+
 // ── Pending authorizations (§25.3: the consent handle) ──────────────────────────────────
 
 /** Stores the validated request for the consent form; the form carries only the returned id. */
@@ -198,16 +212,21 @@ export interface TokenResponse {
   scope: string;
 }
 
-/** `invalid_grant` for anything wrong with the code or refresh token; the two carve-outs carry
- *  what the route needs for its system-log row and metric (§25.11). */
+/** `invalid_grant` for anything wrong with the code or refresh token; the carve-outs carry what
+ *  the route needs for its system-log row and metric (§25.11). `reuse` is the replay detection:
+ *  an already-rotated refresh token or an already-exchanged code presented again — the whole
+ *  grant was revoked (`refresh_reuse` / `code_reuse`). */
 export type TokenResult =
   | { status: "ok"; tokens: TokenResponse; rotated: boolean }
   | { status: "invalid_grant" }
   | { status: "invalid_client" }
   | { status: "blocked"; clientName: string; userId: string }
-  | { status: "reuse"; clientName: string; userId: string };
+  | { status: "reuse"; of: "code" | "refresh"; clientName: string; userId: string };
 
-async function issueTokens(client: PoolClient, grantId: string, settings: McpSettings, rotatedFromId: string | null): Promise<TokenResponse> {
+/** Mints an access + refresh pair. The refresh row carries the `resource` the pair is minted for
+ *  (§25.3), so the RFC 8707 check holds on rotation too — taken from the code row on exchange and
+ *  from the previous refresh row on rotation. */
+async function issueTokens(client: PoolClient, grantId: string, settings: McpSettings, rotatedFromId: string | null, resource: string | null): Promise<TokenResponse> {
   const access = mintToken();
   const refresh = mintToken();
   const accessSeconds = settings.accessTokenTtlMinutes * 60;
@@ -216,8 +235,9 @@ async function issueTokens(client: PoolClient, grantId: string, settings: McpSet
     [grantId, hashToken(access), accessSeconds],
   );
   await client.query(
-    `insert into oauth_tokens (grant_id, kind, token_hash, expires_at, rotated_from_id) values ($1, 'refresh', $2, now() + make_interval(days => $3), $4)`,
-    [grantId, hashToken(refresh), settings.refreshTokenTtlDays, rotatedFromId],
+    `insert into oauth_tokens (grant_id, kind, token_hash, expires_at, rotated_from_id, resource)
+     values ($1, 'refresh', $2, now() + make_interval(days => $3), $4, $5)`,
+    [grantId, hashToken(refresh), settings.refreshTokenTtlDays, rotatedFromId, resource],
   );
   return { access_token: access, token_type: "Bearer", expires_in: accessSeconds, refresh_token: refresh, scope: MCP_SCOPE };
 }
@@ -247,19 +267,33 @@ const TOKEN_LOOKUP = `
     join oauth_clients c on c.id = g.client_id
     join users u on u.id = g.user_id`;
 
-/** `grant_type=authorization_code`: single use (consumed atomically), unexpired, same client,
- *  same redirect URI, same resource, PKCE verifier matching. */
+/** The replay detections' intermediate result: the grant to revoke, outside the read transaction. */
+type ReuseDetected = { status: "reuse_detected"; grantId: string; clientName: string; userId: string };
+
+/**
+ * `grant_type=authorization_code`: single use (consumed atomically), unexpired, same client,
+ * same redirect URI, same resource, PKCE verifier matching. Presenting a code a SECOND time
+ * revokes the whole grant (`code_reuse`, OAuth 2.1 §4.1.2): the tokens the first exchange minted
+ * die with it, so a code captured in transit cannot be raced for a lasting session. (A used code
+ * row stays until the hourly sweep removes it after expiry, which is the detection window.)
+ */
 export async function exchangeCode(
   pool: Pool,
   input: { code: string; codeVerifier: unknown; clientId: string; redirectUri: string | null; resource: string | null },
   settings: McpSettings,
 ): Promise<TokenResult> {
-  return inTransaction(pool, async (client): Promise<TokenResult> => {
+  const hash = hashToken(input.code);
+  const result = await inTransaction(pool, async (client): Promise<TokenResult | ReuseDetected> => {
     const { rows: consumed } = await client.query<{ id: string }>(
       `update oauth_tokens set used_at = now() where token_hash = $1 and kind = 'code' and used_at is null and expires_at > now() returning id`,
-      [hashToken(input.code)],
+      [hash],
     );
-    if (!consumed[0]) return { status: "invalid_grant" };
+    if (!consumed[0]) {
+      const { rows: used } = await client.query<TokenLookupRow>(`${TOKEN_LOOKUP} where t.token_hash = $1 and t.kind = 'code' and t.used_at is not null`, [hash]);
+      const replay = used[0];
+      if (replay && !replay.revoked_at) return { status: "reuse_detected", grantId: replay.grant_id, clientName: replay.client_name, userId: replay.user_id };
+      return { status: "invalid_grant" };
+    }
     const { rows } = await client.query<TokenLookupRow>(`${TOKEN_LOOKUP} where t.id = $1`, [consumed[0].id]);
     const row = rows[0];
     if (!row || row.revoked_at || !row.user_active) return { status: "invalid_grant" };
@@ -269,21 +303,28 @@ export async function exchangeCode(
     if (input.resource !== null && input.resource !== row.resource) return { status: "invalid_grant" };
     if (!row.code_challenge || !verifyPkceS256(input.codeVerifier, row.code_challenge)) return { status: "invalid_grant" };
     await touchGrant(client, row.grant_id);
-    return { status: "ok", tokens: await issueTokens(client, row.grant_id, settings, null), rotated: false };
+    return { status: "ok", tokens: await issueTokens(client, row.grant_id, settings, null, row.resource), rotated: false };
   });
+  if (result.status !== "reuse_detected") return result;
+  // Outside the exchange transaction, which only read: the revocation is its own atomic write.
+  await inTransaction(pool, (client) => revokeGrant(client, result.grantId, "code_reuse", null));
+  return { status: "reuse", of: "code", clientName: result.clientName, userId: result.userId };
 }
 
 /**
  * `grant_type=refresh_token`: rotates on every use. Presenting a refresh token that was already
  * rotated revokes the WHOLE grant (`refresh_reuse`) — whoever holds the newer one loses it too.
- * The idle lifetime slides: the new refresh token lives `refreshTokenTtlDays` from now.
+ * The idle lifetime slides: the new refresh token lives `refreshTokenTtlDays` from now. A rotation
+ * ends the grant's earlier access tokens (§25.3): the new pair replaces the old one entirely, so a
+ * stolen access token lives only until the legitimate client's next refresh. The refresh row
+ * carries its `resource`, and a refresh that names a different one is `invalid_grant` (RFC 8707).
  */
 export async function refreshTokens(
   pool: Pool,
   input: { refreshToken: string; clientId: string; resource: string | null },
   settings: McpSettings,
 ): Promise<TokenResult> {
-  const result = await inTransaction(pool, async (client): Promise<TokenResult | { status: "reuse_detected"; grantId: string; clientName: string; userId: string }> => {
+  const result = await inTransaction(pool, async (client): Promise<TokenResult | ReuseDetected> => {
     const { rows } = await client.query<TokenLookupRow>(`${TOKEN_LOOKUP} where t.token_hash = $1 and t.kind = 'refresh' for update of t`, [hashToken(input.refreshToken)]);
     const row = rows[0];
     if (!row || row.revoked_at) return { status: "invalid_grant" };
@@ -291,15 +332,16 @@ export async function refreshTokens(
     if (row.used_at) return { status: "reuse_detected", grantId: row.grant_id, clientName: row.client_name, userId: row.user_id };
     if (row.expires_at.getTime() <= Date.now() || !row.user_active) return { status: "invalid_grant" };
     if (row.blocked_at) return { status: "blocked", clientName: row.client_name, userId: row.user_id };
-    if (input.resource !== null && input.resource !== row.resource && row.resource !== null) return { status: "invalid_grant" };
+    if (input.resource !== null && input.resource !== row.resource) return { status: "invalid_grant" };
     await client.query(`update oauth_tokens set used_at = now() where id = $1`, [row.id]);
+    await client.query(`delete from oauth_tokens where grant_id = $1 and kind = 'access'`, [row.grant_id]);
     await touchGrant(client, row.grant_id);
-    return { status: "ok", tokens: await issueTokens(client, row.grant_id, settings, row.id), rotated: true };
+    return { status: "ok", tokens: await issueTokens(client, row.grant_id, settings, row.id, row.resource), rotated: true };
   });
   if (result.status !== "reuse_detected") return result;
   // Outside the rotation transaction, which only read: the revocation is its own atomic write.
   await inTransaction(pool, (client) => revokeGrant(client, result.grantId, "refresh_reuse", null));
-  return { status: "reuse", clientName: result.clientName, userId: result.userId };
+  return { status: "reuse", of: "refresh", clientName: result.clientName, userId: result.userId };
 }
 
 /** RFC 7009: an access token ends alone; a refresh token ends its whole grant (the person, through

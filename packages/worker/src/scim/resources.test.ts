@@ -127,6 +127,7 @@ test("toScimUser: shape includes id, externalId, meta.resourceType, enterprise e
     active: true,
     deactivated_at: null,
     scrubbed_at: null,
+    last_seen_at: null,
     created_at: now,
     updated_at: now,
   });
@@ -151,6 +152,7 @@ test("toScimUser: no email -> empty emails array; no title -> omitted", () => {
     active: false,
     deactivated_at: null,
     scrubbed_at: null,
+    last_seen_at: null,
     created_at: now,
     updated_at: now,
   });

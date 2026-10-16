@@ -25,7 +25,7 @@ open; no user table exists. No local accounts will ever exist (INNOBOX_SPEC.md �
 | Sign-in gating | **Any tenant member** may sign in ("Assignment required" stays No); the app gates capabilities via roles |
 | Existing-account linking / local passwords | n/a — greenfield, no local accounts ever |
 | JIT sign-in before provisioning | **Allowed**: first sign-in creates a stub user from token claims, keyed on `oid`; SCIM/reconciliation completes and thereafter owns profile attributes |
-| Leaver (deactivation) semantics | `active=false` + `deactivated_at`; sign-in refused; live sessions lose access at the next request (per-request `active` check at session validation). Content, likes, follows, assignments stay intact; a deactivated assignee is reassigned manually by a namespace admin. Reactivation restores access with data intact |
+| Leaver (deactivation) semantics | `active=false` + `deactivated_at`; sign-in refused; live sessions lose access at the next request (per-request `active` check at session validation, and since v1.16 the deactivation also stamps `users.sessions_valid_from`, INNOBOX_SPEC.md §3 *Sign out everywhere*, so a token minted before it is refused even if the account is later reactivated). Content, likes, follows, assignments stay intact; a deactivated assignee is reassigned manually by a namespace admin. Reactivation restores access with data intact |
 | Erasure (SCIM DELETE) semantics | **Deactivate only** (idempotent). The GDPR "Delete user info" scrub (§3 of the parent spec: PII scrub + "Deleted User" de-identification, `audit_log` exempt) remains a deliberate, audited platform-admin action (UI in Phase 4) |
 | Groups synced | Only groups **assigned to the provisioning enterprise app** ("Sync only assigned"), plus reconciliation always syncs membership of every group referenced by `role_mappings` and the bootstrap group |
 | Role vocabulary | `platform_admin` (scope: platform), `namespace_admin`, `committee`, `member` (per-namespace). `member` grants namespace membership only — visibility + submission targeting (§4.3). **Assignee is per-challenge (`challenges.assignee_id`), never group-based.** Baseline: every active authenticated user is an implicit `member` of the built-in `global` namespace |
@@ -222,10 +222,15 @@ provisioning contract, including the Entra dialect quirks:
 - **Auth**: `Authorization: Bearer` compared to `SCIM_BEARER_TOKEN` in constant time
   (`crypto.timingSafeEqual`); failures → 401 SCIM error; the header/token is never logged.
   What *is* recorded about a failure (INNOBOX_SPEC.md §14.7): a fixed reason
-  (`no_token | not_bearer | token_mismatch`), the 8-hex SHA-256 fingerprints of the
-  configured and (on a mismatch) the sent token, a flag for whitespace inside the sent
+  (`no_token | not_bearer | token_mismatch`), on a mismatch the 8-hex SHA-256
+  fingerprint of the **sent** token, a flag for whitespace inside the sent
   token, and the real client
-  IP — never the header, the token, or its length.
+  IP — never the header, the token, or its length. The **configured** token's
+  fingerprint is printed once at worker start on stdout and is **not** stored in the
+  system log (changed in v1.16).
+  **Every response is SCIM-shaped**: an authenticated request to a path the router does
+  not serve answers **404** with the SCIM error envelope (`schemas`, `status`,
+  `detail`), never Express's HTML "Cannot GET" page (v1.16).
   The token must be at least **32 characters**: the worker **refuses to start** with a
   shorter (or empty) `SCIM_BEARER_TOKEN`, logging a fatal error that names the variable
   but never its value. This is the only secret guarding a public endpoint that can create
@@ -266,7 +271,13 @@ provisioning contract, including the Entra dialect quirks:
   e-mail in both forms Entra sends (path `emails[type eq "work"].value`, and a path-less
   `emails` array); `externalId` (which is how a re-mapped tenant undoes a sign-in relink,
   INNOBOX_SPEC.md §3) — a value that collides with another row's `external_id` answers
-  **409** `uniqueness` and writes nothing; unknown paths applied-if-stored else ignored — the response is
+  **409** `uniqueness` and writes nothing, and (v1.16) **a row that has been signed in
+  with (`last_seen_at` set) and is active keeps its `external_id`**: a PATCH or PUT
+  that would change it answers **409** `mutability` and writes nothing (audited
+  `scim.anomaly`). Re-keying a used account is allowed only while it is **inactive**
+  — deactivate, re-key, reactivate — so a leaked SCIM token cannot silently point a
+  privileged, in-use account at another Entra object; the relink-undo path (a
+  never-used row) is unchanged. Unknown paths applied-if-stored else ignored — the response is
   **200 with the resource or 204**, both of which Entra accepts (never fail the sync);
   group membership `Add`/`Remove` including the `members[value eq "…"]` filter-path form;
   unknown member ids ignored (reconciliation heals ordering races).

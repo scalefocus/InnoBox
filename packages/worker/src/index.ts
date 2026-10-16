@@ -10,11 +10,19 @@
 import express from "express";
 import { Pool } from "pg";
 import { APP_VERSION } from "@innobox/shared/version";
-import { buildSmtpEnv, parseEmailTokenKey, publicBaseUrl, publicBaseUrlStartupViolation, sweepOauth, type GraphMailEnv } from "@innobox/shared";
+import {
+  buildSmtpEnv,
+  encryptionKeysStartupCheck,
+  parseEmailTokenKey,
+  publicBaseUrl,
+  publicBaseUrlStartupViolation,
+  sweepOauth,
+  type GraphMailEnv,
+} from "@innobox/shared";
 import { aiAllowedPrivateHosts, aiLocalhostAllowed, createAiClient, parseAiKey, pruneAiUsage, warnAiAllowedPrivateHosts } from "@innobox/shared/ai";
 import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
-import { checkScimBearerToken, scimTokenFatalLog } from "./scim/token.js";
+import { checkScimBearerToken, scimTokenFatalLog, scimTokenLoadedLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
 import { runReconciliation } from "./recon/reconcile.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
@@ -50,6 +58,25 @@ if (!scimTokenCheck.ok) {
   process.exit(1);
 }
 const scimToken = scimTokenCheck.token;
+// INNOBOX_SPEC.md §14.7: the configured token's fingerprint is printed once here, for the operator,
+// and is never stored in the system log (a 401 row names only the sent token's fingerprint).
+console.log(scimTokenLoadedLog(scimToken));
+
+// INNOBOX_SPEC.md §2.3 key validation: each set at-rest key must be strict base64 of exactly
+// 32 bytes and the keys must be distinct. Production refuses to start (variable named, value
+// never); elsewhere a warning and the feature behind an invalid key stays off. The worker has no
+// PUBLIC_INTAKE_KEY — it passes only what it holds.
+const encKeys = encryptionKeysStartupCheck({
+  NODE_ENV: process.env.NODE_ENV,
+  EMAIL_TOKEN_ENC_KEY: process.env.EMAIL_TOKEN_ENC_KEY,
+  WEBHOOK_ENC_KEY: process.env.WEBHOOK_ENC_KEY,
+  AI_TOKEN_ENC_KEY: process.env.AI_TOKEN_ENC_KEY,
+});
+if (encKeys.fatal) {
+  console.error(encKeys.fatal);
+  process.exit(1);
+}
+for (const warning of encKeys.warnings) console.log(warning);
 
 // INNOBOX_SPEC.md §2.3: every deep link derives from PUBLIC_BASE_URL, so a production worker
 // without it refuses to start rather than send e-mails and webhook cards with empty links.

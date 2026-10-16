@@ -25,6 +25,7 @@ import {
   canSeeSolution,
   challengeTargetsFor,
   decideTransition,
+  escapeLike,
   formatChallengeNumber,
   formatSolutionNumber,
   isChallengeEnforcedTransition,
@@ -871,7 +872,8 @@ export async function listChallenges(
     // Anonymity-safety: a name filter must never distinguish "not a match" from "hidden
     // because anonymous" — so anonymous items are unconditionally excluded whenever this
     // filter is active, rather than matched against their (masked) true author name.
-    conditions.push(`c.is_anonymous = false AND u.display_name ILIKE ${push(`%${filters.authorName}%`)}`);
+    // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves.
+    conditions.push(`c.is_anonymous = false AND u.display_name ILIKE ${push(`%${escapeLike(filters.authorName)}%`)}`);
   }
 
   const orderBy =

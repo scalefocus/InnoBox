@@ -636,3 +636,186 @@ test(
     }
   },
 );
+
+// ENTRA_AUTH_SPEC.md §5 (v1.16): a row that has been signed in with and is active keeps its
+// external_id (409 mutability, nothing written, scim.anomaly audited); a never-used row and an
+// inactive row may still be re-keyed. INNOBOX_SPEC.md §3 *Sign out everywhere*: every SCIM
+// deactivation path stamps users.sessions_valid_from, and reactivation never clears it.
+test(
+  "SCIM 2.0 server: externalId immutability on used active rows; deactivation stamps sessions_valid_from",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const [{ Pool }, express, { default: request }, { createScimRouter }] = await Promise.all([
+      import("pg"),
+      import("express").then((m) => m.default),
+      import("supertest"),
+      import("./router.js"),
+    ]);
+
+    const pool = new Pool({ connectionString: url });
+    const runId = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
+    const PREFIX = `scimtest3-${runId}-`;
+    const bearerToken = "scimtest-bearer-5c3e8a1f9d7b2064"; // gitleaks:allow — test-only fixture
+    const app = express();
+    app.use("/scim/v2", createScimRouter(pool, { bearerToken }));
+    const auth = (req: import("supertest").Test) => req.set("Authorization", `Bearer ${bearerToken}`);
+    const userPayload = (suffix: string) => ({
+      schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+      externalId: `${PREFIX}${suffix}`,
+      userName: `${PREFIX}${suffix}@example.com`,
+      active: true,
+      displayName: `User ${suffix}`,
+      emails: [{ value: `${PREFIX}${suffix}@example.com`, type: "work", primary: true }],
+    });
+    const userState = async (id: string) =>
+      (
+        await pool.query<{ external_id: string; display_name: string; active: boolean; sessions_valid_from: Date | null }>(
+          `select external_id, display_name, active, sessions_valid_from from users where id = $1`,
+          [id],
+        )
+      ).rows[0]!;
+    const immutableAnomalies = async (id: string) =>
+      (
+        await pool.query<{ request: string; attempted: string }>(
+          `select after->>'request' as request, after->>'attemptedExternalId' as attempted from audit_log
+            where action = 'scim.anomaly' and target_type = 'user' and target_id = $1
+              and after->>'reason' = 'external_id_immutable'
+            order by id`,
+          [id],
+        )
+      ).rows;
+
+    try {
+      const created = await auth(request(app).post("/scim/v2/Users")).send(userPayload("used"));
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const usedId: string = created.body.id;
+      assert.equal((await userState(usedId)).sessions_valid_from, null, "a fresh row has no session stamp");
+
+      // ── a never-used row (last_seen_at null) may still be re-keyed — the relink-undo path ──
+      const rekeyFresh = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Replace", path: "externalId", value: `${PREFIX}used-v2` }],
+      });
+      assert.equal(rekeyFresh.status, 200, JSON.stringify(rekeyFresh.body));
+      assert.equal((await userState(usedId)).external_id, `${PREFIX}used-v2`);
+
+      // ── the row has now been signed in with: externalId becomes immutable while active ──
+      await pool.query(`update users set last_seen_at = now() where id = $1`, [usedId]);
+
+      const patchRefused = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [
+          { op: "Replace", path: "externalId", value: `${PREFIX}hijack-patch` },
+          { op: "Replace", path: "displayName", value: "Must not land" },
+        ],
+      });
+      assert.equal(patchRefused.status, 409, JSON.stringify(patchRefused.body));
+      assert.equal(patchRefused.body.scimType, "mutability");
+      assert.equal(patchRefused.body.schemas?.[0], "urn:ietf:params:scim:api:messages:2.0:Error");
+
+      const putRefused = await auth(request(app).put(`/scim/v2/Users/${usedId}`)).send({
+        ...userPayload("used"),
+        externalId: `${PREFIX}hijack-put`,
+        displayName: "Must not land",
+      });
+      assert.equal(putRefused.status, 409, JSON.stringify(putRefused.body));
+      assert.equal(putRefused.body.scimType, "mutability");
+
+      const afterRefusals = await userState(usedId);
+      assert.equal(afterRefusals.external_id, `${PREFIX}used-v2`, "the key is unchanged");
+      assert.equal(afterRefusals.display_name, "User used", "nothing else from the refused payload landed");
+      assert.deepEqual(
+        (await immutableAnomalies(usedId)).map((r) => [r.request, r.attempted]),
+        [
+          ["PATCH /Users/:id", `${PREFIX}hijack-patch`],
+          ["PUT /Users/:id", `${PREFIX}hijack-put`],
+        ],
+        "each refusal is audited as scim.anomaly with the attempted key",
+      );
+
+      // ── a POST on the existing row is keyed on externalId, so it cannot change it ──
+      const replay = await auth(request(app).post("/scim/v2/Users")).send({ ...userPayload("used"), externalId: `${PREFIX}used-v2` });
+      assert.equal(replay.status, 200, JSON.stringify(replay.body));
+      assert.equal(replay.body.id, usedId);
+      assert.equal(replay.body.externalId, `${PREFIX}used-v2`);
+
+      // ── same-value externalId on a PUT is not a change: the write goes through ──
+      const putSame = await auth(request(app).put(`/scim/v2/Users/${usedId}`)).send({
+        ...userPayload("used"),
+        externalId: `${PREFIX}used-v2`,
+        displayName: "User used (renamed)",
+      });
+      assert.equal(putSame.status, 200, JSON.stringify(putSame.body));
+      assert.equal((await userState(usedId)).display_name, "User used (renamed)");
+
+      // ── deactivation (PATCH) stamps sessions_valid_from ──
+      const before = new Date();
+      const deactivate = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Replace", path: "active", value: "False" }],
+      });
+      assert.equal(deactivate.status, 200, JSON.stringify(deactivate.body));
+      const inactive = await userState(usedId);
+      assert.equal(inactive.active, false);
+      assert.ok(inactive.sessions_valid_from, "PATCH active=false stamps sessions_valid_from");
+      assert.ok(inactive.sessions_valid_from!.getTime() >= before.getTime() - 1_000);
+      const stampAfterPatch = inactive.sessions_valid_from!.getTime();
+
+      // ── an inactive used row may be re-keyed (deactivate, re-key, reactivate) ──
+      const rekeyInactive = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations: [{ op: "Replace", path: "externalId", value: `${PREFIX}used-v3` }],
+      });
+      assert.equal(rekeyInactive.status, 200, JSON.stringify(rekeyInactive.body));
+      assert.equal((await userState(usedId)).external_id, `${PREFIX}used-v3`, "an inactive row is re-keyable");
+      assert.equal((await immutableAnomalies(usedId)).length, 2, "no new anomaly for the permitted re-key");
+
+      // ── reactivation keeps the stamp (a token minted before stays refused) ──
+      const reactivate = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        Operations: [{ op: "replace", path: "active", value: true }],
+      });
+      assert.equal(reactivate.status, 200, JSON.stringify(reactivate.body));
+      const reactivated = await userState(usedId);
+      assert.equal(reactivated.active, true);
+      assert.equal(reactivated.sessions_valid_from!.getTime(), stampAfterPatch, "reactivation never clears sessions_valid_from");
+
+      // ── … and the key is immutable again now that it is active and used ──
+      const refusedAgain = await auth(request(app).patch(`/scim/v2/Users/${usedId}`)).send({
+        Operations: [{ op: "Replace", path: "externalId", value: `${PREFIX}hijack-again` }],
+      });
+      assert.equal(refusedAgain.status, 409);
+      assert.equal(refusedAgain.body.scimType, "mutability");
+
+      // ── PUT with active=false stamps too (a later stamp moves forward) ──
+      await pool.query(`update users set sessions_valid_from = now() - interval '1 day' where id = $1`, [usedId]);
+      const putInactive = await auth(request(app).put(`/scim/v2/Users/${usedId}`)).send({
+        ...userPayload("used"),
+        externalId: `${PREFIX}used-v3`,
+        active: "False",
+      });
+      assert.equal(putInactive.status, 200, JSON.stringify(putInactive.body));
+      const afterPut = await userState(usedId);
+      assert.equal(afterPut.active, false);
+      assert.ok(afterPut.sessions_valid_from!.getTime() > Date.now() - 60_000, "PUT active=false re-stamps sessions_valid_from");
+
+      // ── a PUT that reactivates keeps the stamp ──
+      const putActive = await auth(request(app).put(`/scim/v2/Users/${usedId}`)).send({
+        ...userPayload("used"),
+        externalId: `${PREFIX}used-v3`,
+        active: true,
+      });
+      assert.equal(putActive.status, 200);
+      assert.equal((await userState(usedId)).sessions_valid_from!.getTime(), afterPut.sessions_valid_from!.getTime());
+
+      // ── DELETE (leaver) stamps too ──
+      await pool.query(`update users set sessions_valid_from = now() - interval '1 day' where id = $1`, [usedId]);
+      const del = await auth(request(app).delete(`/scim/v2/Users/${usedId}`));
+      assert.equal(del.status, 204);
+      const afterDelete = await userState(usedId);
+      assert.equal(afterDelete.active, false);
+      assert.ok(afterDelete.sessions_valid_from!.getTime() > Date.now() - 60_000, "DELETE stamps sessions_valid_from");
+    } finally {
+      await pool.end();
+    }
+  },
+);
