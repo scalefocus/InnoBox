@@ -264,21 +264,115 @@ pipeline {
               #                   of disposing them after 60 s idle (a dev-only setting)
               #   setsid        : its own process group, so cleanup also kills next's child
               #                   processes, not just the pnpm wrapper
-              #   WEB_EXIT      : gets the server's exit status when it dies — the watchdog polls it
-              #                   (a dead child can linger as a zombie, which `kill -0` still finds)
+              #   nohup, </dev/null, JENKINS_NODE_COOKIE=dontKillMe : the server must outlive an
+              #                   agent-connection blip. `next dev` exits 0 on SIGINT/SIGTERM, and
+              #                   one such signal has stopped it mid-suite right after Jenkins logged
+              #                   "<node> seems to be removed or offline … is back online". So: ignore
+              #                   SIGHUP, never read a stdin that may be closed under us, and opt out
+              #                   of Jenkins' process-tree killer (which matches processes on the
+              #                   node's cookie and sends SIGTERM) — the pid file + EXIT trap + post
+              #                   step below still stop the server on every exit path.
+              #   WEB_EXIT      : written by the sh wrapper when the server exits - its exit status
+              #                   on line 1, the UTC time on line 2 - and polled by the watchdog (a
+              #                   dead child can linger as a zombie, which `kill -0` still finds)
+              #   WEB_PIDFILE   : the server's process-group id, for the post step (which runs after
+              #                   this script is gone) and for the leftover check below.
+              #   WEB_POSTMORTEM: written by the wrapper just before WEB_EXIT - host memory, load,
+              #                   the kernel log tail and what became of the next PIDs
+              #   WEB_PIDS      : the `next dev` parent and its server child, recorded once the
+              #                   server is ready (the watchdog samples their RSS every tick)
+              #   HOST_STATS    : one line per watchdog tick - host memory, the next RSS, load
               WEB_EXIT="${PWD}/e2e-web.exit"
-              rm -f "${WEB_EXIT}" "${PWD}"/e2e-shard-*.exit
+              WEB_PIDFILE="${PWD}/e2e-web.pid"
+              WEB_POSTMORTEM="${PWD}/e2e-web-exit.log"
+              WEB_PIDS="${PWD}/e2e-web.pids"
+              HOST_STATS="${PWD}/e2e-host-stats.log"
+              rm -f "${WEB_EXIT}" "${WEB_POSTMORTEM}" "${WEB_PIDS}" "${HOST_STATS}" "${PWD}"/e2e-shard-*.exit
+
+              # A server opted out of the process-tree killer can outlive a hard-aborted build. Stop
+              # one left by a previous build (only if that pid still is an InnoBox dev server — pids
+              # get reused), then refuse to run against anything else already on the port: Next
+              # would silently move to 3001 and the suite would test the stale server on 3000.
+              if [ -f "${WEB_PIDFILE}" ]; then
+                OLD_PGID="$(cat "${WEB_PIDFILE}")"
+                if ps -o args= -p "${OLD_PGID}" 2>/dev/null | grep -q 'innobox/web dev'; then
+                  echo "=== stopping a dev server left by a previous build (pgid ${OLD_PGID}) ==="
+                  kill -TERM -"${OLD_PGID}" >/dev/null 2>&1 || true
+                  for i in $(seq 1 10); do kill -0 "${OLD_PGID}" >/dev/null 2>&1 || break; sleep 1; done
+                  kill -KILL -"${OLD_PGID}" >/dev/null 2>&1 || true
+                fi
+                rm -f "${WEB_PIDFILE}"
+              fi
+              if curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null 2>&1; then
+                echo "something already answers on ${E2E_BASE_URL} — refusing to run the suite against a server this build did not start"
+                exit 1
+              fi
+
               export E2E_KEEP_ROUTES_COMPILED=1
-              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" \
-                setsid sh -c 'pnpm --filter @innobox/web dev > e2e-web.log 2>&1; echo $? > "$0"' "${WEB_EXIT}" &
+              # The wrapper is the single-quoted script below (double quotes only inside it):
+              # $1 = WEB_EXIT, $2 = WEB_PIDS, $3 = WEB_POSTMORTEM. It writes the post-mortem first
+              # and the exit file last (via a rename), so whoever sees the exit file has both.
+              # shellcheck disable=SC2016 # the body expands when the wrapper's own sh runs it
+              NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" JENKINS_NODE_COOKIE=dontKillMe \
+                nohup setsid sh -c '
+                  pnpm --filter @innobox/web dev > e2e-web.log 2>&1
+                  rc=$?
+                  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  {
+                    echo "dev server exited with status ${rc} at ${at} (UTC)"
+                    echo "--- free -m ---"
+                    free -m
+                    echo "--- load average (1/5/15 min, running/total tasks, last pid) ---"
+                    cat /proc/loadavg
+                    echo "--- next PIDs recorded when the server became ready ---"
+                    cat "$2" 2>/dev/null || echo "(none recorded: the server never became ready)"
+                    pids="$(sed -n "s/^pids=//p" "$2" 2>/dev/null)"
+                    echo "--- those PIDs now (absent = already reaped; Z = zombie) ---"
+                    [ -z "${pids}" ] || ps -o pid,ppid,stat,rss,etime,cmd -p "${pids}" 2>&1 || true
+                    echo "--- kernel log, last 40 lines (dmesg -T, else journalctl -k --since -2min) ---"
+                    if dmesg -T > e2e-kernel.tmp 2>/dev/null; then
+                      tail -n 40 e2e-kernel.tmp
+                    elif journalctl -k --since -2min --no-pager > e2e-kernel.tmp 2>/dev/null; then
+                      tail -n 40 e2e-kernel.tmp
+                    else
+                      echo "(neither is readable for this user)"
+                    fi
+                    rm -f e2e-kernel.tmp
+                  } > "$3" 2>&1
+                  { echo "${rc}"; echo "${at}"; } > "$1.tmp" && mv "$1.tmp" "$1"
+                ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" </dev/null &
               WEB_PID=$!
+              echo "${WEB_PID}" > "${WEB_PIDFILE}"
               # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
               stop_shards() {
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
               }
               trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; stop_shards' EXIT
-              for i in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
+              for _ in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
               curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
+
+              # Record the server's processes now that it is up. Below the wrapper the tree is
+              # sh -> node (pnpm) -> sh (the dev script) -> node (`next dev`, the parent) -> node (the
+              # server child, titled "next-server (vX)" by Next, re-forked when Next restarts it).
+              descendants() {   # every process below $1, depth first
+                # shellcheck disable=SC2046 # one positional parameter per pid is intended
+                set -- $(pgrep -P "$1")
+                for p in "$@"; do echo "${p}"; descendants "${p}"; done
+              }
+              WEB_TREE="$(descendants "${WEB_PID}" | paste -sd, -)"
+              NEXT_CHILD_PID="$(ps -o pid=,args= -p "${WEB_TREE}" 2>/dev/null | awk '$2 ~ /^next-server/ {print $1; exit}')"
+              if [ -n "${NEXT_CHILD_PID}" ]; then
+                NEXT_PID="$(ps -o ppid= -p "${NEXT_CHILD_PID}" 2>/dev/null | tr -d ' ')"
+              else   # no titled child: fall back to the last `node ... next dev` in the tree
+                NEXT_PID="$(ps -o pid=,args= -p "${WEB_TREE}" 2>/dev/null | awk '$2 ~ /node$/ && / next dev$/ {pid=$1} END {print pid}')"
+              fi
+              {
+                echo "wrapper=${WEB_PID} next=${NEXT_PID:-?} child=${NEXT_CHILD_PID:-?}"
+                echo "pids=${WEB_TREE}"
+                ps -o pid,ppid,rss,etime,cmd -p "${WEB_TREE}" 2>&1 || true
+              } > "${WEB_PIDS}"
+              echo "=== dev server processes (e2e-web.pids) ==="
+              cat "${WEB_PIDS}"
 
               # Compile every page and API route now, so no spec waits on a cold compile — or has its
               # page fully reloaded by Fast Refresh when a compile lands mid-test.
@@ -337,13 +431,48 @@ pipeline {
               shards_done() { ls e2e-shard-*.exit 2>/dev/null | wc -l; }
 
               # Watchdog: if the dev server dies mid-suite, stop every shard at once and say so,
-              # rather than letting every remaining spec fail on "connection refused".
+              # rather than letting every remaining spec fail on "connection refused". Every tick
+              # also appends a host sample to HOST_STATS (archived), so a death can be read against
+              # the memory curve that led to it. Two ways to die:
+              #   - the exit file appears: the wrapper saw `next dev` exit (status + time inside);
+              #   - no exit file, but the port stays closed for 3 ticks: the server child died by a
+              #     signal and the `next dev` parent lingered (it never exits, so the wrapper never
+              #     would) - the watchdog kills that parent, which makes the wrapper write the
+              #     post-mortem and exit file for the kill.
+              # "Closed" is curl's 7 (connection refused); a slow or erroring server isn't dead and
+              # Playwright reports that itself.
+              rss_mb() {   # RSS of pid $1 as "<n>M", or "gone" when there is no such process
+                [ -n "${1:-}" ] && ps -o rss= -p "$1" 2>/dev/null | awk 'NF {printf "%dM", $1/1024; ok=1} END {if (!ok) print "gone"}' || echo "gone"
+              }
+              host_stats() {
+                # The child pid is re-read each tick: Next re-forks it on a memory-threshold restart.
+                child=""
+                [ -z "${NEXT_PID}" ] || child="$(pgrep -P "${NEXT_PID}" 2>/dev/null | head -n 1)"
+                echo "$(date -u +%H:%M:%SZ) $(free -m | awk '/^Mem:/ {f=$4; a=$7} /^Swap:/ {s=$3} END {printf "free=%sM avail=%sM swap_used=%sM", f, a, s}') next=${NEXT_PID:-?}:$(rss_mb "${NEXT_PID}") child=${child:-?}:$(rss_mb "${child}") load=$(cut -d" " -f1-3 /proc/loadavg | tr " " /)"
+              }
               SERVER_DIED=0
+              PORT_CLOSED=0
+              CLOSED_TICKS=0
+              echo "# utc | host free / available / swap used (MB) | next parent pid:RSS | server child pid:RSS | load 1/5/15" > "${HOST_STATS}"
               while [ "$(shards_done)" -lt "${SHARDS}" ]; do
-                if [ "${SERVER_DIED}" = 0 ] && [ -f "${WEB_EXIT}" ]; then
-                  SERVER_DIED=1
-                  echo "=== the dev server exited mid-suite (status $(cat "${WEB_EXIT}")) — stopping Playwright ==="
-                  stop_shards
+                host_stats >> "${HOST_STATS}" 2>&1 || true
+                if [ "${SERVER_DIED}" = 0 ]; then
+                  if [ -f "${WEB_EXIT}" ]; then
+                    SERVER_DIED=1
+                    echo "=== the dev server exited mid-suite (status $(sed -n 1p "${WEB_EXIT}") at $(sed -n 2p "${WEB_EXIT}")) - stopping Playwright ==="
+                    stop_shards
+                  else
+                    probe=0
+                    curl -sf --max-time 5 "${E2E_BASE_URL}/api/auth/csrf" >/dev/null 2>&1 || probe=$?
+                    if [ "${probe}" = 7 ]; then CLOSED_TICKS=$((CLOSED_TICKS + 1)); else CLOSED_TICKS=0; fi
+                    if [ "${CLOSED_TICKS}" -ge 3 ]; then
+                      SERVER_DIED=1
+                      PORT_CLOSED=1
+                      echo "=== the dev server's port has refused connections for 3 ticks with no exit status written: its server child died and the next dev parent (pid ${NEXT_PID:-?}) lingered - killing that parent and stopping Playwright ==="
+                      [ -z "${NEXT_PID}" ] || kill -TERM "${NEXT_PID}" >/dev/null 2>&1 || true
+                      stop_shards
+                    fi
+                  fi
                 fi
                 sleep 5
               done
@@ -362,8 +491,53 @@ pipeline {
                 echo "=== dev server log (e2e-web.log) ==="
                 cat e2e-web.log
                 if [ "${SERVER_DIED}" = 1 ]; then
-                  # No "heap limit" error in the log above + a SIGKILL status (137) = killed from
-                  # outside, most likely the kernel OOM killer (dmesg may be unreadable for this user).
+                  if [ "${PORT_CLOSED}" = 1 ]; then   # give the wrapper a moment to finish after the kill
+                    for _ in $(seq 1 10); do [ -f "${WEB_EXIT}" ] && break; sleep 1; done
+                  fi
+                  echo "=== why the dev server died ==="
+                  WEB_STATUS=""
+                  if [ -f "${WEB_EXIT}" ]; then
+                    WEB_STATUS="$(sed -n 1p "${WEB_EXIT}")"
+                    echo "next dev exited with status ${WEB_STATUS} at $(sed -n 2p "${WEB_EXIT}") (UTC)."
+                  else
+                    echo "No exit status was ever written: the next dev parent never exited."
+                  fi
+                  if [ "${PORT_CLOSED}" = 1 ]; then
+                    echo "The port closed while no exit status had been written: the server child died by a"
+                    echo "signal (most likely SIGKILL from the kernel OOM killer - see the kernel log below)"
+                    echo "and the next dev parent lingered without it. The watchdog sent that parent SIGTERM,"
+                    echo "so the status above comes from that kill, not from the original death."
+                  else
+                    case "${WEB_STATUS}" in
+                      0|130|143)
+                        # `next dev` exits 0 when IT gets SIGINT/SIGTERM (its child's 130/143 surface
+                        # when the child is signalled instead). Either way: not a crash.
+                        echo "Status ${WEB_STATUS} means the server was told to stop - it did not crash. next dev"
+                        echo "exits 0 when a SIGINT or SIGTERM reaches the parent process (its child's 130/143"
+                        echo "surface when the child is signalled instead). This is NOT an OOM kill - the kernel's"
+                        echo "SIGKILL would show as 137, and a V8 heap-limit abort as 134 with 'Reached heap limit'"
+                        echo "in the log above. Look for who signalled it: a Jenkins abort, an agent"
+                        echo "disconnect/reconnect ('seems to be removed or offline' in the build log just before"
+                        echo "this), a stalled host, or a hand kill."
+                        ;;
+                      137)
+                        echo "Status 137 is SIGKILL from outside the process: the kernel OOM killer (see the"
+                        echo "kernel log below) or a hand kill."
+                        ;;
+                      134)
+                        echo "Status 134 is an abort: the V8 heap cap (CI_E2E_WEB_HEAP_MB=${CI_E2E_WEB_HEAP_MB})"
+                        echo "was reached - look for 'Reached heap limit' in the log above."
+                        ;;
+                      *)
+                        echo "An unexpected status: 128+N is death by signal N; anything else is next's own"
+                        echo "exit - read the log above."
+                        ;;
+                    esac
+                  fi
+                  echo "=== host stats, last 20 ticks (e2e-host-stats.log; the whole file is archived) ==="
+                  tail -n 20 "${HOST_STATS}"
+                  echo "=== post-mortem written by the wrapper as the server exited (e2e-web-exit.log) ==="
+                  cat "${WEB_POSTMORTEM}" 2>/dev/null || echo "(none: the wrapper never saw next dev exit)"
                   echo "=== kernel OOM-killer messages (if readable) ==="
                   dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory' | tail -n 5 || true
                 fi
@@ -374,11 +548,17 @@ pipeline {
           post {
             always {
               sh '''
+                # The dev server opts out of Jenkins' process-tree killer (see the stage), so stop it
+                # here too — this runs even when the stage's own EXIT trap never did (hard abort).
+                if [ -f e2e-web.pid ]; then
+                  kill -TERM -"$(cat e2e-web.pid)" >/dev/null 2>&1 || true
+                  rm -f e2e-web.pid
+                fi
                 docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
                 docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
               '''
               // Kept even when the build is aborted (where the in-step `cat` never runs).
-              archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log, e2e-quick.txt', allowEmptyArchive: true
+              archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log, e2e-quick.txt, e2e-host-stats.log, e2e-web-exit.log, e2e-web.pids', allowEmptyArchive: true
             }
           }
         }
