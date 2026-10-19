@@ -1585,6 +1585,38 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 /* ── end Challenges list view ───────────────────────────────────────────── */
 
+/* ── Hype (§26.5) ──────────────────────────────────────────────────────────
+   The list gains a Hype column after Likes while hype is on; the detail page gets the button,
+   the count and the hypers row; Home gets the "Hyped this week" rows. Tokens only (§2.2). */
+.ch-rows.has-hype .ch-row {
+  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 56px 76px 96px;
+}
+.ch-c-hype { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.hype-count { white-space: nowrap; }
+.hype-btn.is-on { background: var(--warn-soft); border-color: color-mix(in oklab, var(--warn) 45%, var(--line)); color: var(--ink); opacity: 1; }
+.hypers { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 6px; }
+.hypers-bubbles { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.hyped-rows { padding: 0; }
+/* Each board row: number · a two-line block (title, then author + status) · this week's points. */
+.hyped-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; color: inherit; text-decoration: none; }
+.hyped-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hyped-title > .ttl, .hyped-title > .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hyped-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.hyped-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.hyped-points { font-family: var(--font-mono); font-size: 14px; white-space: nowrap; }
+@media (max-width: 880px) {
+  .ch-c-hype { order: 8; font-size: 12px; }
+  .ch-c-sol { order: 9; }
+  .ch-c-hype::before { content: "·"; color: var(--faint); margin-right: 4px; }
+  .hyped-row { gap: 10px; padding: 13px 16px; }
+}
+/* The detail header carries Follow, Like and Hype: on a phone the actions drop below the author. */
+@media (max-width: 600px) {
+  .detail-head { flex-wrap: wrap; gap: 10px 12px; }
+  .detail-head > .grow { flex-basis: calc(100% - 64px); }
+}
+/* ── end Hype ───────────────────────────────────────────────────────────── */
+
 /* ── Author reveal dialog (INNOBOX_SPEC.md §9, §13.6) ───────────────────────
    The audited admin reveal opens a native modal <dialog>: the revealed author's real, large
    (~96 px) avatar bubble above their name, flagged "Revealed to you only". Native showModal gives

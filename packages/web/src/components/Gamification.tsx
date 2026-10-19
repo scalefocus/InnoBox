@@ -43,6 +43,7 @@ const BADGE_GLYPH: Record<string, string> = {
   icebreaker: "🧊",
   first_idea: "✨",
   full_circle: "⭕",
+  talent_scout: "🔭",
 };
 
 export function badgeGlyph(key: string): string {

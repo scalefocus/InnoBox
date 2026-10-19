@@ -40,6 +40,8 @@ export interface TriageRow {
   createdAt: string;
   /** §25.8 "via agent" tag (client name masked on an anonymous item). */
   viaAgent: ViaAgent;
+  /** §26.5 the challenge's all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 export interface TriageFilters {
@@ -114,9 +116,10 @@ interface TriageQueryRow {
   assignee_scrubbed: boolean | null;
   created_at: Date;
   mcp_client_name: string | null;
+  hype_points: number;
 }
 
-function toTriageRow(row: TriageQueryRow): TriageRow {
+function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
   // The one projection (§9 masking, §24.6 external label) every author surface uses.
   const author = maskAuthor({
     isAnonymous: row.is_anonymous,
@@ -145,6 +148,7 @@ function toTriageRow(row: TriageQueryRow): TriageRow {
     assigneeScrubbed: row.assignee_id === null ? null : row.assignee_scrubbed,
     createdAt: row.created_at.toISOString(),
     viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
+    ...(withHype ? { hype: row.hype_points } : {}),
   };
 }
 
@@ -153,7 +157,8 @@ const TRIAGE_SELECT = `
          ps.company as external_company, c.is_anonymous, c.status,
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
          au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
-         c.created_at, c.mcp_client_name
+         c.created_at, c.mcp_client_name,
+         (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) as hype_points
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -181,6 +186,7 @@ export async function listTriageQueue(
   viewer: Viewer,
   filters: TriageFilters,
   pagination: { page: number; pageSize: number } = { page: 1, pageSize: TRIAGE_PAGE_SIZE_DEFAULT },
+  opts: { hype?: boolean } = {},
 ): Promise<TriagePage> {
   const query = buildTriageQuery(viewer, filters);
   const { page, pageSize } = pagination;
@@ -201,7 +207,7 @@ export async function listTriageQueue(
   );
 
   return {
-    rows: rows.map(toTriageRow),
+    rows: rows.map((r) => toTriageRow(r, opts.hype === true)),
     total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
     page,
     pageSize,
@@ -311,7 +317,7 @@ export async function exportTriageCsv(pool: Pool, admin: Viewer, filters: Triage
           `${TRIAGE_SELECT} ${query.whereClause} order by c.created_at desc limit ${TRIAGE_EXPORT_MAX}`,
           query.params,
         )
-      ).rows.map(toTriageRow)
+      ).rows.map((r) => toTriageRow(r))
     : [];
 
   await appendAudit(pool, {
@@ -382,6 +388,8 @@ export interface TriageSolutionRow {
   createdAt: string;
   /** §25.8 "via agent" tag (client name masked on an anonymous item). */
   viaAgent: ViaAgent;
+  /** §26.5 the solution's all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 interface TriageSolutionQueryRow {
@@ -397,9 +405,10 @@ interface TriageSolutionQueryRow {
   namespace_slug: string;
   created_at: Date;
   mcp_client_name: string | null;
+  hype_points: number;
 }
 
-function toTriageSolutionRow(row: TriageSolutionQueryRow): TriageSolutionRow {
+function toTriageSolutionRow(row: TriageSolutionQueryRow, withHype: boolean): TriageSolutionRow {
   return {
     number: formatSolutionNumber(row.number),
     challengeNumber: formatChallengeNumber(row.challenge_number),
@@ -412,6 +421,7 @@ function toTriageSolutionRow(row: TriageSolutionQueryRow): TriageSolutionRow {
     namespaceSlug: row.namespace_slug,
     createdAt: row.created_at.toISOString(),
     viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
+    ...(withHype ? { hype: row.hype_points } : {}),
   };
 }
 
@@ -429,6 +439,7 @@ export async function listTriageSolutions(
   pool: Pool,
   viewer: Viewer,
   pagination: { page: number; pageSize: number } = { page: 1, pageSize: TRIAGE_PAGE_SIZE_DEFAULT },
+  opts: { hype?: boolean } = {},
 ): Promise<TriageSolutionsPage> {
   const adminNs = adminNamespaceIds(viewer.roles);
   const { page, pageSize } = pagination;
@@ -445,7 +456,8 @@ export async function listTriageSolutions(
     `select *, count(*) over()::text as total_count from (
        select s.number::text as number, c.number::text as challenge_number, c.title as challenge_title,
               s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
-              ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at, s.mcp_client_name
+              ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at, s.mcp_client_name,
+              (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'solution' and h.parent_id = s.id) as hype_points
          from solutions s
          join challenges c on c.id = s.challenge_id
          join users u on u.id = s.author_id
@@ -459,7 +471,7 @@ export async function listTriageSolutions(
   );
 
   return {
-    rows: rows.map(toTriageSolutionRow),
+    rows: rows.map((r) => toTriageSolutionRow(r, opts.hype === true)),
     total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
     page,
     pageSize,

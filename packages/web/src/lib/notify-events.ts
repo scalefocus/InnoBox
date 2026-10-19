@@ -10,6 +10,7 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges
 import { itemHref } from "./deep-link";
 import {
   dispatchCoalescedComment,
+  dispatchCoalescedHype,
   dispatchEvent,
   dispatchToUser,
   getFollowerUserIds,
@@ -373,6 +374,48 @@ export async function notifyCommentPosted(
     // their own item either.
     { preference: "followedComments" },
   );
+}
+
+/**
+ * §12.1 event 16 (hyped, §26.6): the hyped item's author only. Shared by the hype route; called
+ * after the hype committed. `hype` is the item's points after this hype.
+ */
+export async function notifyHyped(ctx: NotifyContext, parentType: "challenge" | "solution", parentId: string, hyperId: string, hype: number): Promise<void> {
+  const { rows } = await ctx.pool.query<{
+    author_id: string | null;
+    challenge_id: string;
+    challenge_number: string;
+    challenge_title: string;
+    solution_number: string | null;
+  }>(
+    parentType === "challenge"
+      ? `select c.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, null::text as solution_number
+           from challenges c where c.id = $1`
+      : `select s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, s.number::text as solution_number
+           from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+    [parentId],
+  );
+  const item = rows[0];
+  if (!item) return;
+  const { rows: who } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [hyperId]);
+  const challengeNumber = formatChallengeNumber(item.challenge_number);
+  const itemNumber = item.solution_number ? formatSolutionNumber(item.solution_number) : challengeNumber;
+  const itemLabel = item.solution_number
+    ? `solution ${itemNumber} on ${challengeNumber} "${item.challenge_title}"`
+    : `challenge ${challengeNumber} "${item.challenge_title}"`;
+  await dispatchCoalescedHype(ctx, item.author_id, {
+    parentType,
+    parentId,
+    challengeId: item.challenge_id,
+    itemNumber,
+    itemLabel,
+    latestBy: who[0]?.display_name ?? "Someone",
+    hype,
+    link: itemHref(item.challenge_number, item.solution_number),
+    challengeNumber,
+    challengeTitle: item.challenge_title,
+    solutionNumber: item.solution_number,
+  });
 }
 
 /** Notification failures are logged, never thrown — the state change already committed. */

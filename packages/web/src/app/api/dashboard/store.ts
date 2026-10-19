@@ -14,6 +14,8 @@ import {
   type Viewer,
 } from "../challenges/store";
 import { listFeaturedForViewer } from "../challenges/featured";
+import { getHypeEnabled } from "../../../lib/hype-settings";
+import { getHypedBoard, withHypePoints, type HypedBoard } from "../hypes/store";
 
 export const CHALLENGE_KPI_STATUSES: ChallengeStatus[] = ["in_review", "valid", "solved", "rejected"];
 export const SOLUTION_KPI_STATUSES: SolutionStatus[] = ["in_review", "valid", "in_implementation", "implemented"];
@@ -33,8 +35,11 @@ export interface SpotlightSolution {
 }
 
 export interface DashboardData {
-  /** §13.2 Featured: the viewer's VISIBLE pins only, newest first (empty → no section). */
-  featured: ChallengeListItem[];
+  /** §13.2 Featured: the viewer's VISIBLE pins only, newest first (empty → no section). Each card
+   *  carries `hype` while hype is on (§26.5). */
+  featured: (ChallengeListItem & { hype?: number })[];
+  /** §26.5 "Hyped this week" — null while hype is off. */
+  hyped: HypedBoard | null;
   kpis: DashboardKpis;
   spotlights: {
     lastImplemented: SpotlightSolution | null;
@@ -136,11 +141,13 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
     };
   };
 
-  const [lastImplemented, lastInImplementation, featured] = await Promise.all([
+  const [lastImplemented, lastInImplementation, pins, hypeOn] = await Promise.all([
     spotlight("implemented"),
     spotlight("in_implementation"),
     listFeaturedForViewer(pool, viewer),
+    getHypeEnabled(pool),
   ]);
+  const [featured, hyped] = hypeOn ? await Promise.all([withHypePoints(pool, pins), getHypedBoard(pool, viewer)]) : [pins, null];
 
-  return { featured, kpis: { challenges, solutions }, spotlights: { lastImplemented, lastInImplementation } };
+  return { featured, hyped, kpis: { challenges, solutions }, spotlights: { lastImplemented, lastInImplementation } };
 }

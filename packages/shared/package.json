@@ -109,6 +109,10 @@
     "./presence": {
       "types": "./dist/presence.d.ts",
       "default": "./dist/presence.js"
+    },
+    "./hype": {
+      "types": "./dist/hype.d.ts",
+      "default": "./dist/hype.js"
     }
   },
   "scripts": {

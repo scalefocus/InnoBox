@@ -37,6 +37,11 @@ test("heldRowDropReason: read, gone, invisible and malformed rows are dropped", 
   assert.equal(heldRowDropReason(row({ payload: { parentType: "challenge", parentId: "c1" } }), true), "malformed");
 });
 
+test("toDigestUpdate: a coalesced hyped row counts every hype it gathered (§26.6)", () => {
+  const u = toDigestUpdate(row({ payload: { digest: { kind: "hype", challengeNumber: "1", challengeTitle: "T" } }, inbox_count: 3 }));
+  assert.equal(u.count, 3);
+});
+
 test("toDigestUpdate: a coalesced comment row counts every comment and is as recent as the latest", () => {
   const u = toDigestUpdate(
     row({

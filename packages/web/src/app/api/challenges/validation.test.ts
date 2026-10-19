@@ -37,6 +37,13 @@ test("parseChallengeListFilters: accepts all documented tab/sort/status values",
   }
 });
 
+test("parseChallengeListFilters: accepts the §26.5 most_hyped sort", () => {
+  const result = parseChallengeListFilters(new URLSearchParams({ sort: "most_hyped" }));
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value.sort, "most_hyped");
+  assert.equal(parseChallengeListFilters(new URLSearchParams({ sort: "hype" })).ok, false, "unknown sorts still fail closed");
+});
+
 test("parseGalleryFilters: parses the four §13.1 filters and nothing else (search reuses it)", () => {
   const result = parseGalleryFilters(
     new URLSearchParams({ status: "valid", impactAreaId: AREA_ID, namespaceId: NS_ID, authorName: " Jane ", tab: "mine", q: "x" }),

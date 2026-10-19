@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.17.0",
+    date: "2026-10-19",
+    summary:
+      "New: Hype. Everyone gets three hypes a week to spend on the open challenges and solutions they most want acted on. A hype counts double in an item's first week and can't be taken back. This week's most-hyped items show on Home, authors are notified, and you earn Talent Scout when something you hyped is solved. Platform admins switch it on in Platform settings.",
+  },
+  {
     version: "1.15.0",
     date: "2026-10-16",
     summary:

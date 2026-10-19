@@ -28,6 +28,8 @@ import { DangerZone, TrashedBanner, type TrashInfo } from "@/components/TrashCon
 import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 import { VisibilityControl } from "@/components/VisibilityControl";
 import { PEOPLE_VISIBILITY_LABEL, type AccessEntryView } from "@innobox/shared/challenge-access";
+import { HypeButton, HypeCount, HypersList, type HypeFields } from "@/components/Hype";
+import { invalidateApi } from "@/lib/ui";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -58,7 +60,8 @@ interface AttachmentItem {
   createdAt: string;
 }
 
-interface SolutionItem {
+/** §26.11: present only while hype is on. */
+interface SolutionItem extends Partial<HypeFields> {
   id: string;
   number: string;
   description: string;
@@ -88,7 +91,9 @@ interface SolutionItem {
   viaAgent?: ViaAgent;
 }
 
-interface ChallengeDetail {
+interface ChallengeDetail extends Partial<HypeFields> {
+  /** §26.11: the viewer's budget — present only while hype is on. */
+  hypesLeft?: number;
   id: string;
   number: string;
   title: string;
@@ -242,6 +247,27 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       onChanged();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Could not update like");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // §26: spend one of this week's hypes. Home's board and the budget in `me` change with it.
+  const giveHype = async (parentType: "challenge" | "solution", parentId: string) => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/hypes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parentType, parentId }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not hype this");
+      invalidateApi("/api/dashboard");
+      invalidateApi("/api/me");
+      onChanged();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not hype this");
     } finally {
       setBusy(false);
     }
@@ -524,7 +550,10 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <ViaAgentTag via={s.viaAgent} />
         </span>
         {solutionReadOnly ? (
-          <span className="sub mono">♡ {s.likeCount}</span>
+          <>
+            <span className="sub mono">♡ {s.likeCount}</span>
+            {s.hype !== undefined && <HypeCount value={s.hype} className="sub mono hype-count" />}
+          </>
         ) : (
           <>
             <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("solution", s.id)}>
@@ -540,9 +569,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             >
               {s.likedByViewer ? "♥" : "♡"} {s.likeCount}
             </button>
+            {s.hypeReason !== undefined && (
+              <HypeButton item={s as HypeFields} hypesLeft={challenge.hypesLeft ?? 0} busy={busy} onHype={() => giveHype("solution", s.id)} />
+            )}
           </>
         )}
       </div>
+      {s.hypers && <HypersList hypers={s.hypers} />}
       {s.author.anonymous && (s.canReveal || s.canSelfReveal) && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
           {s.canReveal && (
@@ -683,7 +716,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       </div>
 
       <div className="card card-pad reveal" data-attach-scope style={{ marginBottom: 18 }}>
-        <div className="row" style={{ border: 0, padding: 0, marginBottom: 16 }}>
+        <div className="row detail-head" style={{ border: 0, padding: 0, marginBottom: 16 }}>
           <AvatarBubble
             size="md"
             userId={challenge.author.userId}
@@ -717,7 +750,10 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             )}
           </div>
           {readOnly ? (
-            <span className="sub mono">♡ {challenge.likeCount}</span>
+            <>
+              <span className="sub mono">♡ {challenge.likeCount}</span>
+              {challenge.hype !== undefined && <HypeCount value={challenge.hype} className="sub mono hype-count" />}
+            </>
           ) : (
             <>
               <button type="button" className="btn btn-sm" disabled={busy} onClick={() => toggleFollow("challenge", challenge.id)}>
@@ -734,9 +770,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               >
                 {challenge.likedByViewer ? "♥" : "♡"} {challenge.likeCount}
               </button>
+              {challenge.hypeReason !== undefined && (
+                <HypeButton item={challenge as HypeFields} hypesLeft={challenge.hypesLeft ?? 0} busy={busy} onHype={() => giveHype("challenge", challenge.id)} />
+              )}
             </>
           )}
         </div>
+        {challenge.hypers && <HypersList hypers={challenge.hypers} />}
         <p style={{ whiteSpace: "pre-wrap", fontSize: 14.5, lineHeight: 1.65 }}>{challenge.description}</p>
 
         {challenge.externalContact && (

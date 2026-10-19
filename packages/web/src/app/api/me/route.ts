@@ -17,6 +17,8 @@ import { markQuickStartSeen, markWhatsNewSeen } from "./store";
 import { readBugReports, readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { meGamification, newAchievements } from "@/lib/gamification-read";
 import { getMcpSettings, hasLiveConnection } from "@/lib/mcp/store";
+import { getHypeEnabled } from "@/lib/hype-settings";
+import { viewerHypeBudget } from "../hypes/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -25,7 +27,7 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
@@ -35,7 +37,10 @@ async function handleGET(): Promise<Response> {
     newAchievements(pool, user.id),
     getMcpSettings(pool),
     hasLiveConnection(pool, user.id),
+    getHypeEnabled(pool),
   ]);
+  // §26.11: the hype button's initial budget — null while hype is off.
+  const hype = hypeOn ? { enabled: true, hypesLeft: (await viewerHypeBudget(pool, user.id)).hypesLeft } : null;
 
   const byRole = (role: "namespace_admin" | "committee"): string[] => [
     ...new Set(
@@ -74,6 +79,7 @@ async function handleGET(): Promise<Response> {
     // §25.9: the account menu's AI agents item — while agent access is on, or while the person
     // still holds a connection (so they can revoke it).
     agentsMenu: mcp.enabled || connected,
+    hype,
   });
 }
 

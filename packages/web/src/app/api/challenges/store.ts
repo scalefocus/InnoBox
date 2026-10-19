@@ -879,7 +879,10 @@ export async function listChallenges(
       ? "like_count DESC, c.created_at DESC"
       : filters.sort === "most_solutions"
         ? "solution_count DESC, c.created_at DESC"
-        : "c.created_at DESC";
+        : filters.sort === "most_hyped"
+          ? // §26.5: the challenge's own all-time hype points, then newest.
+            "(select coalesce(sum(h.weight), 0) from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) DESC, c.created_at DESC"
+          : "c.created_at DESC";
 
   const whereClause = conditions.length ? `where ${conditions.join(" and ")}` : "";
   const sql = `${CHALLENGE_SELECT.replaceAll("$viewer", viewerParam)} ${whereClause} order by ${orderBy} limit 100`;

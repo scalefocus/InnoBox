@@ -7,6 +7,8 @@ import { isChallengeStatus, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
+import { getHypeEnabled } from "@/lib/hype-settings";
+import { decorateDetailWithHype } from "../../hypes/store";
 import { logNotifyFailure, notifyChallengeStatusChanged } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
@@ -30,6 +32,10 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
   // challenge's and its solutions'). Best-effort — never fails the page. The §10.4 trashed view
   // stamps nothing: its inbox rows stay hidden, untouched, until a restore brings them back.
   if (!challenge.trashed) await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
+  // §26.11: the hype fields ride on this payload only, and only while hype is on.
+  if (await getHypeEnabled(pool)) {
+    return Response.json({ challenge: await decorateDetailWithHype(pool, { userId: gate.user.id, roles: gate.user.roles }, challenge) });
+  }
   return Response.json({ challenge });
 }
 

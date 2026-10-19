@@ -16,6 +16,7 @@ import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
+import { HypeCount } from "@/components/Hype";
 
 interface MeResponse {
   user: { id: string };
@@ -46,6 +47,8 @@ interface TriageRow {
   aiNotes?: "ready" | "pending" | "failed" | null;
   /** §25.8: set when submitted through an AI agent (client name masked on anonymous items). */
   viaAgent?: ViaAgent;
+  /** §26.5: all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 type Tab = "challenges" | "solutions";
@@ -419,6 +422,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
             <span>Author</span>
             <span>Status</span>
             <span>Assignee</span>
+            {rows.some((r) => r.hype !== undefined) && <span>Hype</span>}
             <span>Created</span>
           </div>
           {rows.map((r) => {
@@ -471,6 +475,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   refresh(true);
                 }}
               />
+              {r.hype !== undefined && <HypeCount value={r.hype} className="sub mono" />}
               <span className="sub mono">{fmt.date(r.createdAt)}</span>
             </div>
             );
@@ -513,6 +518,8 @@ interface TriageSolutionRow {
   createdAt: string;
   /** §25.8: set when proposed through an AI agent (client name masked on anonymous items). */
   viaAgent?: ViaAgent;
+  /** §26.5: all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 // Solutions tab (§14.1): `proposed` solutions awaiting review across the namespaces the admin
@@ -558,6 +565,7 @@ function SolutionsQueue() {
             <span style={{ flex: 1 }}>Solution</span>
             <span>Author</span>
             <span>Impact</span>
+            {rows.some((r) => r.hype !== undefined) && <span>Hype</span>}
             <span>Proposed</span>
           </div>
           {rows.map((r) => {
@@ -585,6 +593,7 @@ function SolutionsQueue() {
                 <ViaAgentTag via={r.viaAgent} flush />
               </span>
               <span className="sub">{r.impactAreaName}</span>
+              {r.hype !== undefined && <HypeCount value={r.hype} className="sub mono" />}
               <span className="sub mono">{fmt.date(r.createdAt)}</span>
             </div>
             );

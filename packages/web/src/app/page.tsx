@@ -14,6 +14,7 @@ import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "./challenges/status";
 import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/FeaturedChallenges";
+import { HypedThisWeek, type HypedBoard } from "@/components/Hype";
 
 interface SpotlightSolution {
   number: string;
@@ -26,6 +27,8 @@ interface SpotlightSolution {
 
 interface DashboardData {
   featured: FeaturedChallengeCard[];
+  /** §26.5 "Hyped this week" — null while hype is off. */
+  hyped?: HypedBoard | null;
   kpis: {
     challenges: Record<string, number>;
     solutions: Record<string, number>;
@@ -78,6 +81,7 @@ function Dashboard({ data }: { data: DashboardData | null }) {
   return (
     <>
       <FeaturedChallenges items={data?.featured ?? []} />
+      <HypedThisWeek board={data?.hyped} />
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontSize: 16, marginBottom: 12 }}>Challenges</h3>

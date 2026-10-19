@@ -10,6 +10,7 @@ import { cachedGet, invalidateApi } from "@/lib/ui";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
 import { GamificationSettingsCard } from "@/components/GamificationSettingsCard";
+import { HypeSettingsCard } from "@/components/HypeSettingsCard";
 import { PublicSubmissionsSettingsCard, type PublicSubmissionsSettings } from "@/components/PublicSubmissionsSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
 import { McpCard } from "./McpCard";
@@ -74,6 +75,7 @@ interface SettingsData {
   impactAreas: ImpactArea[];
   featuredLimit: number;
   gamificationEnabled: boolean;
+  hypeEnabled: boolean;
   publicSubmissions: PublicSubmissionsSettings;
 }
 
@@ -138,6 +140,7 @@ function SettingsConsole() {
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />
       <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />
       <GamificationSettingsCard key={String(data.gamificationEnabled)} enabled={data.gamificationEnabled} onChanged={refresh} onError={notify} />
+      <HypeSettingsCard key={`hype-${String(data.hypeEnabled)}`} enabled={data.hypeEnabled} onChanged={refresh} onError={notify} />
       <PublicSubmissionsSettingsCard
         key={JSON.stringify(data.publicSubmissions)}
         settings={data.publicSubmissions}

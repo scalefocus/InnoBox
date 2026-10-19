@@ -3,6 +3,7 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, listTriageQueue } from "./store";
+import { getHypeEnabled } from "@/lib/hype-settings";
 import { parseTriageFilters, parseTriagePagination } from "./validation";
 import { withSystemLog } from "@/lib/system-log";
 import { webAi } from "@/lib/ai";
@@ -29,7 +30,8 @@ async function handleGET(req: Request): Promise<Response> {
   const pagination = parseTriagePagination(url.searchParams);
   if (!pagination.ok) return Response.json({ error: pagination.error }, { status: 400 });
 
-  const page = await listTriageQueue(pool, admin, parsed.value, pagination.value);
+  // §26.5: the hype column, only while hype is on.
+  const page = await listTriageQueue(pool, admin, parsed.value, pagination.value, { hype: await getHypeEnabled(pool) });
   // §22.11: the triage-notes indicator per row (the queue is admins-only, who may always read them).
   const notes = await triageQueueNotes(pool, webAi(), admin.userId, page.rows.map((r) => r.number));
   return Response.json({ ...page, rows: page.rows.map((r) => ({ ...r, aiNotes: notes.get(r.number) ?? null })) });

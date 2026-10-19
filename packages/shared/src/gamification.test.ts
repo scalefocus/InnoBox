@@ -33,6 +33,8 @@ test("weights are fixed: outcomes dominate, social activity earns 1", () => {
     like_received: 1,
     comment_posted: 1,
     agent_connected: 0, // §25.12: a marker for Plugged In, never points
+    hype_received: 3, // §26.7: three times a like, for a signal three-a-week scarce
+    hype_fulfilled: 0, // §26.7: a marker for Talent Scout, never points
   });
 });
 
@@ -42,6 +44,9 @@ test("daily caps: the first 5 comments and 25 likes of a day earn points, later 
   assert.equal(pointsFor("comment_posted", 5), 0, "the sixth is a 0-point row");
   assert.equal(pointsFor("like_received", 24), 1);
   assert.equal(pointsFor("like_received", 25), 0);
+  assert.equal(pointsFor("hype_received", 9), 3, "the tenth hype of a day still earns");
+  assert.equal(pointsFor("hype_received", 10), 0, "the eleventh is a 0-point row");
+  assert.equal(pointsFor("hype_fulfilled", 0), 0, "the Talent Scout marker never earns");
   assert.equal(pointsFor("solution_implemented", 1000), 50, "milestones are never capped");
 });
 
@@ -101,7 +106,8 @@ test("badge thresholds match the catalogue", () => {
   assert.deepEqual(t.implementer, [1, 3, 10]);
   assert.deepEqual(t.crowd_favorite, [10, 50, 200]);
   assert.deepEqual(t.conversation_starter, [10, 50, 200]);
-  assert.equal(BADGES.length, 14, "the ten §23.4 badges plus the four §25.12 agent badges");
+  assert.deepEqual(t.talent_scout, [1, 5, 20]);
+  assert.equal(BADGES.length, 15, "the ten §23.4 badges, the four §25.12 agent badges and §26.7 Talent Scout");
 });
 
 test("badgeProgress names the next step and stops once fully earned", () => {

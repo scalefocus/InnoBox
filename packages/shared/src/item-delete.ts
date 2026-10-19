@@ -31,6 +31,8 @@ export interface CascadeCounts {
   solutions: number;
   comments: number;
   likes: number;
+  /** §26.9: the subtree's hypes. Budgets are not refunded; the ledger is untouched. */
+  hypes: number;
   follows: number;
   attachments: number;
   notifications: number;
@@ -181,6 +183,7 @@ async function deleteChildren(
 
   const comments = await client.query(`delete from comments where ${parentMatch}`, params);
   const likes = await client.query(`delete from likes where ${parentMatch}`, params);
+  const hypes = await client.query(`delete from hypes where ${parentMatch}`, params);
   const follows = await client.query(`delete from follows where ${parentMatch}`, params);
 
   // Tombstones go too (the §11 retention rule is carved out here, and only here); their MinIO
@@ -210,6 +213,7 @@ async function deleteChildren(
     counts: {
       comments: comments.rowCount ?? 0,
       likes: likes.rowCount ?? 0,
+      hypes: hypes.rowCount ?? 0,
       follows: follows.rowCount ?? 0,
       attachments: attachments.rowCount ?? 0,
       uploadSessions: sessions.length,
