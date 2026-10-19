@@ -76,12 +76,12 @@ function buildBearerApp(record: (pool: Pool, e: SystemEventInput) => Promise<voi
   return app;
 }
 
-test("each rejection reason gets its own code, fingerprints and the client IP — never the token", async () => {
+test("each rejection reason gets its own code, the sent fingerprint and the client IP — never the token or the configured fingerprint", async () => {
   const recorded: SystemEventInput[] = [];
   const app = buildBearerApp(async (_pool, e) => {
     recorded.push(e);
   });
-  const fp = scimTokenFingerprint(CONFIGURED);
+  const configuredFp = scimTokenFingerprint(CONFIGURED);
   await request(app).get("/scim/v2/Users").set("X-Forwarded-For", "203.0.113.7").expect(401);
   await request(app).get("/scim/v2/Users").set("authorization", "Basic abc").expect(401);
   await request(app).get("/scim/v2/Users").set("authorization", "Bearer not-the-token").expect(401);
@@ -94,21 +94,20 @@ test("each rejection reason gets its own code, fingerprints and the client IP �
     ["scim_no_token", "scim_not_bearer", "scim_token_mismatch", "scim_token_mismatch"],
     "the accepted call is not recorded",
   );
-  assert.equal(recorded[0]!.message, `SCIM request rejected: no token sent (configured ${fp})`);
-  assert.equal(recorded[1]!.message, `SCIM request rejected: not a bearer token (configured ${fp})`);
-  assert.equal(
-    recorded[2]!.message,
-    `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not-the-token")}, configured ${fp})`,
-  );
+  assert.equal(recorded[0]!.message, "SCIM request rejected: no token sent");
+  assert.equal(recorded[1]!.message, "SCIM request rejected: not a bearer token");
+  assert.equal(recorded[2]!.message, `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not-the-token")})`);
   assert.equal(
     recorded[3]!.message,
-    `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not the token")}, configured ${fp}; sent token contains whitespace)`,
+    `SCIM request rejected: token mismatch (sent ${scimTokenFingerprint("not the token")}; sent token contains whitespace)`,
   );
   assert.equal(recorded[0]!.clientIp, "203.0.113.7", "the proxy-selected client address");
   assert.ok(recorded[1]!.clientIp, "a direct caller's address is recorded too");
   for (const e of recorded) {
     assert.equal(e.message.includes("not-the-token") || e.message.includes("not the token"), false, "never the sent token");
     assert.equal(e.message.includes(CONFIGURED), false, "never the configured token");
+    assert.equal(e.message.includes(configuredFp), false, "the configured fingerprint is printed at start, never stored (v1.16)");
+    assert.equal(/configured/.test(e.message), false, "no row mentions the configured side at all");
   }
 });
 

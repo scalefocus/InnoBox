@@ -126,7 +126,7 @@ test(
         );
       }
       const before = await snapshot(pool, challengeId);
-      const inboxBefore = await getInbox(pool, rival.userId);
+      const inboxBefore = await getInbox(pool, rival);
       assert.ok(inboxBefore.notifications.some((n) => n.link === `/challenges/${chNum}`), "fixture: the rival has an inbox row about it");
 
       // ── 1. Non-platform-admins: 404 everywhere, nothing touched ───────────────────────────
@@ -174,10 +174,10 @@ test(
       assert.equal((await store.withdrawChallenge(pool, author, chNum)).status, "not_found");
 
       // Inbox hidden (list and count) and left alone by mark-all-read; unsent mail/posts gone.
-      const inboxTrashed = await getInbox(pool, rival.userId);
+      const inboxTrashed = await getInbox(pool, rival);
       assert.ok(!inboxTrashed.notifications.some((n) => n.link === `/challenges/${chNum}`), "inbox row hidden while trashed");
       assert.equal(inboxTrashed.unreadCount, inboxBefore.unreadCount - 1);
-      await markAllRead(pool, rival.userId);
+      await markAllRead(pool, rival);
       const outbox = await pool.query<{ status: string }>(`select status from notification_outbox where payload->>'parentId' = $1`, [challengeId]);
       assert.deepEqual(outbox.rows.map((r) => r.status), ["sent"], "only the already-sent row stays");
       const hooks = await pool.query<{ status: string }>(`select status from webhook_deliveries where entity_id = $1`, [challengeId]);
@@ -204,7 +204,7 @@ test(
       assert.equal((await restoreChallenge(pool, pa, chNum)).status, "not_trashed");
       const after = await snapshot(pool, challengeId);
       assert.deepEqual({ ...after, uploads: before.uploads }, before, "every child row, the status, the assignee and updated_at round-trip");
-      const inboxBack = await getInbox(pool, rival.userId);
+      const inboxBack = await getInbox(pool, rival);
       const row = inboxBack.notifications.find((n) => n.link === `/challenges/${chNum}`);
       assert.ok(row, "the inbox row is back after restore");
       assert.equal(row!.read, false, "mark-all-read did not touch it while it was hidden");

@@ -282,7 +282,8 @@ including theme-aware scrollbars and form controls. Pinned values:
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
-    Sign out — plus the §25.9 **AI agents** item above What's new while agent access is
+    Sign out / **Sign out everywhere** (§3; the last item, below Sign out) — plus the
+    §25.9 **AI agents** item above What's new while agent access is
     on or the user still holds a connection, plus the §13.10 **Take the survey** as the first item while a survey
     offer is open, and **Give feedback** above Sign out when an on-demand survey can
     start) in the sidebar foot, and the topbar search + notification bell +
@@ -519,6 +520,25 @@ The delivery pipeline, pinned:
     provider write answers `ai_key_missing`. Deliberately not the e-mail or webhook key:
     the three rotate independently. Compose passes `${AI_TOKEN_ENC_KEY:-}` to both
     services.
+  - **Key validation (added in v1.16).** Each of `EMAIL_TOKEN_ENC_KEY`,
+    `WEBHOOK_ENC_KEY`, `AI_TOKEN_ENC_KEY` and `PUBLIC_INTAKE_KEY` that is set must be
+    **strictly** base64 (the standard alphabet with correct padding — a value with stray
+    characters is refused, not silently decoded to fewer bytes) and decode to exactly
+    **32 bytes**, and the set values must be **pairwise distinct** — the four rotate
+    independently and a shared key defeats that. A violation is a **startup error in
+    a production build** (the process exits, naming the variable but never its value —
+    the same fail-loud check as `INNOBOX_DEV_AUTH`); outside production it is a `warn`
+    line and the feature behind that key stays off, as for an unset key.
+  - **`INNOBOX_BOOTSTRAP_ADMIN_GROUP` is a standing grant.** While set, its members
+    are platform admins regardless of `role_mappings` (`ENTRA_AUTH_SPEC.md` §3). So
+    that it is not forgotten after first run, the Administration page (§14.2) shows a
+    platform-admin-only notice — *"Bootstrap admin group is still configured; remove
+    `INNOBOX_BOOTSTRAP_ADMIN_GROUP` once a role mapping grants platform admin."* —
+    whenever the variable is set **and** at least one `platform_admin` role mapping
+    exists. `GET /api/admin/settings` gains `bootstrapAdminGroupActive: boolean` for it.
+  - **Image pins.** The bundled `clamav` service runs a pinned release tag (never
+    `latest`), so a redeploy cannot silently pull a different scanner; signatures still
+    update at runtime through freshclam. Bumping the tag is a deliberate, reviewed edit.
   - **`AI_ALLOWED_PRIVATE_HOSTS`** (web **and** worker; added in v1.1) — a
     comma-separated list of exact host names (or IP literals) the §22 AI provider may use
     even though they resolve to private or internal addresses (§22.2). Empty by default
@@ -660,7 +680,13 @@ these rules close the generic web-platform paths by which it could.
   Auth.js routes under `/api/auth/*`, which carry their own CSRF token, and the public
   CSP report sink `/api/csp-report` — exact path — which changes no application state)
   must carry an `Origin` header equal to the origin of `PUBLIC_BASE_URL`; a missing or
-  different `Origin` is rejected with **403** before the route runs. Endpoints that take
+  different `Origin` is rejected with **403** before the route runs. **The check runs
+  twice, independently:** once in the edge middleware (before any handler) and again
+  inside the §14.7 system-log wrapper that every route handler is mounted through, with
+  the same rule, exemptions and 403 body. The second check is defence in depth: a
+  framework bug that let a request skip the middleware (the 2025 middleware-bypass
+  class) would still find CSRF enforced per route, exactly as authentication already is
+  (`getSessionUser()` runs in the handler, not only at the edge). Endpoints that take
   a JSON body additionally require `Content-Type: application/json` (**415** otherwise),
   so a plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
   The JSON `Content-Type` rule likewise does not apply to the report sink, which takes
@@ -669,6 +695,13 @@ these rules close the generic web-platform paths by which it could.
   `/mcp`, `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt — they are
   called by programs, carry no cookie and never read a session (§25.3). The consent
   page alone widens `form-action` to the client redirect shapes (§25.3).
+- **Substring filters are literal.** Every free-text "contains" filter that reaches a
+  `LIKE`/`ILIKE` — the §13.1 gallery and §13.4 search *author name* filters, the §14.1
+  triage *author name* filter, the §7.3 directory search `GET /api/users?q=`, the §15
+  audit browser and §14.7 system-log searches — escapes `%`, `_` and `\` in the user's
+  text before wrapping it in `%…%`, so the characters match themselves. A query of `%`
+  or `_` therefore matches nothing rather than everything: the directory cannot be
+  paged through alphabetically with a wildcard, and a filter means what it says.
 - **Request body limits** — enforced **before** a body is read into memory (from
   `Content-Length`, and by a running byte count when it is absent), answering **413**:
   - JSON bodies: **1 MB**.
@@ -783,6 +816,23 @@ Entra runbook); on conflict this document wins.
   cards, the §13.1 view choice) is untouched.
   Sessions: rolling 7-day cookie; the user's `active` flag and roles are resolved
   from the DB on every request — the session token never carries roles.
+- **Sign out everywhere (added in v1.16).** Plain sign-out is per device: a session
+  cookie on another browser stays valid until its 7-day cap. The account menu's
+  **Sign out everywhere** item (§2.2) — a confirm dialog, then
+  `POST /api/me/sign-out-everywhere` — stamps `users.sessions_valid_from = now()` and
+  then signs this browser out exactly as above. `getSessionUser()` compares the
+  session token's **sign-in time** — an `issuedAt` claim the `jwt` callback stamps once
+  when the token is first minted at sign-in (not Auth.js's own `iat`, which a rolling
+  re-issue resets to "now"; the custom claim survives re-issue because the payload is
+  carried over; a token minted before this version has no claim and counts as epoch 0)
+  — with that column and treats a token signed in **before** it as no session: an API
+  call answers 401 and a page request
+  redirects to Home, so every other device is signed out at its next request. Audited
+  `user.signed_out_everywhere` (actor = target). **GDPR erasure (below) and SCIM
+  deactivation (`ENTRA_AUTH_SPEC.md` §5) stamp the same column**, which closes the
+  window between the `active` flip and the next request without changing either
+  flow's semantics. The column is never shown and never used for anything else;
+  a never-stamped row (`null`) accepts every token, as today.
 - **Sign-in relink (SCIM-provisioned rows).** The identity key stays the Entra
   `oid` (`users.external_id`); the UPN is never an identity key. It is used for
   exactly one repair, at sign-in, when **no `users` row has `external_id = oid`**:
@@ -863,7 +913,15 @@ Entra runbook); on conflict this document wins.
 - **GDPR erasure:** "Delete user info" scrubs the `users` row and personal data and
   de-identifies the user's comments/challenges/solutions to "Deleted User";
   `audit_log` is deliberately exempt (invariant 5) and retains actor identity for
-  provenance. **The erasure also clears the cached photo bytes + etag (§3.1)** —
+  provenance. **Two refusals come first (added in v1.16):** the acting platform admin
+  cannot erase **their own** account (**400** `cannot_erase_self` — an erasure is a
+  deliberate act on someone else, and self-erasure would end the session mid-request
+  with an irreversible result), and an erasure that would leave **no active,
+  not-erased platform admin** resolved from `role_mappings` or the bootstrap group is
+  refused (**409** `last_platform_admin`): the target is a platform admin and no other
+  active platform admin remains. Both are checked inside the erasure transaction, before
+  anything changes, and both show in the dialog as a plain message.
+  **The erasure also clears the cached photo bytes + etag (§3.1)** —
   the "Deleted User" placeholder renders the neutral bubble — **and the whole
   directory profile (department, job title, office location), which is personal data
   and is scrubbed exactly like the photo.** It **also erases all presence data**
@@ -970,7 +1028,11 @@ shown (§13.6).
   serves a photo for content whose author is masked (§9 — the client never learns
   an anonymous author's id in the first place, invariant 3). The response's
   `Content-Type` is the stored image's real type (JPEG or PNG, sniffed from the leading
-  bytes), and its `ETag` is the stored Graph etag as one well-formed entity tag: a value
+  bytes); like the §11 attachment gateway it carries `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox; default-src 'none'` and
+  `Content-Disposition: inline; filename="photo"`, so bytes that are not a real image
+  can never execute in the app's origin whatever the sniff concluded. Its `ETag` is the
+  stored Graph etag as one well-formed entity tag: a value
   that is already quoted — strong, or weak with a `W/` prefix — is sent unchanged, and
   only an unquoted value is wrapped in quotes. `If-None-Match` is compared against that
   same form.
@@ -2390,7 +2452,15 @@ right, not only through an auto-follow.
 
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
-rendering (§9). **A deactivated user (`active = false`, the §3 leaver) or an erased
+rendering (§9). **The inbox applies the same gate at read time (added in v1.16):** a
+row written while the recipient could see the item is **hidden** from the bell list and
+the unread count once they no longer can — the challenge was narrowed to `namespace` or
+`people` (§4.3) after the row was written, or the recipient left the namespace — and
+comes back if access returns, exactly as rows about the trash are kept but hidden
+(§10.4). The read-time predicate is the §4.3 SQL twin on the row's `challengeId` /
+`parentType` + `parentId` payload keys (the keys every item-bound row carries); rows
+that name no item (achievements, scan failures) are unaffected. The §25.6 agent view
+already filters this way; the web inbox now matches it. **A deactivated user (`active = false`, the §3 leaver) or an erased
 one (`scrubbed_at` set) is never a recipient**, on any channel: the dispatch drops
 them at insert time, beside the visibility drop, so neither the inbox row nor the
 outbox row is written; the role-resolving recipient helpers (namespace admins,
@@ -4349,9 +4419,10 @@ the export; every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
 (titles, names, impact areas), and spreadsheet applications run a cell that begins with
-a formula trigger. So any cell whose value begins with `=`, `+`, `-`, `@`, a tab, or a
-carriage return is prefixed with a single quote (`'`) **before** the usual RFC 4180
-quoting. The rule applies to **every** cell, header row included, with no per-column
+a formula trigger. So any cell whose value begins with `=`, `+`, `-`, `@`, `|` (the
+legacy DDE trigger), a tab, or a carriage return — or with whitespace followed by any of
+those (some applications trim first, then evaluate) — is prefixed with a single quote
+(`'`) **before** the usual RFC 4180 quoting. The rule applies to **every** cell, header row included, with no per-column
 exceptions, so a new column cannot be forgotten. The visible cost is that such a value
 shows a leading `'` in tools that don't hide it (e.g. a title `- Reduce costs` exports
 as `'- Reduce costs`); the export is for people to read in a spreadsheet, not for
@@ -4720,8 +4791,9 @@ structural rather than a filter.
   the row's `updated_by`/`updated_at` record who set it and when. `message` is plain
   UTF-8, **≤ 120 characters**, escaped on render, no markup. `tone` ∈ `info | warning`
   (accent pill vs the warn token). `url` is **optional** — `https:` only, or a path
-  relative to `PUBLIC_BASE_URL` — validated server-side and rendered as a trailing
-  **"Learn more →"** link.
+  relative to `PUBLIC_BASE_URL` (one that starts with `/` followed by neither `/` nor
+  `\`: browsers resolve `/\host` as `//host`, a different origin) — validated
+  server-side and rendered as a trailing **"Learn more →"** link.
 - **Set / replace** — `PUT /api/admin/system-banner`, platform admin only: an
   unconditional upsert. Text, tone, link and duration replace whatever is active and
   the countdown **always restarts from the save** (`expiresAt = now() + duration`),
@@ -4818,13 +4890,15 @@ console directly under Audit, never shown to namespace admins, and the API answe
     not match `SCIM_BEARER_TOKEN`), and `scim_forbidden` for a 403. Rows written
     before this change keep `scim_unauthorized` and read as *reason unknown*.
   - **Token fingerprints in `message`.** A fingerprint is the **first 8 lowercase hex
-    characters of the SHA-256** of the token's UTF-8 bytes, exactly as compared. Every
-    401 row names the **configured** token's fingerprint (computed once at worker
-    start); a `scim_token_mismatch` row also names the **sent** token's. An operator
-    checks a copy of the token locally with
-    `printf %s "<token>" | sha256sum | cut -c1-8`. Thirty-two bits of a hash of a
-    ≥ 32-character random secret gives no practical help in guessing it, and the
-    fingerprint is only ever shown to platform admins.
+    characters of the SHA-256** of the token's UTF-8 bytes, exactly as compared. A
+    `scim_token_mismatch` row names the **sent** token's fingerprint (and the
+    whitespace flag below); the **configured** token's fingerprint is **not** written
+    to the system log (changed in v1.16 — a stored, exportable 32-bit hint about the
+    live secret bought little and belongs with the operator, not in a table). It is
+    instead printed **once at worker start** on stdout (`scim bearer token loaded,
+    fingerprint <8hex>`), where the operator who holds `deploy/.env` can read it, and
+    the diagnosis is the same: compare the row's *sent* fingerprint with
+    `printf %s "<token>" | sha256sum | cut -c1-8` of the value in Entra's Secret Token.
   - **Whitespace flag in `message`.** HTTP strips whitespace around a header value
     before the worker sees it, so a stray space or newline pasted at the *edge* of
     Entra's Secret Token never arrives. What can be seen is a **sent** token with
@@ -4836,10 +4910,10 @@ console directly under Audit, never shown to namespace admins, and the API answe
     Entra's provisioning service can be told apart from anyone else probing the
     endpoint. Stored in full (no /64 truncation). Web-tier rows and every other worker
     row leave it null.
-  - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4,
-    configured e5f6a7b8)"*; *"SCIM request rejected: token mismatch (sent 0c1d2e3f,
-    configured e5f6a7b8; sent token contains whitespace)"*; *"SCIM request rejected:
-    no token sent (configured e5f6a7b8)"*.
+  - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4)"*;
+    *"SCIM request rejected: token mismatch (sent 0c1d2e3f; sent token contains
+    whitespace)"*; *"SCIM request rejected: no token sent"*; *"SCIM request rejected:
+    not a bearer token"*.
   - Nothing the caller controls reaches the row as free text: the reason is a fixed
     code, fingerprints are fixed-length hex, and the IP is the proxy-validated
     address. The row count is unchanged (one row per 401/403, as before) and stays
@@ -7060,18 +7134,41 @@ expired rows (§25.13).
   form Claude Code and the MCP SDKs register) matches **on any port**, with the same
   host, path and query, as MCP desktop and CLI clients require; every other URI must be
   `https` or a custom app scheme. No wildcards. `client_name` is required, 1–80 printable characters.
+  `client_uri` and `logo_uri`, when sent, must be well-formed **`https:` URLs** (≤ 2048
+  characters, no credentials); anything else is `invalid_client_metadata`. They are still
+  never fetched or rendered — the rule exists so that a future admin view cannot be
+  handed a `javascript:` value.
 - **A parameter supplied twice is rejected** on `/oauth/authorize`, before
   `client_id` or `redirect_uri` is read, with the non-redirecting error page — a
   duplicated `redirect_uri` can never be resolved to the registered one.
-- **The consent page** (outside AppShell, §2.2 tokens) names the **client** and its
-  redirect host, the **signed-in person**, and what is granted, in plain words: *"Read
-  the challenges, solutions and comments you can see. Submit challenges, propose
-  solutions, edit and resubmit your own items, comment and follow — as you, marked
-  'via agent'. It cannot like, change a status, assign, triage or administer."* —
-  plus, while §25.5 hides restricted content, *"Namespace-restricted challenges are not
-  shared with agents."* It says the connection can be revoked on **AI agents**
-  (§25.9). **Approve** writes or refreshes the `oauth_grants` row; **Deny** redirects
-  with `access_denied`.
+- **The consent page** (outside AppShell, §2.2 tokens) names the **client**, **where
+  approval sends the person**, the **signed-in person**, and what is granted, in plain
+  words: *"Read the challenges, solutions and comments you can see. Submit challenges,
+  propose solutions, edit and resubmit your own items, comment and follow — as you,
+  marked 'via agent'. It cannot like, change a status, assign, triage or
+  administer."* — plus, while §25.5 hides restricted content, *"Namespace-restricted
+  challenges are not shared with agents."* It says the connection can be revoked on
+  **AI agents** (§25.9). **Approve** writes or refreshes the `oauth_grants` row;
+  **Deny** redirects with `access_denied`.
+  **Against consent phishing (added in v1.16)** — registration is open, so a
+  look-alike `client_name` costs an attacker nothing; the page therefore makes the
+  *destination* the thing the person reads, not the name:
+  - the heading is the destination, not the client: for a loopback redirect
+    *"Connect <client> on **this computer**?"*; for an `https` or custom-scheme redirect
+    *"Connect <client> at **<host>** (or *<scheme>://*)?"* with the host (or scheme)
+    rendered as the most prominent text on the page, and the sentence *"Approving
+    sends an access code to <host>. Only approve a connection you started from your own
+    AI tool."* beneath it;
+  - a client that **no person has ever approved** (no `oauth_grants` row, revoked or
+    not) **or that was registered less than 24 hours ago** carries an **"Unverified
+    application"** notice above the buttons — *"Nobody in your organization has
+    connected this application before"* / *"registered <n> minutes ago"* — in the warn
+    tone; a client both older and previously approved shows nothing extra;
+  - the **Approve** button is secondary-styled until the person ticks *"I started this
+    connection from my own AI tool"* (the checkbox is part of the form and the handler
+    refuses an approve without it — **400**); **Deny** needs nothing.
+  Platform admins already block a client (§25.10); nothing else is added — an
+  allow-list of names would only be matched by the next look-alike.
 - **The validated request travels through the database, not the form.** Rendering
   `/oauth/authorize` stores the validated request in `oauth_pending_authorizations`
   and the form carries only that row's id and the approve/deny choice. The consent
@@ -7096,12 +7193,23 @@ expired rows (§25.13).
   `user_id`, `client_id` and `grant_id` — never a role or a namespace.
 - **Tokens are opaque random strings, stored as SHA-256 hashes**, sent only in
   `Authorization: Bearer` — never in a URL.
-  - **Authorization code:** single use, 60 seconds.
-  - **Access token:** `mcp_access_token_ttl_minutes` (**5–1440, default 60**).
+  - **Authorization code:** single use, 60 seconds. **Presenting a code a second time
+    revokes the whole grant** (`code_reuse`, like refresh reuse below; OAuth 2.1
+    §4.1.2) and writes a system-log row (§25.11): the tokens the first exchange minted
+    die with it, so a code captured in transit cannot be raced for a lasting session.
+    (added in v1.16)
+  - **Access token:** `mcp_access_token_ttl_minutes` (**5–1440, default 60**). **A
+    refresh rotation ends the grant's earlier access tokens** (added in v1.16): the new
+    pair replaces the old one entirely, so a stolen access token lives only until the
+    legitimate client's next refresh instead of until its own expiry. MCP clients
+    switch to the new access token on rotation, so nothing in normal use is cut off.
   - **Refresh token:** rotates on every use. Presenting an already-rotated refresh
     token **revokes the whole grant** and writes a system-log row (§25.11). Idle
     lifetime `mcp_refresh_token_ttl_days` (**1–365, default 90**), sliding on each
-    rotation.
+    rotation. **Every refresh token row carries the `resource` it was minted for**
+    (added in v1.16; previously codes only), and a refresh that names a different
+    `resource` is `invalid_grant` — the RFC 8707 check holds on every grant type, not
+    only the code exchange.
 - **Failures.** `401` with `WWW-Authenticate: Bearer resource_metadata="<url>"`, so a
   client can discover how to sign in; the response never says why a token failed.
   `403` for an authenticated call the person's role does not allow. `503` while the
@@ -7335,8 +7443,8 @@ A **platform-admin** card on `/admin/settings` — **AI agents (MCP)** (§14.3):
   — a partial unique index where `revoked_at is null`; consenting again refreshes it.
 - **`oauth_tokens`** — id, `grant_id` (FK, cascade), `kind` (`code | access |
   refresh`), `token_hash`, `expires_at`, `used_at`, `rotated_from_id` (nullable
-  self-FK, for reuse detection), `code_challenge`, `redirect_uri`, `resource` (the
-  last three for codes only), `created_at`.
+  self-FK, for reuse detection), `code_challenge`, `redirect_uri` (codes only),
+  `resource` (codes **and**, since v1.16, refresh tokens), `created_at`.
 - **`oauth_pending_authorizations`** — id (the opaque consent handle), `user_id`,
   `client_id`, `request` (jsonb — the validated `redirect_uri`, `code_challenge`,
   `state`, `resource`), `created_at`, `consumed_at`.
@@ -7363,7 +7471,7 @@ on/off, the person's connections) and `DELETE /api/me/agents/:grantId` (revoke);
 (`challenge.created`, `solution.created`, `challenge.edited`, `comment.posted`, …) and
 add `source: "mcp"` and `client: "<client name>"` to the payload, so the audit browser
 can find them. New rows: `mcp.grant_created`; `mcp.grant_revoked` with `reason:
-"user" | "deactivated" | "erased" | "refresh_reuse"`; `mcp.client_blocked`;
+"user" | "deactivated" | "erased" | "refresh_reuse" | "code_reuse"`; `mcp.client_blocked`;
 `mcp.client_unblocked`; and `settings.mcp_changed` (`after` carries the four settings).
 All `mcp.*` rows sit under the Admin chip. **Not audited:** reads, registrations, token
 issue and rotation (they are metrics), and follows (as on the web).
@@ -7373,7 +7481,13 @@ issue and rotation (they are metrics), and follows (as on the web).
   `https`, custom schemes, no wildcards); duplicate-parameter rejection; refresh
   rotation and reuse detection; TTL bounds; the restricted-content filter; the "via
   agent" masking on anonymous items; the four badges, including the replay on
-  self-reveal and the `agent_connected` ledger check.
+  self-reveal and the `agent_connected` ledger check; `client_uri`/`logo_uri` must be
+  `https`; the consent page's destination heading, loopback wording and unverified
+  notice (never approved / under 24 h) and the approve checkbox requirement.
+- *Integration (v1.16 additions):* a second exchange of a used code revokes the grant
+  and the first exchange's tokens stop working; a refresh rotation ends the grant's
+  earlier access tokens; a refresh with a different `resource` is `invalid_grant`; an
+  approve without the checkbox is 400.
 - *Integration:* register → authorize → consent → token → `/mcp` → refresh → revoke;
   the pending authorization is single-use, expires and is bound to its person; a
   session cookie on `/mcp` is ignored; every tool's RBAC and visibility, **including

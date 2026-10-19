@@ -71,3 +71,18 @@ export function isOriginAllowed(input: OriginCheckInput): boolean {
   if (!presented) return false;
   return allowedOrigins(input).includes(presented);
 }
+
+/** The same rule read off a raw `Request` — the §14.7 route wrapper's second, independent check
+ *  (§2.4): method, pathname and the server's own origin come from the request, `Origin` from its
+ *  header, PUBLIC_BASE_URL and the dev flag from `env` (read per call, as the middleware does). */
+export function isRequestOriginAllowed(req: Request, env: { PUBLIC_BASE_URL?: string; NODE_ENV?: string }): boolean {
+  const url = new URL(req.url);
+  return isOriginAllowed({
+    method: req.method,
+    pathname: url.pathname,
+    origin: req.headers.get("origin"),
+    requestOrigin: url.origin,
+    env: { PUBLIC_BASE_URL: env.PUBLIC_BASE_URL },
+    dev: env.NODE_ENV !== "production",
+  });
+}

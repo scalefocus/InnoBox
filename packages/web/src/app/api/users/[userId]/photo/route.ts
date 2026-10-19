@@ -10,7 +10,7 @@ import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { isUuid } from "../../../challenges/validation";
 import { withSystemLog } from "@/lib/system-log";
-import { ifNoneMatchHits, noPhotoResponse, photoContentType, photoEtag } from "@/lib/photo-type";
+import { PHOTO_CACHE_CONTROL, ifNoneMatchHits, noPhotoResponse, photoEtag, photoResponseHeaders } from "@/lib/photo-type";
 
 export const dynamic = "force-dynamic";
 
@@ -32,19 +32,13 @@ async function handleGET(req: Request, context: { params: Promise<{ userId: stri
   // Graph etag may arrive quoted or weak already — photoEtag sends one well-formed entity tag.
   const etag = photoEtag(row.photo_etag);
   if (etag && ifNoneMatchHits(req.headers.get("if-none-match"), etag)) {
-    return new Response(null, { status: 304, headers: { etag, "cache-control": "private, max-age=3600, must-revalidate" } });
+    return new Response(null, { status: 304, headers: { etag, "cache-control": PHOTO_CACHE_CONTROL } });
   }
 
-  // §3.1: stored as-is (JPEG or PNG, as Graph returned it) — the type is sniffed from the bytes.
+  // §3.1: stored as-is (JPEG or PNG, as Graph returned it) — the type is sniffed from the bytes,
+  // and the response is sandboxed like a §11 download (nosniff, sandbox CSP, inline disposition).
   const bytes = new Uint8Array(row.photo);
-  return new Response(bytes, {
-    status: 200,
-    headers: {
-      "content-type": photoContentType(bytes),
-      "cache-control": "private, max-age=3600, must-revalidate",
-      ...(etag ? { etag } : {}),
-    },
-  });
+  return new Response(bytes, { status: 200, headers: photoResponseHeaders(bytes, etag) });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

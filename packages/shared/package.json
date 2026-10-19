@@ -74,6 +74,10 @@
       "types": "./dist/public-url.d.ts",
       "default": "./dist/public-url.js"
     },
+    "./enc-keys": {
+      "types": "./dist/enc-keys.d.ts",
+      "default": "./dist/enc-keys.js"
+    },
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"

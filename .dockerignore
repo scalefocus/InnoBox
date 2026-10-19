@@ -4,6 +4,9 @@
 **/coverage
 **/*.tsbuildinfo
 deploy/.env
+# Local env files anywhere in the tree (packages/web/.env.local …): never in a build context.
+**/.env
+**/.env.*
 deploy/data
 .git
 .gitignore
