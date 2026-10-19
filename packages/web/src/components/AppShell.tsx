@@ -13,6 +13,7 @@ import { signIn, signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { APP_VERSION } from "@innobox/shared/version";
 import { cachedGet, invalidateApi } from "../lib/ui";
+import { postJson } from "../lib/api-client";
 import { isChallengesSurface, leavesChallengesSurface } from "../lib/challenges-surface";
 import { QUICK_START_PATH, shouldRedirectToQuickStart } from "../lib/quick-start";
 import { ThemeToggle } from "./ThemeToggle";
@@ -579,7 +580,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
 
         <div className="sidebar-foot">
-          {authed && <AccountMenu me={me} survey={survey} onTakeSurvey={reopenSurvey} canGiveFeedback={canStartSelf} onGiveFeedback={() => void startSurvey()} />}
+          {authed && <AccountMenu me={me} survey={survey} onTakeSurvey={reopenSurvey} canGiveFeedback={canStartSelf} onGiveFeedback={() => void startSurvey()} onNotify={showToast} />}
           {status === "unauthenticated" && <SignInButton />}
           <div className="colophon">
             <span className="colophon-version">
@@ -676,6 +677,7 @@ function AccountMenu({
   onTakeSurvey,
   canGiveFeedback,
   onGiveFeedback,
+  onNotify,
 }: {
   me: Pick<MeResponse, "user" | "gamification" | "agentsMenu"> | null;
   /** §13.10: while an offer is open, "Take the survey" leads the menu. */
@@ -685,6 +687,8 @@ function AccountMenu({
    *  while the switch is off. */
   canGiveFeedback: boolean;
   onGiveFeedback: () => void;
+  /** The shell's toast — a failed "Sign out everywhere" stamp is reported here. */
+  onNotify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -773,6 +777,27 @@ function AccountMenu({
           >
             <SignOutIcon />
             Sign out
+          </button>
+          {/* §3 "Sign out everywhere" — always the last item, below Sign out. Confirm, stamp
+              users.sessions_valid_from through the API (every other device is signed out at its
+              next request), then sign THIS browser out exactly like Sign out. A failed stamp
+              keeps this session: the user is told and can retry. */}
+          <button
+            type="button"
+            className="user-menu-item"
+            role="menuitem"
+            data-testid="menu-sign-out-everywhere"
+            onClick={() => {
+              setOpen(false);
+              if (!window.confirm("Sign out of InnoBox on every device? Each of your other sessions ends at its next request, and this browser is signed out now.")) return;
+              void postJson("/api/me/sign-out-everywhere", {}).then(
+                () => signOut({ callbackUrl: "/" }),
+                (err: unknown) => onNotify(err instanceof Error ? err.message : "Could not sign out everywhere"),
+              );
+            }}
+          >
+            <SignOutAllIcon />
+            Sign out everywhere
           </button>
         </div>
       )}
@@ -912,6 +937,18 @@ function SignOutIcon() {
       <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15" />
       <path d="M10 16l5-4-5-4" />
       <path d="M15 12H4" />
+    </svg>
+  );
+}
+
+/** Sign out everywhere: the Sign out arrow with a second, trailing door — "all of them". */
+function SignOutAllIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 4h3a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 16 20h-3" />
+      <path d="M19.5 6.5v11" />
+      <path d="M8 16l5-4-5-4" />
+      <path d="M13 12H2" />
     </svg>
   );
 }

@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   SYSTEM_LOG_EXPORT_CAP,
   SYSTEM_LOG_PAGE_SIZE,
+  escapeLike,
   sanitizeSystemMessage,
   type SystemEventInput,
   type SystemEventSource,
@@ -114,10 +115,6 @@ export async function recordSystemEvent(db: Db, input: SystemEventInput): Promis
       input.source,
     ],
   );
-}
-
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 function buildWhere(filters: SystemLogFilters): { where: string; params: unknown[] } {

@@ -8,7 +8,7 @@
 // same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
 // through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
-import { canAssignAtStatus, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type ViaAgent } from "@innobox/shared";
+import { canAssignAtStatus, escapeLike, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type ViaAgent } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
 import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged } from "../../../../lib/notify-events";
@@ -85,7 +85,8 @@ function buildTriageQuery(viewer: Viewer, filters: TriageFilters): { whereClause
   if (filters.authorName) {
     // Anonymity-safety (mirrors challenges/store.ts): the filter must never distinguish
     // "no match" from "hidden because anonymous", so anonymous rows are excluded outright.
-    conditions.push(`c.is_anonymous = false and u.display_name ILIKE ${push(`%${filters.authorName}%`)}`);
+    // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves.
+    conditions.push(`c.is_anonymous = false and u.display_name ILIKE ${push(`%${escapeLike(filters.authorName)}%`)}`);
   }
   if (filters.assigneeId === "unassigned") {
     conditions.push(`c.assignee_id is null`);

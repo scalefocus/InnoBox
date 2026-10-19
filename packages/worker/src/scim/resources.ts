@@ -53,6 +53,9 @@ export interface UserRow {
   deactivated_at: Date | string | null;
   /** Set by the GDPR erasure (INNOBOX_SPEC.md §3) — SCIM never writes to or returns such a row. */
   scrubbed_at: Date | string | null;
+  /** INNOBOX_SPEC.md §14.5 presence stamp; set once the row has been signed in with. While set on
+   *  an active row, `external_id` is immutable through SCIM (ENTRA_AUTH_SPEC.md §5). */
+  last_seen_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }

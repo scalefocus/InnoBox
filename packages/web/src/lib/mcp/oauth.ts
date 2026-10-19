@@ -67,6 +67,23 @@ function optionalText(value: unknown, max: number): string | null | undefined {
   return value;
 }
 
+/** §25.3: `client_uri` / `logo_uri`, when sent, must be a well-formed `https:` URL of at most
+ *  2048 characters with no credentials — never fetched or rendered, but a future admin view must
+ *  never be handed a `javascript:` value. Null when absent, undefined when malformed. */
+function optionalHttpsUrl(value: unknown): string | null | undefined {
+  const text = optionalText(value, 2048);
+  if (text === null || text === undefined) return text;
+  if (/\s/.test(text)) return undefined;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return undefined;
+  return text;
+}
+
 /** Validates a registration body: public clients only, the authorization-code grant (with
  *  refresh), exact redirect URIs of the accepted shapes, a 1–80 character printable name. */
 export function parseRegistration(body: Record<string, unknown>): RegistrationResult {
@@ -93,13 +110,12 @@ export function parseRegistration(body: Record<string, unknown>): RegistrationRe
   const responseTypes = body.response_types;
   if (responseTypes !== undefined && (!Array.isArray(responseTypes) || responseTypes.some((r) => r !== "code"))) return bad("response_types must be code");
   if (body.scope !== undefined && body.scope !== MCP_SCOPE) return bad(`the only scope is ${MCP_SCOPE}`);
-  const clientUri = optionalText(body.client_uri, 2048);
-  const logoUri = optionalText(body.logo_uri, 2048);
+  const clientUri = optionalHttpsUrl(body.client_uri);
+  const logoUri = optionalHttpsUrl(body.logo_uri);
+  if (clientUri === undefined || logoUri === undefined) return bad("client_uri and logo_uri must be https URLs of at most 2048 characters, without credentials");
   const softwareId = optionalText(body.software_id, 200);
   const softwareVersion = optionalText(body.software_version, 200);
-  if (clientUri === undefined || logoUri === undefined || softwareId === undefined || softwareVersion === undefined) {
-    return bad("client_uri, logo_uri, software_id and software_version must be short printable strings");
-  }
+  if (softwareId === undefined || softwareVersion === undefined) return bad("software_id and software_version must be short printable strings");
   return { ok: true, value: { clientName: name, redirectUris: [...new Set(uris as string[])], clientUri, logoUri, softwareId, softwareVersion } };
 }
 
@@ -170,6 +186,26 @@ export function redirectWith(redirectUri: string, params: Record<string, string 
   const url = new URL(redirectUri);
   for (const [key, value] of Object.entries(params)) if (value !== null) url.searchParams.set(key, value);
   return url.toString();
+}
+
+// ── /oauth/consent (§25.3) ───────────────────────────────────────────────────────────────
+
+export type ConsentForm = { ok: true; decision: "approve" | "deny"; requestId: string } | { ok: false; message: string };
+
+/**
+ * The consent form's three fields: the pending-authorization handle, the choice, and — for an
+ * approve only — the "I started this connection from my own AI tool" confirmation (`confirm=1`).
+ * An approve without the tick is refused (the handler answers 400); Deny needs nothing. Pure, and
+ * checked before the pending row is consumed, so the person can go back, tick the box and submit
+ * the same consent again.
+ */
+export function parseConsentForm(form: URLSearchParams): ConsentForm {
+  const decision = form.get("decision");
+  if (decision !== "approve" && decision !== "deny") return { ok: false, message: "The form was incomplete." };
+  if (decision === "approve" && form.get("confirm") !== "1") {
+    return { ok: false, message: "Confirm that you started this connection from your own AI tool, then approve it again." };
+  }
+  return { ok: true, decision, requestId: form.get("request_id") ?? "" };
 }
 
 // ── Metadata documents ───────────────────────────────────────────────────────────────────

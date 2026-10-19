@@ -1,10 +1,12 @@
 // GET/PATCH /api/admin/settings (INNOBOX_SPEC.md §14.3): attachment limits, impact areas,
 // the platform date-display format, the feedback-survey switch (§14.11, `surveyEnabled`), the bug-report
 // switch (§13.10, `bugReportsEnabled`), and the
-// public submissions card (§24.2, `publicSubmissions`). Platform-admin only; every change audited.
+// public submissions card (§24.2, `publicSubmissions`), plus the §2.3 bootstrap-admin notice flag
+// (`bootstrapAdminGroupActive`, GET only). Platform-admin only; every change audited.
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import {
+  countPlatformAdminMappings,
   getAttachmentLimits,
   getDateFormat,
   getGamificationEnabled,
@@ -14,6 +16,7 @@ import {
   setGamificationEnabled,
   setPublicSubmissionSettings,
 } from "./store";
+import { bootstrapAdminGroupActive } from "./bootstrap-admin";
 import { publicSubmissionsCard } from "./public-submissions";
 import { emailTransportAvailable, invalidatePublicIntakeState } from "@/lib/public-intake-live";
 import { PRECONDITION_HINT, publicIntakeKey } from "@/lib/public-intake";
@@ -30,17 +33,31 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
-    getDateFormat(pool),
-    getAttachmentLimits(pool),
-    listAllImpactAreas(pool),
-    getFeaturedLimit(pool),
-    getSurveyEnabled(pool),
-    getBugReportsEnabled(pool),
-    getGamificationEnabled(pool),
-    publicSubmissionsCard(),
-  ]);
-  return Response.json({ dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions });
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions, platformAdminMappings] =
+    await Promise.all([
+      getDateFormat(pool),
+      getAttachmentLimits(pool),
+      listAllImpactAreas(pool),
+      getFeaturedLimit(pool),
+      getSurveyEnabled(pool),
+      getBugReportsEnabled(pool),
+      getGamificationEnabled(pool),
+      publicSubmissionsCard(),
+      countPlatformAdminMappings(pool),
+    ]);
+  // §2.3: the standing bootstrap grant is flagged once a role mapping could replace it.
+  const bootstrapActive = bootstrapAdminGroupActive(process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP, platformAdminMappings);
+  return Response.json({
+    dateFormat,
+    attachmentLimits,
+    impactAreas,
+    featuredLimit,
+    surveyEnabled,
+    bugReportsEnabled,
+    gamificationEnabled,
+    publicSubmissions,
+    bootstrapAdminGroupActive: bootstrapActive,
+  });
 }
 
 async function handlePATCH(req: Request): Promise<Response> {

@@ -77,8 +77,10 @@ export const MCP_SCOPE = "mcp";
 /** The path of the MCP endpoint under PUBLIC_BASE_URL — also the RFC 8707 resource. */
 export const MCP_PATH = "/mcp";
 
-/** Why a grant was revoked — the `reason` of the `mcp.grant_revoked` audit row (§25.13). */
-export type GrantRevokeReason = "user" | "deactivated" | "erased" | "refresh_reuse";
+/** Why a grant was revoked — the `reason` of the `mcp.grant_revoked` audit row (§25.13):
+ *  `refresh_reuse` and `code_reuse` are the §25.3 replay detections (an already-rotated refresh
+ *  token, or an already-exchanged authorization code, presented again). */
+export type GrantRevokeReason = "user" | "deactivated" | "erased" | "refresh_reuse" | "code_reuse";
 
 /** The "via agent" attribution a detail payload carries (§25.8): null for browser-created items;
  *  the client name, or null for an anonymous item — a client name could point to one person. */

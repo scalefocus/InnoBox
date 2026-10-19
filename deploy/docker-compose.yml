@@ -67,7 +67,9 @@ services:
       retries: 5
 
   clamav:
-    image: clamav/clamav:latest
+    # Pinned release (INNOBOX_SPEC.md §2.3): a deploy never silently pulls a different scanner.
+    # Bump deliberately; signatures still update at runtime via freshclam.
+    image: clamav/clamav:1.5.4
     restart: always
     # Signature updates require outbound network (INNOBOX_SPEC.md §11).
     # Scanner limits (§11): the image's entrypoint writes every CLAMD_CONF_<Option> into its

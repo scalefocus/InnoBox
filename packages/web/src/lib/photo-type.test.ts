@@ -2,7 +2,8 @@
 // as Graph returns it, served with the matching type).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { NO_PHOTO_CACHE_CONTROL, ifNoneMatchHits, noPhotoResponse, photoContentType, photoEtag } from "./photo-type";
+import { NO_PHOTO_CACHE_CONTROL, PHOTO_CACHE_CONTROL, ifNoneMatchHits, noPhotoResponse, photoContentType, photoEtag, photoResponseHeaders } from "./photo-type";
+import { ATTACHMENT_DOWNLOAD_CSP } from "./security-headers";
 
 const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
 const jpeg = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
@@ -63,4 +64,20 @@ test("noPhotoResponse: an empty 404 the browser may cache for 5 minutes", async 
   assert.equal(res.headers.get("cache-control"), NO_PHOTO_CACHE_CONTROL);
   assert.equal(NO_PHOTO_CACHE_CONTROL, "private, max-age=300");
   assert.equal(await res.text(), "");
+});
+
+test("photoResponseHeaders: the 200 carries the sniffed type, the private cache, the etag and the download-gateway hardening (§3.1)", () => {
+  const headers = photoResponseHeaders(png, '"abc"');
+  assert.equal(headers["content-type"], "image/png");
+  assert.equal(headers["cache-control"], PHOTO_CACHE_CONTROL);
+  assert.equal(headers["etag"], '"abc"');
+  assert.equal(headers["x-content-type-options"], "nosniff");
+  assert.equal(headers["content-security-policy"], ATTACHMENT_DOWNLOAD_CSP);
+  assert.equal(headers["content-security-policy"], "sandbox; default-src 'none'", "the same policy as the attachment gateway");
+  assert.equal(headers["content-disposition"], 'inline; filename="photo"');
+  // Without an etag there is no etag header at all — never an empty one.
+  const noTag = photoResponseHeaders(jpeg, undefined);
+  assert.equal(noTag["content-type"], "image/jpeg");
+  assert.equal("etag" in noTag, false);
+  assert.equal(noTag["x-content-type-options"], "nosniff");
 });

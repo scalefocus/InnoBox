@@ -6,7 +6,7 @@
 // real names — it is the single authorized place to read the raw trail.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool } from "pg";
-import { AUDIT_CATEGORY_PATTERNS, AUDIT_EXPORT_CAP, AUDIT_PAGE_SIZE, type AuditCategory } from "@innobox/shared";
+import { AUDIT_CATEGORY_PATTERNS, AUDIT_EXPORT_CAP, AUDIT_PAGE_SIZE, escapeLike, type AuditCategory } from "@innobox/shared";
 import { itemHref } from "../../../../lib/deep-link";
 
 export interface AuditFilters {
@@ -106,10 +106,6 @@ function targetHref(r: Pick<AuditQueryRow, "target_type" | "target_number" | "ta
   if (r.target_type === "challenge") return itemHref(r.target_number);
   if (r.target_type === "solution" && r.target_parent_number) return itemHref(r.target_parent_number, r.target_number);
   return null;
-}
-
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 function buildWhere(filters: AuditFilters): { where: string; params: unknown[] } {
