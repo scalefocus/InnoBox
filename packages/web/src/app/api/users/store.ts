@@ -2,10 +2,11 @@
 // backing the namespace admin's assignment picker. Not admin-gated at this layer — any
 // authenticated user may search (enforced in route.ts); this module only returns the
 // minimal id/displayName/email projection, never roles or namespace membership.
-import type { Pool } from "pg";
-import { eraseUserGrants, type ChallengeVisibilityInput } from "@innobox/shared";
+import type { Pool, PoolClient } from "pg";
+import { eraseUserGrants, escapeLike, type ChallengeVisibilityInput } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
+import { getPlatformAdminUserIds } from "../../../lib/notify";
 import { scrubSystemEventsForUser } from "../admin/system-log/store";
 import { handOverOpenAssignments, isEligibleSuccessor, type ReassignmentResult, type SuccessorHandover } from "./erasure-reassignment";
 
@@ -53,9 +54,10 @@ function canSeeChallengeCondition(audience: ChallengeVisibilityInput, push: (v: 
            or ${grant(`rm.namespace_id = ${namespace}`)}${bootstrap})`;
 }
 
-/** The directory search. With `audience`, only users who can see that challenge (§7.3). */
+/** The directory search. With `audience`, only users who can see that challenge (§7.3). The query
+ *  is a literal substring (§2.4): `%`, `_` and `\` match themselves, so `q=%` matches nobody. */
 export async function searchActiveUsers(pool: Pool, query: string, audience?: ChallengeVisibilityInput): Promise<UserSearchResult[]> {
-  const params: unknown[] = [`%${query}%`];
+  const params: unknown[] = [`%${escapeLike(query)}%`];
   const push = (v: unknown) => {
     params.push(v);
     return `$${params.length}`;
@@ -86,7 +88,7 @@ export async function searchUsersForAdmin(pool: Pool, query: string): Promise<Ad
     `select id, display_name, email, active, scrubbed_at from users
       where display_name ilike $1 or email ilike $1
       order by active desc, display_name limit ${RESULT_LIMIT}`,
-    [`%${query}%`],
+    [`%${escapeLike(query)}%`], // §2.4: literal substring, same as searchActiveUsers
   );
   return rows.map((r) => ({ id: r.id, displayName: r.display_name, email: r.email, active: r.active, scrubbed: r.scrubbed_at !== null }));
 }
@@ -145,7 +147,27 @@ export type ScrubUserResult =
   | { status: "ok"; reassignment: ReassignmentResult | null }
   | { status: "not_found" }
   | { status: "already_scrubbed" }
+  | { status: "cannot_erase_self" }
+  | { status: "last_platform_admin" }
   | { status: "invalid_successor" };
+
+/** §3 erasure refusal: does the user hold the platform-admin role — a SCIM-synced membership of
+ *  a group that `role_mappings` maps to `platform_admin`, or of the bootstrap admin group —
+ *  exactly as resolveRolesForUsers (lib/auth.ts) and getPlatformAdminUserIds resolve it
+ *  (invariant 1)? Membership alone: the row's own `active`/`scrubbed_at` are not consulted here. */
+async function holdsPlatformAdminRole(client: PoolClient, userId: string, bootstrapAdminGroup: string | undefined): Promise<boolean> {
+  const { rows } = await client.query(
+    `select 1
+       from group_members gm
+       join groups g on g.id = gm.group_id
+      where gm.user_id = $1
+        and (exists (select 1 from role_mappings rm where rm.group_external_id = g.external_id and rm.role = 'platform_admin')
+             or ($2::text is not null and g.external_id = $2))
+      limit 1`,
+    [userId, bootstrapAdminGroup || null],
+  );
+  return rows.length > 0;
+}
 
 /** GDPR erasure — "Delete user info" (§3). De-identifies the user's row: display name becomes
  *  "Deleted User" (which cascades to every challenge/solution/comment via the display_name
@@ -153,7 +175,9 @@ export type ScrubUserResult =
  *  is deactivated, and scrubbed_at is stamped so reconciliation never restores it from Entra.
  *  The row (id + external_id) is kept so the audit trail still links, and the audit_log itself
  *  is exempt from erasure (§15). Irreversible; platform-admin-only (gated in the route).
- *  `handover` names the optional successor for open assignments (§3, erasure-reassignment.ts). */
+ *  `handover` names the optional successor for open assignments (§3, erasure-reassignment.ts).
+ *  Two refusals come first (§3, v1.16): the acting admin cannot erase their own account, and an
+ *  erasure that would leave no active, not-erased platform admin is refused. */
 export async function scrubUser(pool: Pool, adminUserId: string, userId: string, handover?: SuccessorHandover): Promise<ScrubUserResult> {
   const { rows } = await pool.query<{ id: string; scrubbed_at: Date | null }>(`select id, scrubbed_at from users where id = $1`, [userId]);
   const row = rows[0];
@@ -161,7 +185,16 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
   if (row.scrubbed_at) return { status: "already_scrubbed" };
 
   return inTransaction(pool, async (client) => {
-    // §3 successor rules, checked before anything changes (the transaction is still empty).
+    // §3 refusals, all checked before anything changes (the transaction is still empty).
+    // Self-erasure would end the session mid-request with an irreversible result.
+    if (adminUserId.toLowerCase() === userId.toLowerCase()) return { status: "cannot_erase_self" };
+    // The last active platform admin: the target holds the role and no OTHER active, not-erased
+    // platform admin remains (getPlatformAdminUserIds already filters to active + not scrubbed).
+    const bootstrapAdminGroup = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
+    if (await holdsPlatformAdminRole(client, userId, bootstrapAdminGroup)) {
+      const remaining = (await getPlatformAdminUserIds(client, bootstrapAdminGroup)).filter((id) => id !== userId);
+      if (remaining.length === 0) return { status: "last_platform_admin" };
+    }
     if (handover && !(await isEligibleSuccessor(client, handover.successorId, userId))) return { status: "invalid_successor" };
     await client.query(
       `update users
@@ -201,6 +234,9 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               achievements_seen_at = null,
               active = false,
               deactivated_at = coalesce(deactivated_at, now()),
+              -- §3 Sign out everywhere: every live session token of the erased user is refused
+              -- at its next request, closing the window between the active flip and that request.
+              sessions_valid_from = now(),
               scim_synced = false,
               scrubbed_at = now(),
               updated_at = now()

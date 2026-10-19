@@ -74,6 +74,10 @@
       "types": "./dist/public-url.d.ts",
       "default": "./dist/public-url.js"
     },
+    "./enc-keys": {
+      "types": "./dist/enc-keys.d.ts",
+      "default": "./dist/enc-keys.js"
+    },
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"
@@ -122,11 +126,11 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/sanitize-html": "^2.16.2",
     "eslint": "^10.12.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.1"
+    "typescript-eslint": "^8.71.2"
   },
   "dependencies": {
     "htmlparser2": "^12.0.0",

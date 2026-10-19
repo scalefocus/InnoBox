@@ -18,6 +18,7 @@ import type { Pool } from "pg";
 import {
   canSeeChallenge,
   canSeeSolution,
+  escapeLike,
   formatChallengeNumber,
   formatSolutionNumber,
   maskAuthor,
@@ -80,7 +81,8 @@ function pushChallengeFilterConditions(filters: GalleryFilters, push: Push, cond
  *  items are excluded unconditionally while it is set (see the header). */
 function pushAuthorCondition(filters: GalleryFilters, alias: "c" | "s", push: Push, conditions: string[]): void {
   if (!filters.authorName) return;
-  conditions.push(`${alias}.is_anonymous = false and u.display_name ILIKE ${push(`%${filters.authorName}%`)}`);
+  // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves.
+  conditions.push(`${alias}.is_anonymous = false and u.display_name ILIKE ${push(`%${escapeLike(filters.authorName)}%`)}`);
 }
 
 interface ChallengeCandidate {

@@ -41,13 +41,27 @@ test("toCsvRow: joins escaped fields with commas, coercing numbers to strings", 
 });
 
 test("neutralizeCsvFormula: prefixes a quote to every formula trigger, leaves the rest", () => {
-  for (const trigger of ["=", "+", "-", "@", "\t", "\r"]) {
+  for (const trigger of ["=", "+", "-", "@", "|", "\t", "\r"]) {
     assert.equal(neutralizeCsvFormula(`${trigger}x`), `'${trigger}x`, JSON.stringify(trigger));
   }
+  assert.equal(neutralizeCsvFormula("|cmd"), "'|cmd", "the legacy DDE trigger");
+  assert.equal(neutralizeCsvFormula("=x"), "'=x");
   assert.equal(neutralizeCsvFormula("Reduce costs"), "Reduce costs");
+  assert.equal(neutralizeCsvFormula("normal"), "normal");
   assert.equal(neutralizeCsvFormula("a=b"), "a=b"); // only the leading character matters
   assert.equal(neutralizeCsvFormula(""), "");
-  assert.equal(neutralizeCsvFormula(" =1"), " =1");
+});
+
+test("neutralizeCsvFormula: leading whitespace before a trigger is neutralized too; whitespace before plain text is not", () => {
+  // Some applications trim first, then evaluate — so the trigger after whitespace counts.
+  assert.equal(neutralizeCsvFormula(" =1"), "' =1");
+  assert.equal(neutralizeCsvFormula("  =1"), "'  =1");
+  assert.equal(neutralizeCsvFormula("\t=1"), "'\t=1");
+  assert.equal(neutralizeCsvFormula("   |cmd"), "'   |cmd");
+  assert.equal(neutralizeCsvFormula(" -1"), "' -1", "non-breaking space is whitespace too");
+  assert.equal(neutralizeCsvFormula(" text"), " text");
+  assert.equal(neutralizeCsvFormula("   "), "   ", "whitespace alone is not a formula");
+  assert.equal(neutralizeCsvFormula("a |b"), "a |b");
 });
 
 test("escapeCsvField: neutralizes formulas before RFC 4180 quoting", () => {

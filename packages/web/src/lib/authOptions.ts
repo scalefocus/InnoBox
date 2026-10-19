@@ -11,16 +11,24 @@ import { resolveEntraSignIn } from "./signin-relink";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
 import { AUTH_PAGES } from "./auth-pages";
 import { buildEntraProvider } from "./entra-tenant";
+import { nowInSeconds } from "./session-revocation";
 
 declare module "next-auth" {
   interface Session {
     /** Entra object id (== users.external_id) of the signed-in user. */
     oid?: string;
+    /** When this sign-in's token was first minted, in seconds since the epoch — compared with
+     *  `users.sessions_valid_from` by getSessionUser() ("Sign out everywhere", INNOBOX_SPEC.md
+     *  §3). Undefined for a token minted before the claim existed. */
+    issuedAt?: number;
   }
 }
 declare module "next-auth/jwt" {
   interface JWT {
     oid?: string;
+    /** Stamped once, at first mint — see the jwt callback for why the library's own `iat` is
+     *  not used. */
+    issuedAt?: number;
   }
 }
 
@@ -132,11 +140,20 @@ export const authOptions: NextAuthOptions = {
         token.oid = account.provider === "dev" ? user?.id : claims?.oid;
         token.name = claims?.name ?? user?.name ?? token.name;
         token.email = claims?.email ?? user?.email ?? token.email;
+        // "Sign out everywhere" (INNOBOX_SPEC.md §3) needs the time this SIGN-IN happened, and
+        // the library's own `iat` does not keep it: next-auth v4's jwt.encode() calls jose's
+        // setIssuedAt() with no argument on EVERY encode, which overwrites `iat` with "now" —
+        // so the rolling re-issue (session.updateAge) would move it forward and let a token
+        // minted before `users.sessions_valid_from` slip past the check. The re-issue does
+        // spread the whole decoded payload back into the new token, so a claim of our own set
+        // only on first mint survives unchanged for the cookie's lifetime.
+        token.issuedAt = nowInSeconds();
       }
       return token;
     },
     async session({ session, token }) {
       session.oid = token.oid;
+      session.issuedAt = token.issuedAt;
       return session;
     },
   },

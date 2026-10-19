@@ -16,7 +16,9 @@ async function handleGET(): Promise<Response> {
 
   // §14.6: the active system banner rides the bell's 30-second poll — one round trip, no second
   // transport. Null when none is active (lazy expiry judged here, at read time).
-  const [inbox, banner] = await Promise.all([getInbox(pool, gate.user.id), getActiveSystemBanner(pool)]);
+  // §12.1: the inbox is visibility-gated at read time, so the viewer's roles ride along.
+  const viewer = { userId: gate.user.id, roles: gate.user.roles };
+  const [inbox, banner] = await Promise.all([getInbox(pool, viewer), getActiveSystemBanner(pool)]);
   return Response.json({ ...inbox, banner });
 }
 
@@ -25,7 +27,7 @@ async function handlePATCH(): Promise<Response> {
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
   if (limited) return limited;
-  await markAllRead(pool, gate.user.id);
+  await markAllRead(pool, { userId: gate.user.id, roles: gate.user.roles });
   return Response.json({ ok: true });
 }
 

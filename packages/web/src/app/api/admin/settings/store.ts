@@ -3,7 +3,7 @@
 // already live under /api/admin/namespaces and /api/admin/role-mappings (Phase 1); the
 // notification sender (Graph connect flow) lives under /api/admin/email, reusing the
 // carried-over lib/email.ts helpers. Every change here is audited (platform-admin only).
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { GAMIFICATION_ENABLED_AT_KEY, GAMIFICATION_ENABLED_KEY, getGamificationSettings, isDateFormat, type DateFormat } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
@@ -17,6 +17,15 @@ import {
   type PublicIntakePreconditions,
   type PublicIntakeSettings,
 } from "../../../../lib/public-intake";
+
+// ── Bootstrap admin group (§2.3) ─────────────────────────────────────────────────────────
+
+/** How many role mappings grant `platform_admin` — the half of the §2.3 notice decision that lives
+ *  in the database (bootstrap-admin.ts combines it with the environment variable). */
+export async function countPlatformAdminMappings(db: Pool | PoolClient): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(`select count(*)::int as n from role_mappings where role = 'platform_admin'`);
+  return rows[0]?.n ?? 0;
+}
 
 // ── Date format ──────────────────────────────────────────────────────────────────────────
 

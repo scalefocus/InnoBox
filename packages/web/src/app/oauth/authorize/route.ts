@@ -11,7 +11,7 @@ import { pool } from "@/lib/db";
 import { htmlResponse, renderConsentPage, renderErrorPage } from "@/lib/mcp/consent-page";
 import { recordMcpEvent, settingsOr503 } from "@/lib/mcp/http";
 import { checkAuthorizeRequest, duplicateParameter, mcpResource, redirectWith } from "@/lib/mcp/oauth";
-import { createPendingAuthorization, findClient } from "@/lib/mcp/store";
+import { clientApprovalHistory, createPendingAuthorization, findClient } from "@/lib/mcp/store";
 
 export const dynamic = "force-dynamic";
 
@@ -57,14 +57,17 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const requestId = await createPendingAuthorization(pool, user.id, client!.id, check.value);
-  const target = new URL(check.value.redirectUri);
+  // The anti-phishing notice: a client nobody has approved before, or registered under 24 hours ago.
+  const history = await clientApprovalHistory(pool, client!.id);
   return htmlResponse(
     renderConsentPage({
       clientName: client!.clientName,
-      redirectTarget: target.protocol === "http:" || target.protocol === "https:" ? target.host : target.protocol,
+      redirectUri: check.value.redirectUri,
       personName: user.displayName,
       requestId,
       restrictedShared: gate.settings.restrictedContentEnabled,
+      everApproved: history.everApproved,
+      registeredMinutesAgo: (Date.now() - history.createdAt.getTime()) / 60_000,
     }),
   );
 }

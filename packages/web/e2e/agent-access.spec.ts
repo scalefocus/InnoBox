@@ -59,8 +59,13 @@ test("connect from /agents through consent; the agent's challenge shows via agen
       if (r.url().startsWith(REDIRECT)) callback = new URL(r.url());
     });
     await page.goto(authorize.toString());
-    await expect(page.getByRole("heading", { name: `Connect ${clientName} to InnoBox?` })).toBeVisible();
+    // The heading names the destination (a loopback redirect: this computer), not just the client;
+    // a client nobody has approved before carries the unverified notice; Approve needs the tick.
+    await expect(page.getByRole("heading", { name: `Connect ${clientName} on this computer?` })).toBeVisible();
+    await expect(page.getByText("Approving sends an access code to an application on this computer.")).toBeVisible();
+    await expect(page.getByText("Unverified application")).toBeVisible();
     await expect(page.getByText("It cannot like, change a status, assign, triage or administer.")).toBeVisible();
+    await page.getByRole("checkbox", { name: "I started this connection from my own AI tool" }).check();
     await page.getByRole("button", { name: "Approve" }).click();
     await expect.poll(() => callback?.searchParams.get("code") ?? null).not.toBeNull();
     expect(callback!.searchParams.get("state")).toBe(stamp);

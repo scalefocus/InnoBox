@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { createHash } from "node:crypto";
 import { bearerAuth, classifyBearer, safeTokenEqual, SCIM_REJECTION_LOCAL } from "./router.js";
-import { checkScimBearerToken, scimTokenFatalLog, scimTokenFingerprint, SCIM_TOKEN_MIN_LENGTH } from "./token.js";
+import { checkScimBearerToken, scimTokenFatalLog, scimTokenFingerprint, scimTokenLoadedLog, SCIM_TOKEN_MIN_LENGTH } from "./token.js";
 
 test("safeTokenEqual: correct token accepted", () => {
   const token = "my-secret-token-12345";
@@ -198,23 +198,28 @@ test("scimTokenFingerprint: first 8 hex of SHA-256 over the UTF-8 bytes (matches
   assert.match(scimTokenFingerprint("q".repeat(64)), /^[0-9a-f]{8}$/);
 });
 
-test("classifyBearer: each reason, the fingerprints, and the whitespace flag", () => {
+test("scimTokenLoadedLog: the startup line carries the configured fingerprint, never the token (v1.16)", () => {
+  const token = "startup-line-token-0123456789abcdef"; // gitleaks:allow — test-only fixture
+  const line = scimTokenLoadedLog(token);
+  assert.deepStrictEqual(JSON.parse(line), { level: "info", msg: "scim bearer token loaded", fingerprint: scimTokenFingerprint(token) });
+  assert.strictEqual(line.includes(token), false);
+});
+
+test("classifyBearer: each reason, the sent fingerprint, and the whitespace flag", () => {
   const configured = "c".repeat(40);
-  const fp = scimTokenFingerprint(configured);
-  assert.deepStrictEqual(classifyBearer("", configured, fp), { reason: "no_token", configuredFingerprint: fp });
-  assert.deepStrictEqual(classifyBearer("   ", configured, fp), { reason: "no_token", configuredFingerprint: fp });
-  assert.deepStrictEqual(classifyBearer("Basic dXNlcjpwYXNz", configured, fp), { reason: "not_bearer", configuredFingerprint: fp });
-  assert.deepStrictEqual(classifyBearer("Bearer", configured, fp), { reason: "not_bearer", configuredFingerprint: fp }, "Bearer with nothing after it");
-  assert.deepStrictEqual(classifyBearer(configured, configured, fp), { reason: "not_bearer", configuredFingerprint: fp }, "no scheme at all");
-  assert.strictEqual(classifyBearer(`Bearer ${configured}`, configured, fp), null);
-  assert.strictEqual(classifyBearer(`bearer ${configured}`, configured, fp), null);
-  assert.deepStrictEqual(classifyBearer("Bearer wrong-token", configured, fp), {
-    reason: "token_mismatch",
-    configuredFingerprint: fp,
-    sentFingerprint: scimTokenFingerprint("wrong-token"),
-    sentHasWhitespace: false,
-  });
-  const split = classifyBearer("Bearer abc def", configured, fp);
+  assert.deepStrictEqual(classifyBearer("", configured), { reason: "no_token" });
+  assert.deepStrictEqual(classifyBearer("   ", configured), { reason: "no_token" });
+  assert.deepStrictEqual(classifyBearer("Basic dXNlcjpwYXNz", configured), { reason: "not_bearer" });
+  assert.deepStrictEqual(classifyBearer("Bearer", configured), { reason: "not_bearer" }, "Bearer with nothing after it");
+  assert.deepStrictEqual(classifyBearer(configured, configured), { reason: "not_bearer" }, "no scheme at all");
+  assert.strictEqual(classifyBearer(`Bearer ${configured}`, configured), null);
+  assert.strictEqual(classifyBearer(`bearer ${configured}`, configured), null);
+  assert.deepStrictEqual(
+    classifyBearer("Bearer wrong-token", configured),
+    { reason: "token_mismatch", sentFingerprint: scimTokenFingerprint("wrong-token"), sentHasWhitespace: false },
+    "the verdict carries the sent fingerprint only — the configured one is never on a per-request path (v1.16)",
+  );
+  const split = classifyBearer("Bearer abc def", configured);
   assert.ok(split && split.reason === "token_mismatch");
   assert.strictEqual(split.sentHasWhitespace, true, "whitespace inside the sent token is flagged");
   assert.strictEqual(split.sentFingerprint, scimTokenFingerprint("abc def"));

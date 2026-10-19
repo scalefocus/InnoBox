@@ -1,9 +1,10 @@
 // The worker's half of the §14.7 system log (INNOBOX_SPEC.md): the SCIM 401/403 carve-out — a
 // wrong provisioning token or SCIM URL is the first symptom of an Entra misconfiguration and
 // worth surfacing — plus the 90-day retention trim. Fire-and-forget like the web capture: a
-// logging failure never touches the SCIM response. A 401 row says WHY (a reason code, the token
-// fingerprints, a whitespace flag) and from WHERE (the real client IP) — never the header or the
-// token itself (§14.7 *SCIM rejection detail*).
+// logging failure never touches the SCIM response. A 401 row says WHY (a reason code, on a mismatch
+// the SENT token's fingerprint and a whitespace flag) and from WHERE (the real client IP) — never
+// the header, the token itself, or the configured token's fingerprint, which is printed once at
+// worker start instead of being stored (§14.7 *SCIM rejection detail*, v1.16).
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Pool } from "pg";
 import {
@@ -40,24 +41,22 @@ export async function recordWorkerEvent(pool: Pool, input: SystemEventInput): Pr
   );
 }
 
-/** The row's error code and one-line message for a rejected SCIM call. Every 401 names the
- *  configured token's fingerprint; a mismatch also names the sent one's. A 401 without a verdict
- *  (none is expected — only the bearer check answers 401) keeps the pre-reason wording. */
+/** The row's error code and one-line message for a rejected SCIM call. Only a mismatch carries a
+ *  fingerprint — the SENT token's — plus the whitespace flag; `no_token` / `not_bearer` carry none.
+ *  The configured token's fingerprint is never written here. A 401 without a verdict (none is
+ *  expected — only the bearer check answers 401) keeps the pre-reason wording. */
 export function scimRejectionRow(status: number, rejection: ScimRejection | undefined): { errorCode: string; message: string } {
   if (status === 403) return { errorCode: SCIM_REJECTION_ERROR_CODES.forbidden, message: "SCIM request forbidden" };
   if (!rejection) return { errorCode: "scim_unauthorized", message: "SCIM request rejected: missing or invalid bearer token" };
   const errorCode = SCIM_REJECTION_ERROR_CODES[rejection.reason];
   switch (rejection.reason) {
     case "no_token":
-      return { errorCode, message: `SCIM request rejected: no token sent (configured ${rejection.configuredFingerprint})` };
+      return { errorCode, message: "SCIM request rejected: no token sent" };
     case "not_bearer":
-      return { errorCode, message: `SCIM request rejected: not a bearer token (configured ${rejection.configuredFingerprint})` };
+      return { errorCode, message: "SCIM request rejected: not a bearer token" };
     case "token_mismatch": {
       const ws = rejection.sentHasWhitespace ? "; sent token contains whitespace" : "";
-      return {
-        errorCode,
-        message: `SCIM request rejected: token mismatch (sent ${rejection.sentFingerprint}, configured ${rejection.configuredFingerprint}${ws})`,
-      };
+      return { errorCode, message: `SCIM request rejected: token mismatch (sent ${rejection.sentFingerprint}${ws})` };
     }
   }
 }

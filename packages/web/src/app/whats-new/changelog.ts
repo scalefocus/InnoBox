@@ -17,6 +17,12 @@ export const CHANGELOG: ChangelogEntry[] = [
       "New: Hype. Everyone gets three hypes a week to spend on the open challenges and solutions they most want acted on. A hype counts double in an item's first week and can't be taken back. This week's most-hyped items show on Home, authors are notified, and you earn Talent Scout when something you hyped is solved. Platform admins switch it on in Platform settings.",
   },
   {
+    version: "1.16.0",
+    date: "2026-10-16",
+    summary:
+      "Second round of security hardening. The account menu gains Sign out everywhere, which ends your session on every other device too. When connecting an AI agent, the approval page now leads with where the access code will be sent and flags applications nobody has connected before; you confirm you started the connection yourself before approving. Notifications about a challenge you can no longer see are hidden until you can. Platform admins cannot erase their own account, and the Administration page reminds them while the bootstrap admin group is still configured. Operators: the four encryption keys are validated at start and must differ.",
+  },
+  {
     version: "1.15.0",
     date: "2026-10-16",
     summary:

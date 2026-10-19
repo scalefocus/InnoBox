@@ -14,6 +14,7 @@ import { HypeSettingsCard } from "@/components/HypeSettingsCard";
 import { PublicSubmissionsSettingsCard, type PublicSubmissionsSettings } from "@/components/PublicSubmissionsSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
 import { McpCard } from "./McpCard";
+import { BOOTSTRAP_ADMIN_NOTICE } from "@/app/api/admin/settings/bootstrap-admin";
 
 interface MeResponse {
   roles: { platformAdmin: boolean };
@@ -77,6 +78,8 @@ interface SettingsData {
   gamificationEnabled: boolean;
   hypeEnabled: boolean;
   publicSubmissions: PublicSubmissionsSettings;
+  /** The standing bootstrap grant is still configured although a role mapping now grants platform admin. */
+  bootstrapAdminGroupActive: boolean;
 }
 
 interface EmailStatus {
@@ -135,6 +138,16 @@ function SettingsConsole() {
 
   return (
     <>
+      {data.bootstrapAdminGroupActive && (
+        // The standing bootstrap grant is flagged (platform admins only see this page) so it is not
+        // forgotten after first run: a role mapping now grants platform admin, the variable can go.
+        <div className="card card-pad reveal" role="status" data-testid="bootstrap-admin-notice" style={{ marginBottom: 18, borderColor: "var(--warn)" }}>
+          <div className="row" style={{ alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            <span className="pill pill-warn">Bootstrap</span>
+            <p style={{ margin: 0 }}>{BOOTSTRAP_ADMIN_NOTICE}</p>
+          </div>
+        </div>
+      )}
       <ImpactAreasCard areas={data.impactAreas} onChanged={refresh} onError={notify} />
       <AttachmentLimitsCard limits={data.attachmentLimits} onChanged={refresh} onError={notify} />
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />

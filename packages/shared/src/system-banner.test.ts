@@ -37,6 +37,11 @@ test("links: https or app-relative only", () => {
   assert.equal(isAllowedBannerUrl("/whats-new"), true);
   assert.equal(isAllowedBannerUrl("http://example.test"), false);
   assert.equal(isAllowedBannerUrl("//evil.test"), false);
+  // Browsers resolve `/\host` as `//host` — a different origin — so the backslash form is refused too.
+  assert.equal(isAllowedBannerUrl("/\\evil.test"), false);
+  assert.equal(isAllowedBannerUrl("/\\\\evil.test"), false);
+  assert.equal(isAllowedBannerUrl("/x\\y"), true, "a backslash later in the path is not an origin trick");
+  assert.equal(validateSystemBannerInput({ message: "m", duration: "1h", url: "/\\evil.test" }).ok, false);
   assert.equal(isAllowedBannerUrl("javascript:alert(1)"), false);
   assert.equal(isAllowedBannerUrl("data:text/html,hi"), false);
   assert.equal(isAllowedBannerUrl("/a path"), false);

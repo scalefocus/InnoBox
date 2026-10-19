@@ -87,6 +87,9 @@ export * from "./webhook-address.js";
 // subpath) and the SMTP fallback rule web and worker share.
 export * from "./public-url.js";
 export * from "./smtp-env.js";
+// §2.3 key validation: strict-base64 parsing of the four at-rest encryption keys and the startup
+// check web and worker run (also at the edge-safe `@innobox/shared/enc-keys` subpath).
+export * from "./enc-keys.js";
 
 // §13.10/§14.11 feedback survey: the versioned catalog, offer composition, the eligibility
 // predicate and roll, submission validation, and the results' privacy rules (minimum group size,
@@ -124,3 +127,7 @@ export * from "./challenge-access-db.js";
 // worker share.
 export * from "./mcp.js";
 export * from "./mcp-grants.js";
+
+// §2.4 literal substring filters: the one LIKE/ILIKE escape every "contains" filter runs
+// (gallery/search/triage author filters, directory search, audit and system-log searches).
+export * from "./sql-like.js";
