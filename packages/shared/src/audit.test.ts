@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendAudit } from "./audit.js";
+import { AUDIT_TARGET_ID_MAX_LENGTH, appendAudit, auditTargetId } from "./audit.js";
 import type { DbClient } from "./email-graph.js";
 
 function captureDb() {
@@ -86,4 +86,20 @@ test("db failures propagate to the caller", async () => {
     () => appendAudit(db, { action: "recon.user_refreshed", targetType: "user" }),
     /connection refused/,
   );
+});
+
+test("§15: target_id is capped at the writer — a longer value is truncated, a UUID and null pass through", async () => {
+  assert.equal(AUDIT_TARGET_ID_MAX_LENGTH, 256);
+  assert.equal(auditTargetId(null), null);
+  assert.equal(auditTargetId(undefined), null);
+  const uuid = "2f1d0c9b-8a7e-4d6c-b5a4-3e2f1d0c9b8a";
+  assert.equal(auditTargetId(uuid), uuid);
+  const exact = "x".repeat(AUDIT_TARGET_ID_MAX_LENGTH);
+  assert.equal(auditTargetId(exact), exact, "exactly the cap is kept whole");
+  const planted = "y".repeat(AUDIT_TARGET_ID_MAX_LENGTH * 10);
+  assert.equal(auditTargetId(planted), "y".repeat(AUDIT_TARGET_ID_MAX_LENGTH));
+
+  const { db, calls } = captureDb();
+  await appendAudit(db, { action: "attachment.download_denied", targetType: "attachment", targetId: planted });
+  assert.equal((calls[0]!.params![3] as string).length, AUDIT_TARGET_ID_MAX_LENGTH, "the insert carries the capped value");
 });

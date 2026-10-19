@@ -207,6 +207,15 @@ test(
       // ── Download gateway: pending → denied + audited ───────────────────────────────────
       assert.equal((await getAttachmentForDownload(deps, author, att1.id)).status, "denied", "pending is never served");
       await assertAudited(pool, "attachment.download_denied", att1.id);
+      // §11: a malformed id is the same denial but writes NO audit row — the segment is caller-
+      // chosen text and the log is append-only and hash-chained; nothing exists to target.
+      const malformed = `not-a-uuid-${stamp}-${"x".repeat(300)}`;
+      assert.equal((await getAttachmentForDownload(deps, author, malformed)).status, "denied", "a malformed id is denied");
+      const { rows: planted } = await pool.query<{ n: string }>(
+        `select count(*)::text as n from audit_log where action = 'attachment.download_denied' and target_id like $1`,
+        [`not-a-uuid-${stamp}%`],
+      );
+      assert.equal(Number(planted[0]!.n), 0, "a malformed id never reaches the audit log");
 
       // ── Author removal (soft + object purge + idempotent) on a second attachment ───────
       const up2 = await uploadAttachment(deps, author, { ...goodFile, filename: "second.txt" });

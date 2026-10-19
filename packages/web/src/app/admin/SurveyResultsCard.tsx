@@ -8,7 +8,11 @@
 // just renders what it is given. Free text is always rendered as plain text. Nothing polls; there
 // is no export.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useDateFmt } from "@/components/DateFormat";
+import { useDateFmt, type DateStyle } from "@/components/DateFormat";
+import { EChart } from "@/components/EChart";
+import type { ChartEnv } from "@/lib/charts/chart-env";
+import { buildSurveyTrendOption } from "@/lib/charts/survey-trend-chart";
+import { formatCalendarDay } from "@innobox/shared/calendar-day";
 import {
   SURVEY_FEATURES,
   SURVEY_SEGMENTS,
@@ -25,7 +29,6 @@ import {
   SURVEY_RANGE_LABEL,
   SURVEY_SOURCES,
   SURVEY_SOURCE_LABEL,
-  formatCalendarDay,
   type SurveyBucket,
   type SurveyRange,
   type SurveySeriesPoint,
@@ -294,7 +297,7 @@ export function SurveyResultsCard({ open, onToggle, onNotify }: { open: boolean;
             <div className="stat-label" style={{ marginTop: 0 }}>
               Satisfaction · average of &quot;Overall&quot; per {summary.bucket}, responses as bars
             </div>
-            <SatisfactionTrend series={summary.series} label={day} />
+            <SatisfactionTrend series={summary.series} style={fmt.style} />
 
             <div className="survey-questions">
               {summary.questions.map((q) => (
@@ -504,69 +507,20 @@ function Histogram({ distribution }: { distribution: number[] }) {
   );
 }
 
-/** The satisfaction trend: hand-rolled SVG on the brand tokens, no charting dependency (as the
- *  §14.5 chart). Bars = responses per bucket; the line = the average of "Overall" (1–5), with a
- *  GAP wherever the server withheld it. Fewer than 3 points get visible markers. */
-function SatisfactionTrend({ series, label }: { series: SurveySeriesPoint[]; label: (day: string) => string }) {
-  const W = 720;
-  const H = 180;
-  const padL = 30;
-  const padR = 30;
-  const padT = 10;
-  const padB = 24;
-  const innerW = W - padL - padR;
-  const band = innerW / series.length;
-  const x = (i: number) => padL + band * (i + 0.5);
-  const yAvg = (v: number) => padT + (1 - (v - 1) / 4) * (H - padT - padB);
-  const peakN = Math.max(1, ...series.map((p) => p.n));
-  const barH = (n: number) => (n / peakN) * (H - padT - padB) * 0.6;
-
-  // Split the line at withheld buckets — a gap, never an interpolation.
-  const segments: string[] = [];
-  let current: string[] = [];
-  series.forEach((p, i) => {
-    if (p.overallAvg === null) {
-      if (current.length) segments.push(current.join(" "));
-      current = [];
-      return;
-    }
-    current.push(`${current.length ? "L" : "M"} ${x(i)} ${yAvg(p.overallAvg)}`);
-  });
-  if (current.length) segments.push(current.join(" "));
-  const markers = series.length < 3;
-  const labelIndexes = series.length > 2 ? [0, Math.floor((series.length - 1) / 2), series.length - 1] : series.map((_, i) => i);
-
+/** The satisfaction trend (§14.11) on the shared ECharts wrapper (§14.5). Bars = responses per
+ *  bucket; the line = the average of "Overall" (1–5), with a BREAK wherever the server withheld
+ *  it. Markers when there are fewer than 3 points, and on any point with no drawn neighbour. */
+function SatisfactionTrend({ series, style }: { series: SurveySeriesPoint[]; style: DateStyle }) {
+  const build = useCallback((env: ChartEnv) => buildSurveyTrendOption({ series, style, env }), [series, style]);
   return (
-    <svg className="presence-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Average overall satisfaction over time" style={{ marginBottom: 6 }}>
-      {[1, 2, 3, 4, 5].map((v) => (
-        <g key={v}>
-          <line x1={padL} x2={W - padR} y1={yAvg(v)} y2={yAvg(v)} stroke="var(--line)" strokeDasharray={v === 1 ? undefined : "3 4"} />
-          <text x={padL - 8} y={yAvg(v) + 4} textAnchor="end" fill="var(--faint)" fontSize="11">
-            {v}★
-          </text>
-        </g>
-      ))}
-      {series.map((p, i) => (
-        <rect key={p.date} x={x(i) - Math.min(14, band * 0.35)} width={Math.min(28, band * 0.7)} y={H - padB - barH(p.n)} height={barH(p.n)} fill="var(--accent-soft)" rx="2">
-          <title>{`${label(p.date)}: ${p.n} response${p.n === 1 ? "" : "s"}${p.overallAvg === null ? "" : `, average ${p.overallAvg}`}`}</title>
-        </rect>
-      ))}
-      {segments.map((d) => (
-        <path key={d} d={d} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      ))}
-      {series.map((p, i) =>
-        p.overallAvg !== null && (markers || isolated(series, i)) ? <circle key={`m-${p.date}`} cx={x(i)} cy={yAvg(p.overallAvg)} r="4" fill="var(--accent)" /> : null,
-      )}
-      {labelIndexes.map((i) => (
-        <text key={`l-${i}`} x={x(i)} y={H - 6} textAnchor="middle" fill="var(--faint)" fontSize="11">
-          {label(series[i]!.date)}
-        </text>
-      ))}
-    </svg>
+    <div style={{ marginBottom: 6 }}>
+      <EChart
+        className="presence-chart"
+        testId="survey-trend-chart"
+        title="Average overall satisfaction over time"
+        height={200}
+        build={build}
+      />
+    </div>
   );
-}
-
-/** A point with no drawn neighbour would otherwise be invisible (a one-point path). */
-function isolated(series: SurveySeriesPoint[], i: number): boolean {
-  return (series[i - 1]?.overallAvg ?? null) === null && (series[i + 1]?.overallAvg ?? null) === null;
 }

@@ -58,6 +58,10 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
   const [successorResults, setSuccessorResults] = useState<UserResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [skipped, setSkipped] = useState<SkippedNotice | null>(null);
+  /** The API's refusal, shown plainly inside the open dialog (§3: your own account, the last
+   *  active platform admin, an ineligible successor) — the dialog stays open so the admin can
+   *  change the successor or cancel. */
+  const [error, setError] = useState<string | null>(null);
 
   const search = async (q: string) => {
     setQuery(q);
@@ -79,6 +83,7 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
     setSuccessor(null);
     setSuccessorQuery("");
     setSuccessorResults([]);
+    setError(null);
   };
 
   const open = (u: AdminUserRow) => {
@@ -107,6 +112,7 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
     setSuccessor(u);
     setSuccessorQuery("");
     setSuccessorResults([]);
+    setError(null);
   };
 
   const scrub = async () => {
@@ -114,6 +120,7 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
     const target = pending;
     const chosen = successor;
     setBusy(true);
+    setError(null);
     try {
       const json = (await postJson(`/api/admin/users/${target.id}/scrub`, { reassignTo: chosen?.id ?? null })) as unknown as ScrubResponse;
       const r = json.reassignment;
@@ -130,7 +137,9 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
       setQuery("");
       setResults([]);
     } catch (err) {
-      onNotify(err instanceof Error ? err.message : "Could not delete user info");
+      const message = err instanceof Error ? err.message : "Could not delete user info";
+      setError(message);
+      onNotify(message);
     } finally {
       setBusy(false);
     }
@@ -246,6 +255,12 @@ export function GdprCard({ onNotify }: { onNotify: (message: string) => void }) 
                 : "Without a successor, open assignments stay with Deleted User."}
             </p>
           </div>
+
+          {error && (
+            <p role="alert" data-testid="gdpr-error" style={{ fontSize: 13.5, margin: "0 0 12px", color: "var(--danger)" }}>
+              {error}
+            </p>
+          )}
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={scrub}>

@@ -101,12 +101,15 @@ async function writeNotifications(db: Db, userIds: string[], type: NotificationT
   );
 }
 
+/** The namespace's admins plus every platform admin (§12.1 admin notifications), resolved from
+ *  SCIM-synced membership + role_mappings (invariant 1) — active, not-erased users only (§12.1). */
 export async function getNamespaceAdminUserIds(db: Db, namespaceId: string): Promise<string[]> {
   const { rows } = await db.query<{ user_id: string }>(
     `select distinct gm.user_id
        from group_members gm
        join groups g on g.id = gm.group_id
        join role_mappings rm on rm.group_external_id = g.external_id
+       join users u on u.id = gm.user_id and u.active and u.scrubbed_at is null
       where (rm.role = 'namespace_admin' and rm.namespace_id = $1) or rm.role = 'platform_admin'`,
     [namespaceId],
   );
@@ -134,12 +137,14 @@ export async function dispatchAdminAttention(db: Db, userIds: string[], type: No
   await writeNotifications(db, finalizeRecipients(userIds, null), type, payload);
 }
 
+/** The namespace's committee (invariant 1) — active, not-erased users only (§12.1). */
 export async function getNamespaceCommitteeUserIds(db: Db, namespaceId: string): Promise<string[]> {
   const { rows } = await db.query<{ user_id: string }>(
     `select distinct gm.user_id
        from group_members gm
        join groups g on g.id = gm.group_id
        join role_mappings rm on rm.group_external_id = g.external_id
+       join users u on u.id = gm.user_id and u.active and u.scrubbed_at is null
       where rm.role = 'committee' and rm.namespace_id = $1`,
     [namespaceId],
   );
@@ -189,6 +194,16 @@ export interface PreferenceMute {
   exempt?: string[];
 }
 
+/** §12.1: of `userIds`, the ones who may receive anything at all — active and not erased. A
+ *  deactivated leaver keeps their e-mail, group memberships and follows, so every other filter
+ *  would still pass them; this one is what stops the inbox row and the outbox row. */
+async function activeRecipients(db: Db, userIds: string[]): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const { rows } = await db.query<{ id: string }>(`select id from users where id = any($1::uuid[]) and active and scrubbed_at is null`, [userIds]);
+  const active = new Set(rows.map((r) => r.id));
+  return userIds.filter((id) => active.has(id));
+}
+
 /** The recipients who switched this preference off. The column comes from a fixed map. */
 async function optedOutOf(db: Db, preference: NotificationPreference, userIds: string[]): Promise<Set<string>> {
   if (userIds.length === 0) return new Set();
@@ -219,16 +234,17 @@ export async function dispatchEvent(
   await writeNotifications(ctx.pool, recipients, type, withTarget(payload, visibilityScope), digest);
 }
 
-/** Dedup + actor exclusion, then the visibility drop (invariant 2), then the §12.1 preference
- *  mute — row-level, at insert time: an opted-out recipient gets neither the inbox row nor the
- *  outbox row, so there is nothing for the bell or the e-mail sweep to deliver. */
+/** Dedup + actor exclusion, then the §12.1 deactivated/erased drop, then the visibility drop
+ *  (invariant 2), then the §12.1 preference mute — all row-level, at insert time: a dropped
+ *  recipient gets neither the inbox row nor the outbox row, so there is nothing for the bell or
+ *  the e-mail sweep to deliver. */
 async function finalRecipients(
   ctx: NotifyContext,
   visibilityScope: { parentType: "challenge" | "solution"; parentId: string },
   candidates: readonly (string | null)[],
   mute?: PreferenceMute,
 ): Promise<string[]> {
-  const deduped = finalizeRecipients(candidates, ctx.actorId);
+  const deduped = await activeRecipients(ctx.pool, finalizeRecipients(candidates, ctx.actorId));
   if (deduped.length === 0) return [];
   // The item is read once and every recipient checked against it in memory, with all their
   // roles resolved together — a fixed number of queries, whatever the recipient count.

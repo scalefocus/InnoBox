@@ -50,13 +50,20 @@ test("rateLimit returns null when allowed and a 429 with Retry-After when not", 
   }
 });
 
-test("search is the one limited read: 120 per minute, its own bucket", () => {
+test("search and download are the limited reads: 120 per minute each, their own buckets", () => {
   resetRateLimits();
   const t0 = 1_800_000_000_000;
   assert.deepEqual(RATE_LIMITS.search, { limit: 120, windowMs: 60_000 });
   for (let i = 0; i < 120; i++) assert.equal(takeToken("u1", "search", t0, 1).ok, true);
   assert.equal(takeToken("u1", "search", t0, 1).ok, false);
   assert.equal(takeToken("u1", "mutation", t0, 1).ok, true, "search does not drain the mutation bucket");
+  // §11: the attachment download gateway — every denial is an audit row, so a loop over made-up
+  // ids is bounded here rather than in the audit log.
+  assert.deepEqual(RATE_LIMITS.download, { limit: 120, windowMs: 60_000 });
+  for (let i = 0; i < 120; i++) assert.equal(takeToken("u1", "download", t0, 1).ok, true);
+  assert.equal(takeToken("u1", "download", t0, 1).ok, false);
+  assert.equal(takeToken("u1", "search", t0 + 1, 1).ok, false, "download does not refill search");
+  assert.equal(takeToken("u2", "download", t0, 1).ok, true, "per user");
 });
 
 test("RATE_LIMIT_MULTIPLIER scales every bucket's limit", () => {

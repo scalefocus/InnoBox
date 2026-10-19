@@ -291,3 +291,46 @@ test("presenceHistory: 'all' is a superset of a bounded range", { skip }, async 
     await pool.end();
   }
 });
+
+test("presenceHistory: one point per UTC day — quiet days are 0, unsampled weeks/months are null, today is live", { skip }, async () => {
+  const { Pool } = await importDeps();
+  const { presenceHistory, presenceSummary } = await import("./store");
+  const pool = new Pool({ connectionString: url });
+  const day = (offset: number) => `(now() at time zone 'utc')::date - ${offset}`;
+  try {
+    // A sampled day, an unsampled one, and a day with no row at all between them.
+    await pool.query(
+      `insert into presence_daily (day, active_users, wau, mau) values (${day(5)}, 4, 9, 12)
+       on conflict (day) do update set active_users = 4, wau = 9, mau = 12`,
+    );
+    await pool.query(
+      `insert into presence_daily (day, active_users, wau, mau) values (${day(3)}, 2, null, null)
+       on conflict (day) do update set active_users = 2, wau = null, mau = null`,
+    );
+    await pool.query(`delete from presence_daily where day = ${day(4)}`);
+
+    const points = await presenceHistory(pool, "7d");
+    const summary = await presenceSummary(pool, "5m");
+    const iso = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+
+    // Contiguous: every consecutive pair is exactly one UTC day apart, ending today.
+    for (let i = 1; i < points.length; i++) {
+      const gap = Date.parse(`${points[i]!.day}T00:00:00Z`) - Date.parse(`${points[i - 1]!.day}T00:00:00Z`);
+      assert.equal(gap, 86_400_000, `${points[i - 1]!.day} → ${points[i]!.day} must be one day`);
+    }
+    assert.equal(points.at(-1)!.day, iso(0), "the series ends on the day in progress");
+    assert.ok(points.length <= 8, "7d covers today and the seven days before it");
+
+    const at = (offset: number) => points.find((p) => p.day === iso(offset));
+    assert.deepEqual(at(5), { day: iso(5), activeUsers: 4, wau: 9, mau: 12 });
+    assert.deepEqual(at(4), { day: iso(4), activeUsers: 0, wau: null, mau: null }, "a missing row is a quiet day, never a skipped one");
+    assert.deepEqual(at(3), { day: iso(3), activeUsers: 2, wau: null, mau: null }, "an unsampled week is null, never zero");
+
+    // Today's weekly/monthly values are the live tiles.
+    assert.equal(at(0)!.wau, summary.wau);
+    assert.equal(at(0)!.mau, summary.mau);
+  } finally {
+    await pool.query(`delete from presence_daily where day in (${day(5)}, ${day(3)})`);
+    await pool.end();
+  }
+});

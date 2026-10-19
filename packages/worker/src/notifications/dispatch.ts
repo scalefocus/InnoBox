@@ -39,6 +39,8 @@ interface OutboxRow {
   attempts: number;
   email: string | null;
   email_notifications_enabled: boolean | null;
+  /** §12.1: false once the user is deactivated or erased — the row is discarded like an opt-out. */
+  active: boolean | null;
 }
 
 /** §24.7: the confirmation e-mail's outbox type — its link carries the token, scrubbed once sent. */
@@ -187,9 +189,11 @@ export async function runNotificationSweep(pool: Pool, opts: EmailTransportOptio
   // The recipient's email/opt-out flag is joined in here rather than looked up per row —
   // a LEFT JOIN (not INNER) so a row whose user has since vanished still surfaces (and gets
   // skipped below) instead of silently never being processed at all. A row held for a digest
-  // (§12.1) is left to the digest job, due or not.
+  // (§12.1) is left to the digest job, due or not. `active` is re-read at send time (§12.1): a
+  // user deactivated or erased since the row was written gets nothing, like an opt-out.
   const { rows } = await pool.query<OutboxRow>(
-    `select o.id, o.user_id, o.recipient_email, o.type, o.payload, o.attempts, u.email, u.email_notifications_enabled
+    `select o.id, o.user_id, o.recipient_email, o.type, o.payload, o.attempts, u.email, u.email_notifications_enabled,
+            (u.active and u.scrubbed_at is null) as active
        from notification_outbox o
        left join users u on u.id = o.user_id
       where o.digest_due_at is null and ${OUTBOX_DUE_SQL}
@@ -208,7 +212,7 @@ export async function runNotificationSweep(pool: Pool, opts: EmailTransportOptio
       // §24.7: a submitter row has no user and no preference — it goes to its address as is (an
       // erasure deletes the row first, so an erased address is never reached).
       const submitter = typeof row.recipient_email === "string";
-      if (submitter ? !row.recipient_email : !row.email || !row.email_notifications_enabled) {
+      if (submitter ? !row.recipient_email : !row.email || !row.email_notifications_enabled || !row.active) {
         await pool.query(`update notification_outbox set status = 'sent', sent_at = now() where id = $1`, [row.id]);
         summary.skippedOptOut += 1;
         continue;

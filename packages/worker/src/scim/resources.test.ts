@@ -77,9 +77,16 @@ test("parseUserWrite: externalId absent falls back to id", () => {
   assert.equal(parsed.externalId, "id-only");
 });
 
-test("parseUserWrite: active defaults to true when omitted", () => {
-  assert.equal(parseUserWrite({ externalId: "e" }).active, true);
+test("parseUserWrite: active is read as PATCH reads it — absent or unparseable is undefined, never true", () => {
+  // ENTRA_AUTH_SPEC.md §5: the router keeps the stored value on an existing row and defaults to
+  // true only on insert, so a replayed POST or a PUT silent on `active` never reactivates a leaver.
+  assert.equal(parseUserWrite({ externalId: "e" }).active, undefined, "absent");
   assert.equal(parseUserWrite({ externalId: "e", active: false }).active, false);
+  assert.equal(parseUserWrite({ externalId: "e", active: true }).active, true);
+  assert.equal(parseUserWrite({ externalId: "e", active: "False" }).active, false, "Entra's string quirk");
+  assert.equal(parseUserWrite({ externalId: "e", active: "true" }).active, true);
+  assert.equal(parseUserWrite({ externalId: "e", active: "yes" }).active, undefined, "unparseable");
+  assert.equal(parseUserWrite({ externalId: "e", active: 1 }).active, undefined, "unparseable");
 });
 
 // ── parseGroupWrite ──────────────────────────────────────────────────────────────────────
@@ -120,6 +127,7 @@ test("toScimUser: shape includes id, externalId, meta.resourceType, enterprise e
     active: true,
     deactivated_at: null,
     scrubbed_at: null,
+    last_seen_at: null,
     created_at: now,
     updated_at: now,
   });
@@ -144,6 +152,7 @@ test("toScimUser: no email -> empty emails array; no title -> omitted", () => {
     active: false,
     deactivated_at: null,
     scrubbed_at: null,
+    last_seen_at: null,
     created_at: now,
     updated_at: now,
   });

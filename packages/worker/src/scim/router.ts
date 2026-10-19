@@ -45,10 +45,11 @@ export function safeTokenEqual(provided: string, expected: string): boolean {
 }
 
 /** Why a request failed the bearer check (INNOBOX_SPEC.md §14.7). Derived values only — the
- *  header and the token themselves never leave `bearerAuth`. */
+ *  header and the token themselves never leave `bearerAuth`. The configured token's fingerprint
+ *  is deliberately absent (v1.16): it is printed once at worker start, never stored per row. */
 export type ScimRejection =
-  | { reason: "no_token" | "not_bearer"; configuredFingerprint: string }
-  | { reason: "token_mismatch"; configuredFingerprint: string; sentFingerprint: string; sentHasWhitespace: boolean };
+  | { reason: "no_token" | "not_bearer" }
+  | { reason: "token_mismatch"; sentFingerprint: string; sentHasWhitespace: boolean };
 
 /** The `res.locals` key the bearer check leaves its verdict under for the system-log recorder. */
 export const SCIM_REJECTION_LOCAL = "scimRejection";
@@ -57,23 +58,21 @@ export const SCIM_REJECTION_LOCAL = "scimRejection";
  *  start with a non-space, so `\s+` and the capture never compete for the same characters —
  *  `\s+(.+)` backtracks quadratically on a header of many spaces (polynomial ReDoS).
  *  Returns null when the token matches, otherwise why it did not. */
-export function classifyBearer(header: string, bearerToken: string, configuredFingerprint: string): ScimRejection | null {
-  if (header.trim() === "") return { reason: "no_token", configuredFingerprint };
+export function classifyBearer(header: string, bearerToken: string): ScimRejection | null {
+  if (header.trim() === "") return { reason: "no_token" };
   const provided = /^Bearer\s+(\S.*)$/i.exec(header)?.[1];
-  if (!provided) return { reason: "not_bearer", configuredFingerprint };
+  if (!provided) return { reason: "not_bearer" };
   if (safeTokenEqual(provided, bearerToken)) return null;
   return {
     reason: "token_mismatch",
-    configuredFingerprint,
     sentFingerprint: scimTokenFingerprint(provided),
     sentHasWhitespace: /\s/.test(provided),
   };
 }
 
 export function bearerAuth(bearerToken: string) {
-  const configuredFingerprint = scimTokenFingerprint(bearerToken);
   return (req: Request, res: Response, next: NextFunction): void => {
-    const rejection = classifyBearer(req.header("authorization") ?? "", bearerToken, configuredFingerprint);
+    const rejection = classifyBearer(req.header("authorization") ?? "", bearerToken);
     if (rejection) {
       // Never log the header or the token — not even in an error path. The recorder gets
       // only the derived verdict.
@@ -145,23 +144,50 @@ async function auditScrubbedRefusal(pool: Pool, userId: string, request: string)
   });
 }
 
+// ENTRA_AUTH_SPEC.md §5 (v1.16): a row that has been signed in with (`last_seen_at` set) and is
+// active keeps its `external_id`. Re-keying an in-use account is allowed only while it is
+// inactive (deactivate, re-key, reactivate), so a leaked SCIM token cannot silently point a
+// privileged, in-use account at another Entra object. A never-used row — the sign-in relink-undo
+// path (INNOBOX_SPEC.md §3) — and an inactive row may still be re-keyed.
+function externalIdIsImmutable(user: UserRow): boolean {
+  return user.active && user.last_seen_at !== null && user.last_seen_at !== undefined;
+}
+
+/** Records a refused `external_id` change as `scim.anomaly`, mirroring the scrubbed-row refusals:
+ *  the user id, the request and the attempted key — nothing else from the payload. */
+async function auditExternalIdRefusal(pool: Pool, userId: string, request: string, attemptedExternalId: string): Promise<void> {
+  await appendAudit(pool, {
+    actorUserId: null,
+    action: "scim.anomaly",
+    targetType: "user",
+    targetId: userId,
+    after: { reason: "external_id_immutable", request, attemptedExternalId },
+  });
+}
+
+const EXTERNAL_ID_IMMUTABLE_DETAIL =
+  "externalId cannot be changed on an active account that has signed in; deactivate the account first";
+
 // NOTE (§13.8): `office_location` is deliberately absent from every users write below. SCIM carries
 // no office attribute, and reconciliation overwrites the directory profile unconditionally — adding
 // the column here would wipe it on every sync cycle. scim.dbtest.ts pins that contract.
 async function insertUser(pool: Pool, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
   const userName = data.userName ?? data.email ?? data.externalId;
+  // ENTRA_AUTH_SPEC.md §5: a new row with no parseable `active` starts active — insert is the
+  // only place that defaults it.
+  const active = data.active ?? true;
   const { rows } = await pool.query<UserRow>(
     `insert into users (external_id, user_name, email, display_name, department, job_title, active, scim_synced, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, true, now())
      returning *`,
-    [data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, data.active],
+    [data.externalId, userName, data.email, data.displayName, data.department, data.jobTitle, active],
   );
   // §4.3: a pending access-list entry for this address now names a user.
   await bindPendingAccess(pool, rows[0]!.id);
   return rows[0]!;
 }
 
-async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedUserWrite & { externalId: string }): Promise<UserRow> {
+async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedUserWrite & { externalId: string; active: boolean }): Promise<UserRow> {
   const userName = data.userName ?? data.email ?? data.externalId;
   const { rows } = await pool.query<UserRow>(
     `update users
@@ -171,6 +197,13 @@ async function updateUserFull(pool: Pool | PoolClient, id: string, data: ParsedU
             -- §3.1: drop the cached photo when going inactive (greyed initials bubble thereafter)
             photo = case when $8 then photo else null end,
             photo_etag = case when $8 then photo_etag else null end,
+            -- INNOBOX_SPEC.md §3 *Sign out everywhere*: the active → inactive transition signs every
+            -- device out at its next request. A write that keeps the row inactive leaves the stamp
+            -- alone (coalesce: rows deactivated before the column existed get one now), and
+            -- reactivation never clears it (a token minted before stays refused).
+            sessions_valid_from = case when $8 then sessions_valid_from
+                                       when active then now()
+                                       else coalesce(sessions_valid_from, now()) end,
             scim_synced = true, updated_at = now()
       where id = $1
       returning *`,
@@ -198,6 +231,10 @@ async function updateUserPatch(pool: Pool | PoolClient, id: string, v: UserPatch
             -- §3.1: drop the cached photo when going inactive (greyed initials bubble thereafter)
             photo = case when $7 then photo else null end,
             photo_etag = case when $7 then photo_etag else null end,
+            -- INNOBOX_SPEC.md §3 *Sign out everywhere*: see updateUserFull
+            sessions_valid_from = case when $7 then sessions_valid_from
+                                       when active then now()
+                                       else coalesce(sessions_valid_from, now()) end,
             external_id = $8,
             scim_synced = true, updated_at = now()
       where id = $1
@@ -213,6 +250,8 @@ async function deactivateUser(pool: Pool | PoolClient, id: string): Promise<User
     `update users
         set active = false, deactivated_at = coalesce(deactivated_at, now()),
             photo = null, photo_etag = null, -- §3.1: drop the cached photo on deactivation
+            -- INNOBOX_SPEC.md §3 *Sign out everywhere*: stamped on the transition; see updateUserFull
+            sessions_valid_from = case when active then now() else coalesce(sessions_valid_from, now()) end,
             scim_synced = true, updated_at = now()
       where id = $1
       returning *`,
@@ -521,7 +560,8 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
         }
       }
       const updated = await atomically(pool, async (db) => {
-        const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+        // ENTRA_AUTH_SPEC.md §5: a payload silent on `active` keeps the stored value.
+        const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId, active: parsedBody.active ?? existing.active });
         await auditUserTransition(db, existing, row);
         return row;
       });
@@ -575,6 +615,19 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     }
     const parsedBody = parseUserWrite(req.body);
     const externalId = parsedBody.externalId ?? existing.external_id;
+    if (externalId !== existing.external_id) {
+      if (externalIdIsImmutable(existing)) {
+        await auditExternalIdRefusal(pool, existing.id, "PUT /Users/:id", externalId);
+        res.status(409).json(scimError(409, EXTERNAL_ID_IMMUTABLE_DETAIL, "mutability"));
+        return;
+      }
+      // Re-keying a never-used or inactive row: the new key must not already belong to another row.
+      const conflicting = await findUserByExternalId(pool, externalId);
+      if (conflicting && conflicting.id !== existing.id) {
+        res.status(409).json(scimError(409, `externalId already in use: ${externalId}`, "uniqueness"));
+        return;
+      }
+    }
     if (parsedBody.userName) {
       const conflicting = await findUserByUserNameCI(pool, parsedBody.userName);
       if (conflicting && conflicting.id !== existing.id) {
@@ -583,7 +636,9 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       }
     }
     const updated = await atomically(pool, async (db) => {
-      const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId });
+      // ENTRA_AUTH_SPEC.md §5: a PUT that omits `active` (or sends something unparseable) keeps
+      // the stored value — never a silent reactivation.
+      const row = await updateUserFull(db, existing.id, { ...parsedBody, externalId, active: parsedBody.active ?? existing.active });
       await auditUserTransition(db, existing, row);
       return row;
     });
@@ -604,6 +659,11 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
     const patch = normalizeUserPatch((req.body as { Operations?: unknown })?.Operations);
     const newUserName = patch.userName ?? existing.user_name;
     if (patch.externalId && patch.externalId !== existing.external_id) {
+      if (externalIdIsImmutable(existing)) {
+        await auditExternalIdRefusal(pool, existing.id, "PATCH /Users/:id", patch.externalId);
+        res.status(409).json(scimError(409, EXTERNAL_ID_IMMUTABLE_DETAIL, "mutability"));
+        return;
+      }
       // A re-mapped tenant undoing a sign-in relink (INNOBOX_SPEC.md §3): the new key must not
       // already belong to another row.
       const conflicting = await findUserByExternalId(pool, patch.externalId);
@@ -861,6 +921,12 @@ export function createScimRouter(pool: Pool, opts: CreateScimRouterOptions): Rou
       return;
     }
     res.status(200).json(found);
+  });
+
+  // ENTRA_AUTH_SPEC.md §5: every response is SCIM-shaped — an authenticated request to a path the
+  // router does not serve answers a SCIM 404 envelope, never Express's HTML "Cannot GET" page.
+  router.use((_req: Request, res: Response) => {
+    res.status(404).json(scimError(404, "Resource not found"));
   });
 
   // Error tail: malformed JSON bodies get a SCIM 400 (Entra retries indefinitely on 500s),

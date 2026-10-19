@@ -74,6 +74,10 @@
       "types": "./dist/public-url.d.ts",
       "default": "./dist/public-url.js"
     },
+    "./enc-keys": {
+      "types": "./dist/enc-keys.d.ts",
+      "default": "./dist/enc-keys.js"
+    },
     "./survey": {
       "types": "./dist/survey.d.ts",
       "default": "./dist/survey.js"
@@ -101,6 +105,14 @@
     "./comment-threads": {
       "types": "./dist/comment-threads.d.ts",
       "default": "./dist/comment-threads.js"
+    },
+    "./calendar-day": {
+      "types": "./dist/calendar-day.d.ts",
+      "default": "./dist/calendar-day.js"
+    },
+    "./presence": {
+      "types": "./dist/presence.d.ts",
+      "default": "./dist/presence.js"
     }
   },
   "scripts": {

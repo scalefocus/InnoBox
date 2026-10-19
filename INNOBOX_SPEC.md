@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.16 — draft for review** (2026-10-14; v0.2 added the UI and CI/CD
+> Status: **v0.17 — draft for review** (2026-10-16; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -45,9 +45,11 @@
 > solutions (§10.4), lifting the matching §19 non-goals; v0.15 (2026-10-13) specified
 > agent access through an MCP server — OAuth sign-in, 15 read-and-contribute tools,
 > "via agent" attribution and four agent badges — as a new-feature gap (§25); v0.16
-(2026-10-14) added bug reports to the feedback survey — a sidebar bug button, a Bug
-category in the survey card, and their own source in the admin results (§13.10,
-§14.11)).
+> (2026-10-14) added bug reports to the feedback survey — a sidebar bug button, a Bug
+> category in the survey card, and their own source in the admin results (§13.10,
+> §14.11); v0.17 (2026-10-16) moved both admin charts to Apache ECharts and added
+> weekly and monthly active-user lines, sampled once a day, to the Currently online
+> chart (§14.5, §14.11), and ruled out proprietary dependency licences (§21.1)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -110,7 +112,7 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   delivery (§12.4). **Singleton, leader-locked** via Postgres advisory lock. Its
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
-  (presence rollup §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
+  (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
   upload sessions §11). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
@@ -150,7 +152,11 @@ Cross-cutting requirements:
   host, role, or other connection detail; the detail goes to the structured log.
 - **Timestamps: store UTC (`timestamptz`), serialize UTC ISO, convert in the browser**
   via a shared formatter. Display style (EU dd/mm/yyyy 24h vs US mm/dd/yyyy AM/PM) is
-  a platform setting (§14.3).
+  a platform setting (§14.3). **Bare UTC calendar days** (`date` columns — §14.5,
+  §14.11) are the exception: they render in that EU/US order through the shared
+  calendar-day formatter (`formatCalendarDay`), never through a time zone, which would
+  shift them back a day west of UTC. (Release dates, §13.9, go further and show
+  `YYYY-MM-DD` as is.)
 - `APP_VERSION` in `packages/shared/src/version.ts`, shown in the sidebar colophon;
   bumped on every behavior change; matching entry in the **What's new** changelog
   (`/whats-new`) in the same commit. Commit subjects `type(scope): summary (vX.Y.Z)`.
@@ -276,7 +282,8 @@ including theme-aware scrollbars and form controls. Pinned values:
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
-    Sign out — plus the §25.9 **AI agents** item above What's new while agent access is
+    Sign out / **Sign out everywhere** (§3; the last item, below Sign out) — plus the
+    §25.9 **AI agents** item above What's new while agent access is
     on or the user still holds a connection, plus the §13.10 **Take the survey** as the first item while a survey
     offer is open, and **Give feedback** above Sign out when an on-demand survey can
     start) in the sidebar foot, and the topbar search + notification bell +
@@ -513,6 +520,25 @@ The delivery pipeline, pinned:
     provider write answers `ai_key_missing`. Deliberately not the e-mail or webhook key:
     the three rotate independently. Compose passes `${AI_TOKEN_ENC_KEY:-}` to both
     services.
+  - **Key validation (added in v1.16).** Each of `EMAIL_TOKEN_ENC_KEY`,
+    `WEBHOOK_ENC_KEY`, `AI_TOKEN_ENC_KEY` and `PUBLIC_INTAKE_KEY` that is set must be
+    **strictly** base64 (the standard alphabet with correct padding — a value with stray
+    characters is refused, not silently decoded to fewer bytes) and decode to exactly
+    **32 bytes**, and the set values must be **pairwise distinct** — the four rotate
+    independently and a shared key defeats that. A violation is a **startup error in
+    a production build** (the process exits, naming the variable but never its value —
+    the same fail-loud check as `INNOBOX_DEV_AUTH`); outside production it is a `warn`
+    line and the feature behind that key stays off, as for an unset key.
+  - **`INNOBOX_BOOTSTRAP_ADMIN_GROUP` is a standing grant.** While set, its members
+    are platform admins regardless of `role_mappings` (`ENTRA_AUTH_SPEC.md` §3). So
+    that it is not forgotten after first run, the Administration page (§14.2) shows a
+    platform-admin-only notice — *"Bootstrap admin group is still configured; remove
+    `INNOBOX_BOOTSTRAP_ADMIN_GROUP` once a role mapping grants platform admin."* —
+    whenever the variable is set **and** at least one `platform_admin` role mapping
+    exists. `GET /api/admin/settings` gains `bootstrapAdminGroupActive: boolean` for it.
+  - **Image pins.** The bundled `clamav` service runs a pinned release tag (never
+    `latest`), so a redeploy cannot silently pull a different scanner; signatures still
+    update at runtime through freshclam. Bumping the tag is a deliberate, reviewed edit.
   - **`AI_ALLOWED_PRIVATE_HOSTS`** (web **and** worker; added in v1.1) — a
     comma-separated list of exact host names (or IP literals) the §22 AI provider may use
     even though they resolve to private or internal addresses (§22.2). Empty by default
@@ -654,7 +680,13 @@ these rules close the generic web-platform paths by which it could.
   Auth.js routes under `/api/auth/*`, which carry their own CSRF token, and the public
   CSP report sink `/api/csp-report` — exact path — which changes no application state)
   must carry an `Origin` header equal to the origin of `PUBLIC_BASE_URL`; a missing or
-  different `Origin` is rejected with **403** before the route runs. Endpoints that take
+  different `Origin` is rejected with **403** before the route runs. **The check runs
+  twice, independently:** once in the edge middleware (before any handler) and again
+  inside the §14.7 system-log wrapper that every route handler is mounted through, with
+  the same rule, exemptions and 403 body. The second check is defence in depth: a
+  framework bug that let a request skip the middleware (the 2025 middleware-bypass
+  class) would still find CSRF enforced per route, exactly as authentication already is
+  (`getSessionUser()` runs in the handler, not only at the edge). Endpoints that take
   a JSON body additionally require `Content-Type: application/json` (**415** otherwise),
   so a plain HTML form cannot forge one. Safe methods (`GET`/`HEAD`) never change state.
   The JSON `Content-Type` rule likewise does not apply to the report sink, which takes
@@ -663,6 +695,13 @@ these rules close the generic web-platform paths by which it could.
   `/mcp`, `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt — they are
   called by programs, carry no cookie and never read a session (§25.3). The consent
   page alone widens `form-action` to the client redirect shapes (§25.3).
+- **Substring filters are literal.** Every free-text "contains" filter that reaches a
+  `LIKE`/`ILIKE` — the §13.1 gallery and §13.4 search *author name* filters, the §14.1
+  triage *author name* filter, the §7.3 directory search `GET /api/users?q=`, the §15
+  audit browser and §14.7 system-log searches — escapes `%`, `_` and `\` in the user's
+  text before wrapping it in `%…%`, so the characters match themselves. A query of `%`
+  or `_` therefore matches nothing rather than everything: the directory cannot be
+  paged through alphabetically with a wildcard, and a filter means what it says.
 - **Request body limits** — enforced **before** a body is read into memory (from
   `Content-Length`, and by a running byte count when it is absent), answering **413**:
   - JSON bodies: **1 MB**.
@@ -692,8 +731,11 @@ these rules close the generic web-platform paths by which it could.
     declared size instead) — **60 per hour**;
   - search, autocomplete — the topbar search **and** the user-directory search behind
     every assignee/successor picker (`GET /api/users?q=`) — and the §6.1 similarity
-    check — **120 per minute** (the one limited read: each is a query a script could
+    check — **120 per minute** (a limited read: each is a query a script could
     hammer, and the directory search could otherwise enumerate every user);
+  - downloading an attachment through the §11 gateway — **120 per minute** (the
+    `download` bucket; the other limited read: every denial is an audit row, and the
+    limit keeps a loop over made-up ids from becoming an audit flood);
   - starting an on-demand survey or submitting a survey response (§13.10) — **10 per
     minute** (the `survey` bucket; its 429 warning omits the user id);
   - submitting a bug report (§13.10) — **3 per minute and 20 per day** (the `bug_report`
@@ -774,6 +816,23 @@ Entra runbook); on conflict this document wins.
   cards, the §13.1 view choice) is untouched.
   Sessions: rolling 7-day cookie; the user's `active` flag and roles are resolved
   from the DB on every request — the session token never carries roles.
+- **Sign out everywhere (added in v1.16).** Plain sign-out is per device: a session
+  cookie on another browser stays valid until its 7-day cap. The account menu's
+  **Sign out everywhere** item (§2.2) — a confirm dialog, then
+  `POST /api/me/sign-out-everywhere` — stamps `users.sessions_valid_from = now()` and
+  then signs this browser out exactly as above. `getSessionUser()` compares the
+  session token's **sign-in time** — an `issuedAt` claim the `jwt` callback stamps once
+  when the token is first minted at sign-in (not Auth.js's own `iat`, which a rolling
+  re-issue resets to "now"; the custom claim survives re-issue because the payload is
+  carried over; a token minted before this version has no claim and counts as epoch 0)
+  — with that column and treats a token signed in **before** it as no session: an API
+  call answers 401 and a page request
+  redirects to Home, so every other device is signed out at its next request. Audited
+  `user.signed_out_everywhere` (actor = target). **GDPR erasure (below) and SCIM
+  deactivation (`ENTRA_AUTH_SPEC.md` §5) stamp the same column**, which closes the
+  window between the `active` flip and the next request without changing either
+  flow's semantics. The column is never shown and never used for anything else;
+  a never-stamped row (`null`) accepts every token, as today.
 - **Sign-in relink (SCIM-provisioned rows).** The identity key stays the Entra
   `oid` (`users.external_id`); the UPN is never an identity key. It is used for
   exactly one repair, at sign-in, when **no `users` row has `external_id = oid`**:
@@ -854,7 +913,15 @@ Entra runbook); on conflict this document wins.
 - **GDPR erasure:** "Delete user info" scrubs the `users` row and personal data and
   de-identifies the user's comments/challenges/solutions to "Deleted User";
   `audit_log` is deliberately exempt (invariant 5) and retains actor identity for
-  provenance. **The erasure also clears the cached photo bytes + etag (§3.1)** —
+  provenance. **Two refusals come first (added in v1.16):** the acting platform admin
+  cannot erase **their own** account (**400** `cannot_erase_self` — an erasure is a
+  deliberate act on someone else, and self-erasure would end the session mid-request
+  with an irreversible result), and an erasure that would leave **no active,
+  not-erased platform admin** resolved from `role_mappings` or the bootstrap group is
+  refused (**409** `last_platform_admin`): the target is a platform admin and no other
+  active platform admin remains. Both are checked inside the erasure transaction, before
+  anything changes, and both show in the dialog as a plain message.
+  **The erasure also clears the cached photo bytes + etag (§3.1)** —
   the "Deleted User" placeholder renders the neutral bubble — **and the whole
   directory profile (department, job title, office location), which is personal data
   and is scrubbed exactly like the photo.** It **also erases all presence data**
@@ -961,7 +1028,11 @@ shown (§13.6).
   serves a photo for content whose author is masked (§9 — the client never learns
   an anonymous author's id in the first place, invariant 3). The response's
   `Content-Type` is the stored image's real type (JPEG or PNG, sniffed from the leading
-  bytes), and its `ETag` is the stored Graph etag as one well-formed entity tag: a value
+  bytes); like the §11 attachment gateway it carries `X-Content-Type-Options: nosniff`,
+  `Content-Security-Policy: sandbox; default-src 'none'` and
+  `Content-Disposition: inline; filename="photo"`, so bytes that are not a real image
+  can never execute in the app's origin whatever the sniff concluded. Its `ETag` is the
+  stored Graph etag as one well-formed entity tag: a value
   that is already quoted — strong, or weak with a `W/` prefix — is sent unchanged, and
   only an unquoted value is wrapped in quotes. `If-None-Match` is compared against that
   same form.
@@ -1243,9 +1314,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
 - **`user_activity_days`** — (user_id, day) unique; the transient per-person day set
   that makes "distinct users per day" computable (§14.5). **Deleted by the worker once
   older than 3 days** — long-lived presence history is aggregate-only.
-- **`presence_daily`** — (day) unique, active_users int; the rolled-up daily
-  distinct-active-user count behind the §14.5 chart. Carries **no user ids** and is
-  retained indefinitely.
+- **`presence_daily`** — (day) unique, active_users int, wau int null, mau int null;
+  the rolled-up daily distinct-active-user count behind the §14.5 chart, plus the
+  rolling 7- and 30-day counts the daily snapshot writes once per closed day (§14.5).
+  Carries **no user ids** and is retained indefinitely.
 - **`platform_settings`** (called `settings` elsewhere in this document) — key/value
   platform configuration (§14.3); also holds the
   `system_banner` singleton (§14.6), the `system_log_notify_at` watermark (§14.7), the
@@ -2229,7 +2301,13 @@ trashed item is gone for everyone else from the moment it is trashed.
   re-checks parent visibility, and streams the object **only when `scan_status=clean`
   and `removed_at is null`** (Content-Disposition: attachment). Any denial (not
   visible / not clean / removed) returns the same 404 and is audited
-  `attachment.download_denied`. No presigned/direct MinIO URLs are ever emitted.
+  `attachment.download_denied`. A **malformed id** (not a well-formed UUID) is the
+  same 404 but is **not audited**: there is no attachment to target, and an audit row
+  would otherwise carry caller-chosen text into the append-only, hash-chained log
+  (§15). Such a request is still an ordinary 404 to the system log (§14.7). The GET
+  draws on its own **`download`** rate-limit bucket — **120 per minute** per user
+  (§2.4) — so a loop over the gateway can neither flood the audit log with denials
+  nor contend its chain lock. No presigned/direct MinIO URLs are ever emitted.
   The bytes are **streamed** from MinIO to the client, never buffered whole in memory.
   A served attachment always carries `X-Content-Type-Options: nosniff` and
   `Content-Security-Policy: sandbox; default-src 'none'`, on top of the §2.4 baseline.
@@ -2374,7 +2452,26 @@ right, not only through an auto-follow.
 
 Rules: recipients are deduplicated per event; actors never notify themselves;
 recipients outside the item's visibility are dropped (invariant 2); anonymity-safe
-rendering (§9). Deep links point to the canonical routes under `PUBLIC_BASE_URL`:
+rendering (§9). **The inbox applies the same gate at read time (added in v1.16):** a
+row written while the recipient could see the item is **hidden** from the bell list and
+the unread count once they no longer can — the challenge was narrowed to `namespace` or
+`people` (§4.3) after the row was written, or the recipient left the namespace — and
+comes back if access returns, exactly as rows about the trash are kept but hidden
+(§10.4). The read-time predicate is the §4.3 SQL twin on the row's `challengeId` /
+`parentType` + `parentId` payload keys (the keys every item-bound row carries); rows
+that name no item (achievements, scan failures) are unaffected. The §25.6 agent view
+already filters this way; the web inbox now matches it. **A deactivated user (`active = false`, the §3 leaver) or an erased
+one (`scrubbed_at` set) is never a recipient**, on any channel: the dispatch drops
+them at insert time, beside the visibility drop, so neither the inbox row nor the
+outbox row is written; the role-resolving recipient helpers (namespace admins,
+committee, platform admins) return active, not-erased users only; and the e-mail
+sweep re-checks `active` at send time — immediate and digest alike — and discards a
+row whose user has been deactivated since it was written, exactly as it discards an
+opt-out. Deactivation is where e-mail stops too, not only sign-in
+(`ENTRA_AUTH_SPEC.md` §2): a disabled mailbox is routinely delegated or converted to
+a shared one during offboarding, and nothing about a restricted challenge may reach
+it. Reactivation restores delivery from that moment; the events of the inactive
+period are not backfilled. Deep links point to the canonical routes under `PUBLIC_BASE_URL`:
 `<PUBLIC_BASE_URL>/challenges/:number` for a challenge, and
 `<PUBLIC_BASE_URL>/challenges/:number#SOL-<n>` for **anything about a solution** —
 its status, a comment on it, its proposal (there is no standalone solution page,
@@ -2414,8 +2511,9 @@ a day or a week.
   - the recipient has **already read** the matching inbox row. They have seen it, so
     the digest is not a second copy.
   
-  When nothing is left, no e-mail is sent. When the e-mail switch (§13.5) is off, held
-  rows are discarded at the slot, as an immediate row would be.
+  When nothing is left, no e-mail is sent. When the e-mail switch (§13.5) is off, or
+  the recipient has been deactivated or erased (above), held rows are discarded at the
+  slot, as an immediate row would be.
 - **Content.** Subject: *"Your daily InnoBox digest — N updates"* (or *weekly*). The
   body groups the updates **by item**, most recently active first. Each item gets a
   heading with its number and title, linked, and one line per kind of update:
@@ -4321,9 +4419,10 @@ the export; every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
 (titles, names, impact areas), and spreadsheet applications run a cell that begins with
-a formula trigger. So any cell whose value begins with `=`, `+`, `-`, `@`, a tab, or a
-carriage return is prefixed with a single quote (`'`) **before** the usual RFC 4180
-quoting. The rule applies to **every** cell, header row included, with no per-column
+a formula trigger. So any cell whose value begins with `=`, `+`, `-`, `@`, `|` (the
+legacy DDE trigger), a tab, or a carriage return — or with whitespace followed by any of
+those (some applications trim first, then evaluate) — is prefixed with a single quote
+(`'`) **before** the usual RFC 4180 quoting. The rule applies to **every** cell, header row included, with no per-column
 exceptions, so a new column cannot be forgotten. The visible cost is that such a value
 shows a leading `'` in tools that don't hide it (e.g. a title `- Reduce costs` exports
 as `'- Reduce costs`); the export is for people to read in a spreadsheet, not for
@@ -4481,22 +4580,58 @@ non-admin surface for presence anywhere in the app (§13.8).
 
 Four blocks, top to bottom:
 
-1. **Active-users chart.** A line chart of **daily distinct active users** with a
-   **7d / 30d / 90d / All** range toggle, read from `presence_daily`. Hand-rolled inline
-   SVG on the brand tokens — **no charting dependency**. Days are **UTC** buckets
-   (the store-UTC-convert-at-display rule, §2): a point labelled `07-13` is a UTC day,
-   not the viewer's local day, and
-   the axis is labelled to say so.
+1. **Active-users chart.** Three lines over **UTC days**, read from `presence_daily`:
+   **Daily active** (distinct users that UTC day), **Weekly active (rolling 7 days)** and
+   **Monthly active (rolling 30 days)** — the last two from the daily snapshot below.
+   Drawn with **Apache ECharts** through the shared chart wrapper (below), the same
+   wrapper the survey satisfaction trend uses (§14.11). Days are **UTC** buckets (the
+   store-UTC-convert-at-display rule, §2): the point for 13 July is a UTC day, not the
+   viewer's local day, and the axis and tooltip say "(UTC)".
+   - **Series.** Daily `--accent` solid, Weekly `--anchor` dashed, Monthly `--muted`
+     dotted — a dash pattern as well as a colour, so no line is told apart by colour
+     alone. A clickable legend hides and shows a series.
+   - **Date axis.** A real time axis whose ticks adapt to the visible span. Tick labels
+     are the short day-month in the platform's EU/US order (`13/07` / `07/13`), formatted
+     from the bare `YYYY-MM-DD` by the shared calendar-day formatter — **never through a
+     time zone**, which would shift every label west of UTC back a day (the same rule as
+     the §13.9 release dates and the §14.11 survey dates).
+   - **Tooltip.** Hover (tap on touch) anywhere over a day shows its three values:
+     *"13/07/2026 (UTC) · Daily active 42 · Weekly active 118 · Monthly active 260"*. A
+     missing value reads "—".
+   - **Zoom & pan.** The series is fetched **once, in full** (`range=all` — a few hundred
+     rows a year). The **7d / 30d / 90d / All** buttons are **presets that move the zoom
+     window** to the trailing 7, 30 or 90 days or the whole series; default **30d**, not
+     persisted. A **slider** under the plot selects any window. On a fine pointer the
+     plot also **pans by drag** and **zooms with the wheel only while Ctrl is held** — a
+     bare wheel scrolls the page, never the chart. On a coarse (touch) pointer, drag on
+     the plot does not pan, so a swipe over the chart still scrolls the page; the slider
+     is the zoom control there. Zooming by hand **un-presses** the preset (no button is
+     pressed until one is clicked again). Presets never refetch; **Refresh** refetches the
+     series and keeps the current window.
+   - **Gaps are breaks, quiet days are zeros.** The API returns **one point per UTC day,
+     contiguous** from the first recorded day to today. A day with no activity is a **0**
+     on the daily line — the rollup repairs any day still inside the 3-day detail window,
+     so a missing `presence_daily` row is a day nobody was active, and a quiet weekend dips
+     to zero instead of being skipped. A day with **no weekly/monthly value** (before the
+     snapshot shipped, or a day the worker never swept, below) is a **break in that
+     line** — never a zero, never interpolated across. A sample with a break on both
+     sides is drawn as a dot, so a recorded value never vanishes between its gaps.
+   - **Today** is the day in progress: its daily value is computed live from
+     `user_activity_days`, and its weekly/monthly values are the live tile values, so the
+     line ends exactly where the tiles stand.
    - **Cold start is explicit.** There is **no backfill** — the series begins the day
      tracking ships and grows one point per day. Under **7 days** of history the chart
      is replaced by a muted **"Not enough history yet — the chart starts filling from
-     the day presence tracking shipped."** The range toggles stay visible and simply
-     resolve to the same short series (`90d` and `All` are identical for the first three
+     the day presence tracking shipped."** The preset buttons stay visible and simply
+     cover the whole short series (`90d` and `All` are identical for the first three
      months); they are not hidden, so the control never changes shape under the admin.
+     The weekly and monthly lines start later still — the day the snapshot ships — and
+     until then the legend lists them and the plot draws the daily line alone.
 2. **DAU / WAU / MAU tiles** — distinct users active in the **last 24 h / 7 d / 30 d**,
    as rolling windows labelled with those windows. Computed **directly from
    `users.last_seen_at`** (`last_seen_at > now() - interval`), needing no history table:
-   a user last active three days ago counts in WAU and MAU but not DAU.
+   a user last active three days ago counts in WAU and MAU but not DAU. The chart's
+   weekly and monthly lines are this same formula, sampled once a day (below).
 3. **Window selector** — **5m / 1h / 8h / 24h / 30d** for the list below. **Default 5m**,
    and the chosen window is **persisted to localStorage** per browser, like the console's
    card collapse state. Copy states the window in words ("Users active within the last 5
@@ -4558,6 +4693,92 @@ Each row shows where that user last was: a **route category** (`Challenges`, `Tr
   can see it. Covert monitoring is not on the table; the wider DPIA / works-council
   position is an organizational decision outside this spec.
 
+#### Weekly / monthly history (the daily snapshot)
+
+A rolling 7- or 30-day distinct count cannot be rebuilt from `presence_daily`: distinct
+users do not add up across days, and the per-person detail that could answer it is
+purged after 3 days. Keeping 30 days of per-person detail instead would grow the
+personal history tenfold, so the weekly and monthly lines are **sampled** rather than
+reconstructed:
+
+- **Two nullable counts on `presence_daily`** — `wau` and `mau` — beside `active_users`.
+- **Written by the hourly housekeeping sweep, once per day.** The **first sweep of each
+  UTC day**, after the daily rollup, writes the **just-closed day's** `wau` / `mau`
+  with the tiles' own formula and person filter — `last_seen_at` within the trailing
+  7 / 30 days; scrubbed users and the e-mail service mailbox excluded, deactivated users
+  counted, as the tiles count them. If that day has no row yet (nobody was active), the
+  snapshot inserts one with `active_users = 0`; it never touches `active_users`
+  otherwise.
+- **Why it is exact.** `last_seen_at` only moves forward, so "last seen within the
+  trailing 7 days", measured at any instant, is exactly the number of distinct people
+  active in the 7 days ending at that instant. The sampled window ends at the sweep —
+  within the hour after midnight UTC, or later if the worker was down — rather than at
+  midnight itself: a true rolling window, shifted by that lag, never a double count.
+- **Write-once.** A value, once written, is never overwritten: a later sweep would
+  measure a later window and silently move the point. If the worker does not sweep at
+  all during the following UTC day, that day's `wau` / `mau` stay null and draw as a
+  break. They **cannot be backfilled**, because nothing retains who was active then —
+  which is the point.
+- **Still non-personal.** Counts only, no user ids; `user_activity_days` retention stays
+  at 3 days, the in-panel disclosure is unchanged, and the series stays unaudited.
+  Leader-only and pure-DB like the rest of the housekeeping sweep, so it runs without
+  Entra credentials.
+
+#### The chart wrapper (shared)
+
+Both admin charts — this one and the survey satisfaction trend (§14.11) — render through
+one client component, `components/EChart.tsx`, on **Apache ECharts** (Apache-2.0,
+§21.1). Highcharts was considered and rejected: it is not open source, and every
+organization self-hosting InnoBox would need its own commercial licence.
+
+- **Loaded lazily, tree-shaken.** The wrapper imports only the ECharts modules the two
+  charts use (line and bar series; grid, tooltip, legend, slider and inside data-zoom,
+  and aria components; the canvas renderer) from `echarts/core`, and loads them on first
+  mount — only the Administration console downloads them. Nothing else in the app
+  imports ECharts.
+- **Canvas renderer.** Each chart is one `<canvas>` inside a container carrying the
+  chart's class (`.presence-chart`) and a `data-testid`.
+- **Brand tokens resolved, not referenced.** ECharts derives hover and emphasis shades
+  from the colour value, so it cannot take `var(--accent)`. The wrapper reads the §2.2
+  tokens it needs (colours, `--font-body`) with `getComputedStyle` and passes the
+  resolved values to the chart's option builder. It **re-applies** them whenever
+  `<html data-theme>` changes — the theme toggle flips it at runtime — and resizes with
+  its container. Disposed on unmount.
+- **UTC everywhere.** The wrapper always sets ECharts' `useUTC: true`; no chart can
+  forget it. Date labels come from the shared calendar-day formatter
+  (`formatCalendarDay`, moved out of the survey module into its own shared module now
+  that two charts use it), which gains the short day-month form the axis ticks need.
+- **Motion.** No animation under `prefers-reduced-motion: reduce`.
+- **Accessibility.** ECharts' `aria` is on, and the container's label is a **one-sentence
+  summary each chart's option builder writes** — what it shows, its date span and its
+  latest values (*"Daily, weekly and monthly active users per UTC day, 75 days from
+  01/08/2026 to 15/10/2026. Latest day: 42 daily, 118 weekly and 260 monthly active
+  users."*). ECharts' own generated description is not used: it reads the raw axis values
+  aloud, epoch timestamps included. There is no hidden data table.
+- **Tooltips carry no user text.** Tooltip content is numbers and formatted dates only;
+  the formatter escapes it anyway, because ECharts renders it as HTML.
+- **CSP unchanged (§2.4).** Canvas drawing needs no `eval`, no inline script and no new
+  source; the tooltip is styled through the CSSOM, which the policy does not govern.
+- **Option builders are pure.** Each chart's option is a pure function of its points,
+  the resolved tokens and the formatters, so it is unit-tested without a DOM.
+- **No other charting dependency.** The unused `recharts` dependency is removed.
+
+#### Tests
+
+- **Unit:** the presence option builder (series styles; null `wau` / `mau` stay null so
+  the line breaks; preset → zoom-window maths; Ctrl-only wheel zoom; no drag-pan on a
+  coarse pointer; the preset un-presses after a manual zoom); the survey option builder
+  (withheld averages break the line; markers under 3 points and on isolated points; no
+  data-zoom); the short calendar-day form in both EU and US order.
+- **Integration (DB):** the snapshot writes the just-closed day once and never again;
+  inserts a zero row for a day with no activity without disturbing a later rollup;
+  excludes scrubbed users and the service mailbox; runs after the rollup in the same
+  sweep. The history endpoint returns contiguous days with `0` daily counts on quiet
+  days, `null` weekly/monthly values before the snapshot, and today's live values.
+- **e2e** (`e2e/admin-presence.spec.ts`): the chart container renders a canvas — or the
+  "not enough history" note on a young install — and the preset buttons switch their
+  pressed state.
+
 ### §14.6 System banner (platform admin)
 
 A single, platform-wide announcement a platform admin posts, shown to **every
@@ -4570,8 +4791,9 @@ structural rather than a filter.
   the row's `updated_by`/`updated_at` record who set it and when. `message` is plain
   UTF-8, **≤ 120 characters**, escaped on render, no markup. `tone` ∈ `info | warning`
   (accent pill vs the warn token). `url` is **optional** — `https:` only, or a path
-  relative to `PUBLIC_BASE_URL` — validated server-side and rendered as a trailing
-  **"Learn more →"** link.
+  relative to `PUBLIC_BASE_URL` (one that starts with `/` followed by neither `/` nor
+  `\`: browsers resolve `/\host` as `//host`, a different origin) — validated
+  server-side and rendered as a trailing **"Learn more →"** link.
 - **Set / replace** — `PUT /api/admin/system-banner`, platform admin only: an
   unconditional upsert. Text, tone, link and duration replace whatever is active and
   the countdown **always restarts from the save** (`expiresAt = now() + duration`),
@@ -4668,13 +4890,15 @@ console directly under Audit, never shown to namespace admins, and the API answe
     not match `SCIM_BEARER_TOKEN`), and `scim_forbidden` for a 403. Rows written
     before this change keep `scim_unauthorized` and read as *reason unknown*.
   - **Token fingerprints in `message`.** A fingerprint is the **first 8 lowercase hex
-    characters of the SHA-256** of the token's UTF-8 bytes, exactly as compared. Every
-    401 row names the **configured** token's fingerprint (computed once at worker
-    start); a `scim_token_mismatch` row also names the **sent** token's. An operator
-    checks a copy of the token locally with
-    `printf %s "<token>" | sha256sum | cut -c1-8`. Thirty-two bits of a hash of a
-    ≥ 32-character random secret gives no practical help in guessing it, and the
-    fingerprint is only ever shown to platform admins.
+    characters of the SHA-256** of the token's UTF-8 bytes, exactly as compared. A
+    `scim_token_mismatch` row names the **sent** token's fingerprint (and the
+    whitespace flag below); the **configured** token's fingerprint is **not** written
+    to the system log (changed in v1.16 — a stored, exportable 32-bit hint about the
+    live secret bought little and belongs with the operator, not in a table). It is
+    instead printed **once at worker start** on stdout (`scim bearer token loaded,
+    fingerprint <8hex>`), where the operator who holds `deploy/.env` can read it, and
+    the diagnosis is the same: compare the row's *sent* fingerprint with
+    `printf %s "<token>" | sha256sum | cut -c1-8` of the value in Entra's Secret Token.
   - **Whitespace flag in `message`.** HTTP strips whitespace around a header value
     before the worker sees it, so a stray space or newline pasted at the *edge* of
     Entra's Secret Token never arrives. What can be seen is a **sent** token with
@@ -4686,10 +4910,10 @@ console directly under Audit, never shown to namespace admins, and the API answe
     Entra's provisioning service can be told apart from anyone else probing the
     endpoint. Stored in full (no /64 truncation). Web-tier rows and every other worker
     row leave it null.
-  - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4,
-    configured e5f6a7b8)"*; *"SCIM request rejected: token mismatch (sent 0c1d2e3f,
-    configured e5f6a7b8; sent token contains whitespace)"*; *"SCIM request rejected:
-    no token sent (configured e5f6a7b8)"*.
+  - Example messages: *"SCIM request rejected: token mismatch (sent a1b2c3d4)"*;
+    *"SCIM request rejected: token mismatch (sent 0c1d2e3f; sent token contains
+    whitespace)"*; *"SCIM request rejected: no token sent"*; *"SCIM request rejected:
+    not a bearer token"*.
   - Nothing the caller controls reaches the row as free text: the reason is a fixed
     code, fingerprints are fixed-length hex, and the IP is the proxy-validated
     address. The row count is unchanged (one row per 401/403, as before) and stays
@@ -4858,10 +5082,15 @@ across namespaces.
      report never bumps any other counter, so the prompted and self-initiated funnels
      and their response rates stay about surveys. A closed survey later submitted counts
      in both *Closed* and *Submitted*.
-  2. **Satisfaction trend** — the average of `general.overall` per bucket with the
-     response count as bars, **hand-rolled inline SVG on the brand tokens, no charting
-     dependency** (as §14.5); day / week / month buckets by span; fewer than 3 points get
-     visible markers. Bug reports carry no stars and never count in it.
+  2. **Satisfaction trend** — the average of `general.overall` per bucket as a line on a
+     1–5★ axis, with the response count as bars on a second axis, drawn through the
+     shared ECharts wrapper (§14.5); day / week / month buckets by span; fewer than 3
+     points get visible markers, as does any point with no drawn neighbour. A bucket
+     whose average is withheld (fewer than 5 responses, above) is a **break in the line**, never
+     interpolated. Hover shows the bucket's date (verbatim, the platform's date order),
+     its response count and, unless withheld, its average. **No zoom** — the buckets
+     already adapt to the range, and zooming would only stretch a week or month bucket.
+     Bug reports carry no stars and never count in it.
   3. **Question cards** — one per question with answers in range, in catalog order
      (general, rotating, then the feature questions — per the selected feature, or
      pooled under *All features*): the question text, the **average** (one decimal, ★),
@@ -4906,7 +5135,8 @@ across namespaces.
   - `GET|PATCH /api/admin/settings` carries `surveyEnabled` and `bugReportsEnabled`.
 - **Tests.** Unit: the size-5 withholding for cards, buckets and the feed, and its
   bug-report exemption; the current-day exclusion; the Source filter (the bug-specific
-  cases are listed under §13.10 *Bug reports*). Integration: range, filters, withholding,
+  cases are listed under §13.10 *Bug reports*); the trend's option builder (§14.5
+  *Tests*). Integration: range, filters, withholding,
   403 for a namespace admin, delete cascade and an audit row that carries no text, the
   switch's audit row. e2e: an admin sees the funnel and, with the seed topped past 5, the
   question cards and the comment; the switch is usable while the card is collapsed.
@@ -5039,7 +5269,11 @@ detectable:
   - `created_at` — UTC, `YYYY-MM-DDTHH:MM:SS.ffffffZ`, always six fractional digits
     (`to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`).
   - `actor_user_id` — the canonical lowercase hyphenated UUID text.
-  - `action`, `target_type`, `target_id` — the stored text verbatim.
+  - `action`, `target_type`, `target_id` — the stored text verbatim. The writer
+    **caps `target_id` at 256 characters** (a UUID is 36; every targeted id is far
+    shorter), truncating a longer value before the insert, so no caller can plant an
+    unbounded string in a chained row. The rule binds the writer, not the chain: a row
+    is hashed as stored.
   - `before`, `after` — PostgreSQL's own `jsonb` text output (`before::text`). It is
     deterministic for a stored value: keys are de-duplicated and ordered, and the
     separators are fixed. A verifier obtains it by selecting `::text`, **never** by
@@ -5209,7 +5443,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   pins, §13.2)
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
-  and `admin/presence/history?range=7d|30d|90d|all` → `{ points[] }`** — platform admin
+  and `admin/presence/history?range=7d|30d|90d|all` → `{ range, enoughHistory,
+  points[{ day, activeUsers, wau, mau }] }`** (one point per UTC day, contiguous;
+  `wau`/`mau` null where no snapshot exists; the console requests `all`) — platform admin
   only (**403** for namespace admins), anonymity-masked locations, §14.5;
   **`admin/audit` with `q`/`category`/`from`/`to` + `admin/audit/export`** (§15);
   **`admin/system-banner` `PUT`/`DELETE`** (§14.6); **`admin/system-log` +
@@ -5402,7 +5638,10 @@ removed, or altered by §21.
   attribution clause.
 - **`LICENSE`** at the repository root: the unmodified Apache-2.0 text including the
   appendix, naming the organization as copyright holder for the current year.
-- **`NOTICE`** at the repository root: the copyright line, per Apache-2.0 §4(d).
+- **`NOTICE`** at the repository root: the copyright line, per Apache-2.0 §4(d),
+  followed by a **Third-party notices** section carrying, verbatim, the NOTICE text of
+  any bundled dependency whose licence requires it to travel (today: Apache ECharts,
+  below).
 - **Manifests.** All four `package.json` files keep `"private": true` — it is the
   guard against an accidental `npm publish`, and nothing here is intended for the
   registry — and gain `"license": "Apache-2.0"`. Their `"version"` fields stay at
@@ -5412,9 +5651,12 @@ removed, or altered by §21.
   states this so the mismatch does not read as an oversight.
 - **Dependency licences.** Before publication, `pnpm licenses list --prod` is
   reviewed across the workspace and the result recorded in the publication checklist
-  (§21.9). The production tree must contain no copyleft licence. `NOTICE` carries
-  nothing beyond the project's own copyright unless that review surfaces a dependency
-  whose licence requires attribution. Fonts are **not** an issue: Montserrat, Open
+  (§21.10). The production tree must contain no copyleft licence, and **no proprietary
+  one either** — nothing a deployer would need a paid, evaluation-only or
+  non-commercial-only licence to run, since every self-hosting organization would have to
+  buy its own. (Highcharts was rejected for the admin charts on exactly this ground,
+  §14.5.) `NOTICE` carries nothing beyond the project's own copyright unless that review
+  surfaces a dependency whose licence requires attribution. Fonts are **not** an issue: Montserrat, Open
   Sans, and JetBrains Mono arrive as `@fontsource-variable/*` npm dependencies, so no
   font binaries are vendored into the repository and their licences travel with the
   packages.
@@ -5427,6 +5669,14 @@ removed, or altered by §21.
   `images.unoptimized` so Next never looks for it. Nothing is lost — InnoBox renders no
   `next/image`. Re-run the review after any upgrade of `next`, since a new optional
   dependency would arrive the same way.
+- **Review outcome (admin charts).** Apache ECharts (`echarts`, Apache-2.0) and its
+  renderer `zrender` (BSD-3-Clause) join the production tree for the two admin charts
+  (§14.5); both licences are already on the list above, and the unused `recharts` (MIT)
+  leaves it. ECharts ships a NOTICE file, and Apache-2.0 §4(d) obliges anyone
+  redistributing it to pass that on, so its text is copied into `NOTICE` under
+  *Third-party notices*. The **web image** redistributes the bundled code, so its
+  Dockerfile now copies `LICENSE` and `NOTICE` into the image beside the server. Re-check
+  the ECharts NOTICE text on every ECharts upgrade.
 
 ### §21.2 Brand, trademark & rebranding
 
@@ -6884,18 +7134,41 @@ expired rows (§25.13).
   form Claude Code and the MCP SDKs register) matches **on any port**, with the same
   host, path and query, as MCP desktop and CLI clients require; every other URI must be
   `https` or a custom app scheme. No wildcards. `client_name` is required, 1–80 printable characters.
+  `client_uri` and `logo_uri`, when sent, must be well-formed **`https:` URLs** (≤ 2048
+  characters, no credentials); anything else is `invalid_client_metadata`. They are still
+  never fetched or rendered — the rule exists so that a future admin view cannot be
+  handed a `javascript:` value.
 - **A parameter supplied twice is rejected** on `/oauth/authorize`, before
   `client_id` or `redirect_uri` is read, with the non-redirecting error page — a
   duplicated `redirect_uri` can never be resolved to the registered one.
-- **The consent page** (outside AppShell, §2.2 tokens) names the **client** and its
-  redirect host, the **signed-in person**, and what is granted, in plain words: *"Read
-  the challenges, solutions and comments you can see. Submit challenges, propose
-  solutions, edit and resubmit your own items, comment and follow — as you, marked
-  'via agent'. It cannot like, change a status, assign, triage or administer."* —
-  plus, while §25.5 hides restricted content, *"Namespace-restricted challenges are not
-  shared with agents."* It says the connection can be revoked on **AI agents**
-  (§25.9). **Approve** writes or refreshes the `oauth_grants` row; **Deny** redirects
-  with `access_denied`.
+- **The consent page** (outside AppShell, §2.2 tokens) names the **client**, **where
+  approval sends the person**, the **signed-in person**, and what is granted, in plain
+  words: *"Read the challenges, solutions and comments you can see. Submit challenges,
+  propose solutions, edit and resubmit your own items, comment and follow — as you,
+  marked 'via agent'. It cannot like, change a status, assign, triage or
+  administer."* — plus, while §25.5 hides restricted content, *"Namespace-restricted
+  challenges are not shared with agents."* It says the connection can be revoked on
+  **AI agents** (§25.9). **Approve** writes or refreshes the `oauth_grants` row;
+  **Deny** redirects with `access_denied`.
+  **Against consent phishing (added in v1.16)** — registration is open, so a
+  look-alike `client_name` costs an attacker nothing; the page therefore makes the
+  *destination* the thing the person reads, not the name:
+  - the heading is the destination, not the client: for a loopback redirect
+    *"Connect <client> on **this computer**?"*; for an `https` or custom-scheme redirect
+    *"Connect <client> at **<host>** (or *<scheme>://*)?"* with the host (or scheme)
+    rendered as the most prominent text on the page, and the sentence *"Approving
+    sends an access code to <host>. Only approve a connection you started from your own
+    AI tool."* beneath it;
+  - a client that **no person has ever approved** (no `oauth_grants` row, revoked or
+    not) **or that was registered less than 24 hours ago** carries an **"Unverified
+    application"** notice above the buttons — *"Nobody in your organization has
+    connected this application before"* / *"registered <n> minutes ago"* — in the warn
+    tone; a client both older and previously approved shows nothing extra;
+  - the **Approve** button is secondary-styled until the person ticks *"I started this
+    connection from my own AI tool"* (the checkbox is part of the form and the handler
+    refuses an approve without it — **400**); **Deny** needs nothing.
+  Platform admins already block a client (§25.10); nothing else is added — an
+  allow-list of names would only be matched by the next look-alike.
 - **The validated request travels through the database, not the form.** Rendering
   `/oauth/authorize` stores the validated request in `oauth_pending_authorizations`
   and the form carries only that row's id and the approve/deny choice. The consent
@@ -6920,12 +7193,23 @@ expired rows (§25.13).
   `user_id`, `client_id` and `grant_id` — never a role or a namespace.
 - **Tokens are opaque random strings, stored as SHA-256 hashes**, sent only in
   `Authorization: Bearer` — never in a URL.
-  - **Authorization code:** single use, 60 seconds.
-  - **Access token:** `mcp_access_token_ttl_minutes` (**5–1440, default 60**).
+  - **Authorization code:** single use, 60 seconds. **Presenting a code a second time
+    revokes the whole grant** (`code_reuse`, like refresh reuse below; OAuth 2.1
+    §4.1.2) and writes a system-log row (§25.11): the tokens the first exchange minted
+    die with it, so a code captured in transit cannot be raced for a lasting session.
+    (added in v1.16)
+  - **Access token:** `mcp_access_token_ttl_minutes` (**5–1440, default 60**). **A
+    refresh rotation ends the grant's earlier access tokens** (added in v1.16): the new
+    pair replaces the old one entirely, so a stolen access token lives only until the
+    legitimate client's next refresh instead of until its own expiry. MCP clients
+    switch to the new access token on rotation, so nothing in normal use is cut off.
   - **Refresh token:** rotates on every use. Presenting an already-rotated refresh
     token **revokes the whole grant** and writes a system-log row (§25.11). Idle
     lifetime `mcp_refresh_token_ttl_days` (**1–365, default 90**), sliding on each
-    rotation.
+    rotation. **Every refresh token row carries the `resource` it was minted for**
+    (added in v1.16; previously codes only), and a refresh that names a different
+    `resource` is `invalid_grant` — the RFC 8707 check holds on every grant type, not
+    only the code exchange.
 - **Failures.** `401` with `WWW-Authenticate: Bearer resource_metadata="<url>"`, so a
   client can discover how to sign in; the response never says why a token failed.
   `403` for an authenticated call the person's role does not allow. `503` while the
@@ -6993,7 +7277,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
-| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items. |
+| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
 | `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
 
@@ -7159,8 +7443,8 @@ A **platform-admin** card on `/admin/settings` — **AI agents (MCP)** (§14.3):
   — a partial unique index where `revoked_at is null`; consenting again refreshes it.
 - **`oauth_tokens`** — id, `grant_id` (FK, cascade), `kind` (`code | access |
   refresh`), `token_hash`, `expires_at`, `used_at`, `rotated_from_id` (nullable
-  self-FK, for reuse detection), `code_challenge`, `redirect_uri`, `resource` (the
-  last three for codes only), `created_at`.
+  self-FK, for reuse detection), `code_challenge`, `redirect_uri` (codes only),
+  `resource` (codes **and**, since v1.16, refresh tokens), `created_at`.
 - **`oauth_pending_authorizations`** — id (the opaque consent handle), `user_id`,
   `client_id`, `request` (jsonb — the validated `redirect_uri`, `code_challenge`,
   `state`, `resource`), `created_at`, `consumed_at`.
@@ -7187,7 +7471,7 @@ on/off, the person's connections) and `DELETE /api/me/agents/:grantId` (revoke);
 (`challenge.created`, `solution.created`, `challenge.edited`, `comment.posted`, …) and
 add `source: "mcp"` and `client: "<client name>"` to the payload, so the audit browser
 can find them. New rows: `mcp.grant_created`; `mcp.grant_revoked` with `reason:
-"user" | "deactivated" | "erased" | "refresh_reuse"`; `mcp.client_blocked`;
+"user" | "deactivated" | "erased" | "refresh_reuse" | "code_reuse"`; `mcp.client_blocked`;
 `mcp.client_unblocked`; and `settings.mcp_changed` (`after` carries the four settings).
 All `mcp.*` rows sit under the Admin chip. **Not audited:** reads, registrations, token
 issue and rotation (they are metrics), and follows (as on the web).
@@ -7197,7 +7481,13 @@ issue and rotation (they are metrics), and follows (as on the web).
   `https`, custom schemes, no wildcards); duplicate-parameter rejection; refresh
   rotation and reuse detection; TTL bounds; the restricted-content filter; the "via
   agent" masking on anonymous items; the four badges, including the replay on
-  self-reveal and the `agent_connected` ledger check.
+  self-reveal and the `agent_connected` ledger check; `client_uri`/`logo_uri` must be
+  `https`; the consent page's destination heading, loopback wording and unverified
+  notice (never approved / under 24 h) and the approve checkbox requirement.
+- *Integration (v1.16 additions):* a second exchange of a used code revokes the grant
+  and the first exchange's tokens stop working; a refresh rotation ends the grant's
+  earlier access tokens; a refresh with a different `resource` is `invalid_grant`; an
+  approve without the checkbox is 400.
 - *Integration:* register → authorize → consent → token → `/mcp` → refresh → revoke;
   the pending authorization is single-use, expires and is bound to its person; a
   session cookie on `/mcp` is ignored; every tool's RBAC and visibility, **including

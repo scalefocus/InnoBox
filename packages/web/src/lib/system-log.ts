@@ -4,11 +4,13 @@
 import { getServerSession } from "next-auth";
 import { isClientDisconnect, pathWithoutQuery, sanitizeSystemMessage, type PathEntity } from "@innobox/shared";
 import { authOptions } from "./authOptions";
+import { isRequestOriginAllowed } from "./csrf";
 import { pool } from "./db";
 import { recordSystemEvent } from "../app/api/admin/system-log/store";
 import { createSystemLogWrapper, type ActorSnapshot } from "./system-log-core";
 
 export {
+  CSRF_FORBIDDEN_MESSAGE,
   INTERNAL_ERROR_MESSAGE,
   createSystemLogWrapper,
   noteSystemEvent,
@@ -54,6 +56,9 @@ export const withSystemLog = createSystemLogWrapper({
   record: (event) => recordSystemEvent(pool, event),
   resolveActor: resolveActorFromSession,
   isAnonymousTarget: isAnonymousEntity,
+  // §2.4: the same Origin rule as the edge middleware, re-run per route with the environment read
+  // per call (as the middleware reads it).
+  originAllowed: (req) => isRequestOriginAllowed(req, process.env),
 });
 
 /**

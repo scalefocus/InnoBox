@@ -69,3 +69,50 @@ test(
     }
   },
 );
+
+test(
+  "notification sweep: a deactivated or erased recipient's row is discarded like an opt-out",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    // §12.1: `active` is re-read at send time, immediate path included (the digest job already
+    // did) — a leaver's row is marked sent with no attempt, exactly as an opt-out's is; an active
+    // recipient's row is attempted (and fails here: no transport configured).
+    const { Pool } = await import("pg");
+    const { randomUUID } = await import("node:crypto");
+    const { runNotificationSweep } = await import("./dispatch.js");
+
+    const pool = new Pool({ connectionString: url });
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const mkUser = async (label: string, extra: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name, email ${extra ? ", " + extra.split("=")[0] : ""})
+           values ($1, $2, $3, $4 ${extra ? ", " + extra.split("=")[1] : ""}) returning id`,
+          [`dbtest-inactive-${label}-${stamp}`, `dbtest-inactive-${label}-${stamp}@example.test`, `Dbtest Inactive ${label}`, `inactive-${label}-${stamp}@example.test`],
+        );
+        return rows[0]!.id;
+      };
+      const active = await mkUser("active", "");
+      const leaver = await mkUser("leaver", "active=false");
+      const erased = await mkUser("erased", "scrubbed_at=now()");
+      const outbox = async (userId: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into notification_outbox (user_id, type, payload) values ($1, 'comment_posted', $2::jsonb) returning id`,
+          [userId, JSON.stringify({ message: `dbtest ${stamp}`, link: "/challenges/x" })],
+        );
+        return rows[0]!.id;
+      };
+      const rows = { active: await outbox(active), leaver: await outbox(leaver), erased: await outbox(erased) };
+      const state = async (id: string) =>
+        (await pool.query<{ status: string; attempts: number }>(`select status, attempts from notification_outbox where id = $1`, [id])).rows[0]!;
+
+      const summary = await runNotificationSweep(pool, { graphEnv: null, smtpEnv: null, baseUrl: "https://innobox.example.com", batchSize: 1000 });
+      assert.ok(summary.skippedOptOut >= 2, `the leaver's and the erased user's rows are skipped (got ${summary.skippedOptOut})`);
+      assert.deepEqual(await state(rows.leaver), { status: "sent", attempts: 0 }, "a deactivated recipient's row: marked sent, never attempted");
+      assert.deepEqual(await state(rows.erased), { status: "sent", attempts: 0 }, "an erased recipient's row: marked sent, never attempted");
+      assert.deepEqual(await state(rows.active), { status: "failed", attempts: 1 }, "an active recipient's row is attempted");
+    } finally {
+      await pool.end();
+    }
+  },
+);

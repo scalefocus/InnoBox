@@ -16,12 +16,12 @@ import {
   matchRedirectUri,
   mcpResource,
   mintToken,
+  parseConsentForm,
   parseRegistration,
   protectedResourceMetadata,
   redirectWith,
   verifyPkceS256,
 } from "./oauth";
-import { escapeHtml, renderConsentPage } from "./consent-page";
 
 const BASE = "https://innobox.example.com";
 const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -146,6 +146,31 @@ test("registration: public clients, exact redirect shapes, a 1–80 character na
   assert.equal(bad.ok === false && bad.error, "invalid_redirect_uri");
 });
 
+test("registration: client_uri and logo_uri must be https URLs without credentials, or absent", () => {
+  const reg = (extra: Record<string, unknown>) => parseRegistration({ client_name: "x", redirect_uris: ["https://a.example/cb"], ...extra });
+  const ok = reg({ client_uri: "https://agent.example/about", logo_uri: "https://cdn.example/logo.png" });
+  assert.ok(ok.ok && ok.value.clientUri === "https://agent.example/about" && ok.value.logoUri === "https://cdn.example/logo.png");
+  const absent = reg({ client_uri: null });
+  assert.ok(absent.ok && absent.value.clientUri === null && absent.value.logoUri === null);
+  for (const bad of ["javascript:alert(1)", "http://agent.example/about", "https://user:pw@agent.example/", "data:text/html,x", "not a url", "https://", `https://a.example/${"x".repeat(2048)}`, 42]) {
+    const r = reg({ client_uri: bad });
+    assert.ok(r.ok === false && r.error === "invalid_client_metadata", `client_uri ${String(bad).slice(0, 40)}`);
+    const l = reg({ logo_uri: bad });
+    assert.ok(l.ok === false && l.error === "invalid_client_metadata", `logo_uri ${String(bad).slice(0, 40)}`);
+  }
+});
+
+test("consent form: approve needs the confirmation tick, deny does not, malformed is refused", () => {
+  assert.deepEqual(parseConsentForm(new URLSearchParams("request_id=r1&decision=approve&confirm=1")), { ok: true, decision: "approve", requestId: "r1" });
+  assert.deepEqual(parseConsentForm(new URLSearchParams("request_id=r1&decision=deny")), { ok: true, decision: "deny", requestId: "r1" });
+  assert.equal(parseConsentForm(new URLSearchParams("request_id=r1&decision=approve")).ok, false, "approve without the tick is refused");
+  assert.equal(parseConsentForm(new URLSearchParams("request_id=r1&decision=approve&confirm=on")).ok, false, "only confirm=1 counts");
+  assert.equal(parseConsentForm(new URLSearchParams("request_id=r1&decision=maybe&confirm=1")).ok, false);
+  assert.equal(parseConsentForm(new URLSearchParams("")).ok, false);
+  const refused = parseConsentForm(new URLSearchParams("decision=approve"));
+  assert.ok(refused.ok === false && !refused.message.includes("§"));
+});
+
 test("consent page CSP: loopback shapes and https always; a custom scheme only when used", () => {
   assert.deepEqual(consentFormActionSources(null), ["http://127.0.0.1:*", "http://localhost:*", "https:"]);
   assert.deepEqual(consentFormActionSources("myapp:/done"), ["http://127.0.0.1:*", "http://localhost:*", "https:", "myapp:"]);
@@ -162,16 +187,4 @@ test("metadata, challenge header and redirect builder", () => {
   assert.deepEqual(as.grant_types_supported, ["authorization_code", "refresh_token"]);
   assert.equal(bearerChallenge(BASE), `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"`);
   assert.equal(redirectWith("http://127.0.0.1:5/cb?x=1", { code: "c", state: null }), "http://127.0.0.1:5/cb?x=1&code=c");
-});
-
-test("consent page: escapes every value and states the grant in plain words", () => {
-  const html = renderConsentPage({ clientName: '<script>alert("x")</script>', redirectTarget: "localhost:5", personName: "A & B", requestId: '"id"', restrictedShared: false });
-  assert.ok(!html.includes("<script>alert"));
-  assert.ok(html.includes("&lt;script&gt;"));
-  assert.ok(html.includes("A &amp; B"));
-  assert.ok(html.includes('value="&quot;id&quot;"'));
-  assert.ok(html.includes("It cannot like, change a status, assign, triage or administer."));
-  assert.ok(html.includes("Namespace-restricted challenges are not shared with agents."));
-  assert.ok(!renderConsentPage({ clientName: "c", redirectTarget: "t", personName: "p", requestId: "r", restrictedShared: true }).includes("Namespace-restricted"));
-  assert.equal(escapeHtml(`'`), "&#39;");
 });

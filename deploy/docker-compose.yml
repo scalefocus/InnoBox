@@ -55,7 +55,11 @@ services:
     volumes:
       - ./data/minio:/data
     ports:
-      - "9001:9001" # console (dev only)
+      # Loopback-only, like postgres above: the MinIO console takes the root credentials, which
+      # are also the app's S3 keys by default, and the console bypasses the authenticated
+      # attachment gateway (INNOBOX_SPEC.md invariant 4). Reach it from the host only; the app
+      # talks to MinIO over the compose network on 9000, which is never published.
+      - "127.0.0.1:9001:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -63,7 +67,9 @@ services:
       retries: 5
 
   clamav:
-    image: clamav/clamav:latest
+    # Pinned release (INNOBOX_SPEC.md §2.3): a deploy never silently pulls a different scanner.
+    # Bump deliberately; signatures still update at runtime via freshclam.
+    image: clamav/clamav:1.5.4
     restart: always
     # Signature updates require outbound network (INNOBOX_SPEC.md §11).
     # Scanner limits (§11): the image's entrypoint writes every CLAMD_CONF_<Option> into its

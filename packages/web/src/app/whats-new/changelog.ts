@@ -11,6 +11,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.16.0",
+    date: "2026-10-16",
+    summary:
+      "Second round of security hardening. The account menu gains Sign out everywhere, which ends your session on every other device too. When connecting an AI agent, the approval page now leads with where the access code will be sent and flags applications nobody has connected before; you confirm you started the connection yourself before approving. Notifications about a challenge you can no longer see are hidden until you can. Platform admins cannot erase their own account, and the Administration page reminds them while the bootstrap admin group is still configured. Operators: the four encryption keys are validated at start and must differ.",
+  },
+  {
+    version: "1.15.0",
+    date: "2026-10-16",
+    summary:
+      "Security hardening from a code review. Deactivated and erased accounts no longer receive any notification, in-app or by e-mail, and a provisioning update that says nothing about a user's active state keeps it as it is. Attachment downloads are now rate-limited, a made-up attachment id no longer writes an audit entry, and the AI-agent tools no longer list your own solutions that an admin moved to the trash. Operators: the bundled MinIO console is now reachable from the host only.",
+  },
+  {
+    version: "1.14.0",
+    date: "2026-10-16",
+    summary:
+      "For platform admins: the Currently online chart now shows weekly and monthly active users beside the daily line. Hover to see exact numbers, and zoom with 7d, 30d, 90d and All, the slider below the chart, or Ctrl and the mouse wheel. The weekly and monthly lines start filling in from today. The survey satisfaction trend also shows its values on hover.",
+  },
+  {
     version: "1.13.0",
     date: "2026-10-14",
     summary:
