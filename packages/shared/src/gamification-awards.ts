@@ -309,6 +309,7 @@ export async function challengeAwardsSoFar(
     if (validAt) out.push({ ...item, userId: c.author_id, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId), occurredAt: validAt });
     if (solvedAt) out.push({ ...item, userId: c.author_id, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId), occurredAt: solvedAt });
     out.push(...(await likeAwards(db, "challenge", challengeId, c.author_id)));
+    out.push(...(await hypeAwards(db, "challenge", challengeId, c.author_id)));
   }
   if (opts.assignee && solvedAt && c.assignee_id && c.assignee_id !== c.author_id) {
     out.push({ ...item, userId: c.assignee_id, reason: "assignment_solved", awardKey: awardKey.assignmentSolved(challengeId), occurredAt: solvedAt });
@@ -332,7 +333,25 @@ export async function solutionAwardsSoFar(db: DbClient, solutionId: string): Pro
   if (validAt) out.push({ ...item, reason: "solution_validated", awardKey: awardKey.solutionValidated(solutionId), occurredAt: validAt });
   if (implementedAt) out.push({ ...item, reason: "solution_implemented", awardKey: awardKey.solutionImplemented(solutionId), occurredAt: implementedAt });
   out.push(...(await likeAwards(db, "solution", solutionId, s.author_id)));
+  out.push(...(await hypeAwards(db, "solution", solutionId, s.author_id)));
   return out;
+}
+
+/** §26.7: one hype_received per existing hype, backdated to the hype — what a self-reveal replays.
+ *  Self-hype is refused at the API, so the author filter is belt and braces. */
+async function hypeAwards(db: DbClient, parentType: AwardItemType, parentId: string, authorId: string): Promise<AwardInput[]> {
+  const { rows } = await db.query<{ user_id: string; created_at: Date }>(
+    `select user_id, created_at from hypes where parent_type = $1 and parent_id = $2 and user_id <> $3`,
+    [parentType, parentId, authorId],
+  );
+  return rows.map((h) => ({
+    userId: authorId,
+    reason: "hype_received" as const,
+    itemType: parentType,
+    itemId: parentId,
+    awardKey: awardKey.hypeReceived(parentType, parentId, h.user_id),
+    occurredAt: h.created_at,
+  }));
 }
 
 /** One like_received per current like by someone other than the author. */

@@ -19,6 +19,10 @@ export const GAMIFICATION_REASONS = [
   // §25.12: 0 points, once per person, the first time they approve an AI agent connection. The
   // only reason with no item.
   "agent_connected",
+  // §26.7: 3 points to a hyped item's author (the first 10 a day), and the 0-point marker written
+  // for each hyper when an item they hyped first reaches solved/implemented (Talent Scout).
+  "hype_received",
+  "hype_fulfilled",
 ] as const;
 export type GamificationReason = (typeof GAMIFICATION_REASONS)[number];
 
@@ -33,6 +37,8 @@ export const POINTS: Record<GamificationReason, number> = {
   like_received: 1,
   comment_posted: 1,
   agent_connected: 0,
+  hype_received: 3,
+  hype_fulfilled: 0,
 };
 
 /** Per recipient, per UTC day of the event: only the first N awards of the reason earn points.
@@ -40,6 +46,7 @@ export const POINTS: Record<GamificationReason, number> = {
 export const DAILY_CAPS: Partial<Record<GamificationReason, number>> = {
   comment_posted: 5,
   like_received: 25,
+  hype_received: 10,
 };
 
 /** The points one award is worth, given how many awards of the same reason the recipient
@@ -72,6 +79,9 @@ export const awardKey = {
   commentPosted: (commentId: string) => `comment_posted:${commentId}`,
   /** §25.12: once per person, ever. */
   agentConnected: () => "agent_connected",
+  /** §26.7: once per (item, hyper). */
+  hypeReceived: (parentType: AwardItemType, parentId: string, hyperId: string) => `hype_received:${parentType}:${parentId}:${hyperId}`,
+  hypeFulfilled: (parentType: AwardItemType, parentId: string, hyperId: string) => `hype_fulfilled:${parentType}:${parentId}:${hyperId}`,
 };
 
 // ── Levels (§23.3) ───────────────────────────────────────────────────────────────────────
@@ -145,7 +155,8 @@ export type BadgeKey =
   | "plugged_in"
   | "co_pilot"
   | "agent_of_change"
-  | "human_in_the_loop";
+  | "human_in_the_loop"
+  | "talent_scout";
 
 /** What a count-based badge counts: a ledger reason, or one of the §25.12 agent counters — rows
  *  of the given reasons whose item was created through an AI agent (`via_mcp`). */
@@ -163,6 +174,8 @@ export const BADGE_COUNTERS: Record<BadgeCounter, { reasons: readonly Gamificati
   like_received: { reasons: ["like_received"], viaMcp: null },
   comment_posted: { reasons: ["comment_posted"], viaMcp: null },
   agent_connected: { reasons: ["agent_connected"], viaMcp: null },
+  hype_received: { reasons: ["hype_received"], viaMcp: null },
+  hype_fulfilled: { reasons: ["hype_fulfilled"], viaMcp: null },
   challenge_submitted_via_mcp: { reasons: ["challenge_submitted"], viaMcp: true },
   solution_proposed_via_mcp: { reasons: ["solution_proposed"], viaMcp: true },
   validated_via_mcp: { reasons: ["challenge_validated", "solution_validated"], viaMcp: true },
@@ -182,6 +195,8 @@ export interface BadgeDef {
   unit: string;
   /** §25.12: an agent badge — shown among the locked badges only while agent access is on. */
   agent?: boolean;
+  /** §26.8: a hype badge — shown among the locked badges only while hype is on. */
+  hype?: boolean;
 }
 
 export const BADGES: readonly BadgeDef[] = [
@@ -199,6 +214,7 @@ export const BADGES: readonly BadgeDef[] = [
   { key: "co_pilot", name: "Co-Pilot", criterion: "Your first challenge submitted through an agent", counts: "challenge_submitted_via_mcp", thresholds: [1], unit: "challenges submitted through an agent", agent: true },
   { key: "agent_of_change", name: "Agent of Change", criterion: "Your first solution proposed through an agent", counts: "solution_proposed_via_mcp", thresholds: [1], unit: "solutions proposed through an agent", agent: true },
   { key: "human_in_the_loop", name: "Human in the Loop", criterion: "A challenge or solution you submitted through an agent was validated", counts: "validated_via_mcp", thresholds: [1], unit: "agent submissions validated", agent: true },
+  { key: "talent_scout", name: "Talent Scout", criterion: "Items you hyped that were later solved or implemented", counts: "hype_fulfilled", thresholds: [1, 5, 20], unit: "hyped items solved or implemented", hype: true },
 ];
 
 export function badgeDef(key: string): BadgeDef | undefined {

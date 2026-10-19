@@ -17,6 +17,8 @@ import {
   applyPreferenceMute,
   commentNotificationMessage,
   finalizeRecipients,
+  hypeEmailSubject,
+  hypeNotificationMessage,
   isDigestableEvent,
   nextDigestSlot,
   type DigestCadence,
@@ -345,14 +347,97 @@ export async function dispatchCoalescedComment(
   }
 }
 
-/** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows for the
- *  challenge itself AND its solutions (the page shows both). */
+/** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
+ *  since §26.6, their unread "hyped" rows — for the challenge itself AND its solutions (the page
+ *  shows both). */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type = 'comment_posted' and read_at is null and payload->>'challengeId' = $2`,
+      where user_id = $1 and type in ('comment_posted', 'hyped') and read_at is null and payload->>'challengeId' = $2`,
     [userId, challengeId],
   );
+}
+
+// ── §12.1 event 16 / §26.6: coalesced "hyped" notifications ─────────────────────────────
+
+export interface HypeNotification {
+  /** The hyped item — the coalescing key. */
+  parentType: "challenge" | "solution";
+  parentId: string;
+  /** The challenge whose page shows it — opening it reads the row. */
+  challengeId: string;
+  itemNumber: string; // "CH-412" / "SOL-34"
+  /** `challenge CH-412 "Title"` / `solution SOL-34 on CH-412 "Title"`. */
+  itemLabel: string;
+  /** The hyper's display name — hypers are public (§26 decision 8). */
+  latestBy: string;
+  /** The item's hype points after this hype. */
+  hype: number;
+  link: string;
+  /** For the digest line: the parent challenge, and the solution when the item is one. */
+  challengeNumber: string;
+  challengeTitle: string;
+  solutionNumber: string | null;
+}
+
+/** The count ≥ 2 message, rendered in SQL with the same text as `hypeNotificationMessage`. */
+const HYPED_MESSAGE_SQL = (n: string, p: string) => `format('%s people hyped your %s — latest %s.', ${n}, ${p}->>'itemLabel', ${p}->>'latestBy')`;
+
+/**
+ * Event 16 delivery: one UNREAD inbox row per recipient per item, refreshed in place by every
+ * further hype while unread (the 0050 partial unique index), with ONE outbox row — the e-mail
+ * goes out with the first hype and is not re-sent until the row is read (§26.6). The recipient is
+ * the item's author only; the usual drops apply (the actor, a deactivated or erased author, an
+ * item they can no longer see). No per-event preference: the e-mail switch and digest choice are
+ * the controls, and the outbox row is held for a recipient on a digest.
+ */
+export async function dispatchCoalescedHype(ctx: NotifyContext, authorId: string | null, hype: HypeNotification): Promise<void> {
+  const recipients = await finalRecipients(ctx, { parentType: hype.parentType, parentId: hype.parentId }, [authorId]);
+  const hold: DigestHold = {
+    event: 16,
+    facts: {
+      kind: "hype",
+      challengeNumber: hype.challengeNumber.replace(/\D/g, ""),
+      challengeTitle: hype.challengeTitle,
+      solutionNumber: hype.solutionNumber ? hype.solutionNumber.replace(/\D/g, "") : null,
+    },
+  };
+  const slots = await digestSlots(ctx.pool, recipients, hold);
+  for (const userId of recipients) {
+    const payload = {
+      message: hypeNotificationMessage(1, hype.itemLabel, hype.latestBy, hype.hype),
+      subject: hypeEmailSubject(hype.latestBy, hype.parentType, hype.itemNumber),
+      link: hype.link,
+      parentType: hype.parentType,
+      parentId: hype.parentId,
+      challengeId: hype.challengeId,
+      itemLabel: hype.itemLabel,
+      latestBy: hype.latestBy,
+      latestAt: new Date().toISOString(),
+      count: 1,
+    };
+    const newCount = `(coalesce((notifications.payload->>'count')::int, 1) + 1)`;
+    const { rows } = await ctx.pool.query<{ id: string; inserted: boolean }>(
+      `insert into notifications (user_id, type, payload) values ($1, 'hyped', $2::jsonb)
+       on conflict (user_id, (payload->>'parentType'), (payload->>'parentId'))
+         where read_at is null and type = 'hyped'
+       do update set
+         payload = notifications.payload
+           || jsonb_build_object(
+                'count', ${newCount},
+                'latestBy', excluded.payload->>'latestBy',
+                'latestAt', excluded.payload->>'latestAt',
+                'itemLabel', excluded.payload->>'itemLabel',
+                'message', ${HYPED_MESSAGE_SQL(newCount, "excluded.payload")}),
+         created_at = now()
+       returning id, (xmax = 0) as inserted`,
+      [userId, JSON.stringify(payload)],
+    );
+    // A refresh preserves the delivery bookkeeping: the e-mail went out with the first hype.
+    if (rows[0]?.inserted) {
+      await writeOutbox(ctx.pool, userId, "hyped", payload, rows[0].id, slots.get(userId), hold);
+    }
+  }
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by

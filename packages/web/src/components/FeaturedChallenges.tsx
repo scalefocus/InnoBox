@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
+import { HypeCount } from "@/components/Hype";
 
 export interface FeaturedChallengeCard {
   id: string;
@@ -18,6 +19,8 @@ export interface FeaturedChallengeCard {
   solutionCount: number;
   /** §13.10 Committee pick — present once list rows carry it. */
   endorsed?: boolean;
+  /** §26.5: all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 export function FeaturedChallenges({ items }: { items: FeaturedChallengeCard[] }) {
@@ -43,6 +46,7 @@ export function FeaturedChallenges({ items }: { items: FeaturedChallengeCard[] }
             </div>
             <div className="meta">
               <span className="chip">❤ {c.likeCount}</span>
+              {c.hype !== undefined && <HypeCount value={c.hype} />}
               <span className="chip">
                 {c.solutionCount} solution{c.solutionCount === 1 ? "" : "s"}
               </span>

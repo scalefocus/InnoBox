@@ -14,6 +14,8 @@ import {
   setAttachmentLimits,
   setDateFormat,
   setGamificationEnabled,
+  getHypeEnabled,
+  setHypeEnabled,
   setPublicSubmissionSettings,
 } from "./store";
 import { bootstrapAdminGroupActive } from "./bootstrap-admin";
@@ -33,7 +35,7 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions, platformAdminMappings] =
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions, platformAdminMappings] =
     await Promise.all([
       getDateFormat(pool),
       getAttachmentLimits(pool),
@@ -42,6 +44,7 @@ async function handleGET(): Promise<Response> {
       getSurveyEnabled(pool),
       getBugReportsEnabled(pool),
       getGamificationEnabled(pool),
+      getHypeEnabled(pool),
       publicSubmissionsCard(),
       countPlatformAdminMappings(pool),
     ]);
@@ -55,6 +58,7 @@ async function handleGET(): Promise<Response> {
     surveyEnabled,
     bugReportsEnabled,
     gamificationEnabled,
+    hypeEnabled,
     publicSubmissions,
     bootstrapAdminGroupActive: bootstrapActive,
   });
@@ -78,6 +82,7 @@ async function handlePATCH(req: Request): Promise<Response> {
   if (parsed.value.surveyEnabled !== undefined) await setSurveyEnabled(pool, parsed.value.surveyEnabled, gate.user.id);
   if (parsed.value.bugReportsEnabled !== undefined) await setBugReportsEnabled(pool, parsed.value.bugReportsEnabled, gate.user.id);
   if (parsed.value.gamificationEnabled !== undefined) await setGamificationEnabled(pool, parsed.value.gamificationEnabled, gate.user.id);
+  if (parsed.value.hypeEnabled !== undefined) await setHypeEnabled(pool, parsed.value.hypeEnabled, gate.user.id);
   if (parsed.value.publicSubmissions) {
     const result = await setPublicSubmissionSettings(pool, parsed.value.publicSubmissions, gate.user.id, {
       keyValid: publicIntakeKey() !== null,
@@ -90,16 +95,17 @@ async function handlePATCH(req: Request): Promise<Response> {
     invalidatePublicIntakeState();
   }
 
-  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions] = await Promise.all([
+  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions] = await Promise.all([
     getDateFormat(pool),
     getAttachmentLimits(pool),
     getFeaturedLimit(pool),
     getSurveyEnabled(pool),
     getBugReportsEnabled(pool),
     getGamificationEnabled(pool),
+    getHypeEnabled(pool),
     publicSubmissionsCard(),
   ]);
-  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions });
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

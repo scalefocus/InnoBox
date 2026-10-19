@@ -22,10 +22,11 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 
-/** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented). */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8]);
+/** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
+ *  and 16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable). */
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
@@ -59,7 +60,7 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented";
+export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
@@ -120,6 +121,17 @@ function itemLines(updates: readonly DigestUpdate[]): string[] {
 
   const comments = updates.filter((u) => u.kind === "comment").reduce((n, u) => n + u.count, 0);
   if (comments > 0) lines.push(plural(comments, "new comment", "new comments"));
+
+  // §26.6: hypes on the challenge itself, then on each of its solutions — one line per item.
+  const hypeBySubject = new Map<string, number>();
+  for (const u of updates.filter((x) => x.kind === "hype")) {
+    const key = u.solutionNumber ? digitsOf(u.solutionNumber) : "";
+    hypeBySubject.set(key, (hypeBySubject.get(key) ?? 0) + u.count);
+  }
+  const hypeSubjects = [...hypeBySubject.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : Number(a) - Number(b)));
+  for (const key of hypeSubjects) {
+    lines.push(`${key ? `SOL-${key}: ` : ""}${plural(hypeBySubject.get(key)!, "new hype", "new hypes")}`);
+  }
   return lines;
 }
 

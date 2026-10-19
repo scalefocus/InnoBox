@@ -71,7 +71,8 @@ export function heldRowDropReason(row: HeldRow, visible: boolean): DropReason | 
  *  gathered, and is as recent as its latest one. */
 export function toDigestUpdate(row: HeldRow): DigestUpdate {
   const facts = row.payload.digest!;
-  const count = facts.kind === "comment" ? Math.max(1, row.inbox_count ?? 1) : 1;
+  // §26.6: a coalesced "hyped" row counts every hype its inbox row gathered, like comments.
+  const count = facts.kind === "comment" || facts.kind === "hype" ? Math.max(1, row.inbox_count ?? 1) : 1;
   const at = row.inbox_at && row.inbox_at.getTime() > row.created_at.getTime() ? row.inbox_at : row.created_at;
   return { ...facts, count, at };
 }

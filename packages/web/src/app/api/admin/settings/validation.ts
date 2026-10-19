@@ -20,6 +20,8 @@ export interface SettingsPatch {
   bugReportsEnabled?: boolean;
   /** §23.10 the gamification switch. */
   gamificationEnabled?: boolean;
+  /** §26.8 the hype switch. */
+  hypeEnabled?: boolean;
   /** §24.2 the public submissions card: the switch and/or the privacy notice. */
   publicSubmissions?: { enabled?: boolean; privacyNotice?: string };
 }
@@ -91,6 +93,11 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.gamificationEnabled = rec.gamificationEnabled;
   }
 
+  if (rec.hypeEnabled !== undefined) {
+    if (typeof rec.hypeEnabled !== "boolean") return fail("hypeEnabled must be a boolean");
+    value.hypeEnabled = rec.hypeEnabled;
+  }
+
   if (rec.publicSubmissions !== undefined) {
     const ps = rec.publicSubmissions;
     if (typeof ps !== "object" || ps === null || Array.isArray(ps)) return fail("publicSubmissions must be an object");
@@ -116,9 +123,10 @@ export function parseSettingsPatch(body: unknown): Parsed<SettingsPatch> {
     value.surveyEnabled === undefined &&
     value.bugReportsEnabled === undefined &&
     value.gamificationEnabled === undefined &&
+    value.hypeEnabled === undefined &&
     value.publicSubmissions === undefined
   ) {
-    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, publicSubmissions");
+    return fail("request must include at least one of: dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions");
   }
 
   return { ok: true, value };

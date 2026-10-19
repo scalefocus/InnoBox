@@ -8,6 +8,8 @@ import { logNotifyFailure, notifyChallengeSubmitted } from "@/lib/notify-events"
 import { autoFollow } from "../follows/store";
 import { parseChallengeCreateIds, parseChallengeListFilters, parseSimilarAcknowledged } from "./validation";
 import { createChallenge, listChallenges } from "./store";
+import { getHypeEnabled } from "@/lib/hype-settings";
+import { withHypePoints } from "../hypes/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 import { withSystemLog } from "@/lib/system-log";
@@ -22,8 +24,11 @@ async function handleGET(req: Request): Promise<Response> {
   const parsed = parseChallengeListFilters(url.searchParams);
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
-  const challenges = await listChallenges(pool, { userId: gate.user.id, roles: gate.user.roles }, parsed.value);
-  return Response.json({ challenges });
+  // §26.8: while hype is off the "most hyped" sort falls back to newest and no hype number ships.
+  const hypeOn = await getHypeEnabled(pool);
+  const filters = !hypeOn && parsed.value.sort === "most_hyped" ? { ...parsed.value, sort: "newest" as const } : parsed.value;
+  const challenges = await listChallenges(pool, { userId: gate.user.id, roles: gate.user.roles }, filters);
+  return Response.json({ challenges: hypeOn ? await withHypePoints(pool, challenges) : challenges });
 }
 
 async function handlePOST(req: Request): Promise<Response> {

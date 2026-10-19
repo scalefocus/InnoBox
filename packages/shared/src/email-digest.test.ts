@@ -14,12 +14,12 @@ import {
 } from "./email-digest.js";
 import { parsePreferencePatch } from "./notification-preferences.js";
 
-const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
-test("only the follower-type events (2, 3, 6, 8) are digestable", () => {
+test("only the follower-type events (2, 3, 6, 8) and hyped (16) are digestable", () => {
   assert.deepEqual(
     ALL_EVENTS.filter((e) => isDigestableEvent(e)),
-    [2, 3, 6, 8],
+    [2, 3, 6, 8, 16],
   );
 });
 
@@ -34,6 +34,24 @@ test("a recipient on the admin route is never held — event 2 to admins and the
 
 test("the admin attention and actionable events are never held", () => {
   for (const e of [1, 4, 5, 7, 9, 10, 11, 12, 13, 14] as const) assert.equal(isDigestableEvent(e), false, `event ${e}`);
+});
+
+test("renderDigest: hypes get one line per item — the challenge's first, then each solution's (§26.6)", () => {
+  const digest = renderDigest(
+    [
+      update({ kind: "hype", count: 3, solutionNumber: "17" }),
+      update({ kind: "hype", count: 1 }),
+      update({ kind: "hype", count: 2, solutionNumber: "17" }),
+    ],
+    "daily",
+    "https://x.test",
+  );
+  assert.ok(digest);
+  const lines = digest!.text.split(/\r?\n/);
+  const own = lines.findIndex((l) => l.includes("1 new hype") && !l.includes("SOL-"));
+  const sol = lines.findIndex((l) => l.includes("SOL-17: 5 new hypes"));
+  assert.ok(own >= 0, digest!.text);
+  assert.ok(sol > own, "the challenge's own line comes first");
 });
 
 test("isEmailDelivery accepts the three modes only", () => {

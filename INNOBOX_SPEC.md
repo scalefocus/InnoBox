@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.17 — draft for review** (2026-10-16; v0.2 added the UI and CI/CD
+> Status: **v0.18 — draft for review** (2026-10-19; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -49,7 +49,11 @@
 > category in the survey card, and their own source in the admin results (§13.10,
 > §14.11); v0.17 (2026-10-16) moved both admin charts to Apache ECharts and added
 > weekly and monthly active-user lines, sampled once a day, to the Currently online
-> chart (§14.5, §14.11), and ruled out proprietary dependency licences (§21.1)).
+> chart (§14.5, §14.11), and ruled out proprietary dependency licences (§21.1); v0.18
+> (2026-10-19) specified **hype** — a scarce weekly endorsement of 3 per person on open
+> challenges and solutions, counting double in an item's first week, with a per-viewer
+> "Hyped this week" board on Home, author points and a Talent Scout badge for the hyper
+> (§26)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -1267,6 +1271,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   the platform-admin review queue (§24.5).
 - **`likes`** — (user_id, parent) unique; created_at. Toggling like/unlike
   inserts/deletes the row.
+- **`hypes`** — (user_id, parent) unique; weight (`1 | 2`), created_at. The §26
+  weekly endorsement: insert-only, never updated, removed only by the §10.3 cascade.
 - **`follows`** — (user_id, parent) unique; created_at.
 - **`attachments`** — id, parent (challenge | solution; `parent_id` **nullable while
   staged**, §11), **`draft_key`** (nullable UUID; set only while staged, before the
@@ -2438,6 +2444,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
 | 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
 | 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
+| 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
 
 Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
 in-app only, by design (§23.1).
@@ -2491,7 +2498,8 @@ a day or a week.
   set on the profile (§13.5) and is silent (not audited), like the other preferences.
 - **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
   challenge author and followers, not the admin and committee route), 3 (status
-  changed), 6 (comments, including replies) and 8 (solution implemented). Everything
+  changed), 6 (comments, including replies), 8 (solution implemented) and 16 (hyped,
+  §26.6). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
   12). Event 13 has no e-mail at all.
@@ -2569,8 +2577,8 @@ one e-mail per item until they read it**; once read, the next comment starts a f
 row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
 (comments carry no anonymity option, so the commenter's name is safe; the item's own
 author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
-**or opening the item's detail page** all mark that item's row read. **Only event 6
-coalesces**; every other event remains one row per occurrence.
+**or opening the item's detail page** all mark that item's row read. **Only events 6
+and 16 (hyped, §26.6) coalesce**; every other event remains one row per occurrence.
 
 **Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
 (§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
@@ -2909,10 +2917,10 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
   **Mine** (own items incl. `awaiting_triage`), **Completed** (`solved` +
   `rejected`). Filters: status, impact area, namespace, author name; sort: newest
-  (default), most liked, most solutions.
+  (default), most liked, most solutions, and — while hype is on — most hyped (§26.5).
 - Cards show number (`CH-<n>`), title, author (masked if anonymous, §9), created
-  date, impact area, status, like count, and a solution count that excludes
-  `rejected`/`not_selected`/`withdrawn`/`proposed`.
+  date, impact area, status, like count, the hype number while hype is on (§26.5), and
+  a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
 - **Cards / List view toggle.** A two-option segmented control (**Cards** | **List**,
   the existing `.sort-toggle` look, each option `aria-pressed`, §2.2) at the end of the
   filter row switches the gallery's presentation. It is a **pure presentation choice**:
@@ -2971,6 +2979,8 @@ whole visit, and the next visit flags only genuinely newer items.
   assignee (if any), created/updated/edited dates.
 - Like button (toggle) with live count — disabled while the challenge is closed
   (§8.3).
+- Hype button, hype number and hypers list (§26.5) while hype is on — on the challenge
+  and on each listed solution, beside the like button.
 - The challenge's solutions, listed inline, honoring §4.3's solution-visibility rule
   (a `proposed` solution is hidden except to its author, the challenge's assignee,
   and the namespace's committee/admins), with `rejected`/`not_selected` ones in the
@@ -3027,6 +3037,10 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
 - **Featured** (*Featured challenges*, below): the challenges a platform admin has
   pinned, newest pin first, filtered per viewer. A viewer who can see none of them gets
   no section at all, with no heading and no empty state.
+- **Hyped this week** (§26.5), while hype is on: the top 5 open challenges and
+  solutions by this week's hype points, filtered per viewer under the full §4.3
+  predicate, with the viewer's remaining budget in the heading. Omitted entirely, like
+  Featured, when the viewer can see no eligible item.
 - **KPI tiles** (visibility-filtered, correctly labeled — the legacy app's
   swapped/mislabeled counters are not reproduced): challenges by status
   (in review / valid / solved / rejected) and solutions by status
@@ -4376,7 +4390,8 @@ the existing brand link tokens; the separator is a `›` glyph.
 ### §14.1 Namespace triage queue (namespace admins; platform admins everywhere)
 
 A filterable queue of the namespace's challenges: columns number, title, author
-(masked when anonymous until revealed §9), status, impact area, assignee, created.
+(masked when anonymous until revealed §9), status, impact area, assignee, hype (the
+§26 number, while hype is on), created.
 Filters: author name (matches non-anonymous items only), **assignee — Any,
 "Unassigned", "Assigned to me", or a specific person (searchable)**, status, number.
 
@@ -4522,6 +4537,9 @@ delegated per namespace.**
   access- and refresh-token lifetimes, the read-only server URL, and the registered
   clients with Block / Unblock. Audited as `settings.mcp_changed`,
   `mcp.client_blocked` and `mcp.client_unblocked`.
+- **Hype** — one switch, *Weekly hype*, **off by default** (§26.8): shows or hides
+  every §26 surface and closes the hype route; existing hypes, awards and badges are
+  kept. Audited as `settings.hype_enabled_changed`.
 
 All settings changes are audited.
 
@@ -5188,7 +5206,10 @@ anomalies. Since v0.10 also:
   `mcp.client_blocked`, `mcp.client_unblocked` and `settings.mcp_changed`; and every
   write made through MCP keeps its usual action name with `source: "mcp"` and the
   client name in the payload (§25.13). Reads, client registrations and token issue and
-  rotation are not audited.
+  rotation are not audited;
+- **hype** — `hype.given` (actor the hyper, target the item, `after: { weight }`; under
+  All only, as `like.*`) and `settings.hype_enabled_changed` (§26.11). The awards, the
+  Talent Scout badge and event 16 are not audited, as no award is.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -5419,7 +5440,11 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
-  a like toggle on a closed challenge is **409**, §8.3)
+  a like toggle on a closed challenge is **409**, §8.3); `hypes` (`POST` only — no
+  take-backs; 404 while hype is off or on an invisible item, 409 for a closed or own
+  item, a repeat, or an exhausted weekly budget; challenge and solution payloads carry
+  `hype`, `hyped`, `canHype`, `hypeReason` and `hypers`, the detail payload and `me` the
+  viewer's `hypesLeft`; `challenges` accepts `sort=most_hyped`, §26.11)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
 - `notifications` (inbox, mark read; the unread poll carries the §14.6 banner), `me`
   (`GET` identity, roles and flags, including the §13.9 `whatsNewSeenVersion` and
@@ -5440,7 +5465,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
   malformed id, §13.8)
 - `leaderboards` (incl. `metric=points` and each row's level, §23.12), `dashboard` (KPIs, spotlights, **featured** — visibility-filtered
-  pins, §13.2)
+  pins, §13.2 — and **`hyped`**, the per-viewer "Hyped this week" board with the
+  viewer's budget, `null` while hype is off, §26.5)
 - `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
   and `admin/presence/history?range=7d|30d|90d|all` → `{ range, enoughHistory,
@@ -5554,7 +5580,11 @@ error messages carry no `§` references (§21.9).
 ## §19 Non-goals (v1)
 
 No data migration from SharePoint; no Power Apps/old-link compatibility; no links to
-the legacy SharePoint site; no campaigns/challenge deadlines; for §23 gamification: no
+the legacy SharePoint site; no campaigns/challenge deadlines; for §26 hype: no
+take-backs or refunds, no admin-tunable budget, weight or window, no paid or bonus
+hypes, no hype on comments, no hype through MCP, no "hypes received" leaderboard metric
+or author badge, no per-namespace board, no hypers list in any e-mail, and no weekly
+reset job (the week is computed); for §23 gamification: no
 redeemable rewards (points buy and unlock nothing), no admin-tunable weights, caps or
 level curve, no custom or manually granted or revoked badges, no point deductions, no
 per-namespace boards, and no e-mail for achievements; for comment replies (§10.2): no
@@ -6374,6 +6404,8 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
 | `solution_implemented` | **50** | solution author | its first entry into `implemented` | `solution_implemented:<solutionId>` |
 | `like_received` | **1** | the liked item's author | a like by someone **other than the author** | `like_received:<parentType>:<parentId>:<likerId>` |
 | `comment_posted` | **1** | the commenter | a comment is posted | `comment_posted:<commentId>` |
+| `hype_received` | **3** | the hyped item's author | a hype (§26) — never on your own item, which is refused | `hype_received:<parentType>:<parentId>:<hyperId>` |
+| `hype_fulfilled` | **0** | the hyper | an item they hyped first reaches `solved` (challenge) or `implemented` (solution) — drives the Talent Scout badge (§26.7) | `hype_fulfilled:<parentType>:<parentId>:<hyperId>` |
 
 - **Who moved it doesn't matter.** A milestone counts whether the transition was an
   enforced one by a committee member or assignee, or an admin override (§7.2, §8.2).
@@ -6381,10 +6413,11 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   that goes `valid → needs_improvement → valid` earns `solution_validated` once, and a
   §10.3 revert out of `solved` followed by a second solve earns nothing new.
 - **Daily caps** (per recipient, per **UTC day** of the event): `comment_posted` earns
-  points for the first **5** comments of the day and `like_received` for the first
-  **25** likes received that day. Past the cap the award row is still written, with
+  points for the first **5** comments of the day, `like_received` for the first
+  **25** likes received that day and `hype_received` for the first **10** hypes
+  received that day. Past the cap the award row is still written, with
   **0 points**, so badges that count events (§23.4) still see it.
-- **Never points for:** giving a like, following, editing, attaching a file, a comment
+- **Never points for:** giving a like or a hype, following, editing, attaching a file, a comment
   on a deleted thread, a `not_selected` or `rejected` outcome, or liking your own item
   (no row at all). Withdrawing or deleting an item, deleting a comment, and unliking
   deduct nothing (decision 3).
@@ -6452,6 +6485,7 @@ and count capped (0-point) rows too.
 | **Co-Pilot** (`co_pilot`) | one-off | your first challenge submitted through an agent | — |
 | **Agent of Change** (`agent_of_change`) | one-off | your first solution proposed through an agent | — |
 | **Human in the Loop** (`human_in_the_loop`) | one-off | a challenge or solution you submitted through an agent reached `valid` | — |
+| **Talent Scout** (`talent_scout`) | tiered | items you hyped that were later solved or implemented (§26.7) | 1 / 5 / 20 |
 
 - **Evaluation.** After writing award rows, the same transaction re-counts the affected
   user's relevant reasons and inserts any newly reached `(badge, tier)` rows
@@ -6552,7 +6586,8 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   **not** touch the ledger (decision 3), and the id is never returned by any API — it
   exists only so the Points ranking can apply the live org-visible test. With §25 the
   ledger also gains `via_mcp` (boolean) and the 0-point, item-less `agent_connected`
-  reason (§25.12, §25.13).
+  reason (§25.12, §25.13); with §26 the reasons `hype_received` and the 0-point
+  `hype_fulfilled` (§26.7, §26.10).
 - **`user_badges`** — user_id (FK), badge_key, tier (`1 | 2 | 3`, null for a one-off),
   earned_at. Unique `(user_id, badge_key, coalesce(tier, 0))`. Same grants as the
   ledger.
@@ -7077,7 +7112,7 @@ administration is reachable through it (§25.6).
 | 5 | **Restricted content (namespace-only or shared with specific people) is invisible through MCP** unless a platform admin turns on *"Allow restricted content over MCP"* (off by default). | The agent's model is outside InnoBox's control — the same rule as the AI provider (§22.7). |
 | 6 | **Any active user** may connect once it is on. | Consumption is universal (§4.2); per-connection revoke and per-client block cover incidents. |
 | 7 | **Anonymity works exactly as on the web.** An agent may submit anonymously; every read is masked; reveal and self-reveal stay in the browser. | Anonymity is the person's choice wherever they submit; reveal is one-way. |
-| 8 | **No likes through MCP.** | A like is a human signal that drives ranking, spotlights and points. |
+| 8 | **No likes — and no hypes (§26) — through MCP.** | A like or a hype is a human signal that drives ranking, spotlights and points. |
 | 9 | **Attachments: metadata only.** No bytes, no uploads. | The gateway (invariant 4) stays the only byte path. |
 | 10 | **Visible attribution.** Items and comments created through MCP carry a **"via agent"** tag wherever people read them. | Reviewers and readers should know how a contribution arrived. The person is still the author. |
 | 11 | **Points as normal, plus four "first" badges.** MCP contributions earn §23 points like any other; four one-off badges mark a person's first agent milestones. | The person is responsible for what their agent submits; the badges encourage trying it. |
@@ -7298,7 +7333,8 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
 `valid`, a validation failure.
 
 **Not reachable through MCP — these tools do not exist:**
-- **Likes** (decision 8).
+- **Likes and hypes** (decision 8, §26). Tool results carry an item's like count but no
+  hype fields.
 - **Every status change other than the author's resubmit** — enforced transitions by a
   committee member or assignee, admin overrides, and **withdraw**.
 - **Assignment, triage, the triage queue, bulk actions and CSV exports.**
@@ -7503,3 +7539,321 @@ issue and rotation (they are metrics), and follows (as on the web).
 - *E2e:* connect from `/agents` through consent; an agent submits a challenge that
   appears with "via agent" in the triage queue; the person earns Plugged In and
   Co-Pilot; revoking on `/agents` stops the next call.
+
+---
+
+## §26 Hype
+
+A **scarce, weekly endorsement** beside the unlimited like, modelled on YouTube's Hype:
+every person gets **3 hypes a week** to spend on the open challenges and solutions they
+most want the organization to act on. A hype cannot be taken back, counts double when
+it lands early in an item's life, feeds a per-viewer **"Hyped this week"** board on Home,
+and earns the author points and the hyper a badge when their pick wins. It is a signal
+for the process, not a vote: nothing about triage, transitions or the single accepted
+solution (§8.3) is decided by it.
+
+### §26.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Challenges and solutions, one shared budget.** | One scarce signal, spent wherever the person thinks it matters most; one board, one rule to learn. |
+| 2 | **3 hypes per ISO week (Monday 00:00 UTC), fixed in code.** | YouTube's number; the UTC week matches the ledger's UTC-day caps. No tuning in production (as §23 decision 7). |
+| 3 | **One hype per person per item, ever; no take-backs, no refunds.** | A hype is spent when given. No un-hype path, no decrement to protect, no farming across weeks. |
+| 4 | **Any open status is hypeable; closed states refuse.** No age window. | The status, not the calendar, says whether the signal can still be acted on. |
+| 5 | **Early hype counts double** — a hype within the item's first 7 days weighs 2, later ones 1. The weight is item-based. | Rewards spotting things early; a weight tied to the author would hint at who wrote an anonymous item (invariant 3). |
+| 6 | **One number everywhere — hype points.** Cards, detail, triage and the sort show the item's all-time weighted total; the Home board ranks by the points earned **this week**. | Two clocks, as on YouTube: the item shows its total, the chart is weekly. |
+| 7 | **The board lives on Home (top 5) plus a "most hyped" sort on the challenges page.** It is **per-viewer** (the full §4.3 predicate). | It lists items, so it cannot be the viewer-independent people board of §13.3 (invariant 2). No new page. |
+| 8 | **Hypers are public.** Anyone who can see the item sees who hyped it. | A hype is a real-name endorsement, like a comment; the budget is spent in the open. |
+| 9 | **Self-hype is refused.** | A scarce budget spent on yourself is noise on the board, and it sidesteps the self-award question. |
+| 10 | **Author earns 3 points per hype received, the first 10 a day; the hyper earns the Talent Scout badge when a hyped item is solved or implemented.** Append-only, like every award (§23). | Three times a like for a signal three-a-week scarce; giving a hype earns no points (the §23 "never points for giving" rule), but a good eye is a badge. |
+| 11 | **The author is notified in-app and by e-mail** (event 16), coalesced per item in the inbox. | Scarce enough to be worth a nudge; likes stay silent. |
+| 12 | **Own platform switch, off by default.** | A deployment chooses whether it wants a scarce signal; points and badges additionally need gamification on. |
+| 13 | **No hype through MCP** (§25 decision 8 extended). | A human signal that drives a ranking and points, like a like. |
+
+### §26.2 Budget and the week
+
+- **The week** is the ISO week in UTC: Monday 00:00:00 UTC to the next Monday. Nothing
+  is scheduled — the budget left and the board are computed from `hypes.created_at`
+  against the current week's start, so there is no reset job and nothing to replay.
+- **Budget:** `HYPES_PER_WEEK = 3`, fixed in `@innobox/shared/hype` beside the other
+  constants. *Left* = 3 − the person's hypes with `created_at` in the current week.
+  Hypes on items that have since closed, been trashed or been deleted still count as
+  spent: a budget is never refunded (decision 3).
+- **Copy.** The button reads **"Hype · 2 left this week"**; at zero it is disabled with
+  the tooltip *"You've used this week's hypes. They reset on Monday."* The Home board's
+  heading carries the same budget line (§26.5).
+- **Concurrency.** The budget check and the insert run in one transaction under a
+  transaction-scoped advisory lock per person, so two concurrent requests can never both
+  spend the last hype; the unique key on `(user, item)` makes a retried request a 409,
+  never a second row.
+
+### §26.3 Eligibility
+
+A person may hype an item when **all** of the following hold; the detail payload's
+`canHype` carries the result per viewer, and the API re-checks every one.
+
+1. **The feature is on** (§26.8).
+2. **The viewer can see the item** (§4.3) and it is **not trashed** (§10.4 — the same
+   `trashed` refusal the like toggle gives).
+3. **The item is open.** A challenge in `in_review`, `needs_improvement`,
+   `meeting_scheduled` or `valid`; a solution in `proposed`, `in_review`,
+   `needs_improvement`, `valid`, `accepted_internally`, `waiting_for_resources`,
+   `in_implementation` or `external_acceptance`. A solution is additionally hypeable
+   only while its **parent challenge is open** by the same test — a closed challenge
+   freezes hypes on its solutions exactly as it freezes likes (§8.3). `awaiting_triage`
+   is not hypeable: it is visible only to the author (who cannot self-hype) and the
+   namespace's admins, and a signal before triage would pre-empt it.
+4. **The viewer is not the item's author** (decision 9). This holds for an anonymous
+   item too: `canHype` is a per-viewer flag, so a `false` on your own anonymous item is
+   seen by nobody else. The API refuses with the same generic message as any other
+   ineligible item, so the refusal itself reveals nothing.
+5. **The viewer has not hyped this item before** (decision 3).
+6. **The viewer has budget left** this week (§26.2).
+
+The button is **hidden** when 1–4 fail (nothing to offer), rendered **pressed** and
+disabled when 5 fails (*"You hyped this"*), and disabled with the budget tooltip when
+only 6 fails. Everything the button shows comes from the item's payload (`hype`,
+`hyped`, `canHype`, `hypeReason`) and the viewer's `hypesLeft`; the client computes
+nothing.
+
+**On close.** When an item leaves the open set — any transition to `solved`,
+`rejected`, `withdrawn`, `implemented`, `not_selected`, or a challenge's close freezing
+its solutions — the hypes it holds **stay on the item** as history: the number keeps
+showing on its card and detail, and the hypers list stays. The item **leaves the Home
+board** because the board lists open items only (§26.5). A later move back to an open
+status (an admin override, the §10.3 revert to `valid`) makes it hypeable and
+board-eligible again; the existing hypes are unchanged.
+
+### §26.4 Weight and the number
+
+- **Weight.** A hype inserted while `now() < item.created_at + 7 days` is stored with
+  `weight = 2`, otherwise `weight = 1`. The weight is fixed at insert time and never
+  recomputed, so the number on an item is stable. "Early" is measured against the
+  item's **creation**, not its last status change, so a resubmitted or re-validated
+  item does not re-open the window.
+- **The number.** An item's **hype** is `sum(weight)` over its hype rows, all time. It
+  is what cards, the list view, the detail header, each solution's header, the triage
+  rows and the challenges-page sort use. The Home board instead ranks by
+  `sum(weight)` over the rows whose `created_at` falls in the current week (§26.5).
+- **Copy.** The glyph is a flame; the number sits beside it as the like count sits beside
+  the heart. The button tooltip, while early hype applies, reads *"Counts double — this
+  item is under a week old"*; otherwise *"Spend one of this week's hypes on this item"*.
+  The hypers list and the board never show a per-person weight; the raw hyper count is
+  not surfaced anywhere (decision 6).
+
+### §26.5 Surfaces
+
+When the feature is **off** (§26.8) none of this renders, the payload fields below are
+absent, and `/api/hypes` answers 404.
+
+- **The button.** On the challenge detail header beside the like button, and on each
+  listed solution's header beside its like button. The rules of §26.3 decide its state.
+  A click asks for no confirmation beyond the button's own copy: the tooltip already
+  says it cannot be undone. A successful hype re-renders the number, the pressed state,
+  the hypers list and the budget line from the response.
+- **Cards and list rows (§13.1).** Every challenge card and list row shows the hype
+  number after the like count (flame glyph + number; **0 is shown**, not hidden, so a
+  reader can tell hype is on). The §13.1 "card badges carry over" rule covers it. The
+  Featured cards on Home (§13.2) show it too, since they reuse the gallery card.
+- **Sort — "most hyped".** A fourth option on the challenges page's sort control
+  (newest · most liked · most solutions · **most hyped**), ordering by the challenge's
+  all-time hype desc, then newest. It sorts challenges by **their own** hype, not by
+  their solutions'. It is a sort, not a filter: items at 0 stay in the list.
+- **Hypers list.** On the detail page, under the item's header: the people who hyped it,
+  as small avatar bubbles with the §13.8 hover card, newest first, the first **12** shown
+  and *"+N"* for the rest (expanding on click to the full list). Hypers are never
+  anonymous — the hype records the real user, as a like does — so the list masks
+  nothing. A deactivated hyper shows the greyed bubble; an erased one the scrubbed
+  bubble (§3). Served to anyone who can see the item, as part of its payload (`hypers`).
+- **Triage (§14.1).** The Challenges tab and the Solutions tab each gain a **hype**
+  column (the number only, after the existing columns, before the date), so the signal
+  is visible where decisions are made. No new sort and no filter. Mobile rows add it to
+  the meta line. The CSV export does **not** gain a column.
+- **Home board — "Hyped this week" (§13.2).** A section below Featured and above the
+  KPI tiles, rendered only while the feature is on **and** the viewer can see at least
+  one eligible item (no heading, no empty state otherwise — as Featured). Its heading
+  reads **"Hyped this week"** with the budget line *"You have 2 hypes left this week"*
+  on the right (or *"You've used this week's hypes — they reset on Monday"*).
+  - **Rows:** the top **5** items by **this week's** hype points, ties broken by the
+    earliest hype of the week. One mixed list (decision 1): each row shows the typed
+    number (`CH-12` / `SOL-34`), the title (a solution row shows the first 120
+    characters of its description, with its parent challenge's title muted below), the
+    author masked per §9, the status pill, and this week's points with the flame. The
+    whole row links to the item (`/challenges/:number`, `#SOL-<n>` for a solution).
+  - **Eligible** = open (§26.3 rule 3), not trashed, with at least one hype this week,
+    and **visible to the viewer** under the full §4.3 predicate — the one the gallery
+    uses — applied to the item, and for a solution to its parent as well, including
+    the state rule (a `proposed` solution appears only to those §4.3 lets see it). A
+    namespace-restricted or people-shared item therefore ranks, counts and shows only
+    for those who may see it. The response never carries a count of hidden items, a
+    rank among hidden items, or "N more".
+  - **Not a leaderboard.** It names items, not people; it awards no leader badge; it
+    is not on `/leaderboard`, whose five metrics are unchanged.
+- **Profile, hover card, search results, e-mail bodies of other events:** no hype
+  number. The profile shows no budget (the button and Home do).
+
+### §26.6 Notifications — event 16
+
+A new row of the §12.1 matrix, **"Hyped"**: an item of yours received a hype.
+
+- **Recipient:** the item's author only — never the hyper (they are the actor), never
+  followers, admins or the assignee. The author of an **anonymous** item is a safe
+  recipient: nobody else receives it, and the item's masking is unaffected.
+- **In-app:** coalesced per item while unread, exactly as event 6 (one row per
+  recipient per item, `count`, `latestBy`, `latestAt` updated in place against a second
+  partial unique index on `type = 'hyped'`; opening the item's detail marks it read).
+  Copy: *"3 people hyped CH-412 — latest Alice"*, linked to the item. The hyper's name is
+  safe to show: hypers are public (decision 8).
+- **E-mail:** a standard outbox row. Subject *"<Name> hyped your challenge CH-412"* /
+  *"… your solution SOL-34"*; the body carries the item's number and title, the hyper's
+  name, the item's current hype and the link. It honors the e-mail opt-out and the
+  **digest** choice: event 16 is a **follower-type** event for the digest's purpose
+  (held on `daily` / `weekly`, listed as one line per item in the digest), not an
+  actionable one. The coalescing rule applies as for event 6: the e-mail goes out with
+  the first hype and is **not re-sent** while the inbox row stays unread.
+- **No per-event preference** of its own (§13.5 is unchanged); the e-mail switch and
+  the digest choice are the controls. No channel webhook (§12.4 is unchanged).
+- **Not written** while the feature is off (nothing can be hyped then), for a self-hype
+  (refused), or to a deactivated or erased author (the §12.1 drop).
+
+### §26.7 Gamification
+
+Both halves follow §23 to the letter: append-only, written in the triggering
+transaction, nothing deducted, nothing while anonymous, nothing names the item.
+
+- **`hype_received` — 3 points to the item's author**, award key
+  `hype_received:<parentType>:<parentId>:<hyperId>`, `occurred_at` = the hype's
+  `created_at`. **Daily cap:** the first **10** hypes received per recipient per UTC day
+  earn points; later ones write a 0-point row (as `like_received` past 25). Never for a
+  self-hype (refused, so no row at all). **Anonymous items:** no row while the item is
+  anonymous; the self-reveal replay (§23.2) adds one `hype_received` per existing hype,
+  backdated to each hype's `created_at`, under the daily caps of those days. Counts
+  toward the level total and, via the live org-visible test, the Points ranking
+  (§23.9). Restricted-namespace items count in full (§23 decision 5).
+- **Talent Scout** (`talent_scout`) — a **tiered** achievement badge for the **hyper**:
+  *items you hyped that were later solved or implemented*, **1 / 5 / 20**. Each hyped
+  item counts **once**, at its first entry into `solved` (a challenge) or `implemented`
+  (a solution); hyping both a challenge and its winning solution counts twice. Backed by
+  a 0-point ledger reason **`hype_fulfilled`** (award key
+  `hype_fulfilled:<parentType>:<parentId>:<hyperId>`, `occurred_at` = the transition
+  time), written for every hyper of the item in the transition's transaction — the
+  enforced move, an admin override, a bulk status set, or the §8.3 auto-close — and
+  evaluated into the badge there (§23.4 *Evaluation*). Never revoked by a later revert
+  or delete (§23 decision 3). The item's **own** anonymity is irrelevant: the award goes
+  to the hyper, whose hype is public, and the row names no item on any surface. A hype
+  given before the switch was turned off, on an item that is solved while it is off,
+  still earns the row (accrual is independent of the switch, §23.8); a hype can only be
+  **given** while it is on.
+- **No author badge** is added: the Crowd Favorite badge keeps counting likes only.
+  **No leaderboard metric** is added (§26.5).
+- **Via agent:** no hype can be given through MCP (decision 13), so no hype row is ever
+  `via_mcp`; a `hype_received` on an item that was *created* through an agent is marked
+  `via_mcp` like the item's other awards (§25.12).
+
+### §26.8 Platform switch (§14.3)
+
+A **Hype** card on `/admin/settings` with one switch, **"Weekly hype"**, **off by
+default**, with the explanatory line *"Everyone gets 3 hypes a week to spend on the
+challenges and solutions they most want acted on. Hypes cannot be taken back and count
+double in an item's first 7 days."* Audited as `settings.hype_enabled_changed`
+(`after: { enabled }`). **Off:** every §26.5 surface is hidden, the payload fields are
+absent, `/api/hypes` answers 404, the challenges-page `sort=most_hyped` falls back to newest,
+and no event 16 is written. Existing hype rows, awards and badges are untouched, so
+turning it back on shows accurate numbers at once. The Talent Scout badge appears
+among a profile's **locked** badges only while hype is on (as the agent badges do while
+agent access is on, §23.4); an earned tier stays visible either way, since it is
+permanent. Points and badges render only while **gamification** is also on (§23.10);
+hype itself does not require gamification.
+
+### §26.9 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** A hype number is part of its item's payload and travels with the
+  item's visibility; the board is per-viewer (§26.5); `canHype`, `hyped`, `hypers` and
+  the number are never returned for an item the viewer cannot see (404). Nothing
+  aggregates hypes across items the viewer cannot see — there is no global hype count
+  or KPI tile.
+- **Invariant 3.** The item's author stays masked on every hype surface; the hypers are
+  real names by design. `hype_received` awards wait for self-reveal (§26.7); the
+  notification goes to the author alone (§26.6). A viewer's own `canHype: false` on
+  their anonymous item is visible only to them.
+- **Trash (§10.4).** A trashed item cannot be hyped (`trashed` refusal); its hype rows,
+  number and hypers are kept and reappear on restore; it is off the board while trashed.
+- **Hard delete (§10.3).** The cascade removes the item's `hypes` rows (and a
+  challenge's solutions' rows). Budgets are not refunded. The ledger is untouched
+  (§23 decision 3): `hype_received` and `hype_fulfilled` rows stay, and the Talent Scout
+  tiers already earned stay.
+- **Visibility change (§4.3)** on an item: nothing is rewritten; the per-viewer filter
+  does the rest. A hyper who later loses sight of the item keeps their spent budget.
+- **Erasure (§3)** keeps the person's hype rows attached to the de-identified row, as it
+  keeps their likes; the hypers list shows the scrubbed bubble. Their ledger rows and
+  badges go with the §23 erasure. **Deactivation** keeps everything and shows the greyed
+  bubble.
+- **Archived namespace (§4.1):** hypes follow the status rule only; an archived
+  namespace's open challenges remain hypeable, as they remain likeable.
+
+### §26.10 Data model (migration 0050)
+
+- **`hypes`** — id (bigint identity), user_id (FK `users`), parent_type
+  (`challenge | solution`), parent_id (uuid; no FK, removed by the §10.3 cascade as
+  `likes` rows are), weight (smallint, check `in (1, 2)`), created_at (timestamptz,
+  default now()). **Unique `(user_id, parent_type, parent_id)`**; indexes on
+  `(parent_type, parent_id)`, `(user_id, created_at)` (the budget) and `(created_at)`
+  (the board). Grants: INSERT/SELECT, plus DELETE solely for the §10.3 cascade;
+  **no UPDATE** — a hype is immutable.
+- **`gamification_ledger.reason`** gains `hype_received` and `hype_fulfilled`.
+- **`user_badges`** needs no change; `talent_scout` joins the fixed catalogue.
+- **`notifications`** gains a second partial unique index on `(user_id,
+  payload->>'parentType', payload->>'parentId') WHERE read_at IS NULL AND type = 'hyped'`
+  (§26.6).
+- **`platform_settings`** gains **`hype_enabled`** (default **false**).
+- No column on `challenges` or `solutions`: the number is computed from `hypes` (as the
+  like count is), in the same query that counts likes.
+
+### §26.11 API, audit, tests
+
+- **API (§16).** `POST /api/hypes { parentType, parentId }` — session, `mutation`
+  bucket, `Origin`-checked. Order of checks (§2.4): **404** when the feature is off,
+  the id is malformed or the viewer cannot see the item; the `trashed` response; then
+  **409** with a plain message for a closed item (*"Hype is closed for this item"*),
+  the viewer's own item (the same message), an item already hyped (*"You've already
+  hyped this"*) and an exhausted budget (*"You've used this week's hypes. They reset on
+  Monday."*). Success: `{ hyped: true, hype: <points>, hypesLeft, hypers: [...] }`.
+  There is no `DELETE` (decision 3). The challenge detail payload and each solution in
+  it carry `hype` (number), `hyped`, `canHype`, `hypeReason` (`closed | own | hyped |
+  budget | null`), `hypeEarly` (a hype given now would count double — drives the §26.4
+  tooltip) and `hypers[]` (`{ id, displayName, deactivated, scrubbed }`, newest
+  first); the detail payload also carries the viewer's `hypesLeft` and `weekResetsAt`
+  (UTC ISO). Gallery and list rows carry `hype`. `GET /api/challenges` accepts
+  `sort=most_hyped` (named like the other sorts). `GET /api/dashboard` gains `hyped: {
+  weekStart, hypesLeft, items: [{ type, number, title, parentTitle?, challengeNumber
+  (the row's link target), author (masked), status, points }] } | null`
+  (`null` while off). `GET /api/me` gains `hype: { enabled, hypesLeft } | null` for the
+  button's initial render. Triage-queue rows carry `hype`. No endpoint returns a
+  per-person weight.
+- **Audit (§15).** **`hype.given`** — actor the hyper, target the item, `after: { weight
+  }` — under All only, as `like.*` rows are (the budget spent is derivable from the
+  rows). `settings.hype_enabled_changed` under Admin. Awards, the badge and event 16
+  are not audited (the ledger and the inbox are their own records, §23.12).
+- **Tests.** *Unit:* the week boundary (Sunday 23:59:59 UTC vs Monday 00:00:00 UTC,
+  including a check that local time plays no part), the budget arithmetic, the weight
+  rule at exactly 7 days, the eligibility matrix over every challenge and solution
+  status (and a solution under a closed parent), `hypeReason` precedence, the
+  `hype_received` cap at 10 and 0-point rows beyond, Talent Scout tiers and the
+  once-per-item rule, the sort comparator. *Integration:* a hype is written with the
+  right weight and audited; the fourth hype of a week is 409 and nothing is written;
+  a concurrent pair cannot both take the last hype; a repeat is 409 with a single row;
+  self-hype, closed item, trashed item and an invisible item (404) refuse without a
+  row; the award is written in the same transaction, waits for self-reveal and is
+  replayed backdated; `hype_fulfilled` and the badge on an enforced move, an override, a
+  bulk set and the §8.3 auto-close, once per item, never revoked on revert; event 16's
+  inbox coalescing, its e-mail honoring opt-out and digest, no row to a deactivated
+  author; the board's per-viewer filter — a namespace-restricted item ranks only for
+  its members, a people-shared one only for its list, a `proposed` solution only for
+  those §4.3 allows, nothing in the response hints at hidden items; the §10.3 cascade
+  removes hype rows and leaves the ledger alone; erasure keeps the rows; the switch
+  off hides every surface, 404s the route, falls the sort back and leaves accrual of
+  `hype_fulfilled` intact. *E2e:* with hype on, a user hypes a challenge from the
+  detail page (the button turns pressed, the budget line reads 2 left, their bubble
+  appears in the hypers list), the item appears on Home's "Hyped this week", the author
+  sees the inbox row, and after the solution is implemented the hyper's profile shows
+  Talent Scout (Bronze).

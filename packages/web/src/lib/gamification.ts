@@ -44,6 +44,9 @@ export async function awardSolutionCreated(client: PoolClient, solution: { id: s
  *  the assignee at that moment when they are not also the author). Who moved it doesn't matter. */
 export async function challengeStatusAwards(client: PoolClient, challengeId: string, status: string): Promise<AwardInput[]> {
   if (status !== "valid" && status !== "solved") return [];
+  // §26.7: every hyper of a challenge reaching `solved` earns its Talent Scout marker — the
+  // enforced move, an override, a bulk set and the §8.3 auto-close all come through here.
+  const hypers = status === "solved" ? await hypeFulfilledAwards(client, "challenge", challengeId) : [];
   const { rows } = await client.query<{ author_id: string | null; is_anonymous: boolean; assignee_id: string | null }>(
     `select author_id, is_anonymous, assignee_id from challenges where id = $1`,
     [challengeId],
@@ -62,19 +65,54 @@ export async function challengeStatusAwards(client: PoolClient, challengeId: str
   if (c.assignee_id && c.assignee_id !== c.author_id) {
     out.push({ ...item, userId: c.assignee_id, reason: "assignment_solved", awardKey: awardKey.assignmentSolved(challengeId) });
   }
+  out.push(...hypers);
   return out;
 }
 
 /** The awards a solution's author earns on entering `valid` or `implemented`. */
 export async function solutionStatusAwards(client: PoolClient, solutionId: string, status: string): Promise<AwardInput[]> {
   if (status !== "valid" && status !== "implemented") return [];
+  // §26.7: the hypers' Talent Scout markers do not depend on the author's anonymity — the award
+  // goes to the hyper, whose hype is public, and names no item anywhere.
+  const hypers = status === "implemented" ? await hypeFulfilledAwards(client, "solution", solutionId) : [];
   const { rows } = await client.query<{ author_id: string; is_anonymous: boolean }>(`select author_id, is_anonymous from solutions where id = $1`, [solutionId]);
   const s = rows[0];
-  if (!s || s.is_anonymous) return [];
+  if (!s || s.is_anonymous) return hypers;
   const item = { itemType: "solution" as const, itemId: solutionId, userId: s.author_id };
   return status === "valid"
     ? [{ ...item, reason: "solution_validated", awardKey: awardKey.solutionValidated(solutionId) }]
-    : [{ ...item, reason: "solution_implemented", awardKey: awardKey.solutionImplemented(solutionId) }];
+    : [{ ...item, reason: "solution_implemented", awardKey: awardKey.solutionImplemented(solutionId) }, ...hypers];
+}
+
+/** §26.7 `hype_fulfilled` — 0 points, one per (item, hyper), for every person who hyped an item
+ *  that has just first reached `solved` (a challenge) or `implemented` (a solution). The award key
+ *  keeps it once per item; nothing ever revokes it. */
+export async function hypeFulfilledAwards(client: PoolClient, parentType: AwardItemType, parentId: string): Promise<AwardInput[]> {
+  const { rows } = await client.query<{ user_id: string }>(`select user_id from hypes where parent_type = $1 and parent_id = $2`, [parentType, parentId]);
+  return rows.map((h) => ({
+    userId: h.user_id,
+    reason: "hype_fulfilled" as const,
+    itemType: parentType,
+    itemId: parentId,
+    awardKey: awardKey.hypeFulfilled(parentType, parentId, h.user_id),
+  }));
+}
+
+/** §26.7 `hype_received` for the hyped item's author — 3 points, the first 10 a UTC day. Never
+ *  while the item is anonymous (a self-reveal replays it); self-hype is refused before this. */
+export async function awardHypeReceived(client: PoolClient, parentType: AwardItemType, parentId: string, hyperId: string): Promise<void> {
+  const { rows } = await client.query<{ author_id: string | null; is_anonymous: boolean }>(
+    parentType === "challenge"
+      ? `select author_id, is_anonymous from challenges where id = $1`
+      : `select author_id, is_anonymous from solutions where id = $1`,
+    [parentId],
+  );
+  const item = rows[0];
+  // An external challenge (§24.6) has no author to credit.
+  if (!item || item.is_anonymous || item.author_id === null || item.author_id === hyperId) return;
+  await write(client, [
+    { userId: item.author_id, reason: "hype_received", itemType: parentType, itemId: parentId, awardKey: awardKey.hypeReceived(parentType, parentId, hyperId) },
+  ]);
 }
 
 /** Writes a batch the caller gathered (a challenge transition, or the §8.3 auto-close's three

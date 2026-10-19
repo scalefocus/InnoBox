@@ -90,6 +90,15 @@ test("assignmentsTransferredMessage: singular, plural, and the 10-number cap wit
   assert.ok(!assignmentsTransferredMessage(ten).includes("more"), "exactly ten numbers need no 'and K more'");
 });
 
+test("hype notification copy names the hyper, the item and the count, never the author (§26.6)", async () => {
+  const { NOTIFICATION_TYPES, hypeEmailSubject, hypeNotificationMessage } = await import("./social.js");
+  assert.ok((NOTIFICATION_TYPES as readonly string[]).includes("hyped"));
+  const label = 'challenge CH-412 "Faster onboarding"';
+  assert.equal(hypeNotificationMessage(1, label, "Alice", 2), 'Alice hyped your challenge CH-412 "Faster onboarding" — it now has 2 hype.');
+  assert.equal(hypeNotificationMessage(3, label, "Bob", 5), '3 people hyped your challenge CH-412 "Faster onboarding" — latest Bob.');
+  assert.equal(hypeEmailSubject("Alice", "solution", "SOL-34"), "Alice hyped your solution SOL-34");
+});
+
 test("NOTIFICATION_TYPES: includes the erasure hand-over summary type", async () => {
   const { NOTIFICATION_TYPES } = await import("./social.js");
   assert.ok((NOTIFICATION_TYPES as readonly string[]).includes("assignments_transferred"));

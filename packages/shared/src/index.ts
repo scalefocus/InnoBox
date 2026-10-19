@@ -106,6 +106,9 @@ export * from "./presence.js";
 // `@innobox/shared/gamification`) and the server-only award writer web and worker share.
 export * from "./gamification.js";
 export * from "./gamification-awards.js";
+// §26 hype: the week, the budget, the early-hype weight, the eligibility matrix and the copy
+// (client-safe, also at `@innobox/shared/hype`).
+export * from "./hype.js";
 
 // §24 public submissions: the form's limits and validation, the abuse decisions, retention dates,
 // the privacy-notice links and the submitter e-mails (client-safe, also at

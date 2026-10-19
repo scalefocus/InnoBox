@@ -12,6 +12,8 @@ import { readChallengesView, writeChallengesView, type ChallengesView } from "@/
 import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
 import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
+import { HypeCount } from "@/components/Hype";
+import { cachedGet } from "@/lib/ui";
 
 interface ChallengeListItem {
   id: string;
@@ -26,10 +28,12 @@ interface ChallengeListItem {
   likedByViewer: boolean;
   solutionCount: number;
   isNew: boolean;
+  /** §26.5: all-time hype points — present only while hype is on. */
+  hype?: number;
 }
 
 type Tab = "open" | "mine" | "completed";
-type Sort = "newest" | "most_liked" | "most_solutions";
+type Sort = "newest" | "most_liked" | "most_solutions" | "most_hyped";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "open", label: "Open" },
@@ -41,11 +45,20 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: "newest", label: "Newest" },
   { key: "most_liked", label: "Most liked" },
   { key: "most_solutions", label: "Most solutions" },
+  // §26.5: offered only while hype is on.
+  { key: "most_hyped", label: "Most hyped" },
 ];
 
 export default function ChallengesPage() {
   const [tab, setTab] = useState<Tab>("open");
   const [sort, setSort] = useState<Sort>("newest");
+  // §26.8: the "most hyped" sort and the hype numbers exist only while hype is on.
+  const [hypeOn, setHypeOn] = useState(false);
+  useEffect(() => {
+    cachedGet<{ hype?: { enabled: boolean } | null }>("/api/me")
+      .then((me) => setHypeOn(me.hype?.enabled === true))
+      .catch(() => setHypeOn(false));
+  }, []);
   const [filters, setFilters] = useState<GalleryFilterValues>(EMPTY_GALLERY_FILTERS);
 
   const [challenges, setChallenges] = useState<ChallengeListItem[] | null>(null);
@@ -110,7 +123,7 @@ export default function ChallengesPage() {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
         <GalleryFilterFields value={filters} onChange={setFilters} />
         <div className="sort-toggle">
-          {SORTS.map((s) => (
+          {SORTS.filter((s) => s.key !== "most_hyped" || hypeOn).map((s) => (
             <button
               key={s.key}
               type="button"
@@ -183,6 +196,7 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       </div>
       <div className="meta">
         <span className="chip">❤ {challenge.likeCount}</span>
+        {challenge.hype !== undefined && <HypeCount value={challenge.hype} />}
         <span className="chip">{challenge.solutionCount} solution{challenge.solutionCount === 1 ? "" : "s"}</span>
       </div>
     </Link>

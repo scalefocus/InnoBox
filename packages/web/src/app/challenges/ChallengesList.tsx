@@ -13,6 +13,7 @@ import { AvatarBubble } from "@/components/AvatarBubble";
 import { challengeHref, shouldRowNavigate, solutionCountLabel, type ChallengesView } from "@/lib/challenges-view";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
 import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges, type ChallengeBadgeData } from "./ChallengeBadges";
+import { HYPE_GLYPH } from "@/components/Hype";
 
 /** The subset of the list payload a row reads (the page's list item satisfies it). */
 export interface ChallengeRowData extends ChallengeBadgeData {
@@ -23,12 +24,16 @@ export interface ChallengeRowData extends ChallengeBadgeData {
   status: string;
   likeCount: number;
   solutionCount: number;
+  /** §26.5: present only while hype is on — then the list gains a Hype column. */
+  hype?: number;
 }
 
 const INTERACTIVE = "a, button, input, select, textarea, label, [role='dialog'], [tabindex]";
 
 export function ChallengesList({ challenges }: { challenges: ChallengeRowData[] }) {
   const router = useRouter();
+  // §26.5: rows carry `hype` only while hype is on — the column follows the payload.
+  const hasHype = challenges.some((c) => c.hype !== undefined);
   const onRowClick = (e: MouseEvent<HTMLDivElement>, href: string) => {
     const target = e.target instanceof Element ? e.target : null;
     const go = shouldRowNavigate({
@@ -41,7 +46,7 @@ export function ChallengesList({ challenges }: { challenges: ChallengeRowData[] 
   };
 
   return (
-    <div className="rows ch-rows reveal">
+    <div className={hasHype ? "rows ch-rows has-hype reveal" : "rows ch-rows reveal"}>
       <div className="row row-head ch-row">
         <span className="ch-c-num">Number</span>
         <span className="ch-c-title">Title</span>
@@ -49,6 +54,7 @@ export function ChallengesList({ challenges }: { challenges: ChallengeRowData[] 
         <span className="ch-c-ns">Namespace</span>
         <span className="ch-c-author">Author</span>
         <span className="ch-c-likes">Likes</span>
+        {hasHype && <span className="ch-c-hype">Hype</span>}
         <span className="ch-c-sol">Solutions</span>
         <span className="ch-c-date">Date</span>
       </div>
@@ -99,6 +105,11 @@ function ChallengeRow({
       <span className="ch-c-likes" title={`${challenge.likeCount} likes`}>
         ❤ {challenge.likeCount}
       </span>
+      {challenge.hype !== undefined && (
+        <span className="ch-c-hype" title={`${challenge.hype} hype`} data-testid="hype-count">
+          {HYPE_GLYPH} {challenge.hype}
+        </span>
+      )}
       <span className="ch-c-sol">
         <span className="ch-sol-n">{challenge.solutionCount}</span>
         <span className="ch-sol-label">{solutionCountLabel(challenge.solutionCount)}</span>

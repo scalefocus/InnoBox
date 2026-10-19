@@ -70,6 +70,9 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 15 / §4.3: a `people` challenge was shared with the recipient — written by the
   // shared challenge-access-db helper (web and worker), immediate, never digested.
   "challenge_shared",
+  // §12.1 event 16 / §26.6: an item of yours received a hype — the author only, coalesced per item
+  // while unread like comment_posted, e-mailed (digestable).
+  "hyped",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -131,6 +134,23 @@ export function commentNotificationMessage(
       : `New comment on ${challengeNumber} "${challengeTitle}" — by ${latestBy}.`;
   }
   return `${count} new comments on ${challengeNumber} "${challengeTitle}"${repliesClause(repliesToYou)} — latest by ${latestBy}.`;
+}
+
+/**
+ * §26.6 event 16: the inbox/e-mail line for a coalesced "hyped" row. `itemLabel` names the item
+ * the way the recipient knows it — `challenge CH-412 "Title"` or `solution SOL-34 on CH-412
+ * "Title"`. Hypers are public (§26 decision 8), so naming them is safe; the recipient is the
+ * item's author, so nothing here identifies an anonymous author to anyone else. The write path
+ * renders the count ≥ 2 text in SQL too (lib/notify.ts `HYPED_MESSAGE_SQL`); a dbtest pins them.
+ */
+export function hypeNotificationMessage(count: number, itemLabel: string, latestBy: string, hype: number): string {
+  if (count <= 1) return `${latestBy} hyped your ${itemLabel} — it now has ${hype} hype.`;
+  return `${count} people hyped your ${itemLabel} — latest ${latestBy}.`;
+}
+
+/** §26.6: the e-mail subject for the first hype on an item while its inbox row is unread. */
+export function hypeEmailSubject(latestBy: string, parentType: "challenge" | "solution", itemNumber: string): string {
+  return `${latestBy} hyped your ${parentType} ${itemNumber}`;
 }
 
 /** §10.2: the coalesced row adds how many of its comments answer one of the recipient's own. */

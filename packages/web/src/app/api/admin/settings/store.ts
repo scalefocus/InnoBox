@@ -7,6 +7,7 @@ import type { Pool, PoolClient } from "pg";
 import { GAMIFICATION_ENABLED_AT_KEY, GAMIFICATION_ENABLED_KEY, getGamificationSettings, isDateFormat, type DateFormat } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
+import { HYPE_ENABLED_KEY } from "../../../../lib/hype-settings";
 import {
   PUBLIC_PRIVACY_NOTICE_KEY,
   PUBLIC_SUBMISSIONS_ENABLED_KEY,
@@ -83,6 +84,30 @@ export async function setGamificationEnabled(pool: Pool, enabled: boolean, actor
       action: "settings.gamification_enabled_changed",
       targetType: "platform_settings",
       targetId: GAMIFICATION_ENABLED_KEY,
+      after: { enabled },
+    });
+  });
+}
+
+// ── Hype switch (§26.8) ──────────────────────────────────────────────────────────────────
+
+export { getHypeEnabled } from "../../../../lib/hype-settings";
+
+/** One switch, off by default. Off hides every hype surface and closes the route; existing
+ *  hypes, awards and badges are untouched, so turning it back on shows accurate numbers. */
+export async function setHypeEnabled(pool: Pool, enabled: boolean, actorUserId: string): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    await client.query(
+      `insert into platform_settings (key, value, updated_by, updated_at)
+       values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [HYPE_ENABLED_KEY, JSON.stringify(enabled), actorUserId],
+    );
+    await appendAudit(client, {
+      actorUserId,
+      action: "settings.hype_enabled_changed",
+      targetType: "platform_settings",
+      targetId: HYPE_ENABLED_KEY,
       after: { enabled },
     });
   });

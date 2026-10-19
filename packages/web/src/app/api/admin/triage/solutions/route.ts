@@ -4,6 +4,7 @@
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, listTriageSolutions } from "../store";
+import { getHypeEnabled } from "@/lib/hype-settings";
 import { parseTriagePagination } from "../validation";
 import { withSystemLog } from "@/lib/system-log";
 
@@ -23,7 +24,8 @@ async function handleGET(req: Request): Promise<Response> {
   const pagination = parseTriagePagination(url.searchParams);
   if (!pagination.ok) return Response.json({ error: pagination.error }, { status: 400 });
 
-  const page = await listTriageSolutions(pool, viewer, pagination.value);
+  // §26.5: the hype column, only while hype is on.
+  const page = await listTriageSolutions(pool, viewer, pagination.value, { hype: await getHypeEnabled(pool) });
   return Response.json(page);
 }
 

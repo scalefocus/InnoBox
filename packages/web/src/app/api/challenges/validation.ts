@@ -29,7 +29,8 @@ function fail(error: string): { ok: false; error: string } {
 export const CHALLENGE_TABS = ["open", "mine", "completed"] as const;
 export type ChallengeTab = (typeof CHALLENGE_TABS)[number];
 
-export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions"] as const;
+// `most_hyped` (§26.5) is always accepted; the route falls it back to newest while hype is off.
+export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions", "most_hyped"] as const;
 export type ChallengeSort = (typeof CHALLENGE_SORTS)[number];
 
 /** The §13.1 gallery filters (status / impact area / namespace / author name). Shared by the
