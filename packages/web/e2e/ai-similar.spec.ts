@@ -3,6 +3,7 @@
 // the plain banner returns. Self-skips without AI_TOKEN_ENC_KEY on the server.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { openNewChallengeForm } from "./helpers/forms";
 import { createChallengeViaApi } from "./helpers/api";
 import { aiKeyPresent, disableAiStub, enableAiStub, startAiStub } from "./helpers/ai-stub";
 
@@ -28,7 +29,7 @@ test("similar challenges, explained: reasons in the duplicate banner", async ({ 
     await createChallengeViaApi(authorCtx.request, { title: `${word} invoice matching by hand`, description: `${word} invoices are matched by hand.` });
 
     const page = await authorCtx.newPage();
-    await page.goto("/challenges/new");
+    await openNewChallengeForm(page);
     await page.locator("#title").fill(`${word} invoice matching`);
     await page.locator("#description").fill(`${word} invoices matched manually`);
     await page.locator("#impactArea").selectOption({ label: "Internal" });

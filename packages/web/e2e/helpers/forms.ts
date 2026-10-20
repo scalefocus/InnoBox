@@ -4,9 +4,19 @@
 // challenge …", so whether a given run warns depends on what ran before it. Specs that are not
 // about the warning submit through this helper, which clicks through the advisory when it
 // appears; duplicate-warning.spec.ts covers the warning itself.
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 const DETAIL_URL = /\/challenges\/\d+$/;
+
+/** Open the new-challenge form and wait until it can be submitted. The impact-area and namespace
+ *  lists load in separate client fetches: a spec that picks its impact area the moment that list
+ *  arrives can click Submit while the `required` namespace select is still empty — the browser then
+ *  blocks the submit silently, with no request to wait on. A namespace value also means the page
+ *  has hydrated, so nothing typed afterwards is lost. */
+export async function openNewChallengeForm(page: Page): Promise<void> {
+  await page.goto("/challenges/new");
+  await expect(page.locator("#namespace")).not.toHaveValue("");
+}
 
 /** Submit the filled-in new-challenge form and wait until the new challenge's page loads. */
 export async function submitNewChallenge(page: Page): Promise<void> {

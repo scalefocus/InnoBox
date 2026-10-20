@@ -10,7 +10,7 @@
 // the reliable, high-value UI path is the better trade than a flaky full-chain click-through.
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { submitNewChallenge } from "./helpers/forms";
+import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
 
 // The challenge admin-override <select> carries every CHALLENGE status; `solved` is challenge-only,
 // so it uniquely identifies it (and is unaffected by the solution status <select>, if present).
@@ -26,7 +26,7 @@ test("core journey: submit → triage → propose", async ({ browser }) => {
   const authorCtx = await browser.newContext();
   await signIn(authorCtx, { name: `E2E Author ${stamp}` });
   const author = await authorCtx.newPage();
-  await author.goto("/challenges/new");
+  await openNewChallengeForm(author);
   await author.locator("#title").fill(title);
   await author.locator("#description").fill("A problem worth solving, raised by the e2e suite.");
   await author.locator("#impactArea").selectOption({ label: "Internal" });

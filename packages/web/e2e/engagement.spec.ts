@@ -4,7 +4,7 @@
 // (no controlled-<select> status changes), so it's reliable under Next dev's route compilation.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { submitNewChallenge } from "./helpers/forms";
+import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
 
 test("engagement: comment (post + edit), like, and follow a challenge", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -13,7 +13,7 @@ test("engagement: comment (post + edit), like, and follow a challenge", async ({
   const page = await ctx.newPage();
 
   // Raise a challenge (its author can comment/like/follow their own visible item).
-  await page.goto("/challenges/new");
+  await openNewChallengeForm(page);
   await page.locator("#title").fill(`E2E engagement challenge ${stamp}`);
   await page.locator("#description").fill("Something to discuss, like, and follow.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });

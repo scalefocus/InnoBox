@@ -5,6 +5,7 @@
 // AI_TOKEN_ENC_KEY on the server.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { openNewChallengeForm } from "./helpers/forms";
 import { createChallengeViaApi } from "./helpers/api";
 import { aiKeyPresent, disableAiStub, enableAiStub, startAiStub } from "./helpers/ai-stub";
 
@@ -31,7 +32,7 @@ test("Improve with AI: confirm, replace, hint, undo, duplicate check re-armed", 
     await createChallengeViaApi(authorCtx.request, { title: draftedTitle, description: "Invoices are matched by hand in finance." });
 
     const page = await authorCtx.newPage();
-    await page.goto("/challenges/new");
+    await openNewChallengeForm(page);
     const title = page.locator("#title");
     const description = page.locator("#description");
     await title.fill(`invoice stuff ${stamp}`);

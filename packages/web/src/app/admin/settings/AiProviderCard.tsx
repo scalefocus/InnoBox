@@ -120,10 +120,11 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
     setReplacing(false);
   }, []);
 
-  const refresh = useCallback(async (resetForm = false) => {
+  const refresh = useCallback(async (resetForm = false, isCurrent: () => boolean = () => true) => {
     try {
       const res = await fetch(URL_, { headers: { accept: "application/json" } });
       const json = await readJson(res);
+      if (!isCurrent()) return;
       if (!res.ok) throw new Error(json.error ?? "Could not load the AI provider");
       const v = json as unknown as AiView;
       applyView(v, resetForm);
@@ -133,12 +134,18 @@ export function AiProviderCard({ onNotice }: { onNotice: (m: string) => void }) 
         void loadModels({ provider: v.config.provider, baseUrl: v.config.baseUrl, token: "" });
       }
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not load the AI provider");
+      if (isCurrent()) setLoadError(err instanceof Error ? err.message : "Could not load the AI provider");
     }
   }, [applyView, loadModels]);
 
   useEffect(() => {
-    void refresh(true);
+    // A torn-down mount's load is dropped: dev StrictMode mounts twice, and the first load's
+    // late form reset would otherwise wipe a key the admin has already typed.
+    let current = true;
+    void refresh(true, () => current);
+    return () => {
+      current = false;
+    };
   }, [refresh]);
 
   const config = view?.config ?? null;
