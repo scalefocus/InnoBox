@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.17.1",
+    date: "2026-10-20",
+    summary:
+      "Under the hood: InnoBox is now built with Turbopack, the newer Next.js bundler, for development, the automated browser tests and production. Nothing changes in how the app looks or works, but builds finish faster and the test server needs far less memory, which should end the restarts that interrupted long test runs.",
+  },
+  {
     version: "1.17.0",
     date: "2026-10-19",
     summary:
