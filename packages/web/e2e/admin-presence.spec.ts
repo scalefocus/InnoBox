@@ -6,9 +6,10 @@
 // last_route, which the 60-second write throttle makes unreliable to stage through the UI.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("presence panel: platform-admin only, and a namespace-less member gets 403 from the API", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const memberCtx = await browser.newContext();
   await signIn(memberCtx, { name: `E2E Presence Member ${stamp}` });
@@ -29,7 +30,7 @@ test("presence panel: platform-admin only, and a namespace-less member gets 403 
 });
 
 test("presence panel: lists who is active, with the window, search and Refresh — and no Reach out", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   // A member whose sign-in lands them on the dashboard — an allowlisted request, so they are
   // located at "Overview". This is the allowlist working end to end.
@@ -109,7 +110,7 @@ test("presence panel: lists who is active, with the window, search and Refresh �
 });
 
 test("presence panel: opening it writes one presence.view audit row (§14.5, §15)", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   const { userId } = await signIn(adminCtx, { name: `E2E Presence Auditor ${stamp}`, admin: true });
 

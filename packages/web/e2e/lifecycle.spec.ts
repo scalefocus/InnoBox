@@ -18,9 +18,10 @@ import {
   setChallengeStatusViaApi,
   setSolutionStatusViaApi,
 } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("single-winner: implementing a solution solves the challenge and closes its siblings", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   // An admin raises a challenge and opens it for solutions.
   const adminCtx = await browser.newContext();
@@ -79,7 +80,7 @@ test("single-winner: implementing a solution solves the challenge and closes its
 });
 
 test("needs-improvement unlocks the author's Edit + Resubmit and resubmitting returns to review", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   // A member raises a challenge (born awaiting_triage).
   const authorCtx = await browser.newContext();
@@ -116,7 +117,7 @@ test("needs-improvement unlocks the author's Edit + Resubmit and resubmitting re
 });
 
 test("withdraw: the author withdraws their challenge, making it terminal and read-only", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   // NB: the persona name must not contain a control label ("Withdraw", "Edit", …) — the account
   // menu trigger is named after the persona, so a substring match would collide with the button.

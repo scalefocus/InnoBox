@@ -4,6 +4,7 @@
 // is refused the /admin console in-page.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("access control: an unauthenticated visitor is redirected to the sign-in landing", async ({ browser }) => {
   const ctx = await browser.newContext(); // no sign-in
@@ -33,7 +34,7 @@ test("sign-in landing: signed-out Home shows the Entra button, no nav links, and
 });
 
 test("access control: a non-admin member is refused the Administration console", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Member ${stamp}` }); // admin flag off → plain member
   const page = await ctx.newPage();

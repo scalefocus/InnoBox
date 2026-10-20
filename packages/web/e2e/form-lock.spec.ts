@@ -6,6 +6,7 @@
 // otherwise passed through untouched to the real API.
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3000";
 
@@ -54,13 +55,13 @@ async function countMine(ctx: BrowserContext, title: string): Promise<number> {
 }
 
 function uniqueTitle(tag: string): string {
-  const stamp = Date.now().toString(36).replace(/[^a-z]/g, "q");
+  const stamp = uniqueStamp().replace(/[^a-z]/g, "q");
   return `Zorbleq ${tag} vantrix ${stamp}`;
 }
 
 test("form lock: a double click creates exactly one challenge and shows Workingâ€¦", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Lock Click ${Date.now().toString(36)}` });
+  await signIn(ctx, { name: `E2E Lock Click ${uniqueStamp()}` });
   const title = uniqueTitle("click");
   const { page, counts } = await openFilledForm(ctx, title);
 
@@ -86,7 +87,7 @@ test("form lock: a double click creates exactly one challenge and shows Workingâ
 
 test("form lock: a double Enter creates exactly one challenge", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Lock Enter ${Date.now().toString(36)}` });
+  await signIn(ctx, { name: `E2E Lock Enter ${uniqueStamp()}` });
   const title = uniqueTitle("enter");
   const { page, counts } = await openFilledForm(ctx, title);
 
@@ -104,7 +105,7 @@ test("form lock: a double Enter creates exactly one challenge", async ({ browser
 
 test("form lock: two submit events in the same tick are guarded by the handler itself", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Lock Tick ${Date.now().toString(36)}` });
+  await signIn(ctx, { name: `E2E Lock Tick ${uniqueStamp()}` });
   const title = uniqueTitle("tick");
   const { page, counts } = await openFilledForm(ctx, title);
 

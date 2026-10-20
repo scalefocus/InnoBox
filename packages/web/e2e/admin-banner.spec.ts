@@ -4,9 +4,10 @@
 // only — a member's direct API call is refused.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("system banner: publish → everyone sees it → replace → clear", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const adminCtx = await browser.newContext();

@@ -3,10 +3,11 @@
 // photo-less bubbles does not re-ask the gateway on every render.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("photo gateway: a user with no photo gets a short-lived cacheable 404", async ({ browser }) => {
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const ctx = await browser.newContext();
   const { userId } = await signIn(ctx, { name: `E2E Photo Less ${stamp}` });

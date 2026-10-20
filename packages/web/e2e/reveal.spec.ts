@@ -9,9 +9,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("an admin can reveal an anonymous author transiently (to themselves only)", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const realName = `E2E Hidden Person ${stamp}`;
 
   const authorCtx = await browser.newContext();
@@ -50,7 +51,7 @@ test("an admin can reveal an anonymous author transiently (to themselves only)",
 });
 
 test("an anonymous author can permanently reveal themselves", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const realName = `E2E Owning Person ${stamp}`;
 
   const authorCtx = await browser.newContext();
@@ -80,7 +81,7 @@ test("an anonymous author can permanently reveal themselves", async ({ browser }
 });
 
 test("a solution's anonymous author: admin reveal in the dialog, and one-way self-reveal", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const proposerName = `E2E Quiet Proposer ${stamp}`;
 
   const adminCtx = await browser.newContext();

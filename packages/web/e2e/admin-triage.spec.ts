@@ -5,9 +5,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("triage queue: filter to a challenge by author, navigate to it, and switch tabs", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const memberName = `E2E Queue Member ${stamp}`;
   const title = `E2E triage-queue challenge ${stamp}`;
 
@@ -45,7 +46,7 @@ test("triage queue: filter to a challenge by author, navigate to it, and switch 
 });
 
 test("triage queue: the CSV export is offered and produces a CSV", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Export Admin ${stamp}`, admin: true });
   const admin = await adminCtx.newPage();

@@ -6,11 +6,12 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
 
 test("hype: spend one from the detail page, see it on Home, notify the author, earn Talent Scout", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   const authorCtx = await browser.newContext();
   const fanCtx = await browser.newContext();

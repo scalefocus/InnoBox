@@ -7,9 +7,10 @@ import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi } from "./helpers/api";
 import { aiKeyPresent, disableAiStub, enableAiStub, startAiStub } from "./helpers/ai-stub";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("triage assist: admins see the pending note and the queue indicator; the author never does", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const adminCtx = await browser.newContext();

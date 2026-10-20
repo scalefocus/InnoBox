@@ -3,9 +3,10 @@
 // under the Admin chip; a plain member is refused (403) at the API.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("audit integrity: an admin verifies the chain and the run is audited", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const memberCtx = await browser.newContext();
   await signIn(memberCtx, { name: `E2E Verify Member ${stamp}` });

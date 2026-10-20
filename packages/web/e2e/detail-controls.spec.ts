@@ -11,9 +11,10 @@ import {
   setNamespaceArchivedViaApi,
   setSolutionStatusViaApi,
 } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("Propose a solution is visible but disabled off `valid`; likes freeze while the challenge is closed", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Freeze Admin ${stamp}`, admin: true });
   const challenge = await createChallengeViaApi(adminCtx.request, {
@@ -76,7 +77,7 @@ test("Propose a solution is visible but disabled off `valid`; likes freeze while
 });
 
 test("Propose a solution is disabled with its own hint while the challenge's namespace is archived", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Archive Admin ${stamp}`, admin: true });
   const ns = await createNamespaceViaApi(adminCtx.request, { slug: `e2e-arch-${stamp}`, displayName: `E2E Archive ${stamp}` });
@@ -100,7 +101,7 @@ test("Propose a solution is disabled with its own hint while the challenge's nam
 });
 
 test("an admin can unassign a challenge from the detail page", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const assigneeName = `E2E Unassign Target ${stamp}`;
   const assigneeCtx = await browser.newContext();
   const { userId: assigneeId } = await signIn(assigneeCtx, { name: assigneeName });

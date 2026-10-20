@@ -4,9 +4,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { submitNewChallenge } from "./helpers/forms";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("anonymity: an anonymous challenge is masked as 'Anonymous', even to its author", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const authorName = `E2E Anon Author ${stamp}`;
   const title = `E2E anonymous challenge ${stamp}`;
 

@@ -5,9 +5,10 @@ import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi } from "./helpers/api";
 import { UPCOMING } from "../src/app/whats-new/upcoming";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("dashboard: a signed-in member sees KPIs, quick links, and the account menu", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Dash Member ${stamp}` });
   const page = await ctx.newPage();
@@ -37,7 +38,7 @@ test("dashboard: a signed-in member sees KPIs, quick links, and the account menu
 });
 
 test("leaderboard: metric and window toggles change the active selection", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Board Member ${stamp}` });
   const page = await ctx.newPage();
@@ -56,7 +57,7 @@ test("leaderboard: metric and window toggles change the active selection", async
 });
 
 test("what's new: the changelog lists released versions newest-first", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Notes Member ${stamp}` });
   const page = await ctx.newPage();
@@ -71,7 +72,7 @@ test("what's new: the changelog lists released versions newest-first", async ({ 
 });
 
 test("what's new: Coming soon starts collapsed, expands on click, and hides admin-only teasers from members", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Soon Member ${stamp}` });
   const page = await ctx.newPage();
@@ -109,7 +110,7 @@ test("what's new: Coming soon starts collapsed, expands on click, and hides admi
 });
 
 test("profile: the e-mail-notifications toggle round-trips, and the public profile loads", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const name = `E2E Profile Member ${stamp}`;
   const ctx = await browser.newContext();
   const { userId } = await signIn(ctx, { name });
@@ -143,7 +144,7 @@ test("profile: the e-mail-notifications toggle round-trips, and the public profi
 });
 
 test("profile: the e-mail delivery choice round-trips, names the next digest, and waits on the e-mail switch", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Digest Member ${stamp}` });
   const page = await ctx.newPage();
@@ -174,7 +175,7 @@ test("profile: the e-mail delivery choice round-trips, names the next digest, an
 test("search results: an exact number lookup finds a challenge; gibberish yields the empty state", async ({
   browser,
 }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Find Member ${stamp}` });
   // The searcher is the author, so they can see their own (still-untriaged) challenge.

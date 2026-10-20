@@ -11,13 +11,14 @@
 // opt-out. One of them flips the Bug reports switch and always flips it back.
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 async function openAccountMenu(page: Page) {
   await page.locator(".user-trigger").click();
 }
 
 test("a first use shows the card; ✕ keeps the offer in the menu; reopening and submitting thanks and clears it", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Surveyed ${stamp}`, survey: true });
   const page = await ctx.newPage();
@@ -58,7 +59,7 @@ test("a first use shows the card; ✕ keeps the offer in the menu; reopening and
 });
 
 test("Don't ask me again turns the profile switch off", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Survey OptOut ${stamp}`, survey: true });
   const page = await ctx.newPage();
@@ -77,7 +78,7 @@ test("Don't ask me again turns the profile switch off", async ({ browser }) => {
 });
 
 test("at mobile width the card is a bottom sheet with ✕ and Submit visible", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext({ viewport: { width: 375, height: 740 } });
   await signIn(ctx, { name: `E2E Survey Mobile ${stamp}`, survey: true });
   const page = await ctx.newPage();
@@ -104,7 +105,7 @@ test("at mobile width the card is a bottom sheet with ✕ and Submit visible", a
 });
 
 test("with the What's new notice due, a first use produces no survey — What's new always wins", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   // An old marker makes the update notice due on this load.
   await signIn(ctx, { name: `E2E Survey Notice ${stamp}`, survey: true, whatsNewSeen: "0.1.0" });
@@ -118,7 +119,7 @@ test("with the What's new notice due, a first use produces no survey — What's 
 });
 
 test("a persona with surveys off never sees the card", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E No Survey ${stamp}` });
   const page = await ctx.newPage();
@@ -130,7 +131,7 @@ test("a persona with surveys off never sees the card", async ({ browser }) => {
 });
 
 test("admin: the Survey results card shows the funnel; its switch works while collapsed; members get 403", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Survey Admin ${stamp}`, admin: true });
   const page = await ctx.newPage();
@@ -170,7 +171,7 @@ test("admin: the Survey results card shows the funnel; its switch works while co
 // These personas sign in WITHOUT the survey flag: the on-demand path bypasses the random opt-out.
 
 test("Give feedback now opens the on-demand card; a picked feature adds its questions; then the cooldown", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Give Feedback ${stamp}` });
   const page = await ctx.newPage();
@@ -211,7 +212,7 @@ test("the colophon's Have your say: absent signed out; opens the card; survives 
   await expect(anonPage.locator(".colophon .colophon-sub").nth(1)).toHaveText("Powered by the community");
   await anon.close();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Have Your Say ${stamp}` });
   const page = await ctx.newPage();
@@ -252,7 +253,7 @@ test("the bug button: absent signed out; opens Report a bug with no stars; Submi
   await expect(anonPage.getByTestId("report-bug")).toHaveCount(0);
   await anon.close();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Bug Reporter ${stamp}` });
   const page = await ctx.newPage();
@@ -293,7 +294,7 @@ test("the bug button: absent signed out; opens Report a bug with no stars; Submi
 });
 
 test("from the bug card, another category starts an on-demand survey; afterwards the other categories wait for the cooldown", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Bug Then Survey ${stamp}` });
   const page = await ctx.newPage();
@@ -323,7 +324,7 @@ test("from the bug card, another category starts an on-demand survey; afterwards
 });
 
 test("Give feedback, then Bug: Report a bug mode, and the submit ends the offer", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Feedback Then Bug ${stamp}` });
   const page = await ctx.newPage();
@@ -352,7 +353,7 @@ test("Give feedback, then Bug: Report a bug mode, and the submit ends the offer"
 test("admin: Bug reports as a Source and in the funnel; the Bug reports switch hides the button", async ({ browser }) => {
   // Results lag by a day, so a report sent here is not listed yet; the feed's Bug tag, page path
   // and version are covered by the integration suite with backdated rows.
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Bug Admin ${stamp}`, admin: true });
   const page = await ctx.newPage();

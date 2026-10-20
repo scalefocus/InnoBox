@@ -4,9 +4,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("duplicate warning: similar challenges are suggested, edits re-arm, Submit anyway proceeds", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   // A distinctive word pair so only this run's fixture can match.
   const w1 = `flumox${stamp.replace(/[^a-z]/g, "q")}`;
   const w2 = `gribbly${stamp.replace(/[^a-z]/g, "q")}`;

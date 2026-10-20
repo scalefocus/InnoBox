@@ -4,6 +4,7 @@
 // requests (a foreign or missing Origin is refused before the route runs).
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
@@ -33,7 +34,7 @@ test("pages carry a per-request nonce CSP and the static security headers; no X-
 });
 
 test("a signed-in page renders and hydrates under the CSP with no violations", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E CSP ${stamp}` });
   const page = await ctx.newPage();
@@ -52,7 +53,7 @@ test("a signed-in page renders and hydrates under the CSP with no violations", a
 });
 
 test("state-changing API requests from a foreign or missing Origin are refused with 403", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E CSRF ${stamp}` });
   const body = { quickStartSeen: true };

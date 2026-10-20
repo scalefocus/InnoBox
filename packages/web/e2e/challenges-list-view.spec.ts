@@ -5,9 +5,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("the list view persists across reloads, rows navigate, and new items keep their tag", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const viewerCtx = await browser.newContext();
   await signIn(viewerCtx, { name: `E2E ListView Viewer ${stamp}` });

@@ -4,6 +4,7 @@
 // CSRF-rejected sign-out sweeps nothing and keeps the session.
 import { test, expect, type BrowserContext } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 const host = new URL(base).hostname;
@@ -20,7 +21,7 @@ const authCookies = async (ctx: BrowserContext) =>
   (await ctx.cookies(base)).map((c) => c.name).filter((n) => n.replace(/^__(Secure|Host)-/, "").startsWith("next-auth."));
 
 test("Sign out from the account menu clears every Auth.js cookie and keeps non-auth state", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Signout ${stamp}` });
   await plantLeftovers(ctx);
@@ -51,7 +52,7 @@ test("Sign out from the account menu clears every Auth.js cookie and keeps non-a
 });
 
 test("a CSRF-rejected sign-out sweeps nothing and keeps the session", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Signout CSRF ${stamp}` });
   await plantLeftovers(ctx);

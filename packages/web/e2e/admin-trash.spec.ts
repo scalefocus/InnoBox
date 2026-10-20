@@ -8,9 +8,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("a member never sees Move to trash, and the trash endpoints answer them 404", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const memberCtx = await browser.newContext();
   await signIn(memberCtx, { name: `E2E Trash Member ${stamp}` });
   const challenge = await createChallengeViaApi(memberCtx.request, {
@@ -35,7 +36,7 @@ test("a member never sees Move to trash, and the trash endpoints answer them 404
 });
 
 test("move a challenge to the trash, see it gone from the list, restore it from the trash page", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `E2E trash-me challenge ${stamp}`;
 
   const authorCtx = await browser.newContext();

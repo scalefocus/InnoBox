@@ -9,11 +9,12 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, createNamespaceViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("a namespace-restricted challenge is hidden from a non-member across gallery, search, and direct link", async ({
   browser,
 }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `E2E restricted challenge ${stamp}`;
 
   // ── Admin sets up a fresh namespace + a namespace-visible challenge, opened for solutions. ──

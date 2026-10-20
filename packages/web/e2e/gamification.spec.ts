@@ -5,11 +5,12 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
 
 test("an implemented solution → the author's toast, the profile badge and the inbox row", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   const authorCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Gamification Admin ${stamp}`, admin: true });
