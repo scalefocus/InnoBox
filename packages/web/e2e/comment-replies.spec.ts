@@ -4,7 +4,7 @@
 // all button/form driven.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { submitNewChallenge } from "./helpers/forms";
+import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
 
 test("comment replies: reply, reply to a reply, show more replies", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -13,7 +13,7 @@ test("comment replies: reply, reply to a reply, show more replies", async ({ bro
   await signIn(ctx, { name });
   const page = await ctx.newPage();
 
-  await page.goto("/challenges/new");
+  await openNewChallengeForm(page);
   await page.locator("#title").fill(`E2E replies challenge ${stamp}`);
   await page.locator("#description").fill("A thread with replies.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });

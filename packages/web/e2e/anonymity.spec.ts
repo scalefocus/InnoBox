@@ -3,7 +3,7 @@
 // identity is only ever exposed through the audited admin reveal (not exercised here).
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { submitNewChallenge } from "./helpers/forms";
+import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
 
 test("anonymity: an anonymous challenge is masked as 'Anonymous', even to its author", async ({ browser }) => {
   const stamp = Date.now().toString(36);
@@ -14,7 +14,7 @@ test("anonymity: an anonymous challenge is masked as 'Anonymous', even to its au
   await signIn(ctx, { name: authorName });
   const page = await ctx.newPage();
 
-  await page.goto("/challenges/new");
+  await openNewChallengeForm(page);
   await page.locator("#title").fill(title);
   await page.locator("#description").fill("Raised anonymously by the e2e suite.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });

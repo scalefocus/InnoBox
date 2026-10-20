@@ -6,6 +6,7 @@
 // otherwise passed through untouched to the real API.
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { openNewChallengeForm } from "./helpers/forms";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3000";
 
@@ -34,7 +35,7 @@ async function openFilledForm(browserCtx: BrowserContext, title: string): Promis
       await route.continue();
     },
   );
-  await page.goto("/challenges/new");
+  await openNewChallengeForm(page);
   await page.locator("#title").fill(title);
   await page.locator("#description").fill("Submitted once, no matter how eagerly.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });
