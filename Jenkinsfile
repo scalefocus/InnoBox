@@ -68,7 +68,10 @@ pipeline {
     // V8 heap cap (MB) for the e2e dev server. Uncapped, a long run grew it until the kernel OOM
     // killer SIGKILLed it — no log line, and the starved agent dropped its Jenkins connection.
     // Capped, V8 collects harder and, if it truly runs out, dies with a readable "heap limit"
-    // error. Tune to the agent's RAM.
+    // error. Next restarts the dev server itself once the used heap passes 80% of the cap, which
+    // throws away every compiled route mid-suite. Under Turbopack the heap holds only the loaded
+    // route code, ~1.2 GB with every route warmed; Turbopack's own build state is native memory
+    // outside this cap, bounded by its eviction (see next.config.ts). Tune to the agent's RAM.
     CI_E2E_WEB_HEAP_MB  = '4096'
     // asdf — must set ASDF_DIR explicitly so asdf.sh can locate itself in a non-interactive shell.
     ASDF_DIR = "${env.HOME}/.asdf"
@@ -259,9 +262,16 @@ pipeline {
 
               # Start the dev server on the agent and health-check it before Playwright runs (the
               # config reuses the already-listening server). Kill it on the way out.
+              #   dev           : `next dev --turbopack`, the same bundler as Build web. (Under webpack,
+              #                   every warmed route stayed in the JS heap - 2.85 GB for all of them -
+              #                   until Next restarted the server mid-suite, and its 60 s entry
+              #                   disposal recompiled routes without returning their memory.
+              #                   Turbopack warms everything in ~1.5 min instead of ~10.)
               #   NODE_OPTIONS  : the V8 heap cap (CI_E2E_WEB_HEAP_MB, see environment)
-              #   E2E_KEEP_ROUTES_COMPILED : next.config.ts keeps compiled routes resident instead
-              #                   of disposing them after 60 s idle (a dev-only setting)
+              #   E2E_DEV_SERVER : next.config.ts turns on Turbopack's "full" memory eviction: compiled
+              #                   routes live in its disk cache (.next/dev/cache, ~1 GB; reused by the
+              #                   next build if the workspace survives) and are restored from it in
+              #                   ~0.1-0.2 s when a test needs one (a dev-only setting)
               #   setsid        : its own process group, so cleanup also kills next's child
               #                   processes, not just the pnpm wrapper
               #   nohup, </dev/null, JENKINS_NODE_COOKIE=dontKillMe : the server must outlive an
@@ -315,7 +325,7 @@ pipeline {
               oom_kills() { oom_n="$(sed -n 's/^oom_kill //p' /proc/vmstat 2>/dev/null)" || oom_n=""; echo "${oom_n:-?}"; }
               OOM_KILLS_AT_START="$(oom_kills)"
 
-              export E2E_KEEP_ROUTES_COMPILED=1
+              export E2E_DEV_SERVER=1
               # The wrapper is the single-quoted script below (double quotes only inside it):
               # $1 = WEB_EXIT, $2 = WEB_PIDS, $3 = WEB_POSTMORTEM, $4 = OOM_KILLS_AT_START. It writes
               # the post-mortem first and the exit file last (via a rename), so whoever sees the exit
@@ -386,7 +396,9 @@ pipeline {
               cat "${WEB_PIDS}"
 
               # Compile every page and API route now, so no spec waits on a cold compile — or has its
-              # page fully reloaded by Fast Refresh when a compile lands mid-test.
+              # page fully reloaded by Fast Refresh when a compile lands mid-test. Turbopack's eviction
+              # then drops the compiled output from memory; it stays in the disk cache, so a test's
+              # first request to a route restores it instead of compiling it.
               node packages/web/scripts/e2e-warmup.mjs || { echo "=== dev server log (e2e-web.log) ==="; cat e2e-web.log; exit 1; }
 
               # Run the suite inside the official Playwright image so the agent needs NO Playwright

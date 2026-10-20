@@ -1,9 +1,10 @@
 // Pre-compile every page and API route of a running `next dev` server before the e2e suite starts.
-// Used by the Jenkins e2e job. Dev mode compiles each route on its first request (5–35 s on the CI
-// agent) and every new compile can make Fast Refresh fully reload whatever page a test has open —
-// the source of the suite's first-attempt flakes. Warming everything up front, on a server started
-// with E2E_KEEP_ROUTES_COMPILED=1 (next.config.ts keeps the compiled entries resident), means the
-// tests never wait on a compile.
+// Used by the Jenkins e2e job. Dev mode compiles each route on its first request (seconds under
+// Turbopack, 5–35 s under webpack on the CI agent) and every new compile can make Fast Refresh fully
+// reload whatever page a test has open — the source of the suite's first-attempt flakes. Warming
+// everything up front, on a server started with E2E_DEV_SERVER=1 (next.config.ts turns on Turbopack's
+// "full" memory eviction), fills Turbopack's disk cache: the compiled output leaves memory, and a
+// test's first request to a route restores it from disk instead of compiling it.
 //
 // Side-effect free by construction:
 //   - pages get a plain GET (server components render; no client JS runs, so no API calls fire);

@@ -23,14 +23,16 @@ const nextConfig: NextConfig = {
   // `next dev` only. Next 16 writes AGENTS.md + CLAUDE.md into packages/web when it detects an AI
   // coding agent; the repository's agent context lives at the root, so keep dev from adding files.
   agentRules: false,
-  // `next dev` only, and only when the Jenkins e2e job asks for it. By default dev disposes a
-  // route's compiled entry after 60 s idle, so a long e2e run recompiles the same routes over and
-  // over — each recompile a 5–35 s stall on the CI agent and a potential Fast Refresh full reload
-  // of the page under test. The job pre-compiles every route (scripts/e2e-warmup.mjs) and this
-  // keeps them resident for the whole run. Local dev keeps Next's default.
-  ...(process.env.E2E_KEEP_ROUTES_COMPILED === "1"
-    ? { onDemandEntries: { maxInactiveAge: 24 * 60 * 60 * 1000, pagesBufferLength: 1000 } }
-    : {}),
+  // `next dev` only, and only for the Jenkins e2e server (E2E_DEV_SERVER=1). Turbopack writes every
+  // compiled route to its filesystem cache (.next/dev/cache, on by default in dev); "full" eviction
+  // then drops that output from memory after each cache snapshot, instead of only when it expects a
+  // large saving or the host is short of memory. The job pre-compiles every route
+  // (scripts/e2e-warmup.mjs), so a test's first request to a route restores it from disk in about
+  // 0.1–0.2 s — no recompile, no Fast Refresh reload. Measured on all 157 entries: ~2 GB RSS with
+  // a 1.2 GB JS heap, against ~4.6 GB RSS without eviction (and 2.85 GB of heap, past Next's dev
+  // restart threshold under load, when the e2e still ran webpack with every route kept compiled).
+  // Local dev keeps Turbopack's default ("auto").
+  ...(process.env.E2E_DEV_SERVER === "1" ? { experimental: { turbopackMemoryEviction: "full" } } : {}),
   async headers() {
     return [{ source: "/:path*", headers: [...STATIC_SECURITY_HEADERS] }];
   },
