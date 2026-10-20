@@ -265,13 +265,14 @@ pipeline {
               #   setsid        : its own process group, so cleanup also kills next's child
               #                   processes, not just the pnpm wrapper
               #   nohup, </dev/null, JENKINS_NODE_COOKIE=dontKillMe : the server must outlive an
-              #                   agent-connection blip. `next dev` exits 0 on SIGINT/SIGTERM, and
-              #                   one such signal has stopped it mid-suite right after Jenkins logged
-              #                   "<node> seems to be removed or offline … is back online". So: ignore
-              #                   SIGHUP, never read a stdin that may be closed under us, and opt out
-              #                   of Jenkins' process-tree killer (which matches processes on the
-              #                   node's cookie and sends SIGTERM) — the pid file + EXIT trap + post
-              #                   step below still stop the server on every exit path.
+              #                   agent-connection blip. So: ignore SIGHUP, never read a stdin that
+              #                   may be closed under us, and opt out of Jenkins' process-tree killer
+              #                   (which matches processes on the node's cookie and sends SIGTERM) —
+              #                   the pid file + EXIT trap + post step below still stop the server on
+              #                   every exit path. A "<node> seems to be removed or offline … is back
+              #                   online" just before a mid-suite death is usually a symptom, not the
+              #                   cause: an agent that runs out of memory stalls its JVM too (see
+              #                   oom_kills below).
               #   WEB_EXIT      : written by the sh wrapper when the server exits - its exit status
               #                   on line 1, the UTC time on line 2 - and polled by the watchdog (a
               #                   dead child can linger as a zombie, which `kill -0` still finds)
@@ -308,10 +309,17 @@ pipeline {
                 exit 1
               fi
 
+              # The kernel's running count of OOM kills (/proc/vmstat oom_kill). World-readable, unlike
+              # dmesg and the system journal for the Jenkins user, so it is what tells a kernel OOM
+              # kill apart from a signal: sampled now, on every watchdog tick, and in the post-mortem.
+              oom_kills() { oom_n="$(sed -n 's/^oom_kill //p' /proc/vmstat 2>/dev/null)" || oom_n=""; echo "${oom_n:-?}"; }
+              OOM_KILLS_AT_START="$(oom_kills)"
+
               export E2E_KEEP_ROUTES_COMPILED=1
               # The wrapper is the single-quoted script below (double quotes only inside it):
-              # $1 = WEB_EXIT, $2 = WEB_PIDS, $3 = WEB_POSTMORTEM. It writes the post-mortem first
-              # and the exit file last (via a rename), so whoever sees the exit file has both.
+              # $1 = WEB_EXIT, $2 = WEB_PIDS, $3 = WEB_POSTMORTEM, $4 = OOM_KILLS_AT_START. It writes
+              # the post-mortem first and the exit file last (via a rename), so whoever sees the exit
+              # file has both.
               # shellcheck disable=SC2016 # the body expands when the wrapper's own sh runs it
               NODE_OPTIONS="--max-old-space-size=${CI_E2E_WEB_HEAP_MB}" JENKINS_NODE_COOKIE=dontKillMe \
                 nohup setsid sh -c '
@@ -329,10 +337,13 @@ pipeline {
                     pids="$(sed -n "s/^pids=//p" "$2" 2>/dev/null)"
                     echo "--- those PIDs now (absent = already reaped; Z = zombie) ---"
                     [ -z "${pids}" ] || ps -o pid,ppid,stat,rss,etime,cmd -p "${pids}" 2>&1 || true
+                    echo "--- kernel OOM kills (/proc/vmstat oom_kill): $4 when the server started, now: ---"
+                    sed -n "s/^oom_kill //p" /proc/vmstat 2>/dev/null || echo "(unreadable)"
                     echo "--- kernel log, last 40 lines (dmesg -T, else journalctl -k --since -2min) ---"
                     if dmesg -T > e2e-kernel.tmp 2>/dev/null; then
                       tail -n 40 e2e-kernel.tmp
-                    elif journalctl -k --since -2min --no-pager > e2e-kernel.tmp 2>/dev/null; then
+                    elif journalctl -k --since -2min --no-pager > e2e-kernel.tmp 2>&1; then
+                      # (stderr kept: an empty result for a user outside systemd-journal/adm says so)
                       tail -n 40 e2e-kernel.tmp
                     else
                       echo "(neither is readable for this user)"
@@ -340,7 +351,7 @@ pipeline {
                     rm -f e2e-kernel.tmp
                   } > "$3" 2>&1
                   { echo "${rc}"; echo "${at}"; } > "$1.tmp" && mv "$1.tmp" "$1"
-                ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" </dev/null &
+                ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" "${OOM_KILLS_AT_START}" </dev/null &
               WEB_PID=$!
               echo "${WEB_PID}" > "${WEB_PIDFILE}"
               # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
@@ -434,11 +445,13 @@ pipeline {
               # rather than letting every remaining spec fail on "connection refused". Every tick
               # also appends a host sample to HOST_STATS (archived), so a death can be read against
               # the memory curve that led to it. Two ways to die:
-              #   - the exit file appears: the wrapper saw `next dev` exit (status + time inside);
-              #   - no exit file, but the port stays closed for 3 ticks: the server child died by a
-              #     signal and the `next dev` parent lingered (it never exits, so the wrapper never
-              #     would) - the watchdog kills that parent, which makes the wrapper write the
-              #     post-mortem and exit file for the kill.
+              #   - the exit file appears: the wrapper saw `next dev` exit (status + time inside).
+              #     This is also how a SIGKILLed server child shows up: the parent has nothing left
+              #     to run and exits 0 on its own, sometimes many seconds later on a thrashing host;
+              #   - no exit file, but the port stays closed for 3 ticks: the server is gone but the
+              #     `next dev` parent has not exited (stalled, or still holding a handle) - the
+              #     watchdog kills that parent, which makes the wrapper write the post-mortem and
+              #     exit file for the kill.
               # "Closed" is curl's 7 (connection refused); a slow or erroring server isn't dead and
               # Playwright reports that itself.
               rss_mb() {   # RSS of pid $1 as "<n>M", or "gone" when there is no such process
@@ -448,14 +461,16 @@ pipeline {
                 # The child pid is re-read each tick: Next re-forks it on a memory-threshold restart.
                 child=""
                 [ -z "${NEXT_PID}" ] || child="$(pgrep -P "${NEXT_PID}" 2>/dev/null | head -n 1)"
-                echo "$(date -u +%H:%M:%SZ) $(free -m | awk '/^Mem:/ {f=$4; a=$7} /^Swap:/ {s=$3} END {printf "free=%sM avail=%sM swap_used=%sM", f, a, s}') next=${NEXT_PID:-?}:$(rss_mb "${NEXT_PID}") child=${child:-?}:$(rss_mb "${child}") load=$(cut -d" " -f1-3 /proc/loadavg | tr " " /)"
+                echo "$(date -u +%H:%M:%SZ) $(free -m | awk '/^Mem:/ {f=$4; a=$7} /^Swap:/ {s=$3} END {printf "free=%sM avail=%sM swap_used=%sM", f, a, s}') next=${NEXT_PID:-?}:$(rss_mb "${NEXT_PID}") child=${child:-?}:$(rss_mb "${child}") load=$(cut -d" " -f1-3 /proc/loadavg | tr " " /) oom_kill=$(oom_kills)"
               }
               SERVER_DIED=0
               PORT_CLOSED=0
               CLOSED_TICKS=0
-              echo "# utc | host free / available / swap used (MB) | next parent pid:RSS | server child pid:RSS | load 1/5/15" > "${HOST_STATS}"
+              echo "# utc | host free / available / swap used (MB) | next parent pid:RSS | server child pid:RSS | load 1/5/15 | kernel OOM kills so far (${OOM_KILLS_AT_START} at server start)" > "${HOST_STATS}"
               while [ "$(shards_done)" -lt "${SHARDS}" ]; do
-                host_stats >> "${HOST_STATS}" 2>&1 || true
+                # stdout only: stderr carries the step's xtrace, which would bury the samples (the
+                # 20-line tail below would show trace lines instead of ticks).
+                host_stats >> "${HOST_STATS}" 2>/dev/null || true
                 if [ "${SERVER_DIED}" = 0 ]; then
                   if [ -f "${WEB_EXIT}" ]; then
                     SERVER_DIED=1
@@ -502,31 +517,43 @@ pipeline {
                   else
                     echo "No exit status was ever written: the next dev parent never exited."
                   fi
+                  OOM_KILLS_NOW="$(oom_kills)"
+                  OOM_ROSE=0
+                  case "${OOM_KILLS_AT_START}/${OOM_KILLS_NOW}" in
+                    *'?'*) ;;
+                    *) [ "${OOM_KILLS_NOW}" -le "${OOM_KILLS_AT_START}" ] || OOM_ROSE=1 ;;
+                  esac
+                  echo "Kernel OOM kills on this agent (/proc/vmstat oom_kill): ${OOM_KILLS_AT_START} when the server started, ${OOM_KILLS_NOW} now."
+                  if [ "${OOM_ROSE}" = 1 ]; then
+                    echo "The kernel OOM killer fired during the run: the agent ran out of memory, and the"
+                    echo "biggest process - normally the next-server child - was SIGKILLed. Read the host"
+                    echo "stats below for the memory curve, and check what else ran on this agent."
+                  fi
+                  # What the status means, read off Next 16's own code (next/dist/cli/next-dev.js and
+                  # next/dist/server/lib/start-server.js): the server child turns a SIGINT/SIGTERM into
+                  # exit 130/143, which the parent passes on. A child killed by a signal it cannot
+                  # catch (SIGKILL; SIGABRT from a V8 heap-limit abort) leaves the parent nothing to
+                  # run, so the parent exits 0 on its own. The parent itself exits 0 on SIGINT/SIGTERM.
                   if [ "${PORT_CLOSED}" = 1 ]; then
-                    echo "The port closed while no exit status had been written: the server child died by a"
-                    echo "signal (most likely SIGKILL from the kernel OOM killer - see the kernel log below)"
-                    echo "and the next dev parent lingered without it. The watchdog sent that parent SIGTERM,"
-                    echo "so the status above comes from that kill, not from the original death."
+                    echo "The port closed while no exit status had been written: the server was gone but the"
+                    echo "next dev parent had not exited. The watchdog sent that parent SIGTERM, so the status"
+                    echo "above comes from that kill, not from the original death."
                   else
                     case "${WEB_STATUS}" in
-                      0|130|143)
-                        # `next dev` exits 0 when IT gets SIGINT/SIGTERM (its child's 130/143 surface
-                        # when the child is signalled instead). Either way: not a crash.
-                        echo "Status ${WEB_STATUS} means the server was told to stop - it did not crash. next dev"
-                        echo "exits 0 when a SIGINT or SIGTERM reaches the parent process (its child's 130/143"
-                        echo "surface when the child is signalled instead). This is NOT an OOM kill - the kernel's"
-                        echo "SIGKILL would show as 137, and a V8 heap-limit abort as 134 with 'Reached heap limit'"
-                        echo "in the log above. Look for who signalled it: a Jenkins abort, an agent"
-                        echo "disconnect/reconnect ('seems to be removed or offline' in the build log just before"
-                        echo "this), a stalled host, or a hand kill."
+                      0)
+                        echo "Status 0: either the server child was killed by a signal it cannot catch - SIGKILL"
+                        echo "(the kernel OOM killer, or a hand kill) or SIGABRT ('Reached heap limit' in the log"
+                        echo "above) - and the next dev parent then exited 0 on its own; or the parent itself got"
+                        echo "SIGINT/SIGTERM (a Jenkins abort, a hand kill). A child whose RSS reads 0M or gone in"
+                        echo "the host stats while the parent is still alive died first."
+                        ;;
+                      130|143)
+                        echo "Status ${WEB_STATUS}: the server child itself got SIGINT/SIGTERM and shut down - a"
+                        echo "hand kill, or a userspace OOM daemon (earlyoom and the like send SIGTERM first)."
                         ;;
                       137)
-                        echo "Status 137 is SIGKILL from outside the process: the kernel OOM killer (see the"
-                        echo "kernel log below) or a hand kill."
-                        ;;
-                      134)
-                        echo "Status 134 is an abort: the V8 heap cap (CI_E2E_WEB_HEAP_MB=${CI_E2E_WEB_HEAP_MB})"
-                        echo "was reached - look for 'Reached heap limit' in the log above."
+                        echo "Status 137: SIGKILL of the next dev parent (or of pnpm above it) - the kernel OOM"
+                        echo "killer or a hand kill."
                         ;;
                       *)
                         echo "An unexpected status: 128+N is death by signal N; anything else is next's own"
@@ -539,7 +566,12 @@ pipeline {
                   echo "=== post-mortem written by the wrapper as the server exited (e2e-web-exit.log) ==="
                   cat "${WEB_POSTMORTEM}" 2>/dev/null || echo "(none: the wrapper never saw next dev exit)"
                   echo "=== kernel OOM-killer messages (if readable) ==="
-                  dmesg -T 2>/dev/null | grep -iE 'killed process|out of memory' | tail -n 5 || true
+                  if dmesg -T > e2e-dmesg.tmp 2>/dev/null; then
+                    grep -iE 'killed process|out of memory' e2e-dmesg.tmp | tail -n 5 || true
+                  else
+                    echo "(dmesg is not readable for this user - the oom_kill count above stands in)"
+                  fi
+                  rm -f e2e-dmesg.tmp
                 fi
                 exit 1
               fi
