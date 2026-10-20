@@ -3,6 +3,7 @@
 // clears the warning; "Submit anyway" goes through and lands on the new challenge.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { openNewChallengeForm } from "./helpers/forms";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
 import { uniqueStamp } from "./helpers/stamp";
 
@@ -20,7 +21,7 @@ test("duplicate warning: similar challenges are suggested, edits re-arm, Submit 
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Dup Member ${stamp}` });
   const page = await ctx.newPage();
-  await page.goto("/challenges/new");
+  await openNewChallengeForm(page);
   await page.locator("#title").fill(`Fix the ${w1} ${w2} problem`);
   await page.locator("#description").fill("I think this is new.");
   await page.locator("#impactArea").selectOption({ label: "Internal" });

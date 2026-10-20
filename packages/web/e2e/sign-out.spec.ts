@@ -32,7 +32,8 @@ test("Sign out from the account menu clears every Auth.js cookie and keeps non-a
   // session) must be swept by the sign-out, read from the request — never guessed.
   await ctx.addCookies([{ name: "next-auth.session-token.5", value: "orphan-chunk", domain: host, path: "/" }]);
   const signedOut = page.waitForResponse((r) => r.url().includes("/api/auth/signout") && r.request().method() === "POST");
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  // exact: the account menu also holds "Sign out everywhere".
+  await page.getByRole("menuitem", { name: "Sign out", exact: true }).click();
   const res = await signedOut;
   // The sign-out response itself expires every auth cookie the browser carried.
   const expired = (await res.headersArray())

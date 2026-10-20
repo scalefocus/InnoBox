@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.17.2",
+    date: "2026-10-20",
+    summary:
+      "Under the hood: the AI provider settings card now ignores an outdated load when it opens, so an API key typed straight away is no longer cleared. Nothing else changes for you; the rest of this release steadies the automated browser tests.",
+  },
+  {
     version: "1.17.1",
     date: "2026-10-20",
     summary:
