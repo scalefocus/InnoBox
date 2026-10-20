@@ -61,7 +61,10 @@ test("connect from /agents through consent; the agent's challenge shows via agen
     await page.goto(authorize.toString());
     // The heading names the destination (a loopback redirect: this computer), not just the client;
     // a client nobody has approved before carries the unverified notice; Approve needs the tick.
-    await expect(page.getByRole("heading", { name: `Connect ${clientName} on this computer?` })).toBeVisible();
+    // The heading is matched on its text, not its accessible name: the destination is an
+    // inline-block span, and Playwright pads non-inline children with spaces when it computes a
+    // name — "… on this computer ?" — so a `name:` match never finds it.
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Connect ${clientName} on this computer?`);
     await expect(page.getByText("Approving sends an access code to an application on this computer.")).toBeVisible();
     await expect(page.getByText("Unverified application")).toBeVisible();
     await expect(page.getByText("It cannot like, change a status, assign, triage or administer.")).toBeVisible();
