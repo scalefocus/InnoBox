@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import Link from "next/link";
 import { cachedGet, invalidateApi } from "@/lib/ui";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
@@ -154,6 +155,13 @@ function SettingsConsole() {
       <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />
       <GamificationSettingsCard key={String(data.gamificationEnabled)} enabled={data.gamificationEnabled} onChanged={refresh} onError={notify} />
       <HypeSettingsCard key={`hype-${String(data.hypeEnabled)}`} enabled={data.hypeEnabled} onChanged={refresh} onError={notify} />
+      {/* The monitoring switch and sample rate live on the monitoring page itself; this is the pointer. */}
+      <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Real user monitoring</h3>
+        <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>
+          Collection and sampling are set on the <Link href="/admin/monitoring">Real user monitoring</Link> page.
+        </p>
+      </div>
       <PublicSubmissionsSettingsCard
         key={JSON.stringify(data.publicSubmissions)}
         settings={data.publicSubmissions}

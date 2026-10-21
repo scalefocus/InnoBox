@@ -18,6 +18,7 @@ import { readBugReports, readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { meGamification, newAchievements } from "@/lib/gamification-read";
 import { getMcpSettings, hasLiveConnection } from "@/lib/mcp/store";
 import { getHypeEnabled } from "@/lib/hype-settings";
+import { getRumSettings } from "@/lib/rum-settings";
 import { viewerHypeBudget } from "../hypes/store";
 import { readJsonObject } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -27,7 +28,7 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn, rum] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
@@ -38,6 +39,7 @@ async function handleGET(): Promise<Response> {
     getMcpSettings(pool),
     hasLiveConnection(pool, user.id),
     getHypeEnabled(pool),
+    getRumSettings(pool),
   ]);
   // §26.11: the hype button's initial budget — null while hype is off.
   const hype = hypeOn ? { enabled: true, hypesLeft: (await viewerHypeBudget(pool, user.id)).hypesLeft } : null;
@@ -80,6 +82,8 @@ async function handleGET(): Promise<Response> {
     // still holds a connection (so they can revoke it).
     agentsMenu: mcp.enabled || connected,
     hype,
+    // §14.12: whether a new tab starts the monitoring collector, and at what sample rate.
+    rum,
   });
 }
 

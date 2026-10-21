@@ -28,6 +28,7 @@ import { SURVEY_OPEN_EVENT, SURVEY_START_EVENT, announceSurveyChanged, claimFeat
 import { WHATS_NEW_SEEN_EVENT, WhatsNewNotice } from "./WhatsNewNotice";
 import { whatsNewAction } from "../lib/whats-new";
 import { AchievementToast } from "./AchievementToast";
+import { RumCollector, type RumConfig } from "./RumCollector";
 import type { Achievement } from "@innobox/shared/gamification";
 
 // Shape of the §16 `me` resource (packages/web/src/app/api/me/route.ts) — only the fields
@@ -51,6 +52,8 @@ interface MeResponse {
   /** §25.9: true while agent access is on, or while the user still holds a live connection —
    *  shows the account menu's AI agents item. */
   agentsMenu?: boolean;
+  /** §14.12: whether this tab starts the monitoring collector, and at what sample rate. */
+  rum?: RumConfig | null;
 }
 
 /** The survey card the shell has open (§13.10). */
@@ -615,6 +618,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       {authed && <WhatsNewNotice me={me} pathname={pathname} onClosed={() => setWhatsNewClosed(true)} suppressed={noticeSuppressed} />}
       {/* §23.7 achievement toast — one per page load, then the marker advances. */}
       {authed && <AchievementToast achievements={me?.newAchievements ?? null} />}
+      {/* §14.12 real user monitoring — signed-in pages only; inert unless collection is on. */}
+      {authed && <RumCollector config={me?.rum} />}
     </div>
   );
 }

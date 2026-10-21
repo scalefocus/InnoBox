@@ -15,6 +15,7 @@ export type RateLimitBucket =
   | "survey"
   | "bug_report"
   | "bug_report_day"
+  | "rum"
   | "csp-report"
   | "public-read"
   | "public-submit"
@@ -36,6 +37,9 @@ export const RATE_LIMITS: Record<RateLimitBucket, { limit: number; windowMs: num
   // A bug report (§13.10): 3 a minute AND 20 a day — the route takes a token from both.
   bug_report: { limit: 3, windowMs: 60 * 1000 },
   bug_report_day: { limit: 20, windowMs: 24 * 60 * 60 * 1000 },
+  // §14.12 the real-user-monitoring beacon: a flush every 17 s at most, plus the immediate ones on
+  // hide, leaves ample headroom. Its 429s are not recorded in the system log (the route opts out).
+  rum: { limit: 20, windowMs: 60 * 1000 },
   // The public CSP report sink — keyed per client IP, not per user (there is none), and taken
   // via takeToken() directly: its 429s are not logged individually (app/api/csp-report).
   "csp-report": { limit: 120, windowMs: 60 * 1000 },
