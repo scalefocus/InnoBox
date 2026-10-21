@@ -110,6 +110,12 @@ export * from "./gamification-awards.js";
 // (client-safe, also at `@innobox/shared/hype`).
 export * from "./hype.js";
 
+// §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
+// rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the
+// aggregate SQL web and worker share (also at `@innobox/shared/rum-sql`).
+export * from "./rum.js";
+export * from "./rum-sql.js";
+
 // §24 public submissions: the form's limits and validation, the abuse decisions, retention dates,
 // the privacy-notice links and the submitter e-mails (client-safe, also at
 // `@innobox/shared/public-intake`), and the server-only proof-of-work and confirmation token.

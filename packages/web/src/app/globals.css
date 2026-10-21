@@ -1021,6 +1021,68 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .presence-where { max-width: 100%; white-space: normal; }
 }
 
+/* Real user monitoring (/admin/monitoring, INNOBOX_SPEC.md §14.12). The routes table is the
+   only wide element: it scrolls sideways inside its card with the route name sticky, so the
+   page itself never scrolls horizontally. */
+.rum-section { margin-bottom: 18px; }
+.rum-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; }
+.rum-control-label { font-weight: 600; font-size: 13.5px; }
+.rum-sample { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.rum-sample .field { width: auto; padding-top: 6px; padding-bottom: 6px; }
+.rum-schedule { font-size: 12.5px; }
+.rum-refresh { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.rum-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px 14px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.rum-caption {
+  font-family: var(--font-body); font-size: 12.5px; letter-spacing: 0;
+  text-transform: none; color: var(--muted); font-weight: 400;
+}
+.rum-table-wrap { overflow-x: auto; margin: 0 -4px; }
+.rum-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rum-table th, .rum-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--line);
+  text-align: right; white-space: nowrap;
+}
+.rum-table thead th {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--faint); font-weight: 500;
+}
+.rum-table th:first-child, .rum-table td:first-child {
+  text-align: left; position: sticky; left: 0; background: var(--surface); z-index: 1;
+}
+.rum-table tbody th { font-weight: 500; }
+.rum-table .rum-total th, .rum-table .rum-total td { background: var(--surface-2); font-weight: 600; }
+.rum-table .pill { font-size: 12px; text-transform: none; letter-spacing: 0; }
+.rum-table .rum-empty { text-align: left; }
+.rum-sort {
+  background: none; border: 0; padding: 0; font: inherit; color: inherit;
+  letter-spacing: inherit; text-transform: inherit; cursor: pointer;
+}
+.rum-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.rum-errors { list-style: none; margin: 0; padding: 0; }
+.rum-errors > li { border-bottom: 1px solid var(--line); }
+.rum-errors > li:last-child { border-bottom: 0; }
+.rum-error > summary {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  cursor: pointer; list-style: none;
+}
+.rum-error > summary::-webkit-details-marker { display: none; }
+.rum-error-msg {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 12.5px;
+}
+.rum-error-when { font-size: 12.5px; white-space: nowrap; }
+.rum-error-body { padding: 0 0 12px; font-size: 13px; }
+.rum-error-full { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; margin: 0 0 8px; }
+.rum-error-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.rum-error-body dt { color: var(--faint); }
+.rum-error-body dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .rum-controls { align-items: flex-start; flex-direction: column; }
+}
+
 /* Expand all / Collapse all control above the cards. */
 .admin-bulk { display: flex; gap: 8px; align-items: center; margin-bottom: 22px; }
 

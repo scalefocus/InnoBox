@@ -52,6 +52,9 @@ export interface SystemLogOptions {
   /** Record the row with NO user id and NO actor snapshot — the survey routes (§13.10): a named,
    *  exact-time row next to a date-only response would identify it. The session is not even read. */
   anonymousActor?: boolean;
+  /** Statuses this route never records — the §14.12 beacon's 429: telemetry arriving too fast must
+   *  not turn into system-log noise. */
+  unrecordedStatuses?: readonly number[];
 }
 
 /** What a handler wants recorded for its response instead of the defaults — the §22.5 AI admin
@@ -191,7 +194,7 @@ export function createSystemLogWrapper(deps: SystemLogDeps) {
       const note = notes.get(res);
       if (note) {
         void capture(template, req, note.status ?? res.status, note.message, note.errorCode ?? null, startedAt, opts).catch(() => {});
-      } else if (shouldRecordSystemEvent(res.status)) {
+      } else if (shouldRecordSystemEvent(res.status) && !opts.unrecordedStatuses?.includes(res.status)) {
         void (async () => {
           const message = await errorMessageOf(res);
           await capture(template, req, res.status, message, null, startedAt, opts);

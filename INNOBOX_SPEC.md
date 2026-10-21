@@ -122,7 +122,7 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
   (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
-  upload sessions §11). Pure-DB sweeps are scheduled before the Entra-credential check,
+  upload sessions §11, the real-user-monitoring rollup and trims §14.12). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
   credentials; the notification sweep (SMTP needs no Entra), the ClamAV scan sweep, and
@@ -749,6 +749,9 @@ these rules close the generic web-platform paths by which it could.
     minute** (the `survey` bucket; its 429 warning omits the user id);
   - submitting a bug report (§13.10) — **3 per minute and 20 per day** (the `bug_report`
     bucket, both limits enforced; its 429 warning omits the user id too);
+  - sending a real-user-monitoring beacon (§14.12) — **20 per minute** (the `rum`
+    bucket; its 429s are **not** recorded in the system log — telemetry must never
+    turn into log noise);
   - every other state-changing API request — **120 per minute**.
   An exceeded limit answers **429** with `Retry-After` and a plain message ("Too many
   requests — try again shortly."). Rate-limit rejections are **logged** (structured
@@ -1073,7 +1076,7 @@ shown (§13.6).
 
 | Role | Scope | Powers |
 |---|---|---|
-| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area management; **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); audit integrity verification (§15) |
+| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area management; **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); real user monitoring (§14.12); audit integrity verification (§15) |
 | **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; bulk actions; CSV export |
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
@@ -1369,11 +1372,24 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   the rolled-up daily distinct-active-user count behind the §14.5 chart, plus the
   rolling 7- and 30-day counts the daily snapshot writes once per closed day (§14.5).
   Carries **no user ids** and is retained indefinitely.
+- **`rum_views`** — the §14.12 raw page views: id, received_at, day (UTC date),
+  session_id (a random per-tab id, joined to nothing), route (template only),
+  hard_load, lcp_ms, inp_ms, nav_ms, ttfb_ms, cls, api_ms (int[]), api_calls,
+  api_errors, client_errors. **No user id, no FK.** Mutable working data, **deleted
+  by the worker once older than 7 days**.
+- **`rum_daily`** — (day, route) unique, with a `route = '*'` row per day for all
+  routes: views, sessions, the p75 of each measure, api_calls, api_errors,
+  client_errors (§14.12). The permanent, aggregate-only form of the above; recomputed
+  hourly for the open 7-day window, retained indefinitely.
+- **`rum_client_errors`** — fingerprint unique, message, source, frame, route,
+  first_seen, last_seen, count — the §14.12 deduplicated browser errors. Mutable;
+  deleted 90 days after `last_seen`.
 - **`platform_settings`** (called `settings` elsewhere in this document) — key/value
   platform configuration (§14.3); also holds the
   `system_banner` singleton (§14.6), the `system_log_notify_at` watermark (§14.7), the
-  `featured_limit` (§13.2, §14.3), and the **`scim_last_request_at`** stamp (ISO UTC;
-  written by the worker on accepted SCIM requests, at most once a minute — §14.10).
+  `featured_limit` (§13.2, §14.3), the **`scim_last_request_at`** stamp (ISO UTC;
+  written by the worker on accepted SCIM requests, at most once a minute — §14.10),
+  and the §14.12 `rum_enabled` / `rum_sample_rate` pair.
 - **`audit_log`** — append-only (§15): id, actor_user_id, action, target_type,
   target_id, before, after, created_at, plus the hash-chain columns **chain_seq**
   (bigint, unique where set), **prev_hash** and **row_hash** (hex SHA-256). All three
@@ -4463,9 +4479,10 @@ All auth-required (401 otherwise), Origin-checked mutations (§2.4).
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
 admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
 system log §14.7, channel webhooks §12.4, identity sync §14.10, survey results
-§14.11, the trash §10.4, public submissions §24.5 — are hidden from
-namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform settings
-(§14.3), the audit browser (§15), and the system log (§14.7) — each render a
+§14.11, the trash §10.4, public submissions §24.5, real user monitoring §14.12 — are
+hidden from namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform
+settings (§14.3), the audit browser (§15), the system log (§14.7) and real user
+monitoring (§14.12) — each render a
 **breadcrumb** above the page title, via a shared component: **Administration** (a link back to `/admin`) › *current
 page* (the trailing crumb is plain text, not a link). Every present and future
 `/admin/*` sub-page carries it, so the way back to the console is consistent. The
@@ -4629,6 +4646,10 @@ delegated per namespace.**
 - **Hype** — one switch, *Weekly hype*, **off by default** (§26.8): shows or hides
   every §26 surface and closes the hype route; existing hypes, awards and badges are
   kept. Audited as `settings.hype_enabled_changed`.
+- **Real user monitoring** — the `rum_enabled` switch (**off** by default) and the
+  `rum_sample_rate` (100 / 50 / 25 / 10 / 1 %, default 100). Both are edited on the
+  monitoring page itself (`/admin/monitoring`, §14.12), not here; the settings page
+  carries only a link. Audited as `settings.telemetry_changed`.
 
 All settings changes are audited.
 
@@ -5247,6 +5268,315 @@ across namespaces.
   switch's audit row. e2e: an admin sees the funnel and, with the seed topped past 5, the
   question cards and the comment; the switch is usable while the card is collapsed.
 
+### §14.12 Real user monitoring (platform admin)
+
+How InnoBox *feels* to the people using it, measured in their browsers: page views and
+sessions per page, the Core Web Vitals, the time the app's own API calls take and how
+often they fail, and the JavaScript errors that reach the console. A sub-page,
+**`/admin/monitoring`**, linked from the Administration console under System log,
+with the §14 breadcrumb. **Platform admins only** — never shown to namespace admins,
+and every endpoint of this section answers **403** to anyone else. It complements the
+§14.7 system log, which sees only what the server refused: a page that is slow, a
+layout that jumps, a call that never came back or a script that threw on the client
+leaves no server-side trace at all.
+
+#### Decisions
+
+1. **Off by default.** Nothing is sent until a platform admin switches collection on.
+   The sampling and the switch are the admin's; the shape of the data is not
+   configurable.
+2. **Anonymous by construction.** A beacon carries **no user id** and the server never
+   derives one: the beacon handler reads the session only to authenticate, and the
+   insert does not see it. Views are grouped by a **random per-tab session id** that is
+   never joined to anything. Erasure (§3) has nothing to scrub here, and the §14.5
+   position — *InnoBox stores no per-user browsing log* — stays true.
+3. **Route templates only.** A view names its page by the **matched template**
+   (`/challenges/[number]`), never the concrete path, the number or the title. The
+   per-route table needs nothing finer, and no challenge or solution — anonymous or
+   not — can be correlated with a browsing session.
+4. **Raw for 7 days, a per-route daily rollup forever.** Percentiles cannot be
+   re-aggregated, so the **7d** range — the only one the raw window covers — computes
+   a true p75 from the raw views, and **30d, 90d and All** read the daily rollup,
+   labelled as such (below).
+5. **No new monitoring channel.** Nothing here reaches Prometheus `/metrics`, the
+   inbox or e-mail; the page is the surface.
+
+#### The switch and the sample rate
+
+- **`platform_settings`** gains **`rum_enabled`** (default **`false`**) and
+  **`rum_sample_rate`** (integer percent, one of **100 / 50 / 25 / 10 / 1**, default
+  **100**). Both live on the monitoring page itself — a control row above the chart with
+  the **Collect telemetry** switch, the **Sample** selector and, read-only, the flush
+  schedule (*"beacons every 17 s while active, backing off to 157 s when idle"*). The
+  Platform settings page (§14.3) lists neither; its index entry points here.
+- **One audit row per change** — **`settings.telemetry_changed`** with `after: {
+  enabled, sampleRate }`. Opening the page, changing the range and refreshing are
+  **not audited**: the data carries no user ids, so a read discloses nothing about
+  anyone (the §14.5 chart rule, not the online-list rule).
+- **Takes effect per session.** `GET /api/me` carries `rum: { enabled, sampleRate }`.
+  A tab decides **once, when the collector starts**, whether its session is sampled;
+  the decision is kept with the session id (below), so turning the rate down affects
+  new sessions only. Switching collection **off** stops new sessions from starting a
+  collector and makes the beacon endpoint **discard** everything it receives
+  (**204**, no row) — a tab opened before the switch flipped sends into the void until
+  it reloads. Switching on starts collecting from the next page load.
+
+#### Where the collector runs, and where it never does
+
+- The collector is a client component mounted by the **authenticated app shell** and
+  nothing else. The signed-out Home (`/`), the public form (`/submit`,
+  `/submit/confirm`) and the agent-access routes (§25) carry no collector and send no
+  beacon — the only unauthenticated surfaces stay the ones §2.1 names.
+- It **does not run** while `rum_enabled` is false, while the session is not sampled,
+  or when the browser lacks the APIs it needs (`PerformanceObserver`, `sendBeacon`):
+  it then does nothing, silently. It never throws into the page: every observer and
+  the flush are wrapped, and a collector failure is at most a `console.debug`.
+- **Admins are measured like everyone else**, their own monitoring page included.
+
+#### Sessions and sampling
+
+- A **session is one browser tab.** When the collector starts in a tab it reads
+  `sessionStorage`; finding nothing, it draws a random id (`crypto.randomUUID()`),
+  decides sampling with one draw against `rum_sample_rate`, and stores both. The
+  entry lives as long as the tab: a reload or an in-tab navigation keeps it, a closed
+  tab ends it, a duplicated tab (browsers copy `sessionStorage`) continues it. No
+  inactivity cut — a tab left open overnight is one session.
+- The id is **never stored elsewhere** (no cookie, no `localStorage`, nothing on the
+  user row) and the server keeps it only to count distinct sessions. Sampling is
+  decided per session so that a sampled session's views are complete: a 10 % sample
+  is one in ten *people-tabs*, not one in ten page views.
+
+#### What a view records
+
+A **view** starts on a hard load or on a client-side route change and ends at the next
+route change or when the page is hidden or unloaded. Each view becomes one row, with
+these fields; a measurement that does not apply to the view is **null** and renders as
+"—":
+
+- **`route`** — the matched template (decision 3); **`day`** — the view's UTC day.
+- **LCP, CLS and TTFB** — **hard-load views only**, by their standard definitions,
+  measured with the **`web-vitals`** library (Apache-2.0, §21.1). A soft navigation has
+  no navigation response and no "largest paint" of its own, so these stay null there
+  rather than being faked. CLS is the hard load's final value (reported when the page
+  is hidden, so a hard-load view's CLS arrives with its last flush).
+- **INP** — **per view**, over the interactions that happened during it, by the
+  `web-vitals` INP rule (the worst interaction, after discarding the single worst per
+  50 interactions): the collector observes `event` entries (duration threshold 40 ms)
+  and attributes each to the view in progress. A view with no interaction has no INP.
+- **Navigation (`nav_ms`)** — how long the page took to appear. Hard load: from
+  navigation start to `domContentLoadedEventEnd` (Navigation Timing). Soft navigation:
+  from the click or tap on the internal link (or the `history` push) that started it to
+  the first render of the new route. Both are "how long did I wait", measured at the
+  user's end.
+- **API** — every same-origin `/api/*` request the page makes during the view, observed
+  by the collector wrapping `window.fetch` (the app's calls go through it whether they
+  use the caching helper or not): **`api_ms`** — the durations,
+  an integer array capped at **50** per view (the rest are counted but not timed);
+  **`api_calls`**; **`api_errors`** — a status **≥ 500**, a request that never got a
+  response (network failure) or one the app aborted on its **own** timeout. A 4xx is
+  not an error here — 403, 409, 413, 422 and 429 are the app saying no, and the
+  §14.7 system log already records them — and a request the browser cancelled because
+  the user navigated away counts as neither a call nor an error. The shell's 30-second
+  pulse (`GET /api/me/pulse`, §12.2) is excluded, exactly as §14.5 excludes it: it is
+  not the page's work. Opening the bell's inbox list is a person acting, and counts.
+- **`client_errors`** — the number of error occurrences during the view (next
+  heading).
+- Nothing else: no user agent, no viewport, no referrer, no query string, no IP.
+
+The chart and the table use **p75** throughout — the usual Web Vitals threshold
+("good" is LCP ≤ 2.5 s, INP ≤ 200 ms, CLS ≤ 0.1 at the 75th percentile) — and colour
+each vitals cell **good / needs improvement / poor** by those published thresholds
+(TTFB 800 / 1 800 ms; navigation and API use the same three-step dot with 1 000 /
+3 000 ms and 500 / 1 500 ms, InnoBox's own bars). The dot sits beside the number — a
+colour alone never carries the verdict (§2.2).
+
+#### Client errors
+
+- The collector listens for **`error`** and **`unhandledrejection`** on `window`. Each
+  occurrence records: **`message`** (truncated to **500** characters), **`source`** —
+  the script file (its path only, never a query string) and line, **`frame`** — the top
+  stack frame's function and location (one line, truncated to 200), the **`route`** in
+  progress, and the moment. Never a form value, a request body, a URL carrying an id,
+  or anything from the DOM. A rejection whose reason is not an `Error` records its
+  `String()` form, truncated the same way, with no source and the fixed frame
+  *"(unhandled rejection)"* (it has no stack to read, and the extension rule below
+  would otherwise drop it as sourceless).
+- **Deduped on the server** into **`rum_client_errors`**: one row per
+  **fingerprint** — the SHA-256 of the normalised message (digits and quoted strings
+  collapsed, so a message that embeds a number is one error, not a thousand) plus the
+  source file and line — with `message`, `source`, `frame`, `route` (the most recent
+  one), **`first_seen`**, **`last_seen`** and **`count`**. A repeat bumps `count` and
+  `last_seen`; nothing else changes. Occurrences are also counted per view (above), so
+  the routes table can show *where* errors happen without a second table.
+- **Noise control.** A view reports at most **10** occurrences; the eleventh onward is
+  counted (`client_errors`) but not described. Errors thrown by browser extensions
+  (a `source` outside the app's own origin, `moz-extension://`, `chrome-extension://`,
+  or no source at all with an empty frame) are **dropped on the client** — they are
+  not InnoBox's errors — and `ResizeObserver loop completed with undelivered
+  notifications`, the one benign error every app sees, is dropped by name.
+- **The list** on the page shows the fingerprint rows for the selected range (rows whose
+  `last_seen` is inside it), **sorted by Last seen or by Count** (a two-way toggle,
+  default Last seen), **capped at 50** with a muted *"showing 50 of 212"*; each row
+  shows the message, the route name, the source and frame in monospace, the count and a
+  relative last-seen. Expanding a row shows the full 500-character message and the
+  first-seen time. Everything is rendered as text — a message is attacker-influenced
+  (anyone can throw) and is **never** interpreted as HTML.
+- **Retention:** a fingerprint row is deleted **90 days after its `last_seen`** by the
+  hourly sweep (below) — the system log's horizon.
+
+#### Beacons
+
+- **Batched, then sent.** Finished views and error occurrences queue in the collector
+  and go out together as one `POST /api/rum` — **`text/plain`** body holding JSON (so
+  `sendBeacon` needs no preflight; the handler parses it regardless of the declared
+  type) — of at most **50 views, 50 errors and 64 KB**; anything beyond waits for the
+  next flush. The view in progress is sent **open** only when the page is hidden or
+  unloaded (then via `navigator.sendBeacon`, with its INP and CLS so far); every other
+  flush sends completed views only.
+- **Schedule.** While something was sent on the last tick, the next flush is **17 s**
+  away; after an empty tick the interval steps through **23, 37, 59, 97, 157 s** and
+  stays at 157 s until there is something to send, which resets it to 17 s. The primes
+  keep thousands of tabs from flushing in step. `visibilitychange` → hidden and
+  `pagehide` flush immediately, ahead of the schedule.
+- **Server side.** The handler is session-authenticated like every `/api` route
+  (§2.4; the **`rum`** rate-limit bucket — **20 per minute** per user, its 429s
+  **not recorded** in the system log, as a flood must not become a log flood), same-
+  origin checked like every mutation, and **validates every field**: an unknown route
+  template is coerced to **`other`**, numbers are bounded (durations 0–120 000 ms, CLS
+  0–10, arrays at their caps), strings are truncated to their limits, unknown fields
+  are dropped, and a body that is not a JSON object with a `views` array is **400**. It
+  never reads the user id into a row (decision 2). A beacon arriving while collection
+  is off is **204** and discarded. The route is **not** in the §14.5 presence allowlist:
+  a flush is not the person using InnoBox.
+- `connect-src 'self'` (§2.4) already allows it; no CSP change.
+
+#### Data
+
+- **`rum_views`** (migration 0052) — id, received_at, **day** (date, UTC), session_id
+  (text), route, hard_load (bool), lcp_ms, inp_ms, nav_ms, ttfb_ms (int, nullable),
+  cls (numeric(6,4), nullable), api_ms (int[]), api_calls, api_errors, client_errors
+  (int). No user id, no FK to anything. Indexed on (day, route). **Deleted once older
+  than 7 days** by the hourly sweep.
+- **`rum_daily`** — (day, route) unique: views, sessions (distinct session ids that
+  day), p75_lcp_ms, p75_inp_ms, p75_cls, p75_ttfb_ms, p75_nav_ms, p75_api_ms
+  (nullable), api_calls, api_errors, client_errors. One row per route that had a view,
+  plus **one row with `route = '*'`** holding the same measures over **all** views of
+  the day, so the all-routes line needs no weighted guess. Carries no session ids.
+  Retained indefinitely.
+- **`rum_client_errors`** — fingerprint (text, unique), message, source, frame, route,
+  first_seen, last_seen, count. Retained 90 days past `last_seen`.
+- All three are **mutable working data**, like `system_events`: no append-only
+  trigger, trimmed by the worker, untouched by the §10.3 cascade and by erasure
+  (nothing references a challenge, a solution or a user).
+
+#### The worker's part
+
+In the **hourly housekeeping sweep** (§2, §14.5), leader-only and pure-DB:
+
+1. **Rollup.** For every UTC day still inside the raw window (**today and the 7 days
+   before**), recompute its `rum_daily` rows from `rum_views` — true `percentile_cont
+   (0.75)` per measure, per route and for `*` — and **upsert** them. Recomputing the
+   open days each hour means a day's row is always as complete as the raw data, and a
+   day whose late beacons arrived after midnight (a tab hidden at 23:58 and flushed at
+   00:01 carries its view's own `day`) is repaired by the next sweep. A day with no
+   views gets no row; the chart draws it as 0 views and breaks the vitals lines.
+2. **Trim.** Delete `rum_views` older than 7 days and `rum_client_errors` whose
+   `last_seen` is older than 90 days.
+
+The recompute window and the retention are the same 7 days, and the rollup runs
+before the trim in each sweep, so every day gets its final recompute from complete raw
+rows before any of them is deleted. **No backfill**: the series starts the day
+collection is switched on.
+
+#### The page — `/admin/monitoring`
+
+Top to bottom:
+
+1. **Control row** — the **Collect telemetry** switch, the **Sample** selector, the
+   read-only flush schedule, a **range** group **7d / 30d / 90d / All** (**default
+   30d**, not persisted) and **Refresh**. **No auto-refresh**; a muted *"as of 10:04"*
+   stamp next to Refresh, as on §14.5. Changing the switch or the sample rate saves
+   immediately (`PATCH /api/admin/rum/settings`) with a toast.
+2. **Chart** — per **UTC day** over the selected range, from `rum_daily` (`*` rows),
+   today's point computed live from `rum_views`: **page views as bars** on the left
+   axis and **p75 LCP and p75 INP as lines** on a right-hand milliseconds axis,
+   through the shared ECharts wrapper (§14.5: resolved brand tokens, `useUTC`, the
+   calendar-day axis labels, legend toggles, reduced-motion, the one-sentence aria
+   summary; no data-zoom — the range buttons are the window). Each line breaks on a
+   day without that measure. Under **7 days** of rollup the chart is replaced by the
+   muted *"Not enough history yet — the chart starts filling from the day collection
+   was switched on."* note, the controls staying in place.
+3. **Routes table** — one row per route seen in the range, the **All routes** row
+   pinned first and the rest sorted by **views, descending** by default; every column
+   header sorts (click again to flip). Columns: **Route** (the page name), **Views**,
+   **Sessions**, **p75 LCP**, **p75 INP**, **p75 CLS**, **p75 TTFB**, **p75 Nav**,
+   **p75 API**, **API errors** (percent of calls, one decimal), **Client errors**
+   (occurrences). Vitals cells carry the three-step dot. Null → "—". On a narrow
+   viewport the table scrolls horizontally inside its card with the Route column
+   sticky.
+   - **7d** computes from `rum_views`: true p75 (`percentile_cont`), distinct
+     sessions over the whole range, sums for the counts.
+   - **30d, 90d and All** read `rum_daily` (today's rows computed live from
+     `rum_views`, as the chart does): sums for views, calls, errors and occurrences;
+     **sessions** as the sum of daily distinct sessions (a tab spanning midnight counts
+     on both days — stated in the caption); the vitals as the **views-weighted mean of
+     each day's p75** (API latency weighted by calls), because a percentile cannot be
+     re-aggregated. The caption under the table heading says so in those words for
+     these ranges, so the number is never mistaken for a true percentile.
+   - A route whose only views in the range are soft navigations shows "—" for LCP,
+     CLS and TTFB and a value for INP, navigation and API — not a bug, decision-level
+     behaviour (above).
+4. **Client errors** — the list of the previous heading, headed *"Client errors ·
+   212"* (the row count in range), with the Last seen / Count toggle.
+5. **A muted disclosure line** at the foot: that performance beacons are collected
+   from the app in the browser only while the switch is on, carry no user identity,
+   keep detail for 7 days and daily totals thereafter, and are visible to platform
+   admins only.
+
+**Route names.** A **registry** in the web package maps each page template to its
+name — Home, Challenges, Challenge, New challenge, Search, Leaderboard, Profile,
+Quick start, What's new, AI agents, Administration, Triage queue, Platform settings,
+Audit log, System log, Trash, Public submissions, Real user monitoring — and the
+collector resolves the concrete pathname to its template through the same registry
+before the view ever leaves the browser. An unlisted template (a page added without a
+registry entry, or a 404) is **Other**. A unit test walks `app/**/page.tsx` and fails
+when an authenticated page has no registry entry, so Other stays empty in practice.
+
+#### API, audit, tests
+
+- **API (§16).** `POST /api/rum` (any signed-in user; the beacon, above) → **204**;
+  `GET /api/admin/rum/summary?range=7d|30d|90d|all` → `{ range, asOf, source: "raw" |
+  "rollup", routes: [{ route, name, views, sessions, p75: { lcp, inp, cls, ttfb, nav,
+  api }, apiCalls, apiErrors, clientErrors }], total: <the same shape for all routes> }`;
+  `GET /api/admin/rum/series?range=` → `{ range, enoughHistory, points: [{ day, views,
+  p75Lcp, p75Inp }] }` (contiguous UTC days, today live); `GET
+  /api/admin/rum/errors?range=&sort=last_seen|count` → `{ errors: [{ fingerprint,
+  message, source, frame, route, name, firstSeen, lastSeen, count }], total }` (capped
+  at 50); `GET`/`PATCH /api/admin/rum/settings` → `{ enabled, sampleRate }` (`PATCH`
+  validates the rate against the fixed set, **422** otherwise). The admin endpoints are
+  platform-admin only, **403** otherwise; `GET /api/me` gains `rum`.
+- **Audit (§15).** `settings.telemetry_changed` only. Reads are not audited (above).
+- **Tests.** *Unit:* the route matcher and the registry-completeness walk; the
+  session/sampling decision (stored once, honoured on reload, a 1 % rate samples
+  about one session in a hundred over a seeded run); the flush schedule (17 → 23 → 37
+  → 59 → 97 → 157, reset to 17 after a non-empty tick, immediate on hide); beacon
+  validation and coercion (unknown route → `other`, bounds, caps, truncation, a
+  non-object body → 400); the error fingerprint (digits and quoted strings collapse,
+  source and line distinguish, extension sources and the ResizeObserver message are
+  dropped); the views-weighted mean and the p75 SQL fragment; the chart option builder
+  (bars + two lines, a null breaks the line, no data-zoom, the aria sentence); the
+  threshold dots at each boundary. *Integration (DB):* a beacon inserts rows without a
+  user id even though the request carries a session; a beacon while off is 204 and
+  inserts nothing; the rate-limit bucket; the rollup is idempotent, writes the `*` row,
+  repairs an open day after late beacons, and leaves closed days alone once outside
+  the window; the trims; `summary` for 7d and 30d on seeded data (`source` flips, a
+  true p75 vs a weighted mean), sessions distinct in raw and summed in rollup; the
+  errors endpoint dedupes and sorts; every admin endpoint is 403 to a namespace admin.
+  *E2e* (`e2e/admin-monitoring.spec.ts`): a platform admin opens the page, turns
+  collection on (the switch persists across a reload), sees the control row, the "not
+  enough history" note on a young install and the routes table with its All routes
+  row; a namespace admin is refused.
+
 ---
 
 ## §15 Audit
@@ -5297,7 +5627,10 @@ anomalies. Since v0.10 also:
   rotation are not audited;
 - **hype** — `hype.given` (actor the hyper, target the item, `after: { weight }`; under
   All only, as `like.*`) and `settings.hype_enabled_changed` (§26.11). The awards, the
-  Talent Scout badge and event 16 are not audited, as no award is.
+  Talent Scout badge and event 16 are not audited, as no award is;
+- **real user monitoring** — `settings.telemetry_changed` (`after: { enabled,
+  sampleRate }`, §14.12). Beacons and the page's reads are not audited: the data holds
+  no user ids, so a read discloses nothing about anyone.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -5545,8 +5878,10 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `me/survey/start`, `me/survey/close`, `me/survey/responses` and `me/survey/bug` drive
   the §13.10 feedback survey and bug reports, and `GET` carries `openSurvey`,
   `selfSurvey` and `bugReports`, plus the §23
-  `gamification` block and `newAchievements`; `me/achievements-seen` `POST` advances the
-  §23.7 toast marker), `profile` (own and other users'
+  `gamification` block and `newAchievements`, and the §14.12 `rum: { enabled, sampleRate }`;
+  `me/achievements-seen` `POST` advances the
+  §23.7 toast marker), `rum` (`POST` — the §14.12 beacon: any signed-in user, `text/plain`
+  JSON, **204**, never a row with a user id), `profile` (own and other users'
   profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the §12.1
   `emailDelivery` choice, the three §12.1 per-event
   toggles, the §13.10 `surveysEnabled` switch and the §23 `gamificationPublic` and
@@ -5565,7 +5900,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   only (**403** for namespace admins), anonymity-masked locations, §14.5;
   **`admin/audit` with `q`/`category`/`from`/`to` + `admin/audit/export`** (§15);
   **`admin/system-banner` `PUT`/`DELETE`** (§14.6); **`admin/system-log` +
-  `admin/system-log/export` + mark-seen** (§14.7) — all platform admin only;
+  `admin/system-log/export` + mark-seen** (§14.7); **`admin/rum/summary`,
+  `admin/rum/series`, `admin/rum/errors` (`GET`) and `admin/rum/settings`
+  (`GET`/`PATCH`)** (§14.12) — all platform admin only;
   since v0.10: **`admin/audit/verify`** (`POST`, NDJSON stream, one run at a time —
   **409** otherwise, §15); **`admin/identity-sync`** (`GET`, §14.10);
   **`admin/users/:userId/scrub`** (`POST`, the §3 erasure — body `{ reassignTo?: uuid |

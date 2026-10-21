@@ -132,6 +132,12 @@ export default function AdminPage() {
             </Link>
           )}
           {gate === "platform_admin" && <SystemLogCard />}
+          {gate === "platform_admin" && (
+            <Link href="/admin/monitoring" className="card card-pad">
+              <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Real user monitoring →</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Page load, responsiveness, request latency and script errors, as people experience them.</p>
+            </Link>
+          )}
           {gate === "platform_admin" && <PublicSubmissionsLinkCard />}
           {gate === "platform_admin" && (
             <Link href="/admin/trash" className="card card-pad">

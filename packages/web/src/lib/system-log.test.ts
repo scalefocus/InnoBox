@@ -72,6 +72,22 @@ test("401 and 404 are never recorded; 403/409/413/422/429 and 5xx are", async ()
   assert.equal(first.source, "web");
 });
 
+test("unrecordedStatuses: the monitoring beacon's 429 is never recorded, its 5xx still is (§14.12)", async () => {
+  const { recorded, withSystemLog } = fakeDeps();
+  for (const status of [429, 500]) {
+    const H = withSystemLog("/api/rum", async (_req: Request) => Response.json({ error: `status ${status}` }, { status }), {
+      anonymousActor: true,
+      unrecordedStatuses: [429],
+    });
+    assert.equal((await H(req("POST", "/api/rum"))).status, status, "the response itself is unchanged");
+  }
+  await settle();
+  assert.deepEqual(
+    recorded.map((e) => [e.status, e.userId]),
+    [[500, null]],
+  );
+});
+
 test("the response body is left intact for the client after recording", async () => {
   const { withSystemLog } = fakeDeps();
   const H = withSystemLog("/api/x", async (_req: Request) => Response.json({ error: "forbidden here" }, { status: 403 }));

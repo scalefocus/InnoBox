@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.19.0",
+    date: "2026-10-21",
+    summary:
+      "New for platform admins: Real user monitoring, under Administration. It shows how InnoBox performs in people's browsers: page views, load and responsiveness, request times and failures, and script errors, page by page. Collection is off until you switch it on. Beacons carry no names and never identify an item.",
+  },
+  {
     version: "1.18.0",
     date: "2026-10-21",
     summary:

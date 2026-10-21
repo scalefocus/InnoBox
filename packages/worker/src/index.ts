@@ -31,6 +31,7 @@ import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps,
 import { runDraftGcSweep } from "./attachments/draft-gc.js";
 import { runUploadGcSweep } from "./attachments/upload-gc.js";
 import { runPresenceRollupSweep } from "./presence/rollup.js";
+import { runRumSweep } from "./rum/rollup.js";
 import {
   createMetricsHandler,
   createReadyzHandler,
@@ -193,7 +194,8 @@ const leaderElection = startLeaderElection(dbUrl, {
       })
       .catch((err) => console.error(JSON.stringify({ level: "error", msg: "gamification backfill failed", error: String(err) })));
 
-    // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.7 system-log
+    // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.12 monitoring
+    // rollup + trims, §14.7 system-log
     // trim, §22.3 AI usage prune, §25.13 expired OAuth rows, §11 stale upload sessions (and abandoned draft attachments). Presence rollup is what
     // keeps per-person presence detail from accumulating past its 3-day floor — skipping it
     // because a mail or storage integration is unconfigured would silently turn presence into an
@@ -207,6 +209,16 @@ const leaderElection = startLeaderElection(dbUrl, {
         }
       } catch (err) {
         console.error(JSON.stringify({ level: "error", msg: "presence rollup sweep failed", error: String(err) }));
+      }
+      // §14.12 real user monitoring: recompute the open 7-day window into the daily rollup, then
+      // trim raw views past it and error rows unseen for 90 days.
+      try {
+        const rum = await runRumSweep(pool);
+        if (rum.rolled || rum.trimmedViews || rum.trimmedErrors) {
+          console.log(JSON.stringify({ level: "info", msg: "rum sweep", ...rum }));
+        }
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "rum sweep failed", error: String(err) }));
       }
       // §14.7 retention: the system log keeps 90 days.
       try {

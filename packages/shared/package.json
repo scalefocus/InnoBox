@@ -117,6 +117,14 @@
     "./hype": {
       "types": "./dist/hype.d.ts",
       "default": "./dist/hype.js"
+    },
+    "./rum": {
+      "types": "./dist/rum.d.ts",
+      "default": "./dist/rum.js"
+    },
+    "./rum-sql": {
+      "types": "./dist/rum-sql.d.ts",
+      "default": "./dist/rum-sql.js"
     }
   },
   "scripts": {
