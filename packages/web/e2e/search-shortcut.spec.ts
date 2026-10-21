@@ -2,11 +2,12 @@
 // anywhere while signed in, without stealing focus from an in-progress edit elsewhere.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const searchInput = (page: import("@playwright/test").Page) => page.getByPlaceholder("Search challenges & solutions…");
 
 test("Ctrl+K focuses the topbar search from any page", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Shortcut ${stamp}` });
   const page = await ctx.newPage();
@@ -20,7 +21,7 @@ test("Ctrl+K focuses the topbar search from any page", async ({ browser }) => {
 });
 
 test("Ctrl+K does not steal focus from an in-progress edit in another field", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E ShortcutGuard ${stamp}` });
   const page = await ctx.newPage();
@@ -36,7 +37,7 @@ test("Ctrl+K does not steal focus from an in-progress edit in another field", as
 });
 
 test("a grey shortcut-hint pill advertises the combo and hides once the field is focused", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E ShortcutHint ${stamp}` });
   const page = await ctx.newPage();
@@ -60,7 +61,7 @@ test("a grey shortcut-hint pill advertises the combo and hides once the field is
 const clearButton = (page: import("@playwright/test").Page) => page.getByRole("button", { name: "Clear search" });
 
 test("a clear button appears from the first character and clears the field, keeping focus", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E SearchClear ${stamp}` });
   const page = await ctx.newPage();
@@ -84,7 +85,7 @@ test("a clear button appears from the first character and clears the field, keep
 });
 
 test("Escape progressively clears the field, then exits it when already empty", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E SearchEscape ${stamp}` });
   const page = await ctx.newPage();
@@ -105,7 +106,7 @@ test("Escape progressively clears the field, then exits it when already empty", 
 });
 
 test("the clear button is suppressed on the mobile layout", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E SearchClearMobile ${stamp}` });
   const page = await ctx.newPage();

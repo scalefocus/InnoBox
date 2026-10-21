@@ -15,11 +15,12 @@
 import { test, expect, type Locator } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("directory card: hover opens it, keyboard reaches it, and an anonymous author never gets one", async ({ browser }) => {
   test.slow(); // Next dev-mode first-hit route compilation
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const authorName = `E2E Card Author ${stamp}`;
 
   const ctx = await browser.newContext();
@@ -111,7 +112,7 @@ test("directory card: hover opens it, keyboard reaches it, and an anonymous auth
 test("directory card: Tab routes into and out of the portalled card; your own bubble links to /profile", async ({ browser }) => {
   test.slow();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const authorName = `E2E Card Keys ${stamp}`;
   const ctx = await browser.newContext();
   const { userId: authorId } = await signIn(ctx, { name: authorName });
@@ -184,7 +185,7 @@ test("directory card: Tab routes into and out of the portalled card; your own bu
 test("directory card: a scrubbed author renders the Deleted User bubble from the flag, with no profile and no link", async ({ browser }) => {
   test.slow();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const json = { "content-type": "application/json", accept: "application/json" };
   const authorCtx = await browser.newContext();
   const { userId: authorId } = await signIn(authorCtx, { name: `E2E Card Leaver ${stamp}` });
@@ -223,7 +224,7 @@ test("directory card: a scrubbed author renders the Deleted User bubble from the
 test("directory card: the read-only assignee on a terminal triage row opens the card without opening the row", async ({ browser }) => {
   test.slow();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const json = { "content-type": "application/json", accept: "application/json" };
   const assigneeName = `E2E Card Assignee ${stamp}`;
   const assigneeCtx = await browser.newContext();
@@ -270,7 +271,7 @@ test("directory card: the read-only assignee on a terminal triage row opens the 
 test("directory card: press and hold opens it on touch; a tap, a drag or an anonymous bubble never does", async ({ browser }) => {
   test.slow();
 
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const authorName = `E2E Card Holder ${stamp}`;
   const ctx = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
   await signIn(ctx, { name: authorName });

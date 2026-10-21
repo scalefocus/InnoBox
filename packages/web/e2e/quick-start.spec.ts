@@ -4,9 +4,10 @@
 // (freshOnboarding omitted) must NOT be redirected — every other e2e spec depends on that.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("first sign-in redirects to /quick-start; Continue marks it seen and returns to Home", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Onboarding ${stamp}`, freshOnboarding: true });
   const page = await ctx.newPage();
@@ -34,7 +35,7 @@ test("first sign-in redirects to /quick-start; Continue marks it seen and return
 });
 
 test("an ordinary dev sign-in (freshOnboarding omitted) is never redirected to /quick-start", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Regular ${stamp}` });
   const page = await ctx.newPage();
@@ -46,7 +47,7 @@ test("an ordinary dev sign-in (freshOnboarding omitted) is never redirected to /
 });
 
 test("the account menu's Quick start link is always reachable, even once seen", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E MenuLink ${stamp}` });
   const page = await ctx.newPage();

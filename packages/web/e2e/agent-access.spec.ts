@@ -7,6 +7,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
 const REDIRECT = "http://127.0.0.1:59999/callback";
@@ -19,7 +20,7 @@ async function mcpCall(request: APIRequestContext, token: string, method: string
 }
 
 test("connect from /agents through consent; the agent's challenge shows via agent; revoke stops it", async ({ browser, playwright }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const clientName = `E2E Agent ${stamp}`;
   const adminCtx = await browser.newContext();
   const personCtx = await browser.newContext();

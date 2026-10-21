@@ -5,9 +5,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("engagement: comment (post + edit), like, and follow a challenge", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Engager ${stamp}` });
   const page = await ctx.newPage();

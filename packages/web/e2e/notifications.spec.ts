@@ -6,9 +6,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("bell: a challenge author is notified when an admin triages their challenge", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `E2E notify challenge ${stamp}`;
 
   // A member raises a challenge (auto-follows themselves → becomes a recipient of its events).
@@ -37,7 +38,7 @@ test("bell: a challenge author is notified when an admin triages their challenge
 });
 
 test("bell: a namespace admin is notified when a challenge is submitted for triage", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `E2E triage-notify challenge ${stamp}`;
 
   // The admin exists first, so it's a recipient when the submission event fans out to ns admins.

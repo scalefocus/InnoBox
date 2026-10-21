@@ -5,6 +5,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { CHANGELOG } from "../src/app/whats-new/changelog";
 import { UPCOMING } from "../src/app/whats-new/upcoming";
+import { uniqueStamp } from "./helpers/stamp";
 
 const CURRENT = CHANGELOG[0]!;
 const PREVIOUS = CHANGELOG[1]!;
@@ -17,7 +18,7 @@ async function highlightedVersions(page: Page): Promise<string[]> {
 
 test("a release below the marker shows the notice; it survives a reload and closes only on ✕", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Notice Dismiss ${Date.now().toString(36)}`, whatsNewSeen: PREVIOUS.version });
+  await signIn(ctx, { name: `E2E Notice Dismiss ${uniqueStamp()}`, whatsNewSeen: PREVIOUS.version });
   const page = await ctx.newPage();
   await page.goto("/");
 
@@ -54,7 +55,7 @@ test("the link lands on the page with exactly the missed entries highlighted abo
   const seen = CHANGELOG[3]!.version;
   const missed = CHANGELOG.slice(0, 3).map((e) => e.version);
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Notice Link ${Date.now().toString(36)}`, whatsNewSeen: seen });
+  await signIn(ctx, { name: `E2E Notice Link ${uniqueStamp()}`, whatsNewSeen: seen });
   const page = await ctx.newPage();
   await page.goto("/");
 
@@ -87,7 +88,7 @@ test("the link lands on the page with exactly the missed entries highlighted abo
 
 test("opening the page from the account menu closes the notice and highlights from the marker", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Notice Menu ${Date.now().toString(36)}`, whatsNewSeen: CHANGELOG[2]!.version });
+  await signIn(ctx, { name: `E2E Notice Menu ${uniqueStamp()}`, whatsNewSeen: CHANGELOG[2]!.version });
   const page = await ctx.newPage();
   await page.goto("/");
   await expect(notice(page)).toBeVisible();
@@ -112,7 +113,7 @@ test("rollout: a null marker counts and highlights from the boundary date", asyn
   const boundary = CHANGELOG[2]!.date;
   const expected = CHANGELOG.filter((e) => e.date >= boundary).map((e) => e.version);
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Notice Rollout ${Date.now().toString(36)}`, whatsNewSeen: "none", whatsNewSinceDate: boundary });
+  await signIn(ctx, { name: `E2E Notice Rollout ${uniqueStamp()}`, whatsNewSeen: "none", whatsNewSinceDate: boundary });
   const page = await ctx.newPage();
   await page.goto("/");
 
@@ -133,7 +134,7 @@ for (const viewport of [
   test(`overflow at ${viewport.name}: the card fits, the list scrolls, ✕ and link stay visible`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
     // Far enough back that three long summaries overflow the 60vh cap.
-    await signIn(ctx, { name: `E2E Notice Overflow ${viewport.width} ${Date.now().toString(36)}`, whatsNewSeen: "0.0.0" });
+    await signIn(ctx, { name: `E2E Notice Overflow ${viewport.width} ${uniqueStamp()}`, whatsNewSeen: "0.0.0" });
     const page = await ctx.newPage();
     await page.goto("/");
     await expect(notice(page)).toBeVisible();
@@ -161,7 +162,7 @@ for (const viewport of [
 
 test("Quick start's Continue leaves no notice behind", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Notice Onboard ${Date.now().toString(36)}`, freshOnboarding: true, whatsNewSeen: "none" });
+  await signIn(ctx, { name: `E2E Notice Onboard ${uniqueStamp()}`, freshOnboarding: true, whatsNewSeen: "none" });
   const page = await ctx.newPage();
   await page.goto("/");
   await expect(page).toHaveURL(/\/quick-start$/);
@@ -179,7 +180,7 @@ test("Quick start's Continue leaves no notice behind", async ({ browser }) => {
 
 test("the page opens with Coming soon greyed out above the releases, filtered by role", async ({ browser }) => {
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Soon Member ${Date.now().toString(36)}` });
+  await signIn(ctx, { name: `E2E Soon Member ${uniqueStamp()}` });
   const page = await ctx.newPage();
   await page.goto("/whats-new");
 

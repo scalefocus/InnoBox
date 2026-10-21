@@ -1,7 +1,7 @@
-// The e2e suite's test index (INNOBOX_SPEC.md §17), shared by e2e/playwright.config.ts (it balances
-// the Jenkins shards by test count) and the quick run (Jenkins' E2E_MODE=QUICK_E2E_TESTS).
+// The e2e suite's test index (INNOBOX_SPEC.md §17), for the quick run (Jenkins'
+// E2E_MODE=QUICK_E2E_TESTS).
 //
-// A quick run executes a random 10% of the suite's tests in a single shard — a smoke signal in a
+// A quick run executes a random 10% of the suite's tests — a smoke signal in a
 // fraction of the time, not a substitute for the full run. Picking individual tests (not whole
 // spec files) is safe because no spec chains tests together: there is no serial mode, no
 // beforeAll, and every test creates its own uniquely-named fixtures.

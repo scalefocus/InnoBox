@@ -5,6 +5,7 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, getImpactAreaId } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 // Impact-area rows all share the aria-label "Impact area name" (exact, to exclude the "New impact
 // area name" create box), so a row is identified by its input's current value.
@@ -29,7 +30,7 @@ async function impactAreaRow(page: Page, value: string): Promise<Locator> {
 }
 
 test("platform settings are refused to a non-platform-admin", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Settings Member ${stamp}` }); // plain member
   const page = await ctx.newPage();
@@ -40,7 +41,7 @@ test("platform settings are refused to a non-platform-admin", async ({ browser }
 
 test("impact areas: create, retire, then delete a zero-reference area", async ({ browser }) => {
   test.slow(); // first hit to each of the create/retire/delete impact-area routes compiles cold
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const name = `E2E ZeroRef Area ${stamp}`;
 
   const ctx = await browser.newContext();
@@ -74,7 +75,7 @@ test("impact areas: create, retire, then delete a zero-reference area", async ({
 
 test("impact areas: a retired area with challenges is deleted only after reassignment", async ({ browser }) => {
   test.slow(); // create + submit + retire + delete each may hit a cold-compiled route
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const name = `E2E RefArea ${stamp}`;
 
   const ctx = await browser.newContext();
@@ -114,7 +115,7 @@ test("impact areas: a retired area with challenges is deleted only after reassig
 });
 
 test("date format: switching between EU and US persists across a reload", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E DateFmt Admin ${stamp}`, admin: true });
   const page = await ctx.newPage();

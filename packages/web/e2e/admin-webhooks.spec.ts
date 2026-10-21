@@ -6,9 +6,10 @@
 // public IP literal, so saving needs no DNS; no Send test is run (it would leave the machine).
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("channel webhooks: platform-admin only; add → hint only → switch off → edit keeps URL → delete", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const memberCtx = await browser.newContext();

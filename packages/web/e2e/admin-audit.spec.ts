@@ -6,9 +6,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("audit log: an audited status change is filterable and its before/after is inspectable", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   // A member raises a challenge; the admin makes a distinctive transition (the audited action).
   const memberCtx = await browser.newContext();

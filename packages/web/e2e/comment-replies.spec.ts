@@ -5,9 +5,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("comment replies: reply, reply to a reply, show more replies", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const name = `E2E Replier ${stamp}`;
   const ctx = await browser.newContext();
   await signIn(ctx, { name });

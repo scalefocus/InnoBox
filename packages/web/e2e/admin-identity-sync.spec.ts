@@ -6,9 +6,10 @@
 // admins, and the counts depend on SCIM-written rows the e2e stack does not provision.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("identity sync: platform-admin only — a member sees no card and gets 403 from the API", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const memberCtx = await browser.newContext();
   await signIn(memberCtx, { name: `E2E Idsync Member ${stamp}` });
 
@@ -23,7 +24,7 @@ test("identity sync: platform-admin only — a member sees no card and gets 403 
 });
 
 test("identity sync: the card shows counts, request times, the never-arrived list and a summary chip", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: `E2E Idsync Admin ${stamp}`, admin: true });
 

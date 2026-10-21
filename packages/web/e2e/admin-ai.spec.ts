@@ -10,6 +10,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 const TOKEN = "sk-e2e-stub-key-0042";
 
@@ -45,7 +46,7 @@ function startStub(): Promise<{ base: string; close: () => Promise<void> }> {
 }
 
 test("AI provider: platform-admin only; configure stub → load models → test → save → enable → failing save → remove", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const memberCtx = await browser.newContext();

@@ -5,6 +5,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 interface Posted {
   name: string;
@@ -81,7 +82,7 @@ async function paste(page: Page, opts: { files: { name: string; type: string }[]
 }
 
 test("challenge form: the whole page takes a drop — pre-checks, a sequential queue, Submit gated", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Drop Author ${stamp}` });
   const page = await ctx.newPage();
@@ -115,7 +116,7 @@ test("challenge form: the whole page takes a drop — pre-checks, a sequential q
 });
 
 test("challenge form: a file-only paste attaches (renamed); a paste with text stays text", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Paste Author ${stamp}` });
   const page = await ctx.newPage();
@@ -139,7 +140,7 @@ test("challenge form: a file-only paste attaches (renamed); a paste with text st
 });
 
 test("detail page: one overlay target per control; drops and pastes go where they're aimed", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Drop Admin ${stamp}`, admin: true });
   const challenge = await createChallengeViaApi(ctx.request, { title: `Drop targets ${stamp}`, description: "Where do dropped files go?" });
@@ -176,7 +177,7 @@ test("detail page: one overlay target per control; drops and pastes go where the
 });
 
 test("a file drag with no available control raises no overlay but never lets the browser open the file", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const ctx = await browser.newContext();
   await signIn(ctx, { name: `E2E Drop Viewer ${stamp}`, admin: true });
   const challenge = await createChallengeViaApi(ctx.request, { title: `No targets ${stamp}`, description: "Nothing editable here." });

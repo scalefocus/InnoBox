@@ -11,6 +11,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { openNewChallengeForm, submitNewChallenge } from "./helpers/forms";
+import { uniqueStamp } from "./helpers/stamp";
 
 // The challenge admin-override <select> carries every CHALLENGE status; `solved` is challenge-only,
 // so it uniquely identifies it (and is unaffected by the solution status <select>, if present).
@@ -19,7 +20,7 @@ function challengeStatusSelect(page: Page) {
 }
 
 test("core journey: submit → triage → propose", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `E2E journey challenge ${stamp}`;
 
   // ── 1. A regular member submits an org-visible challenge (starts at awaiting_triage). ──

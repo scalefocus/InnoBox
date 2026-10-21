@@ -6,26 +6,20 @@
 // The suites run against whatever database the dev server points at and create uniquely-named
 // (timestamped) fixtures, asserting on those specific rows — so they don't depend on a clean
 // database. (A fully isolated e2e database + server, like the dbtest harness, is a later CI step.)
-import { readdirSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
-import { specTests } from "../scripts/e2e-specs.mjs";
 
 const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
 
-// ── Sharding (Jenkins) ────────────────────────────────────────────────────────────────────────
-// E2E_SHARD=i with E2E_SHARD_TOTAL=n (1 ≤ i ≤ n ≤ 9) runs the i-th of n slices of the suite;
-// Jenkins (its E2E_SHARDS parameter) runs all n at once against the SAME dev server and database
-// (one `next dev` per checkout is all Next allows, and the agent can't afford more). Playwright's
-// own --shard can't be used: it splits blindly, and these specs below change PLATFORM-WIDE state
-// (the AI provider + its switches, the system banner, platform settings, channel webhooks, the
-// featured list) that another spec running concurrently would observe. They are pinned to shard
-// 1, where they keep running serially as before; every other spec only touches its own
-// uniquely-named fixtures. The rest are dealt out greedily by test count so the slices come out
-// roughly equal (shard 1 gets no more once its pinned specs exceed a fair share). Every spec
-// lands in exactly one shard. E2E_SHARD unset → the whole suite, as before. (Jenkins' quick run,
-// E2E_MODE=QUICK_E2E_TESTS, is shard 1 of 1 narrowed by test-location arguments — see scripts/e2e-specs.mjs.)
+// ── Workers ───────────────────────────────────────────────────────────────────────────────────
+// E2E_WORKERS (1-16, default 4; Jenkins passes its E2E_WORKERS parameter) spec files run at once,
+// all against the SAME dev server and database (one `next dev` per checkout is all Next allows, and
+// the agent can't afford more). Every spec only touches its own uniquely-named fixtures
+// (helpers/stamp.ts) — except these, which change PLATFORM-WIDE state (the AI provider + its
+// switches, the system banner, platform settings, channel webhooks, the featured list, …) that
+// another of them running at the same time would observe. They form the "platform-state" project,
+// held to one worker so they run one after another, while the other workers share the rest of the
+// suite. Run back to back they are about a quarter of the tests, which sets the floor on the
+// suite's wall time: past about 4 workers, more only adds load on the one dev server.
 // A NEW spec that changes platform-wide state must be added here.
 const PLATFORM_STATE_SPECS = [
   "admin-ai.spec.ts",
@@ -43,42 +37,12 @@ const PLATFORM_STATE_SPECS = [
   "survey.spec.ts",
 ];
 
-const e2eDir = path.dirname(fileURLToPath(import.meta.url));
+const PLATFORM_STATE_GLOBS = PLATFORM_STATE_SPECS.map((f) => `**/${f}`);
 
-/** The spec files of shard `shard` of `total`. */
-function shardSpecs(shard: number, total: number): string[] {
-  const counts = new Map<string, number>();
-  for (const t of specTests(e2eDir)) counts.set(t.file, (counts.get(t.file) ?? 0) + 1);
-  const testCount = (file: string) => counts.get(file) ?? 0;
-  const specs = readdirSync(e2eDir).filter((f) => f.endsWith(".spec.ts")).sort();
-  const slices = Array.from({ length: total }, () => ({ files: [] as string[], tests: 0 }));
-  for (const f of specs.filter((s) => PLATFORM_STATE_SPECS.includes(s))) {
-    slices[0].files.push(f);
-    slices[0].tests += testCount(f);
-  }
-  const rest = specs
-    .filter((s) => !PLATFORM_STATE_SPECS.includes(s))
-    .map((f) => ({ f, n: testCount(f) }))
-    .sort((a, b) => b.n - a.n || a.f.localeCompare(b.f));
-  for (const { f, n } of rest) {
-    // The lightest slice so far; ties go to the lowest index, so the split is deterministic.
-    const target = slices.reduce((min, s) => (s.tests < min.tests ? s : min));
-    target.files.push(f);
-    target.tests += n;
-  }
-  return slices[shard - 1].files;
-}
-
-const shardEnv = process.env.E2E_SHARD;
-const shardTotalEnv = process.env.E2E_SHARD_TOTAL ?? "2";
-let shard: { index: number; total: number } | null = null;
-if (shardEnv !== undefined) {
-  const index = Number(shardEnv);
-  const total = Number(shardTotalEnv);
-  if (!Number.isInteger(total) || total < 1 || total > 9 || !Number.isInteger(index) || index < 1 || index > total) {
-    throw new Error(`E2E_SHARD must be 1..E2E_SHARD_TOTAL and E2E_SHARD_TOTAL 1..9, got "${shardEnv}" of "${shardTotalEnv}"`);
-  }
-  shard = { index, total };
+const workersEnv = process.env.E2E_WORKERS ?? "4";
+const workers = Number(workersEnv);
+if (!Number.isInteger(workers) || workers < 1 || workers > 16) {
+  throw new Error(`E2E_WORKERS must be a whole number from 1 to 16, got "${workersEnv}"`);
 }
 
 // Whether Playwright manages the dev server itself. Omitted when E2E_NO_WEBSERVER=1 — set on the
@@ -110,17 +74,11 @@ const webServer =
 
 export default defineConfig({
   testDir: ".",
-  ...(shard
-    ? {
-        testMatch: shardSpecs(shard.index, shard.total).map((f) => `**/${f}`),
-        // All shards run at once from the same checkout, so each writes its own results.
-        outputDir: `../test-results/shard-${shard.index}`,
-      }
-    : {}),
-  // Journey specs share database state and drive multi-actor flows, so run serially for
-  // determinism rather than in parallel.
+  // Whole spec files are dealt out to the workers, and a file's tests run in order in one worker,
+  // so two tests of the same file never overlap. Splitting files would buy nothing: the
+  // platform-state chain is far longer than any one file.
   fullyParallel: false,
-  workers: 1,
+  workers,
   // Generous timeouts absorb Next.js dev-mode's first-hit route compilation (a cold API route
   // can take several seconds to compile on its first request) so a fresh server doesn't flake.
   timeout: 120_000,
@@ -133,9 +91,7 @@ export default defineConfig({
   // In CI, stop once the suite is clearly broken rather than retrying every spec until the
   // Jenkins pipeline timeout aborts the build (which also swallows the error summary).
   maxFailures: process.env.CI ? 10 : 0,
-  reporter: process.env.CI
-    ? [["list"], ["html", { open: "never", ...(shard ? { outputFolder: `../playwright-report/shard-${shard.index}` } : {}) }]]
-    : "list",
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL,
     // §2.4 CSRF: every state-changing /api/* request must carry an Origin equal to the app's own
@@ -150,6 +106,11 @@ export default defineConfig({
     // (throwaway CI container). Unset locally.
     ...(process.env.E2E_NO_SANDBOX === "1" ? { chromiumSandbox: false } : {}),
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    // Listed first, so its files head the queue: whenever its one worker frees up it takes the
+    // next of them at once, and the chain that bounds the run never waits behind other files.
+    { name: "platform-state", testMatch: PLATFORM_STATE_GLOBS, workers: 1, use: { ...devices["Desktop Chrome"] } },
+    { name: "isolated", testIgnore: PLATFORM_STATE_GLOBS, use: { ...devices["Desktop Chrome"] } },
+  ],
   webServer,
 });

@@ -36,7 +36,7 @@ pipeline {
   options {
     timestamps()
     // 120, not 60: the browser e2e (~93 specs against a dev server) ran well past an hour on the
-    // agent and was cut off mid-suite. Two shards + route warm-up should bring it far under that;
+    // agent and was cut off mid-suite. Parallel workers + route warm-up should bring it far under that;
     // the headroom stays so a slow agent fails on a real error, not the clock.
     timeout(time: 120, unit: 'MINUTES')
     disableConcurrentBuilds()
@@ -47,8 +47,8 @@ pipeline {
     string(name: 'AGENT_LABEL', defaultValue: 'linux', description: 'Jenkins agent label to run on')
     booleanParam(name: 'RUN_DB_TESTS', defaultValue: true, description: 'Run gated live-DB integration tests (spins an ephemeral Postgres)')
     // The first choice is the default.
-    choice(name: 'E2E_MODE', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests on every build, in a single shard (E2E_SHARDS is ignored); the picked tests are listed in the log and archived as e2e-quick.txt. FULL_E2E_TESTS = the whole suite, split into E2E_SHARDS shards.')
-    string(name: 'E2E_SHARDS', defaultValue: '2', description: 'FULL_E2E_TESTS only: split the e2e suite into this many shards (1-9), run in parallel on this agent as separate Playwright containers against ONE shared Postgres + web dev server; 1 = the whole suite in one container. Specs that change platform-wide settings always stay together in shard 1. More shards = more concurrent browsers sharing the agent\'s CPU and RAM and the one dev server.')
+    choice(name: 'E2E_MODE', choices: ['FULL_E2E_TESTS', 'QUICK_E2E_TESTS', 'NO_E2E_TESTS'], description: 'Playwright browser e2e (spins Postgres + dev server; browsers run in the official Playwright Docker image — no agent provisioning needed). NO_E2E_TESTS = skip it. QUICK_E2E_TESTS = a fresh random 10% of the e2e tests on every build; the picked tests are listed in the log and archived as e2e-quick.txt. FULL_E2E_TESTS = the whole suite.')
+    string(name: 'E2E_WORKERS', defaultValue: '4', description: 'Playwright workers (1-16): how many e2e spec files run at once, in ONE Playwright container against ONE shared Postgres + web dev server; 1 = one file at a time. Specs that change platform-wide settings always run one at a time, and they are about a quarter of the suite, so beyond about 4 more workers barely shorten the run. More workers = more concurrent browsers sharing the agent\'s CPU and RAM and the one dev server.')
     booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Force a deploy from a non-main branch (main deploys automatically; never on pull-request builds)')
     // Deploy target (host + checkout path) comes from Jenkins credentials, not build parameters —
     // see innobox-deploy-host / innobox-deploy-path in the credentials list above.
@@ -198,32 +198,33 @@ pipeline {
               set -eu
               . "${HOME}/.asdf/asdf.sh"
 
-              # The E2E_MODE build parameter (validated up front, before anything is started).
-              #   FULL_E2E_TESTS  : the whole suite in E2E_SHARDS shards (the fallback covers the
-              #                     first build after that parameter is added, when it isn't defined).
+              # The E2E_MODE and E2E_WORKERS build parameters (validated up front, before anything is
+              # started).
+              #   FULL_E2E_TESTS  : the whole suite.
               #   QUICK_E2E_TESTS : a random 10% of the tests, picked now by scripts/e2e-specs.mjs as
-              #                     Playwright test locations (e2e/<file>.spec.ts:<line>), run as
-              #                     shard 1 of 1 narrowed to those locations; E2E_SHARDS is ignored.
-              #                     The pick is logged and archived, so a failing quick run can be
-              #                     rerun locally with the same tests.
+              #                     Playwright test locations (e2e/<file>.spec.ts:<line>) and passed
+              #                     to the run, which then executes only those. The pick is logged
+              #                     and archived, so a failing quick run can be rerun locally with
+              #                     the same tests.
+              #   E2E_WORKERS     : Playwright's worker count, for either mode (the fallback covers
+              #                     the first build after that parameter is added, when it isn't
+              #                     defined).
               QUICK_ARGS=""
               rm -f e2e-quick.txt   # never archive a previous build's pick
               case "${E2E_MODE}" in
                 QUICK_E2E_TESTS)
-                  SHARDS=1
                   node packages/web/scripts/e2e-specs.mjs quick > e2e-quick.txt
                   [ -s e2e-quick.txt ] || { echo "the quick e2e picked no tests"; exit 1; }
                   cat e2e-quick.txt
                   QUICK_ARGS="$(cat e2e-quick.txt)"
                   ;;
-                FULL_E2E_TESTS)
-                  SHARDS="${E2E_SHARDS:-2}"
-                  case "${SHARDS}" in
-                    [1-9]) ;;
-                    *) echo "E2E_SHARDS must be a whole number from 1 to 9, got '${SHARDS}'"; exit 1 ;;
-                  esac
-                  ;;
+                FULL_E2E_TESTS) ;;
                 *) echo "E2E_MODE must be QUICK_E2E_TESTS or FULL_E2E_TESTS here, got '${E2E_MODE}'"; exit 1 ;;
+              esac
+              WORKERS="${E2E_WORKERS:-4}"
+              case "${WORKERS}" in
+                [1-9]|1[0-6]) ;;
+                *) echo "E2E_WORKERS must be a whole number from 1 to 16, got '${WORKERS}'"; exit 1 ;;
               esac
 
               # Ephemeral Postgres for the browser e2e; the dev server connects to it.
@@ -298,7 +299,8 @@ pipeline {
               WEB_POSTMORTEM="${PWD}/e2e-web-exit.log"
               WEB_PIDS="${PWD}/e2e-web.pids"
               HOST_STATS="${PWD}/e2e-host-stats.log"
-              rm -f "${WEB_EXIT}" "${WEB_POSTMORTEM}" "${WEB_PIDS}" "${HOST_STATS}" "${PWD}"/e2e-shard-*.exit
+              PW_EXIT="${PWD}/e2e-playwright.exit"   # the Playwright run's exit status, once it ends
+              rm -f "${WEB_EXIT}" "${WEB_POSTMORTEM}" "${WEB_PIDS}" "${HOST_STATS}" "${PW_EXIT}"
 
               # A server opted out of the process-tree killer can outlive a hard-aborted build. Stop
               # one left by a previous build (only if that pid still is an InnoBox dev server — pids
@@ -364,11 +366,11 @@ pipeline {
                 ' e2e-web-wrapper "${WEB_EXIT}" "${WEB_PIDS}" "${WEB_POSTMORTEM}" "${OOM_KILLS_AT_START}" </dev/null &
               WEB_PID=$!
               echo "${WEB_PID}" > "${WEB_PIDFILE}"
-              # Removes every shard's Playwright container (they're named ${CI_E2E_PW_CONTAINER}-N).
-              stop_shards() {
-                docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+              # Removes the Playwright container.
+              stop_playwright() {
+                docker rm -f "${CI_E2E_PW_CONTAINER}" >/dev/null 2>&1 || true
               }
-              trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; stop_shards' EXIT
+              trap 'kill -TERM -"${WEB_PID}" >/dev/null 2>&1 || kill "${WEB_PID}" >/dev/null 2>&1 || true; stop_playwright' EXIT
               for _ in $(seq 1 90); do curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null && break; sleep 2; done
               curl -sf "${E2E_BASE_URL}/api/auth/csrf" >/dev/null || { echo "dev server did not become ready"; cat e2e-web.log; exit 1; }
 
@@ -405,13 +407,11 @@ pipeline {
               # browsers or system libraries — Docker is already an agent prerequisite. The tag is
               # derived from the installed @playwright/test so image browsers always match the driver.
               #
-              # E2E_SHARDS SHARDS AT ONCE, all against the one dev server + database above (Next allows
-              # one `next dev` per checkout, and more servers would multiply the memory). E2E_SHARD=i +
-              # E2E_SHARD_TOTAL=n make the config pick its slice: specs that change platform-wide
-              # state all stay in shard 1, the rest are balanced by test count (see
-              # e2e/playwright.config.ts). Each shard writes its own test-results/ and
-              # playwright-report/ subfolder; its output lines are prefixed [shard i]. They run in the
-              # background so the watchdog below can stop them.
+              # One run with E2E_WORKERS workers, all against the one dev server + database above (Next
+              # allows one `next dev` per checkout, and more servers would multiply the memory). The
+              # config keeps the specs that change platform-wide state to one worker between them, so
+              # they run one after another while the other workers share the rest (see
+              # e2e/playwright.config.ts). It runs in the background so the watchdog below can stop it.
               #   --name            : so the watchdog and cleanup can stop the container
               #   --network host    : the container reaches the dev server on 127.0.0.1:3000
               #   --ipc=host        : Playwright's Chromium recommendation (avoids /dev/shm crashes)
@@ -425,35 +425,26 @@ pipeline {
               #   QUICK_ARGS        : the quick run's picked test locations (empty on a full run)
               # The test runner itself never touches the DB, so only the base-URL env goes in.
               PW_VERSION="$(node -p "require('./packages/web/node_modules/@playwright/test/package.json').version")"
-              run_shard() {
-                {
-                  rc=0
-                  docker run --rm --name "${CI_E2E_PW_CONTAINER}-$1" --network host --ipc=host \
-                    --user "$(id -u):$(id -g)" \
-                    -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
-                    -e E2E_SHARD="$1" -e E2E_SHARD_TOTAL="${SHARDS}" \
-                    -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
-                    "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
-                    ./node_modules/.bin/playwright test -c e2e/playwright.config.ts ${QUICK_ARGS} || rc=$?
-                  # (QUICK_ARGS is unquoted on purpose: one argument per picked location.)
-                  echo "${rc}" > "${PWD}/e2e-shard-$1.exit"
-                } 2>&1 | sed -u "s/^/[shard $1] /"
-              }
               if [ -n "${QUICK_ARGS}" ]; then
-                echo "=== running the quick e2e: $(wc -l < e2e-quick.txt) randomly picked test(s), in 1 shard ==="
+                echo "=== running the quick e2e: $(wc -l < e2e-quick.txt) randomly picked test(s), ${WORKERS} worker(s) ==="
               else
-                echo "=== running the e2e in ${SHARDS} shard(s) ==="
+                echo "=== running the e2e with ${WORKERS} worker(s) ==="
               fi
-              SHARD_PIDS=""
-              for n in $(seq 1 "${SHARDS}"); do
-                run_shard "${n}" &
-                SHARD_PIDS="${SHARD_PIDS} $!"
-              done
+              {
+                rc=0
+                docker run --rm --name "${CI_E2E_PW_CONTAINER}" --network host --ipc=host \
+                  --user "$(id -u):$(id -g)" \
+                  -e HOME=/tmp -e CI=1 -e E2E_NO_SANDBOX=1 -e E2E_NO_WEBSERVER=1 -e E2E_BASE_URL \
+                  -e E2E_WORKERS="${WORKERS}" \
+                  -v "${PWD}:${PWD}" -w "${PWD}/packages/web" \
+                  "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
+                  ./node_modules/.bin/playwright test -c e2e/playwright.config.ts ${QUICK_ARGS} || rc=$?
+                # (QUICK_ARGS is unquoted on purpose: one argument per picked location.)
+                echo "${rc}" > "${PW_EXIT}"
+              } &
+              PW_PID=$!
 
-              # How many shards have written their exit status so far.
-              shards_done() { ls e2e-shard-*.exit 2>/dev/null | wc -l; }
-
-              # Watchdog: if the dev server dies mid-suite, stop every shard at once and say so,
+              # Watchdog: if the dev server dies mid-suite, stop Playwright at once and say so,
               # rather than letting every remaining spec fail on "connection refused". Every tick
               # also appends a host sample to HOST_STATS (archived), so a death can be read against
               # the memory curve that led to it. Two ways to die:
@@ -479,7 +470,7 @@ pipeline {
               PORT_CLOSED=0
               CLOSED_TICKS=0
               echo "# utc | host free / available / swap used (MB) | next parent pid:RSS | server child pid:RSS | load 1/5/15 | kernel OOM kills so far (${OOM_KILLS_AT_START} at server start)" > "${HOST_STATS}"
-              while [ "$(shards_done)" -lt "${SHARDS}" ]; do
+              while [ ! -f "${PW_EXIT}" ]; do
                 # stdout only: stderr carries the step's xtrace, which would bury the samples (the
                 # 20-line tail below would show trace lines instead of ticks).
                 host_stats >> "${HOST_STATS}" 2>/dev/null || true
@@ -487,7 +478,7 @@ pipeline {
                   if [ -f "${WEB_EXIT}" ]; then
                     SERVER_DIED=1
                     echo "=== the dev server exited mid-suite (status $(sed -n 1p "${WEB_EXIT}") at $(sed -n 2p "${WEB_EXIT}")) - stopping Playwright ==="
-                    stop_shards
+                    stop_playwright
                   else
                     probe=0
                     curl -sf --max-time 5 "${E2E_BASE_URL}/api/auth/csrf" >/dev/null 2>&1 || probe=$?
@@ -497,24 +488,18 @@ pipeline {
                       PORT_CLOSED=1
                       echo "=== the dev server's port has refused connections for 3 ticks with no exit status written: its server child died and the next dev parent (pid ${NEXT_PID:-?}) lingered - killing that parent and stopping Playwright ==="
                       [ -z "${NEXT_PID}" ] || kill -TERM "${NEXT_PID}" >/dev/null 2>&1 || true
-                      stop_shards
+                      stop_playwright
                     fi
                   fi
                 fi
                 sleep 5
               done
-              # shellcheck disable=SC2086 # word-splitting the PID list is intended
-              wait ${SHARD_PIDS} || true
+              wait "${PW_PID}" || true
 
-              FAILED_SHARDS=""
-              for n in $(seq 1 "${SHARDS}"); do
-                rc="$(cat "e2e-shard-${n}.exit")"
-                echo "=== shard ${n} exit: ${rc} ==="
-                [ "${rc}" = 0 ] || FAILED_SHARDS="${FAILED_SHARDS} ${n}"
-              done
+              PW_RC="$(cat "${PW_EXIT}")"
+              echo "=== Playwright exit: ${PW_RC} ==="
 
-              if [ "${SERVER_DIED}" = 1 ] || [ -n "${FAILED_SHARDS}" ]; then
-                [ -z "${FAILED_SHARDS}" ] || echo "=== failed shard(s):${FAILED_SHARDS} ==="
+              if [ "${SERVER_DIED}" = 1 ] || [ "${PW_RC}" != 0 ]; then
                 echo "=== dev server log (e2e-web.log) ==="
                 cat e2e-web.log
                 if [ "${SERVER_DIED}" = 1 ]; then
@@ -598,8 +583,7 @@ pipeline {
                   kill -TERM -"$(cat e2e-web.pid)" >/dev/null 2>&1 || true
                   rm -f e2e-web.pid
                 fi
-                docker rm -f "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
-                docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+                docker rm -f "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}" >/dev/null 2>&1 || true
               '''
               // Kept even when the build is aborted (where the in-step `cat` never runs).
               archiveArtifacts artifacts: 'packages/web/playwright-report/**, e2e-web.log, e2e-quick.txt, e2e-host-stats.log, e2e-web-exit.log, e2e-web.pids', allowEmptyArchive: true
@@ -711,8 +695,7 @@ MINIO_SCRIPT
   post {
     always {
       sh '''
-        docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" >/dev/null 2>&1 || true
-        docker ps -aq --filter "name=${CI_E2E_PW_CONTAINER}-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+        docker rm -f "${CI_PG_CONTAINER}" "${CI_E2E_PG_CONTAINER}" "${CI_E2E_PW_CONTAINER}" >/dev/null 2>&1 || true
       '''
     }
     success { echo "innobox pipeline OK — ${env.GIT_COMMIT}" }

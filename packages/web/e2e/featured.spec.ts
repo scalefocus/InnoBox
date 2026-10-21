@@ -11,6 +11,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 const TITLE_PREFIX = "E2E featured pin";
 
@@ -25,7 +26,7 @@ async function clearLeftoverPins(request: APIRequestContext): Promise<void> {
 }
 
 test("a platform admin features a challenge and it appears on Home for everyone who can see it", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const title = `${TITLE_PREFIX} ${stamp}`;
 
   const adminCtx = await browser.newContext();

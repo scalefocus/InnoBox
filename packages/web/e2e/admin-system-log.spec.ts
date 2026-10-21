@@ -4,9 +4,10 @@
 // locked out of the page itself.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("system log: a member's 403 is recorded and visible to a platform admin", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const memberCtx = await browser.newContext();

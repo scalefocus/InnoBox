@@ -5,12 +5,14 @@
 // queue, and the challenge sits in the triage queue labelled "External submission"; and the §24.3
 // visibility request — Specific people with its tag field, pre-filled into the Accept dialog,
 // shared once the challenge leaves triage (§4.3, §12.1 event 15). The switch is platform-wide
-// (this spec is pinned to shard 1) and is put back as it was whatever happens. Needs a server with
+// (this spec is in the one-at-a-time platform-state project) and is put back as it was whatever
+// happens. Needs a server with
 // PUBLIC_INTAKE_KEY and an e-mail transport (Jenkins sets both) — it self-skips otherwise — and
 // reads the confirmation token from the dev seam, which is on wherever dev sign-in is.
 import { test, expect, type BrowserContext } from "@playwright/test";
 import { devSlug, signIn } from "./helpers/auth";
 import { setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -34,7 +36,7 @@ const patchCard = (admin: BrowserContext, patch: Partial<CardState>) =>
 test.describe.configure({ mode: "serial" });
 
 test("while the switch is off, /submit and every public route answer 404", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const admin = await browser.newContext();
   const outsider = await browser.newContext();
   await signIn(admin, { name: `E2E Public Off Admin ${stamp}`, admin: true });
@@ -81,7 +83,7 @@ test("while the switch is off, /submit and every public route answer 404", async
 });
 
 test("submit on /submit, confirm through the link, accept in the queue → External submission in triage", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const admin = await browser.newContext();
   const outsider = await browser.newContext(); // never signed in
   await signIn(admin, { name: `E2E Public Admin ${stamp}`, admin: true });
@@ -181,7 +183,7 @@ test("submit on /submit, confirm through the link, accept in the queue → Exter
 });
 
 test("Specific people: the tag field, the pre-filled Accept, and sharing once the challenge leaves triage", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const admin = await browser.newContext();
   const listed = await browser.newContext();
   const unlisted = await browser.newContext();

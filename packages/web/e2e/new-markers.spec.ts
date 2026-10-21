@@ -4,9 +4,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, setChallengeStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("new challenges light up the nav bubble and the card tag until the visitor leaves", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const viewerCtx = await browser.newContext();
   await signIn(viewerCtx, { name: `E2E NewMarker Viewer ${stamp}` });

@@ -6,9 +6,10 @@ import { signIn } from "./helpers/auth";
 import { openNewChallengeForm } from "./helpers/forms";
 import { createChallengeViaApi } from "./helpers/api";
 import { aiKeyPresent, disableAiStub, enableAiStub, startAiStub } from "./helpers/ai-stub";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("similar challenges, explained: reasons in the duplicate banner", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 
   const adminCtx = await browser.newContext();

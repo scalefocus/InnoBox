@@ -11,9 +11,10 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi, proposeSolutionViaApi, setChallengeStatusViaApi, setSolutionStatusViaApi } from "./helpers/api";
+import { uniqueStamp } from "./helpers/stamp";
 
 test("a member never sees the danger zone, and their DELETE is a 404 that changes nothing", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const memberCtx = await browser.newContext();
   await signIn(memberCtx, { name: `E2E Delete Member ${stamp}` });
@@ -41,7 +42,7 @@ test("a member never sees the danger zone, and their DELETE is a 404 that change
 });
 
 test("the danger zone arms only on the typed number plus a reason, then deletes for good", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: "E2E Delete Admin", admin: true });
@@ -115,7 +116,7 @@ test("the danger zone arms only on the typed number plus a reason, then deletes 
 });
 
 test("a blank reason is refused by the API", async ({ browser }) => {
-  const stamp = Date.now().toString(36);
+  const stamp = uniqueStamp();
 
   const adminCtx = await browser.newContext();
   await signIn(adminCtx, { name: "E2E Delete Admin", admin: true });
