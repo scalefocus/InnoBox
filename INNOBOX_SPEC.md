@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.18 — draft for review** (2026-10-19; v0.2 added the UI and CI/CD
+> Status: **v0.19 — draft for review** (2026-10-21; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -53,7 +53,12 @@
 > (2026-10-19) specified **hype** — a scarce weekly endorsement of 3 per person on open
 > challenges and solutions, counting double in an item's first week, with a per-viewer
 > "Hyped this week" board on Home, author points and a Talent Scout badge for the hyper
-> (§26)).
+> (§26); v0.19 (2026-10-21) cut the steady-state request and query load without changing
+> what anyone sees: the bell, the new-challenges bubble, the triage attention bubble and
+> the system banner now share **one pulse poll** that pauses while the tab is hidden
+> (§12.2), inbox rows carry the challenge and solution they are about as real columns so
+> the read-time gates are index lookups (§5, §12.1), and a request's identity, roles and
+> access list resolve in **one statement**, at most once per request (§4.2)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -819,7 +824,8 @@ Entra runbook); on conflict this document wins.
   re-assembled with a newer one. Non-auth browser state (theme, collapsed admin
   cards, the §13.1 view choice) is untouched.
   Sessions: rolling 7-day cookie; the user's `active` flag and roles are resolved
-  from the DB on every request — the session token never carries roles.
+  from the DB on every request — the session token never carries roles — in one
+  statement, at most once per request (§4.2 *Resolution*).
 - **Sign out everywhere (added in v1.16).** Plain sign-out is per device: a session
   cookie on another browser stays valid until its 7-day cap. The account menu's
   **Sign out everywhere** item (§2.2) — a confirm dialog, then
@@ -1076,6 +1082,26 @@ shown (§13.6).
 
 A user may hold different roles in different namespaces. Roles are additive.
 
+**Resolution (one statement, once per request — v1.18).** Roles come from SCIM-synced
+group membership and `role_mappings` on every request, never from the session token
+(invariant 1), and nothing is cached across requests. Within that rule the lookup is
+bounded:
+
+- **One statement.** The user row (by the token's `oid`), the `active` and
+  `scrubbed_at` check, the §3 `sessions_valid_from` comparison inputs, the role grants
+  (group membership ⋈ `role_mappings`, plus the `INNOBOX_BOOTSTRAP_ADMIN_GROUP`
+  implicit mapping while it is set) and the §4.3 `people` access list (`challenge_access`)
+  are read in **one SQL statement** — one database round trip, not one per source. The
+  grants and the access list come back as arrays on the user row. The `global`
+  namespace's id, which never changes after migration, may be held in process memory.
+- **At most once per request.** The result is memoized for the lifetime of a single
+  request only, so a handler, the helpers it calls and the §14.5 presence stamp share
+  one resolution. The memo dies with the request; a role, membership or access change
+  is visible on the very next request, exactly as before.
+- **Bulk resolution** for an event's recipient set (§12.1 dispatch) uses the same
+  statement over a list of user ids — one round trip whatever the count — and returns the
+  same grants a per-request resolution would.
+
 ### §4.3 Visibility
 
 - Every challenge has **`visibility: org | namespace | people`**. The submitter
@@ -1290,7 +1316,26 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   and may address an outside submitter by e-mail instead of a user (nullable
   `recipient_email` with `user_id` null, a check constraint requiring exactly one —
   §24.6). Rows targeting a challenge/solution are deleted with it (§10.3), so no
-  inbox item ever points at a vanished entity. **Comment rows coalesce** (§12.1): a
+  inbox item ever points at a vanished entity. **What a row is about (v1.18):**
+  `notifications` carries two nullable columns, `challenge_id` and `solution_id`,
+  written at insert from the dispatch target — a challenge row sets `challenge_id`; a
+  solution row sets `solution_id` **and** its parent's `challenge_id`; a comment or
+  hype row sets them from its parent the same way; a scan-failure row about a bound
+  attachment sets them from the attachment's parent. Rows that name no item
+  (achievements, a staged attachment's scan failure, `system.error`,
+  `assignments_transferred`) leave both null. A database trigger derives both columns from
+  the row's payload target on every insert (and on a payload update, as coalescing does),
+  so no writer can forget them. They are lookup keys, not foreign keys: the §10.3 cascade deletes the rows
+  explicitly, as it always has. Migration 0051 backfills existing rows once, from the
+  payload's `parentType`/`parentId` and `challengeId` keys and, for rows that carry only
+  a deep link, from the `/challenges/<n>` and `#SOL-<m>` link forms; a row whose item no
+  longer resolves stays null. One index serves the inbox gates, the cascade and the
+  "opening the challenge reads its rows" update: `(user_id, challenge_id) WHERE read_at
+  IS NULL`, replacing the two per-type expression indexes on `payload->>'challengeId'`
+  (0026, 0050); `(challenge_id)` and `(solution_id)` partial indexes (`WHERE … IS NOT
+  NULL`) serve the cascade and trash lookups. The payload keys stay in the payload — the
+  rendered message, the link and the coalescing keys still use them — but no filter
+  matches on them any more. **Comment rows coalesce** (§12.1): a
   partial unique index on `(user_id, payload->>'parentType', payload->>'parentId')
   WHERE read_at IS NULL AND type = 'comment_posted'` lets the insert become an atomic
   update-in-place while the row is unread; the payload carries `count`, `latestBy`,
@@ -2464,10 +2509,14 @@ row written while the recipient could see the item is **hidden** from the bell l
 the unread count once they no longer can — the challenge was narrowed to `namespace` or
 `people` (§4.3) after the row was written, or the recipient left the namespace — and
 comes back if access returns, exactly as rows about the trash are kept but hidden
-(§10.4). The read-time predicate is the §4.3 SQL twin on the row's `challengeId` /
-`parentType` + `parentId` payload keys (the keys every item-bound row carries); rows
-that name no item (achievements, scan failures) are unaffected. The §25.6 agent view
-already filters this way; the web inbox now matches it. **A deactivated user (`active = false`, the §3 leaver) or an erased
+(§10.4). The read-time predicate is the §4.3 SQL twin evaluated on the challenge the
+row is about — the row's `challenge_id` column (§5), joined to `challenges` by primary
+key — and the trash filter looks up `challenge_id` and `solution_id` the same way; rows
+that name no item (both columns null — achievements, scan failures) are unaffected.
+**Since v1.18 neither gate matches on payload keys or the deep link**, so each costs one
+index lookup per row rather than a scan of the challenges table. The web inbox list,
+the §12.2 pulse count and the §25.6 agent view share this one predicate, so they can
+never disagree. **A deactivated user (`active = false`, the §3 leaver) or an erased
 one (`scrubbed_at` set) is never a recipient**, on any channel: the dispatch drops
 them at insert time, beside the visibility drop, so neither the inbox row nor the
 outbox row is written; the role-resolving recipient helpers (namespace admins,
@@ -2629,8 +2678,48 @@ state, mark-read and mark-all-read. In-app notifications are always on; the per-
 opt-out (§13.5 profile) affects e-mail only, and the §12.1 per-event preferences
 remove a recipient before any row exists. A coalesced comment row (§12.1) renders its
 count and latest commenter; the platform admins' `system.error` alert (§14.7) is an
-ordinary inbox row that is never e-mailed. The 30-second unread poll also carries the
-active §14.6 system banner, so no second poll exists for it.
+ordinary inbox row that is never e-mailed.
+
+**The pulse — one poll per tab (v1.18).** Every signed-in tab keeps its live counters
+current through **one** request, `GET /api/me/pulse`, instead of one poller per
+widget:
+
+```json
+{ "unreadCount": 3, "newChallenges": 5, "attention": 2, "banner": null }
+```
+
+- `unreadCount` — the bell's unread count, under the §12.1 read-time gates.
+- `newChallenges` — the §13.1 "new since your last visit" count.
+- `attention` — the §14.4 triage attention count for a namespace or platform admin;
+  **`null`** for everyone else (the key is present, the value is null, so the shape
+  never varies by role and nothing about it is computed for a non-admin).
+- `banner` — the active §14.6 system banner, `{ message, tone, url, expiresAt }` or
+  `null`.
+
+All four are bare values with the same visibility and namespace scoping as the surfaces
+they feed (invariant 2): no titles, authors or namespaces. The four reads run
+concurrently after one §4.2 resolution.
+
+- **Cadence.** Every **30 s** while the tab is **visible**. While
+  `document.visibilityState` is `hidden` the tab **does not poll at all**; on becoming
+  visible again it polls **at once** (if the last pulse is older than 30 s) and resumes
+  the cadence. A hidden tab therefore shows values from when it was last visible, and
+  catches up the moment the user looks at it.
+- **The bell list is not polled.** `GET /api/notifications` runs when the bell is
+  opened, and again after a mark-read or mark-all-read. Its response carries
+  `unreadCount` too, which the shell adopts, so the badge and the open list agree.
+- **Immediate refresh.** Actions that change a counter re-read the pulse at once
+  rather than waiting for the next tick: mark-read and mark-all-read, opening the
+  triage queue (§14.4 *Clearing*), and leaving the Challenges surface (§13.1).
+- **No needless re-render.** The shell keeps the previous values when a pulse returns
+  the same ones, so an idle tick re-renders nothing.
+- **Failure.** A failed or non-2xx pulse keeps the last values and retries on the next
+  tick; a 401 means the session has ended and stops polling (§3).
+- **Presence.** The pulse is a background poller: it is **not** on the §14.5 presence
+  allowlist and never stamps `last_seen_at`.
+
+`GET /api/challenges/new-count` and `GET /api/admin/triage/attention` are **retired**
+— the pulse is their only reader.
 
 ### §12.3 Follows
 
@@ -2965,8 +3054,8 @@ challenges_seen_at` **and** it is visible to them (invariant 2). A new solution 
 comment on an existing challenge does **not** make it new, and the viewer's own
 just-submitted items count like anyone else's. The **Challenges** nav item shows a
 superscript `1`–`9` / `9+` count of new items (hidden at zero; the §14.4 bubble
-style), polled on the 30-second bell cadence via `GET /api/challenges/new-count →
-{ count }` — a bare integer, no titles or namespaces. Each matching card, on **any**
+style), kept current by the §12.2 pulse (`newChallenges`) — a bare integer, no titles
+or namespaces. Each matching card, on **any**
 tab and in either view, carries a small **"new" corner tag**, so the tagged cards are
 exactly the ones the count refers to. The marker **advances when the user leaves the Challenges
 surface** — `/challenges` and its `/challenges/:number` detail pages share it — via
@@ -4562,8 +4651,8 @@ namespace-admin function, §7.2).
   `POST /api/admin/triage/seen`, stamping `triage_seen_at = now()` for the actor; the
   count then reads 0 on both nav items until a **new** actionable item arrives.
   Merely opening the queue clears it — acting on the items is not required.
-- **Freshness.** Polled on the same 30-second cadence as the notification bell
-  (§12.2) via `GET /api/admin/triage/attention → { count }`.
+- **Freshness.** Carried by the §12.2 pulse (`attention`, `null` for non-admins), so it
+  follows the pulse cadence and pauses with it while the tab is hidden.
 - **Safety.** The value is a bare integer — no title, author, or namespace leaks —
   and obeys the same namespace scoping and visibility filtering as the queue
   (invariant 2).
@@ -4579,8 +4668,8 @@ non-admin surface for presence anywhere in the app (§13.8).
 #### What counts as activity
 
 - **User-initiated requests only.** Page navigations and mutations stamp
-  `users.last_seen_at`; **background pollers never do** — the notification bell (§12.2)
-  and the triage attention badge (§14.4) both poll every 30 s, so counting them would
+  `users.last_seen_at`; **background pollers never do** — the §12.2 pulse, which feeds
+  the bell, the attention badge (§14.4) and the banner, polls every 30 s, so counting it would
   make "online" mean "has a tab open somewhere" and every user who ever left InnoBox
   open would read as permanently active. Reading counts as using: a challenge detail
   `GET` is activity, `GET /api/notifications` is not.
@@ -4827,10 +4916,9 @@ structural rather than a filter.
 - **Audience & scope:** every authenticated user, org-wide. No namespace scoping
   (namespace admins have no authority here), **no per-user dismiss**, and the
   unauthenticated Home (§13.2) never shows it.
-- **Delivery:** folded into the existing 30-second bell poll — the unread-count
-  response gains `banner: { message, tone, url, expiresAt } | null` (§12.2) — so an
-  open tab picks up a new, replaced or cleared banner within one poll and no second
-  transport exists.
+- **Delivery:** carried by the §12.2 pulse — `banner: { message, tone, url, expiresAt }
+  | null` — so a visible tab picks up a new, replaced or cleared banner within one pulse,
+  a hidden tab on its return, and no second transport exists.
 - **Rendering:** desktop — a width-capped pill that truncates on one line with an
   ellipsis (full text via `title`) and **never** grows under the bell/theme controls;
   mobile (the §2.2 narrow topbar) — its own full-width line below the search row,
@@ -5421,8 +5509,8 @@ bulk download of identities is never silent.
 REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource groups:
 
 - `challenges` (list/search/detail/create/edit/withdraw/transition/assign/visibility/
-  **delete**; `challenges/similar` — the §6.1 duplicate check; `challenges/new-count`
-  — the §13.1 bare integer; `challenges/:number/featured` `PUT`/`DELETE` — platform
+  **delete**; `challenges/similar` — the §6.1 duplicate check (the §13.1 new count
+  rides on `me/pulse`); `challenges/:number/featured` `PUT`/`DELETE` — platform
   admin, §13.2, 409 at the cap or on an ineligible status; the detail payload carries
   `featured`/`canFeature`; `challenges/:number/visibility` `POST { visibility: "org" |
   "namespace" | "people", access?: { userIds, emails } }` — namespace/platform admin,
@@ -5446,7 +5534,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `hype`, `hyped`, `canHype`, `hypeReason` and `hypers`, the detail payload and `me` the
   viewer's `hypesLeft`; `challenges` accepts `sort=most_hyped`, §26.11)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
-- `notifications` (inbox, mark read; the unread poll carries the §14.6 banner), `me`
+- `notifications` (inbox list with its `unreadCount`, fetched when the bell opens; mark
+  read, mark all read), `me/pulse` (`GET` the §12.2 pulse — `unreadCount`,
+  `newChallenges`, `attention`, `banner`; the shell's only poll), `me`
   (`GET` identity, roles and flags, including the §13.9 `whatsNewSeenVersion` and
   `whatsNewSinceDate`; `PATCH` sets the §13.7 quick-start flag, which also stamps the
   §13.9 marker; `me/challenges-seen` advances the §13.1 marker; `me/whats-new-seen`
@@ -5467,7 +5557,7 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `leaderboards` (incl. `metric=points` and each row's level, §23.12), `dashboard` (KPIs, spotlights, **featured** — visibility-filtered
   pins, §13.2 — and **`hyped`**, the per-viewer "Hyped this week" board with the
   viewer's budget, `null` while hype is off, §26.5)
-- `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage attention count + mark-seen**, §14.4;
+- `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage mark-seen**, §14.4 — the attention count rides on `me/pulse`;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
   and `admin/presence/history?range=7d|30d|90d|all` → `{ range, enoughHistory,
   points[{ day, activeUsers, wau, mau }] }`** (one point per UTC day, contiguous;

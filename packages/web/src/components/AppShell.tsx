@@ -19,7 +19,7 @@ import { QUICK_START_PATH, shouldRedirectToQuickStart } from "../lib/quick-start
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { SystemBanner } from "./SystemBanner";
-import type { SystemBanner as Banner } from "@innobox/shared/system-banner";
+import { usePulse } from "./usePulse";
 import { TopbarSearch, type TopbarSearchHandle } from "./TopbarSearch";
 import { AvatarBubble } from "./AvatarBubble";
 import { SurveyCard, type BugCardOthers, type StartSelfOutcome } from "./SurveyCard";
@@ -102,13 +102,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Role/identity hints for the nav + account menu. Fetched only when authenticated — the
   // signed-out landing shows no user data (INNOBOX_SPEC.md §2.1 invariant 2, §13.2).
   const [me, setMe] = useState<MeResponse | null>(null);
-  // §14.4 attention count for the Triage/Administration nav bubbles — polled while an admin is
-  // signed in (see the effect below).
-  const [attention, setAttention] = useState(0);
-  // §14.6 system banner — delivered on the bell's poll, rendered in the topbar.
-  const [banner, setBanner] = useState<Banner | null>(null);
-  // §13.1 "new since your last visit" — the count behind the Challenges nav bubble.
-  const [newChallenges, setNewChallenges] = useState(0);
+  // §12.2 pulse (v1.18): the shell's ONLY poll — the bell's unread count, the §13.1 "new since
+  // your last visit" count behind the Challenges bubble, the §14.4 attention count behind the
+  // Triage/Administration bubbles (null for non-admins) and the §14.6 banner. Visible tabs only.
+  const { pulse, adoptUnreadCount } = usePulse(authed);
+  const attention = pulse.attention ?? 0;
+  const newChallenges = pulse.newChallenges;
   const previousPath = useRef<string | null>(null);
   // §13.10 feedback survey: the open offer, the card (and how it was opened), the bell's open
   // state (its mobile sheet blocks the card), and the shell's toast.
@@ -429,60 +428,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     showToast("Got it — no more surveys. You can turn them back on in your profile.");
   }, [refreshSurvey, showToast]);
 
-  // §14.4: poll the unseen-actionable count while an admin is signed in, on the same 30s cadence
-  // as the notification bell. The triage-queue page dispatches `innobox:triage-seen` after it
-  // stamps triage_seen_at, so the bubble clears promptly on open instead of waiting for the tick.
-  useEffect(() => {
-    if (!authed || !isAdmin) {
-      setAttention(0);
-      return;
-    }
-    let live = true;
-    const fetchAttention = () => {
-      fetch("/api/admin/triage/attention", { headers: { accept: "application/json" } })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((json) => {
-          if (live && json) setAttention(json.count ?? 0);
-        })
-        .catch(() => {});
-    };
-    fetchAttention();
-    const interval = window.setInterval(fetchAttention, 30_000);
-    window.addEventListener("innobox:triage-seen", fetchAttention);
-    return () => {
-      live = false;
-      window.clearInterval(interval);
-      window.removeEventListener("innobox:triage-seen", fetchAttention);
-    };
-  }, [authed, isAdmin]);
-
-  // §13.1: poll the new-challenge count on the bell's 30 s cadence while signed in. Leaving the
-  // Challenges surface (gallery or a detail page → anywhere else) advances the marker, then the
-  // bubble is refreshed so it clears at once; entering never touches it, so the count and the
-  // card tags stay stable for the whole visit. A tab closed while on the surface counts as a
-  // leave too (a beacon survives page hide where a fetch would not).
-  useEffect(() => {
-    if (!authed) return;
-    let live = true;
-    const fetchCount = () => {
-      fetch("/api/challenges/new-count", { headers: { accept: "application/json" } })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((json) => {
-          if (live && json) setNewChallenges(json.count ?? 0);
-        })
-        .catch(() => {});
-    };
-    fetchCount();
-    const interval = window.setInterval(fetchCount, 30_000);
-    const onSeen = () => fetchCount();
-    window.addEventListener("innobox:challenges-seen", onSeen);
-    return () => {
-      live = false;
-      window.clearInterval(interval);
-      window.removeEventListener("innobox:challenges-seen", onSeen);
-    };
-  }, [authed]);
-
+  // §14.4 / §13.1: the attention and new-challenges counts ride on the §12.2 pulse (usePulse). The
+  // triage queue dispatches `innobox:triage-seen` after stamping triage_seen_at, and leaving the
+  // Challenges surface dispatches `innobox:challenges-seen` below — both re-read the pulse at once.
+  // A tab closed while on the surface counts as a leave too (a beacon survives page hide where a
+  // fetch would not). Entering never touches the marker, so the count and the card tags stay
+  // stable for the whole visit.
   useEffect(() => {
     if (!authed) return;
     const prev = previousPath.current;
@@ -632,8 +583,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
           {authed && <TopbarSearch ref={searchRef} />}
           <div className="topbar-spacer" />
-          {authed && <SystemBanner banner={banner} />}
-          {authed && <NotificationBell onBanner={setBanner} onOpenChange={setBellOpen} />}
+          {authed && <SystemBanner banner={pulse.banner} />}
+          {authed && <NotificationBell unreadCount={pulse.unreadCount} onUnreadCount={adoptUnreadCount} onOpenChange={setBellOpen} />}
           <ThemeToggle />
         </header>
         <main className="content">{quickStartPending ? null : children}</main>

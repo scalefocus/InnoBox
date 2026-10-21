@@ -349,11 +349,12 @@ export async function dispatchCoalescedComment(
 
 /** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
  *  since §26.6, their unread "hyped" rows — for the challenge itself AND its solutions (the page
- *  shows both). */
+ *  shows both). A solution row carries its challenge in `challenge_id` (§5, migration 0051), so one
+ *  probe of the (user_id, challenge_id) unread index covers both. */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type in ('comment_posted', 'hyped') and read_at is null and payload->>'challengeId' = $2`,
+      where user_id = $1 and type in ('comment_posted', 'hyped') and read_at is null and challenge_id = $2::uuid`,
     [userId, challengeId],
   );
 }

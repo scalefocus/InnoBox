@@ -71,11 +71,12 @@ export const PRESENCE_THROTTLE_MS = 60_000;
 // ---------------------------------------------------------------------------------------
 // EXPLICIT ALLOWLIST, never a denylist (§14.5): a path that isn't listed here is silent.
 // A future polling widget therefore cannot quietly pollute presence by being forgotten —
-// the failure mode is an under-count, which is the safe direction. The two pollers that
-// exist today (GET /api/notifications on the bell's 30 s cadence, §12.2, and
-// GET /api/admin/triage/attention on the same cadence, §14.4) are absent by construction:
-// counting them would make "online" mean "left a tab open", and every user who ever opened
-// InnoBox would read as permanently active.
+// the failure mode is an under-count, which is the safe direction. The one poller that
+// exists today — the §12.2 pulse, GET /api/me/pulse, every 30 s from every visible tab, which
+// carries the bell count, the §13.1 new-challenges count, the §14.4 attention count and the
+// banner (v1.18) — is absent by construction, as is the bell's list (GET /api/notifications,
+// fetched when the bell opens): counting them would make "online" mean "left a tab open", and
+// every user who ever opened InnoBox would read as permanently active.
 //
 // Two tiers:
 //   "locate" — the request tells us where the user is; it stamps last_seen_at AND last_route.
@@ -160,9 +161,9 @@ export function presenceTouchFor(pathname: string, method: string): PresenceTouc
       // plus an anonymous challenge appearing moments later is the §9 correlation with
       // extra steps (§14.5).
       if (!second) return { tier: "locate", route: ROUTE_CHALLENGES };
-      // The shell's "new since your last visit" badge (§13.1) polls this every 30 s on every
-      // page — a background poller, never activity (§14.5); counting it would also relocate a
-      // user on Home to "Challenges" whenever it raced the dashboard read.
+      // "new-count" was the §13.1 badge's own poller before the §12.2 pulse absorbed it (v1.18).
+      // The route is gone; a stale tab still asking for it must not relocate a user on Home to
+      // "Challenges", so it stays silent.
       if (second === "new-count") return null;
       const token = entityToken("challenge", second);
       // A nested solutions listing (…/challenges/412/solutions) is still "on CH-412".

@@ -96,7 +96,8 @@ export interface Subtree {
 }
 
 /**
- * The notification rows that target a subtree. A row targets it when EITHER
+ * The OUTBOX rows that target a subtree (inbox rows match on their challenge_id / solution_id
+ * columns instead — §5, migration 0051). A row targets it when EITHER
  *  - its payload names an item of the subtree as its target, `parentType`/`parentId` — every
  *    notification about a challenge or solution carries one (web lib/notify.ts `withTarget`, the
  *    scan-failure writer) — or, for a comment row (event 6), names a challenge of the subtree as
@@ -203,7 +204,13 @@ async function deleteChildren(
 
   // §12.1: no inbox item may survive pointing at an entity that no longer exists; unsent e-mail
   // about it never goes out.
-  const inbox = await client.query(`delete from notifications where ${SUBTREE_NOTIFICATION_MATCH}`, subtreeNotificationParams(subtree));
+  // Inbox rows carry what they are about as columns (§5, migration 0051 — a solution row carries its
+  // challenge too), so the inbox delete is two index lookups; the outbox has no such columns and
+  // keeps the payload/link match.
+  const inbox = await client.query(
+    `delete from notifications where challenge_id = any($1::uuid[]) or solution_id = any($2::uuid[])`,
+    [subtree.challengeIds, subtree.solutionIds],
+  );
   const outbox = await client.query(
     `delete from notification_outbox where ${SUBTREE_NOTIFICATION_MATCH} and status <> 'sent'`,
     subtreeNotificationParams(subtree),

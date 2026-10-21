@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.18.0",
+    date: "2026-10-21",
+    summary:
+      "Faster and lighter: the bell, the new-challenges and triage bubbles and the system banner now update through one check every 30 seconds, and a tab you are not looking at stops checking until you return. Notifications load faster as your inbox grows, and every page spends less time confirming who you are. Nothing changes in what you see.",
+  },
+  {
     version: "1.17.2",
     date: "2026-10-20",
     summary:

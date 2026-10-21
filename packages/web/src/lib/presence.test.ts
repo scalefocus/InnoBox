@@ -26,9 +26,11 @@ import {
 } from "./presence";
 
 test("the 30-second pollers are NOT activity — otherwise 'online' means 'left a tab open'", () => {
-  // The notification bell (§12.2) and the triage attention badge (§14.4) both poll every
-  // 30s from any open tab. If either counted, a user who opened InnoBox on Monday would
-  // still read as "active just now" on Friday.
+  // The §12.2 pulse (v1.18) polls every 30s from every visible tab, carrying the bell, the
+  // attention badge (§14.4), the new-challenges badge (§13.1) and the banner. If it counted, a
+  // user who opened InnoBox on Monday would still read as "active just now" on Friday.
+  assert.equal(presenceTouchFor("/api/me/pulse", "GET"), null);
+  // The bell's list (fetched on open) and the retired pre-pulse pollers stay silent too.
   assert.equal(presenceTouchFor("/api/notifications", "GET"), null);
   assert.equal(presenceTouchFor("/api/admin/triage/attention", "GET"), null);
   // The shell's new-challenges badge polls on every page — silent, so Home stays "Overview".
