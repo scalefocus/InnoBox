@@ -205,6 +205,19 @@ test("client errors: the app's own are described, extensions and benign noise ar
   );
 });
 
+test("frame parsing stays linear on hostile stacks", () => {
+  // The shapes that made the earlier patterns backtrack: long runs of '@', of ':1', of letters.
+  for (const hostile of ["@".repeat(50_000), `x@${":1".repeat(25_000)}`, "a".repeat(50_000), `at ${"@".repeat(50_000)}:1`]) {
+    const started = Date.now();
+    describeClientError({ message: "boom", stack: hostile }, ORIGIN);
+    describeRejection(Object.assign(new Error("boom"), { stack: hostile }), ORIGIN);
+    assert.ok(Date.now() - started < 200, `took ${Date.now() - started} ms on a ${hostile.length}-char stack`);
+  }
+  // And the ordinary shapes still parse.
+  assert.equal(describeClientError({ message: "e", stack: `f@${ORIGIN}/_next/a.js:3:9` }, ORIGIN)?.frame, "f@/_next/a.js:3:9");
+  assert.equal(describeClientError({ message: "e", stack: "user@example.test said hi" }, ORIGIN), null, "an @ that is not a location is no frame");
+});
+
 test("rejections: an Error is described normally, anything else records its string form", () => {
   assert.deepEqual(describeRejection("quota exceeded", ORIGIN), { message: "quota exceeded", source: "", frame: "(unhandled rejection)" });
   assert.deepEqual(describeRejection(42, ORIGIN), { message: "42", source: "", frame: "(unhandled rejection)" });

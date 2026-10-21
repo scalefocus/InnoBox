@@ -346,25 +346,48 @@ function ownPath(url: string, origin: string): string | null {
   }
 }
 
+/** A trailing ":line" or ":line:col". No two quantifiers can claim the same character, so it runs
+ *  in linear time on any input. */
+const LINE_COL = /:\d+(?::\d+)?$/;
+/** Stack lines read and the length each is cut to before any pattern runs: a stack is
+ *  attacker-influenced text (anyone can throw), and a real top frame is far shorter. */
+const STACK_LINES_READ = 20;
+const STACK_LINE_MAX = 1000;
+
+/** `url:12:5` → [`url`, `:12:5`]; no suffix → [`url`, ``]. */
+function splitLineCol(url: string): [string, string] {
+  const m = LINE_COL.exec(url);
+  return m ? [url.slice(0, m.index), m[0]] : [url, ""];
+}
+
+/** A Firefox/Safari frame, `fn@url:line:col`: an `@` followed by a whitespace-free location that
+ *  ends in a line number. Checked with string operations, not a backtracking pattern. */
+function isAtFrame(line: string): boolean {
+  const at = line.lastIndexOf("@");
+  if (at < 0) return false;
+  const location = line.slice(at + 1);
+  return location.length > 0 && !/\s/.test(location) && LINE_COL.test(location) && splitLineCol(location)[0].length > 0;
+}
+
 /** The first stack line (V8 `at …` or Firefox/Safari `fn@url`), its URLs reduced to paths. Null
  *  when the frame points outside the app. */
 export function topFrame(stack: string | undefined, origin: string): string | null | undefined {
   if (!stack) return undefined;
   const line = stack
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.startsWith("at ") || /@\S+:\d+/.test(l));
+    .split("\n", STACK_LINES_READ)
+    .map((l) => l.slice(0, STACK_LINE_MAX).trim())
+    .find((l) => l.startsWith("at ") || isAtFrame(l));
   if (!line) return undefined;
   let outside = false;
   const rewritten = line.replace(/^at\s+/, "").replace(URL_IN_TEXT, (url) => {
     // Keep the trailing ":line:col" that follows the path inside the URL match.
-    const m = /^(.*?)(:\d+(?::\d+)?)?$/.exec(url);
-    const path = ownPath(m?.[1] ?? url, origin);
+    const [bare, lineCol] = splitLineCol(url);
+    const path = ownPath(bare, origin);
     if (path === null) {
       outside = true;
       return url;
     }
-    return `${path}${m?.[2] ?? ""}`;
+    return `${path}${lineCol}`;
   });
   if (outside) return null;
   return rewritten.slice(0, RUM_FRAME_MAX);
