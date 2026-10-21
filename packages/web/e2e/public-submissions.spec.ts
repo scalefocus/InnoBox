@@ -83,6 +83,9 @@ test("while the switch is off, /submit and every public route answer 404", async
 });
 
 test("submit on /submit, confirm through the link, accept in the queue → External submission in triage", async ({ browser }) => {
+  // Sign-ins, a proof-of-work wait, confirm and accept run end to end: on a dev server that stalls
+  // for a few seconds per request this outgrows the default budget, so it gets three times it.
+  test.slow();
   const stamp = uniqueStamp();
   const admin = await browser.newContext();
   const outsider = await browser.newContext(); // never signed in
@@ -183,6 +186,10 @@ test("submit on /submit, confirm through the link, accept in the queue → Exter
 });
 
 test("Specific people: the tag field, the pre-filled Accept, and sharing once the challenge leaves triage", async ({ browser }) => {
+  // Three sign-ins, a proof-of-work wait, confirm, accept, a triage move and the inbox check:
+  // the longest flow in the suite, and the first to outgrow the default budget when the dev
+  // server stalls — so it gets three times it.
+  test.slow();
   const stamp = uniqueStamp();
   const admin = await browser.newContext();
   const listed = await browser.newContext();
