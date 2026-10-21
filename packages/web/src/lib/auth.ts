@@ -2,14 +2,17 @@
 // cookie only proves authentication happened; identity, `active`, and roles come from
 // the database on EVERY request — a deactivated user holding a live cookie loses access
 // at the next call (§2 leaver semantics), and roles NEVER come from token claims
-// (INNOBOX_SPEC.md invariant 1; per-request resolution, no role cache in v1).
+// (INNOBOX_SPEC.md invariant 1; per-request resolution, no role cache in v1). §4.2 *Resolution*:
+// one statement per resolution, at most one resolution per request.
 import { headers } from "next/headers";
 import { getServerSession } from "next-auth";
-import { buildRoleSet, type Role, type RoleGrant, type RoleSet } from "@innobox/shared";
+import type { RoleSet } from "@innobox/shared";
 import { authOptions } from "./authOptions";
 import { pool } from "./db";
 import { PRESENCE_METHOD_HEADER, PRESENCE_PATH_HEADER, touchPresence } from "./presence-touch";
 import { isSessionRevoked } from "./session-revocation";
+import { requestMemo } from "./request-memo";
+import { bootstrapAdminGroup, loadSessionRow, resolveRoleSets } from "./role-resolution";
 
 export interface SessionUser {
   id: string;
@@ -26,73 +29,13 @@ export interface SessionUser {
   roles: RoleSet;
 }
 
-// The built-in 'global' namespace is seeded by migration 0003 and can never be deleted
-// (namespaces are archive-only), so its id is safe to cache for the process lifetime.
-let globalNamespaceId: string | null = null;
-async function getGlobalNamespaceId(): Promise<string> {
-  if (!globalNamespaceId) {
-    const { rows } = await pool.query<{ id: string }>(
-      `select id from namespaces where slug = 'global'`,
-    );
-    if (!rows[0]) throw new Error("built-in 'global' namespace missing — are migrations applied?");
-    globalNamespaceId = rows[0].id;
-  }
-  return globalNamespaceId;
-}
-
-/** Resolves a RoleSet for each of many user ids in a fixed number of queries, whatever the count —
- *  notification dispatch (lib/notify.ts) visibility-checks every candidate recipient of an event,
- *  and a per-user lookup made that cost grow with the recipient list. Every id gets an entry; a
- *  user with no grants gets the implicit-member RoleSet. The ONE place roles are resolved
- *  (invariant 1): resolveRolesForUser and getSessionUser go through it too. */
+/** Resolves a RoleSet for each of many user ids in ONE statement, whatever the count (§4.2
+ *  *Resolution*) — notification dispatch (lib/notify.ts) visibility-checks every candidate
+ *  recipient of an event at once. Every id gets an entry; a user with no grants gets the
+ *  implicit-member RoleSet. The ONE place roles are resolved (invariant 1): resolveRolesForUser and
+ *  getSessionUser go through the same SQL (lib/role-resolution.ts). */
 export async function resolveRolesForUsers(userIds: readonly string[]): Promise<Map<string, RoleSet>> {
-  const ids = [...new Set(userIds)];
-  if (ids.length === 0) return new Map();
-
-  const grants = new Map<string, RoleGrant[]>(ids.map((id) => [id, []]));
-  const { rows: grantRows } = await pool.query<{ user_id: string; role: Role; namespace_id: string | null }>(
-    `select gm.user_id, rm.role, rm.namespace_id
-       from group_members gm
-       join groups g         on g.id = gm.group_id
-       join role_mappings rm on rm.group_external_id = g.external_id
-      where gm.user_id = any($1::uuid[])`,
-    [ids],
-  );
-  for (const g of grantRows) grants.get(g.user_id)!.push({ role: g.role, namespaceId: g.namespace_id });
-
-  const bootstrapAdmins = new Set<string>();
-  const bootstrapGroup = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
-  if (bootstrapGroup) {
-    const { rows: b } = await pool.query<{ user_id: string }>(
-      `select distinct gm.user_id
-         from group_members gm
-         join groups g on g.id = gm.group_id
-        where gm.user_id = any($1::uuid[]) and g.external_id = $2`,
-      [ids, bootstrapGroup],
-    );
-    for (const r of b) bootstrapAdmins.add(r.user_id);
-  }
-
-  // §4.3 `people`: the challenges whose access list names the user — resolved per request with the
-  // grants, so the visibility gate and its SQL twin read it exactly like namespace membership.
-  const access = new Map<string, string[]>(ids.map((id) => [id, []]));
-  const { rows: accessRows } = await pool.query<{ user_id: string; challenge_id: string }>(
-    `select user_id, challenge_id from challenge_access where user_id = any($1::uuid[])`,
-    [ids],
-  );
-  for (const r of accessRows) access.get(r.user_id)!.push(r.challenge_id);
-
-  const globalNamespaceId = await getGlobalNamespaceId();
-  return new Map(
-    ids.map((id) => [
-      id,
-      buildRoleSet(grants.get(id)!, {
-        bootstrapPlatformAdmin: bootstrapAdmins.has(id),
-        globalNamespaceId,
-        accessListChallengeIds: access.get(id)!,
-      }),
-    ]),
-  );
+  return resolveRoleSets(pool, userIds, bootstrapAdminGroup());
 }
 
 /** Resolves a RoleSet for an arbitrary user id (not just the session user) — the assignee and
@@ -117,56 +60,51 @@ async function stampPresence(userId: string): Promise<void> {
   }
 }
 
+/** The request's scope object for the §4.2 per-request memo: the headers object Next hands out
+ *  once per request (lib/request-memo.ts). Null outside a request scope — then nothing is memoized. */
+async function requestScope(): Promise<object | null> {
+  try {
+    return await headers();
+  } catch {
+    return null;
+  }
+}
+
+const sessionMemo = requestMemo<SessionUser | null>();
+
 /** The signed-in, ACTIVE user with DB-resolved roles — or null (unauthenticated, or the
  *  user row is missing/deactivated, or the token was issued before the row's
- *  `sessions_valid_from` — "Sign out everywhere", INNOBOX_SPEC.md §3: same outcome, no session). */
+ *  `sessions_valid_from` — "Sign out everywhere", INNOBOX_SPEC.md §3: same outcome, no session).
+ *  §4.2 *Resolution*: the user row and its roles come back from ONE statement, and a request that
+ *  asks twice (a handler and a helper it calls) shares one resolution — never across requests. */
 export async function getSessionUser(): Promise<SessionUser | null> {
+  return sessionMemo(await requestScope(), resolveSessionUser);
+}
+
+async function resolveSessionUser(): Promise<SessionUser | null> {
   const session = await getServerSession(authOptions);
   const oid = session?.oid;
   if (!oid) return null;
 
-  const { rows } = await pool.query<{
-    id: string;
-    external_id: string;
-    user_name: string;
-    email: string | null;
-    display_name: string;
-    active: boolean;
-    sessions_valid_from: Date | null;
-    email_notifications_enabled: boolean;
-    quick_start_seen_at: Date | null;
-    whats_new_seen_version: string | null;
-    whats_new_since_date: string | null;
-  }>(
-    // The rollout boundary is a bare calendar date: read it as text, never through a JS Date,
-    // which would shift it by the server's offset.
-    `select id, external_id, user_name, email, display_name, active, sessions_valid_from, email_notifications_enabled, quick_start_seen_at,
-            whats_new_seen_version, to_char(whats_new_since_date, 'YYYY-MM-DD') as whats_new_since_date
-       from users
-      where external_id = $1`,
-    [oid],
-  );
-  const row = rows[0];
+  const row = await loadSessionRow(pool, oid, bootstrapAdminGroup());
   if (!row || !row.active) return null;
   // §3 Sign out everywhere / erasure / SCIM deactivation stamp: a token minted before it is no
   // session, whatever the cookie says — the API answers 401, a page redirects to Home.
-  if (isSessionRevoked({ issuedAt: session.issuedAt, sessionsValidFrom: row.sessions_valid_from })) return null;
+  if (isSessionRevoked({ issuedAt: session.issuedAt, sessionsValidFrom: row.sessionsValidFrom })) return null;
 
   await stampPresence(row.id);
 
-  const roles = await resolveRolesForUser(row.id);
-
   return {
     id: row.id,
-    externalId: row.external_id,
-    userName: row.user_name,
-    displayName: row.display_name,
+    externalId: row.externalId,
+    userName: row.userName,
+    displayName: row.displayName,
     email: row.email,
-    emailNotificationsEnabled: row.email_notifications_enabled,
-    quickStartSeenAt: row.quick_start_seen_at,
-    whatsNewSeenVersion: row.whats_new_seen_version,
-    whatsNewSinceDate: row.whats_new_since_date,
-    roles,
+    emailNotificationsEnabled: row.emailNotificationsEnabled,
+    quickStartSeenAt: row.quickStartSeenAt,
+    whatsNewSeenVersion: row.whatsNewSeenVersion,
+    whatsNewSinceDate: row.whatsNewSinceDate,
+    roles: row.roles,
   };
 }
 

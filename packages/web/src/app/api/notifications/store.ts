@@ -25,31 +25,15 @@ const INBOX_LIMIT = 50;
 /**
  * §10.4: an inbox row about a trashed item — or about anything under a trashed challenge — is kept
  * but hidden: the list and the unread count skip it, mark-all-read leaves it alone, and a restore
- * brings it back exactly as it was. A row is "about" an item by the same matching the §10.3
- * purge uses: the target it carries (`parentType`/`parentId`, or `challengeId` on a comment row),
- * or its deep link (`/challenges/<n>`, `…#SOL-<m>`). Over `notifications n`.
+ * brings it back exactly as it was. Since v1.18 a row is "about" an item by its `challenge_id` /
+ * `solution_id` columns (§5, migration 0051 — derived from the payload target by a trigger, so a
+ * solution row carries its parent challenge too), looked up by primary key: one index probe per
+ * row instead of a scan of every trashed item's link and payload keys. Over `notifications n`.
  */
 export const NOT_ABOUT_TRASH = `not exists (
-    select 1 from challenges tc
-     where tc.trashed_at is not null
-       and (n.payload->>'link' = '/challenges/' || tc.number
-            or n.payload->>'link' like '/challenges/' || tc.number || '#%'
-            or (n.payload->>'parentType' = 'challenge' and n.payload->>'parentId' = tc.id::text)
-            or n.payload->>'challengeId' = tc.id::text))
+    select 1 from challenges tc where tc.id = n.challenge_id and tc.trashed_at is not null)
   and not exists (
-    select 1 from solutions ts join challenges sc on sc.id = ts.challenge_id
-     where ts.trashed_at is not null
-       and ((n.payload->>'parentType' = 'solution' and n.payload->>'parentId' = ts.id::text)
-            or n.payload->>'link' = '/challenges/' || sc.number || '#SOL-' || ts.number))`;
-
-/** The challenge an inbox row is about, by the payload keys every item-bound row carries
- *  (§12.1): `challengeId` (comment rows), or `parentType` + `parentId` for a challenge or a
- *  solution (resolved to its challenge). Over `notifications n` and `challenges c`. A row that
- *  names no item matches no challenge. */
-const ROW_IS_ABOUT_CHALLENGE = `(c.id::text = n.payload->>'challengeId'
-         or (n.payload->>'parentType' = 'challenge' and c.id::text = n.payload->>'parentId')
-         or (n.payload->>'parentType' = 'solution'
-             and c.id = (select s.challenge_id from solutions s where s.id::text = n.payload->>'parentId')))`;
+    select 1 from solutions ts where ts.id = n.solution_id and ts.trashed_at is not null)`;
 
 /**
  * §12.1 read-time visibility gate (v1.16): hide a row about a challenge — or a solution on one —
@@ -57,7 +41,8 @@ const ROW_IS_ABOUT_CHALLENGE = `(c.id::text = n.payload->>'challengeId'
  * platform admins see everything; awaiting_triage/withdrawn only the author and the namespace's
  * admins; `people` the access list, reviewers and assignee; else org-wide or members), so the
  * bell can never disagree with the detail page. A read-time predicate only — nothing is deleted,
- * and a row comes back as it was once access returns. Rows that name no item pass. Over
+ * and a row comes back as it was once access returns. Rows that name no item (`challenge_id` null)
+ * pass. The web list, the §12.2 pulse count and the §25.6 agent view all go through it. Over
  * `notifications n`; parameters go through `push`.
  */
 function pushInboxVisibilityCondition(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
@@ -66,9 +51,11 @@ function pushInboxVisibilityCondition(viewer: Viewer, push: (v: unknown) => stri
   // coalesce: the twin is written for a plain WHERE, where SQL NULL (e.g. `c.assignee_id = $viewer`
   // on a challenge with no assignee) already means "not visible". Negated inside `not exists` a
   // NULL would mean "not hidden" instead, so it is pinned to false before the negation.
+  // §12.1 (v1.18): the challenge the row is about is its `challenge_id` column — a primary-key join,
+  // where matching payload text against `c.id::text` used to scan every challenge per row.
   conditions.push(`not exists (
     select 1 from challenges c
-     where ${ROW_IS_ABOUT_CHALLENGE}
+     where c.id = n.challenge_id
        and not coalesce((${visible.join(" and ")}), false))`);
 }
 
@@ -86,16 +73,24 @@ function inboxScope(viewer: Viewer, extra: string[] = []): { where: string; para
 }
 
 export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
+  // One evaluation of the gates: the window count runs over every row the WHERE keeps, before the
+  // LIMIT, so the list and its unread count come from the same pass (§12.2 — the list response
+  // carries `unreadCount`, which the shell adopts).
   const list = inboxScope(viewer);
-  const unread = inboxScope(viewer, [`n.read_at is null`]);
-  const [{ rows }, { rows: countRows }] = await Promise.all([
-    pool.query<{ id: string; type: string; payload: { message: string; link: string }; read_at: Date | null; created_at: Date }>(
-      `select n.id, n.type, n.payload, n.read_at, n.created_at from notifications n
-        where ${list.where} order by n.created_at desc limit ${INBOX_LIMIT}`,
-      list.params,
-    ),
-    pool.query<{ count: string }>(`select count(*)::text as count from notifications n where ${unread.where}`, unread.params),
-  ]);
+  const { rows } = await pool.query<{
+    id: string;
+    type: string;
+    payload: { message: string; link: string };
+    read_at: Date | null;
+    created_at: Date;
+    unread_count: string;
+  }>(
+    `select n.id, n.type, n.payload, n.read_at, n.created_at,
+            (count(*) filter (where n.read_at is null) over ())::text as unread_count
+       from notifications n
+      where ${list.where} order by n.created_at desc limit ${INBOX_LIMIT}`,
+    list.params,
+  );
 
   return {
     notifications: rows.map((r) => ({
@@ -106,8 +101,15 @@ export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
       read: r.read_at !== null,
       createdAt: r.created_at.toISOString(),
     })),
-    unreadCount: Number(countRows[0]?.count ?? 0),
+    unreadCount: Number(rows[0]?.unread_count ?? 0),
   };
+}
+
+/** §12.2 pulse: the bell's unread count alone, under the same gates as the list. */
+export async function countUnread(pool: Pool, viewer: Viewer): Promise<number> {
+  const scope = inboxScope(viewer, [`n.read_at is null`]);
+  const { rows } = await pool.query<{ count: string }>(`select count(*)::text as count from notifications n where ${scope.where}`, scope.params);
+  return Number(rows[0]?.count ?? 0);
 }
 
 /**
@@ -127,7 +129,7 @@ export async function listInboxPage(
   if (opts.orgVisibleOnly) {
     conditions.push(`not exists (
       select 1 from challenges c
-       where c.visibility <> 'org' and ${ROW_IS_ABOUT_CHALLENGE})`);
+       where c.id = n.challenge_id and c.visibility <> 'org')`);
   }
   const { rows } = await pool.query<{ id: string; type: string; payload: { message: string; link: string }; read_at: Date | null; created_at: Date }>(
     `select n.id, n.type, n.payload, n.read_at, n.created_at from notifications n

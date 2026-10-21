@@ -1,11 +1,10 @@
 "use client";
 // In-app notification bell (INNOBOX_SPEC.md §12.2): unread count, newest-first list,
-// mark-read (click) and mark-all-read. Reuses the .bell/.msg-* class contract from
-// globals.css (carried-over messaging pattern) — no new CSS.
+// mark-read (click) and mark-all-read. The count comes from the shell's §12.2 pulse. Reuses the
+// .bell/.msg-* class contract from globals.css (carried-over messaging pattern) — no new CSS.
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { SystemBanner } from "@innobox/shared/system-banner";
 import { useDateFmt } from "@/components/DateFormat";
 
 interface NotificationItem {
@@ -17,43 +16,41 @@ interface NotificationItem {
   createdAt: string;
 }
 
-/** `onBanner` receives the §14.6 system banner (or null) that rides every inbox poll, so the
- *  shell can render the topbar pill without a second poller. `onOpenChange` reports the panel's
- *  open state — on mobile it is a full sheet, which keeps the §13.10 survey card off screen. */
+/** §12.2 (v1.18): the badge shows `unreadCount` from the shell's pulse — the bell itself never
+ *  polls. Its list is fetched when the panel opens and again after mark-all-read; that response
+ *  carries the unread count too, handed back through `onUnreadCount` so badge and list agree. A
+ *  mark action also dispatches `innobox:pulse`, re-reading the pulse at once. `onOpenChange`
+ *  reports the panel's open state — on mobile it is a full sheet, which keeps the §13.10 survey
+ *  card off screen. */
 export function NotificationBell({
-  onBanner,
+  unreadCount,
+  onUnreadCount,
   onOpenChange,
-}: { onBanner?: (banner: SystemBanner | null) => void; onOpenChange?: (open: boolean) => void } = {}) {
+}: { unreadCount: number; onUnreadCount?: (count: number) => void; onOpenChange?: (open: boolean) => void }) {
   const router = useRouter();
   const fmt = useDateFmt();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[] | null>(null);
-  const [unreadCount, setUnreadCount] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const refresh = () => {
+  const loadList = () => {
     fetch("/api/notifications", { headers: { accept: "application/json" } })
-      .then((res) => res.json())
+      .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
+        if (!json) return;
         setItems(json.notifications);
-        setUnreadCount(json.unreadCount);
-        onBanner?.((json.banner as SystemBanner | null | undefined) ?? null);
+        if (typeof json.unreadCount === "number") onUnreadCount?.(json.unreadCount);
       })
       .catch(() => {});
   };
 
+  const refreshPulse = () => window.dispatchEvent(new Event("innobox:pulse"));
+
+  // The list is not polled: it loads each time the panel opens.
   useEffect(() => {
-    refresh();
-    const interval = window.setInterval(refresh, 30_000);
-    // The Administration card dispatches this after a save/clear so the admin's own header
-    // reflects the change at once instead of at the next tick.
-    window.addEventListener("innobox:banner-changed", refresh);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("innobox:banner-changed", refresh);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (open) loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load on open only
+  }, [open]);
 
   useEffect(() => {
     onOpenChange?.(open);
@@ -71,14 +68,15 @@ export function NotificationBell({
 
   const markAllRead = async () => {
     await fetch("/api/notifications", { method: "PATCH" });
-    refresh();
+    loadList();
+    refreshPulse();
   };
 
   const openItem = async (item: NotificationItem) => {
     setOpen(false);
     if (!item.read) {
       await fetch(`/api/notifications/${item.id}`, { method: "PATCH" });
-      refresh();
+      refreshPulse();
     }
     router.push(item.link);
   };
