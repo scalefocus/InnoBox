@@ -41,25 +41,34 @@ export async function signIn(
     // if that chain breaks — e.g. a page loaded while Next compiles /_error mid-run (it does so on
     // the first aborted request) never hydrates — so a load showing no panel within 20 s is
     // retried with a fresh navigation instead of being waited on until the test times out.
+    //
+    // The whole sign-in is retried, not just the panel load: a dev server that stalls (Turbopack
+    // cache compaction, a heap-pressure pause) can hold the callback or the post-sign-in render
+    // past any single wait, and the attempt that follows must not leave the test stuck.
+    const menu = page.locator(".user-trigger");
+    const panel = page.locator("#dev-name");
     await expect(async () => {
       await page.goto(`${base}/`);
-      await page.locator("#dev-name").waitFor({ state: "visible", timeout: 20_000 });
-    }).toPass({ timeout: 75_000 });
-    await page.locator("#dev-name").fill(opts.name);
-    await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
-    await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");
-    await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
-    await page.locator("#dev-whats-new-seen").fill(opts.whatsNewSeen ?? "");
-    await page.locator("#dev-whats-new-since").fill(opts.whatsNewSinceDate ?? "");
-    // §13.10: "1" = survey-eligible with every roll forced to win; otherwise surveys are off.
-    await page.locator("#dev-survey").fill(opts.survey ? "1" : "0");
-    await page.getByRole("button", { name: "Dev sign-in" }).click();
-    // On success the app returns to "/" authenticated and the account menu (.user-trigger, rendered
-    // only when signed in) appears; on failure it stays on the signed-out landing with the dev
-    // panel — so waiting for the account menu both confirms success and fails fast otherwise.
-    // 30 s like the suite's expect timeout: a fresh-onboarding persona is redirected to
-    // /quick-start server-side, and that route's first hit compiles cold in dev mode.
-    await page.locator(".user-trigger").waitFor({ state: "visible", timeout: 30_000 });
+      // Whichever renders first: the account menu means an earlier attempt's callback landed after
+      // its wait gave up — the session cookie is already set, so it must not be posted again (that
+      // would re-seed the persona, e.g. reset a fresh-onboarding flag the test relies on).
+      await menu.or(panel).first().waitFor({ state: "visible", timeout: 20_000 });
+      if (await menu.isVisible()) return;
+      await panel.fill(opts.name);
+      await page.locator("#dev-email").fill(`${devSlug(opts.name)}@dev.test`);
+      await page.locator("#dev-admin").fill(opts.admin ? "1" : "0");
+      await page.locator("#dev-fresh-onboarding").fill(opts.freshOnboarding ? "1" : "0");
+      await page.locator("#dev-whats-new-seen").fill(opts.whatsNewSeen ?? "");
+      await page.locator("#dev-whats-new-since").fill(opts.whatsNewSinceDate ?? "");
+      // §13.10: "1" = survey-eligible with every roll forced to win; otherwise surveys are off.
+      await page.locator("#dev-survey").fill(opts.survey ? "1" : "0");
+      await page.getByRole("button", { name: "Dev sign-in" }).click();
+      // On success the app returns to "/" authenticated and the account menu (.user-trigger,
+      // rendered only when signed in) appears; on failure it stays on the signed-out landing with
+      // the dev panel. 30 s like the suite's expect timeout: a fresh-onboarding persona is
+      // redirected to /quick-start server-side, and that route's first hit compiles cold in dev.
+      await menu.waitFor({ state: "visible", timeout: 30_000 });
+    }).toPass({ timeout: 100_000 });
 
     const meRes = await context.request.get(`${base}/api/me`, { headers: { accept: "application/json" } });
     const me = (await meRes.json()) as { user?: { id?: string }; roles?: { platformAdmin?: boolean } };

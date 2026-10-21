@@ -125,7 +125,12 @@ test("profile: the e-mail-notifications toggle round-trips, and the public profi
   const emailSwitch = page.getByRole("switch", { name: "E-mail notifications" });
   const before = await emailSwitch.getAttribute("aria-checked");
   const after = before === "true" ? "false" : "true";
+  // The switch flips optimistically, before its PATCH lands. Reloading before the server has
+  // answered aborts the request (logged as "client disconnected") and the reload then reads the
+  // old value — so hold the PATCH's response and reload only once it has been committed.
+  const saved = page.waitForResponse((r) => r.url().endsWith("/api/profile") && r.request().method() === "PATCH");
   await emailSwitch.click();
+  expect((await saved).status()).toBe(200);
   await expect(emailSwitch).toHaveAttribute("aria-checked", after);
   // The page carries one switch per notification preference (§12.1) — read the word that sits
   // beside THIS switch, inside its own .toggle-field.
