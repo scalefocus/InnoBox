@@ -1,6 +1,7 @@
-// POST /api/challenges/:number/withdraw (INNOBOX_SPEC.md §10.1): the author withdraws their
-// own challenge from any non-terminal status → `withdrawn` (terminal, soft). Namespace + platform
-// admins (§12.1 event 10), the assignee, and existing followers are notified — delivered directly
+// POST /api/challenges/:number/withdraw (INNOBOX_SPEC.md §10.1): an author — any member of the team,
+// for everyone (§39.5) — withdraws the challenge from any non-terminal status → `withdrawn`
+// (terminal, soft). Namespace + platform admins (§12.1 event 10), the assignee, the other members of
+// the team (§39.8) and existing followers are notified — delivered directly
 // rather than through the visibility-filtered dispatch, because a withdrawn challenge is hidden
 // (§4.3) yet all these recipients retain access (admins always; assignee/followers already had
 // it), so notifying them leaks nothing.
@@ -31,13 +32,15 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
         getFollowerUserIds(pool, "challenge", result.challengeId),
         getNamespaceAdminUserIds(pool, result.namespaceId),
       ]);
-      const recipients = [...new Set([...(result.assigneeId ? [result.assigneeId] : []), ...followers, ...admins])];
+      // §39.8: the other members of the team hear of it too (the actor never notifies themselves).
+      const recipients = [...new Set([...(result.assigneeId ? [result.assigneeId] : []), ...followers, ...admins, ...result.authorIds])];
       const ctx = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
       const label = formatChallengeNumber(number);
+      const by = result.authorIds.length > 1 ? "one of its authors" : "its author";
       await Promise.all(
         recipients.map((userId) =>
           dispatchToUser(ctx, userId, "status_changed", {
-            message: `${label} "${result.title}" was withdrawn by its author.`,
+            message: `${label} "${result.title}" was withdrawn by ${by}.`,
             link: `/challenges/${number}`,
           }, { parentType: "challenge", parentId: result.challengeId }),
         ),

@@ -11,22 +11,28 @@
 import type { Pool, PoolClient } from "pg";
 import {
   HYPE_BOARD_SIZE,
+  challengeTeamJsonSql,
   decideHype,
   formatChallengeNumber,
   formatSolutionNumber,
   hypeWeight,
   hypesLeft,
   isChallengeHypeOpen,
+  isChallengeMemberSql,
   isEarlyHype,
   isSolutionHypeOpen,
+  isSolutionMemberSql,
   maskAuthor,
+  maskTeam,
   nextWeekStartUtc,
+  solutionTeamJsonSql,
   weekStartUtc,
   type ChallengeStatus,
   type HypeReason,
   type HypeWeight,
   type MaskedAuthor,
   type SolutionStatus,
+  type TeamMemberRow,
 } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -200,12 +206,14 @@ export async function giveHype(pool: Pool, viewer: Viewer, parentType: ParentTyp
   return inTransaction(pool, async (client) => {
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`hype:${viewer.userId}`]);
     const now = await dbNow(client);
-    const { rows } = await client.query<{ status: string; author_id: string | null; created_at: Date; challenge_status: string }>(
+    // §26.3 / §39.9: hyping is refused to every member of the item's team.
+    const { rows } = await client.query<{ status: string; is_author: boolean; created_at: Date; challenge_status: string }>(
       parentType === "challenge"
-        ? `select c.status, c.author_id, c.created_at, c.status as challenge_status from challenges c where c.id = $1 for share`
-        : `select s.status, s.author_id, s.created_at, c.status as challenge_status
+        ? `select c.status, ${isChallengeMemberSql("c", "$2")} as is_author, c.created_at, c.status as challenge_status
+             from challenges c where c.id = $1 for share`
+        : `select s.status, ${isSolutionMemberSql("s", "$2")} as is_author, s.created_at, c.status as challenge_status
              from solutions s join challenges c on c.id = s.challenge_id where s.id = $1 for share of s, c`,
-      [parentId],
+      [parentId, viewer.userId],
     );
     const item = rows[0];
     if (!item) return { status: "not_found" } as const;
@@ -219,7 +227,7 @@ export async function giveHype(pool: Pool, viewer: Viewer, parentType: ParentTyp
       parentId,
     ]);
     const used = await hypesUsedThisWeek(client, viewer.userId, now);
-    const decision = decideHype({ open, isAuthor: item.author_id === viewer.userId, alreadyHyped: mine.length > 0, usedThisWeek: used });
+    const decision = decideHype({ open, isAuthor: item.is_author, alreadyHyped: mine.length > 0, usedThisWeek: used });
     if (decision.reason) return { status: "refused", reason: decision.reason } as const;
 
     const weight = hypeWeight(item.created_at, now);
@@ -271,7 +279,10 @@ export interface HypedBoardItem {
   parentTitle?: string;
   /** The challenge the row links to (itself, or a solution's parent). */
   challengeNumber: string;
+  /** The first member of the team (§39.7). */
   author: MaskedAuthor;
+  /** §39.7: every member in team order, masked — the compact form. */
+  authors: MaskedAuthor[];
   status: ChallengeStatus | SolutionStatus;
   /** This week's hype points. */
   points: number;
@@ -311,12 +322,13 @@ export async function getHypedBoard(db: Db, viewer: Viewer): Promise<HypedBoard>
     author_active: boolean | null;
     author_scrubbed: boolean | null;
     external_company: string | null;
+    team: TeamMemberRow[];
     points: number;
     first_at: Date;
   }>(
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
             u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
-            hw.points, hw.first_at
+            ${challengeTeamJsonSql("c")} as team, hw.points, hw.first_at
        from (select parent_id, sum(weight)::int as points, min(created_at) as first_at
                from hypes where parent_type = 'challenge' and created_at >= ${weekParam} group by parent_id) hw
        join challenges c on c.id = hw.parent_id
@@ -343,13 +355,14 @@ export async function getHypedBoard(db: Db, viewer: Viewer): Promise<HypedBoard>
     author_display_name: string;
     author_active: boolean;
     author_scrubbed: boolean;
+    team: TeamMemberRow[];
     challenge_number: string;
     challenge_title: string;
     points: number;
     first_at: Date;
   }>(
     `select s.number::text, s.description, s.status, s.is_anonymous, s.author_id, u.display_name as author_display_name,
-            u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
+            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ${solutionTeamJsonSql("s")} as team,
             c.number::text as challenge_number, c.title as challenge_title, hw.points, hw.first_at
        from (select parent_id, sum(weight)::int as points, min(created_at) as first_at
                from hypes where parent_type = 'solution' and created_at >= ${soWeek} group by parent_id) hw
@@ -363,14 +376,9 @@ export async function getHypedBoard(db: Db, viewer: Viewer): Promise<HypedBoard>
   );
 
   const ranked: { item: HypedBoardItem; firstAt: number }[] = [
-    ...challengeRows.map((r) => ({
-      firstAt: r.first_at.getTime(),
-      item: {
-        type: "challenge" as const,
-        number: formatChallengeNumber(r.number),
-        title: r.title,
-        challengeNumber: formatChallengeNumber(r.number),
-        author: maskAuthor({
+    ...challengeRows.map((r) => {
+      const authors = maskTeam(
+        maskAuthor({
           isAnonymous: r.is_anonymous,
           authorId: r.author_id,
           authorDisplayName: r.author_display_name,
@@ -378,29 +386,48 @@ export async function getHypedBoard(db: Db, viewer: Viewer): Promise<HypedBoard>
           authorScrubbed: r.author_scrubbed,
           externalCompany: r.external_company,
         }),
-        status: r.status,
-        points: r.points,
-      },
-    })),
-    ...solutionRows.map((r) => ({
-      firstAt: r.first_at.getTime(),
-      item: {
-        type: "solution" as const,
-        number: formatSolutionNumber(r.number),
-        title: excerpt(r.description, 120),
-        parentTitle: r.challenge_title,
-        challengeNumber: formatChallengeNumber(r.challenge_number),
-        author: maskAuthor({
+        r.team ?? [],
+      );
+      return {
+        firstAt: r.first_at.getTime(),
+        item: {
+          type: "challenge" as const,
+          number: formatChallengeNumber(r.number),
+          title: r.title,
+          challengeNumber: formatChallengeNumber(r.number),
+          author: authors[0]!,
+          authors,
+          status: r.status,
+          points: r.points,
+        },
+      };
+    }),
+    ...solutionRows.map((r) => {
+      const authors = maskTeam(
+        maskAuthor({
           isAnonymous: r.is_anonymous,
           authorId: r.author_id,
           authorDisplayName: r.author_display_name,
           authorActive: r.author_active,
           authorScrubbed: r.author_scrubbed,
         }),
-        status: r.status,
-        points: r.points,
-      },
-    })),
+        r.team ?? [],
+      );
+      return {
+        firstAt: r.first_at.getTime(),
+        item: {
+          type: "solution" as const,
+          number: formatSolutionNumber(r.number),
+          title: excerpt(r.description, 120),
+          parentTitle: r.challenge_title,
+          challengeNumber: formatChallengeNumber(r.challenge_number),
+          author: authors[0]!,
+          authors,
+          status: r.status,
+          points: r.points,
+        },
+      };
+    }),
   ];
   ranked.sort((a, b) => b.item.points - a.item.points || a.firstAt - b.firstAt);
   return {

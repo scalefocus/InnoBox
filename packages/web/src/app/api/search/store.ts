@@ -9,7 +9,8 @@
 // §13.1's gallery filters (status / impact area / namespace / author) narrow the results
 // alongside the query. They are the CHALLENGE gallery's filters, so for a solution hit the
 // status, impact-area and namespace filters apply to its parent challenge, while the author
-// filter applies to the solution's own (named) author. The author filter is anonymity-safe the
+// filter applies to the solution's own (named) authors — any member of its team (§39.12). The
+// author filter is anonymity-safe the
 // same way the gallery's is: whenever it is set, anonymous items are excluded outright rather
 // than matched against their true author, so it can never distinguish "no match" from "hidden
 // because anonymous" — for anyone, revealers included (the audited reveal is the only path to
@@ -18,14 +19,20 @@ import type { Pool } from "pg";
 import {
   canSeeChallenge,
   canSeeSolution,
+  challengeAuthorIdsSql,
+  challengeTeamJsonSql,
   escapeLike,
   formatChallengeNumber,
   formatSolutionNumber,
+  isChallengeMemberSql,
   maskAuthor,
+  maskTeam,
+  solutionTeamJsonSql,
   type ChallengeStatus,
   type ChallengeVisibility,
   type MaskedAuthor,
   type SolutionStatus,
+  type TeamMemberRow,
   type TopicRef,
 } from "@innobox/shared";
 import {
@@ -33,6 +40,7 @@ import {
   pushChallengeVisibilityConditions,
   pushSolutionVisibilityConditions,
   pushTopicFilter,
+  teamNameMatchSql,
   toListItem,
   type ChallengeListItem,
   type ChallengeRow,
@@ -43,7 +51,10 @@ import { isEntityNumber, type GalleryFilters } from "../challenges/validation";
 export interface ChallengeSearchResult {
   number: string;
   title: string;
+  /** The first member of the team (§39.7). */
   author: MaskedAuthor;
+  /** §39.7: every member in team order, masked — the compact form. */
+  authors: MaskedAuthor[];
   status: string;
   namespaceSlug: string;
   /** §34.6: the challenge's topics, alphabetical. */
@@ -53,7 +64,10 @@ export interface ChallengeSearchResult {
 export interface SolutionSearchResult {
   number: string;
   description: string;
+  /** The first member of the team (§39.7). */
   author: MaskedAuthor;
+  /** §39.7: every member in team order, masked. */
+  authors: MaskedAuthor[];
   status: string;
   challengeNumber: string;
   challengeTitle: string;
@@ -83,12 +97,36 @@ function pushChallengeFilterConditions(filters: GalleryFilters, push: Push, cond
   if (filters.namespaceId) conditions.push(`c.namespace_id = ${push(filters.namespaceId)}`);
 }
 
-/** The author filter over an item alias (`c` or `s`) joined to its author as `u`. Anonymous
- *  items are excluded unconditionally while it is set (see the header). */
+/** The author filter over an item alias (`c` or `s`): any member of the team's name (§39.12).
+ *  Anonymous items are excluded unconditionally while it is set (see the header). */
 function pushAuthorCondition(filters: GalleryFilters, alias: "c" | "s", push: Push, conditions: string[]): void {
   if (!filters.authorName) return;
   // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves.
-  conditions.push(`${alias}.is_anonymous = false and u.display_name ILIKE ${push(`%${escapeLike(filters.authorName)}%`)}`);
+  const pattern = push(`%${escapeLike(filters.authorName)}%`);
+  conditions.push(`${alias}.is_anonymous = false and ${teamNameMatchSql(alias === "c" ? "challenge" : "solution", pattern)}`);
+}
+
+/** §39.7: an item's team, masked — the first entry is `author`. */
+function teamOf(row: {
+  is_anonymous: boolean;
+  author_id: string | null;
+  author_display_name: string | null;
+  author_active: boolean | null;
+  author_scrubbed: boolean | null;
+  external_company?: string | null;
+  team: TeamMemberRow[];
+}): MaskedAuthor[] {
+  return maskTeam(
+    maskAuthor({
+      isAnonymous: row.is_anonymous,
+      authorId: row.author_id,
+      authorDisplayName: row.author_display_name,
+      authorActive: row.author_active,
+      authorScrubbed: row.author_scrubbed,
+      externalCompany: row.external_company ?? null,
+    }),
+    row.team ?? [],
+  );
 }
 
 interface ChallengeCandidate {
@@ -102,6 +140,7 @@ interface ChallengeCandidate {
   author_active: boolean | null;
   author_scrubbed: boolean | null;
   external_company: string | null;
+  team: TeamMemberRow[];
   id: string;
   namespace_id: string;
   visibility: ChallengeVisibility;
@@ -119,11 +158,12 @@ interface SolutionCandidate {
   author_display_name: string;
   author_active: boolean;
   author_scrubbed: boolean;
+  team: TeamMemberRow[];
   challenge_id: string;
   namespace_id: string;
   visibility: ChallengeVisibility;
   challenge_status: string;
-  challenge_author_id: string | null;
+  challenge_author_ids: string[];
   assignee_id: string | null;
   challenge_number: string;
   challenge_title: string;
@@ -154,6 +194,7 @@ async function challengeCandidates(pool: Pool, viewer: Viewer, match: Match, fil
   const { rows } = await pool.query<ChallengeCandidate>(
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
             u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
+            ${challengeTeamJsonSql("c")} as team,
             c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug,
             (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
                from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics
@@ -193,8 +234,9 @@ async function solutionCandidates(pool: Pool, viewer: Viewer, match: Match, filt
 
   const { rows } = await pool.query<SolutionCandidate>(
     `select s.number::text, s.description, s.status, s.is_anonymous, s.author_id, u.display_name as author_display_name,
-            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status,
-            c.author_id as challenge_author_id, c.assignee_id,
+            u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ${solutionTeamJsonSql("s")} as team,
+            c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status,
+            ${challengeAuthorIdsSql("c")} as challenge_author_ids, c.assignee_id,
             c.number::text as challenge_number, c.title as challenge_title
        from solutions s
        join users u on u.id = s.author_id
@@ -215,27 +257,24 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
         namespaceId: row.namespace_id,
         visibility: row.visibility,
         status: row.status as ChallengeStatus,
-        authorId: row.author_id,
+        authorIds: (row.team ?? []).map((m) => m.id),
         assigneeId: row.assignee_id,
         trashed: false, // §10.4: the SQL predicate already dropped trashed rows
       }),
     )
     .slice(0, RESULT_LIMIT)
-    .map((row) => ({
-      number: formatChallengeNumber(row.number),
-      title: row.title,
-      author: maskAuthor({
-        isAnonymous: row.is_anonymous,
-        authorId: row.author_id,
-        authorDisplayName: row.author_display_name,
-        authorActive: row.author_active,
-        authorScrubbed: row.author_scrubbed,
-        externalCompany: row.external_company,
-      }),
-      status: row.status,
-      namespaceSlug: row.namespace_slug,
-      topics: row.topics ?? [],
-    }));
+    .map((row) => {
+      const authors = teamOf(row);
+      return {
+        number: formatChallengeNumber(row.number),
+        title: row.title,
+        author: authors[0]!,
+        authors,
+        status: row.status,
+        namespaceSlug: row.namespace_slug,
+        topics: row.topics ?? [],
+      };
+    });
 }
 
 function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionSearchResult[] {
@@ -246,7 +285,7 @@ function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionS
         namespaceId: row.namespace_id,
         visibility: row.visibility,
         status: row.challenge_status as ChallengeStatus,
-        authorId: row.challenge_author_id,
+        authorIds: row.challenge_author_ids,
         assigneeId: row.assignee_id,
         trashed: false, // §10.4: dropped in SQL
       });
@@ -254,24 +293,22 @@ function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionS
       return canSeeSolution(
         viewer,
         { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-        { status: row.status as SolutionStatus, authorId: row.author_id, trashed: false },
+        { status: row.status as SolutionStatus, authorIds: (row.team ?? []).map((m) => m.id), trashed: false },
       );
     })
     .slice(0, RESULT_LIMIT)
-    .map((row) => ({
-      number: formatSolutionNumber(row.number),
-      description: row.description,
-      author: maskAuthor({
-        isAnonymous: row.is_anonymous,
-        authorId: row.author_id,
-        authorDisplayName: row.author_display_name,
-        authorActive: row.author_active,
-        authorScrubbed: row.author_scrubbed,
-      }),
-      status: row.status,
-      challengeNumber: formatChallengeNumber(row.challenge_number),
-      challengeTitle: row.challenge_title,
-    }));
+    .map((row) => {
+      const authors = teamOf(row);
+      return {
+        number: formatSolutionNumber(row.number),
+        description: row.description,
+        author: authors[0]!,
+        authors,
+        status: row.status,
+        challengeNumber: formatChallengeNumber(row.challenge_number),
+        challengeTitle: row.challenge_title,
+      };
+    });
 }
 
 export async function search(pool: Pool, viewer: Viewer, rawQuery: string, filters: GalleryFilters = {}): Promise<SearchResults> {
@@ -342,7 +379,8 @@ export async function searchChallengePage(pool: Pool, viewer: Viewer, input: Cha
   pushChallengeVisibilityConditions(viewer, push, conditions);
   pushChallengeFilterConditions(input.filters, push, conditions);
   pushAuthorCondition(input.filters, "c", push, conditions);
-  if (input.mine) conditions.push(`c.author_id = ${push(viewer.userId)}`);
+  // §39.10: "mine" means "a member of".
+  if (input.mine) conditions.push(isChallengeMemberSql("c", push(viewer.userId)));
   if (input.following) {
     conditions.push(`exists (select 1 from follows ff where ff.parent_type = 'challenge' and ff.parent_id = c.id and ff.user_id = ${push(viewer.userId)})`);
   }
@@ -357,7 +395,7 @@ export async function searchChallengePage(pool: Pool, viewer: Viewer, input: Cha
       namespaceId: row.namespace_id,
       visibility: row.visibility,
       status: row.status as ChallengeStatus,
-      authorId: row.author_id,
+      authorIds: (row.team ?? []).map((m) => m.id),
       assigneeId: row.assignee_id,
       trashed: row.trashed_at !== null,
     }),

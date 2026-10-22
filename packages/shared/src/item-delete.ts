@@ -91,6 +91,17 @@ async function inTransaction<T>(pool: DbPool, fn: (client: DbClient) => Promise<
   }
 }
 
+/** §39.11: the item's members in team order, read before the purge removes them. */
+async function teamOf(client: DbClient, entity: "challenge" | "solution", id: string): Promise<string[]> {
+  const { rows } = await client.query<{ user_id: string }>(
+    entity === "challenge"
+      ? `select user_id from challenge_authors where challenge_id = $1 order by added_at, user_id`
+      : `select user_id from solution_authors where solution_id = $1 order by added_at, user_id`,
+    [id],
+  );
+  return rows.map((r) => r.user_id);
+}
+
 /** The subtree a cascade or a trash-time cleanup covers: the challenge(s) and solution(s) by id,
  *  plus the §12.1 link scope of the item at its root. */
 export interface Subtree {
@@ -291,6 +302,7 @@ export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage
     if (!locked[0] || retentionStandsDown(request, locked[0].trashed_at)) return null;
     const { rows: solutionRows } = await client.query<{ id: string }>(`select id from solutions where challenge_id = $1`, [challenge.id]);
     const solutionIds = solutionRows.map((r) => r.id);
+    const authorIds = await teamOf(client, "challenge", challenge.id);
 
     // A challenge's link scope covers its own link plus every `#SOL-<n>` link beneath it.
     const children = await deleteChildren(client, {
@@ -322,6 +334,8 @@ export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage
         number: `CH-${challenge.number}`,
         entityType: "challenge",
         authorId: challenge.author_id,
+        // §39.11: the members at deletion — their rows went with the item (ON DELETE CASCADE).
+        authorIds,
         status: challenge.status,
         namespaceId: challenge.namespace_id,
       },
@@ -379,6 +393,7 @@ export async function purgeSolution(deps: { pool: DbPool; storage: PurgeStorage 
       linkScope: notificationLinkScope({ challengeNumber: solution.challenge_number, solutionNumber: solution.number }),
     });
 
+    const authorIds = await teamOf(client, "solution", solution.id);
     await client.query(`delete from solutions where id = $1`, [solution.id]);
 
     if (revertTo !== null) {
@@ -407,6 +422,7 @@ export async function purgeSolution(deps: { pool: DbPool; storage: PurgeStorage 
         number: `SOL-${solution.number}`,
         entityType: "solution",
         authorId: solution.author_id,
+        authorIds, // §39.11
         status: solution.status,
         namespaceId: solution.namespace_id,
         challengeId: solution.challenge_id,

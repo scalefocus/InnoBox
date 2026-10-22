@@ -8,7 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "../challenges/status";
 import { applyGalleryFilters, GalleryFilterFields, type GalleryFilterValues } from "../challenges/GalleryFilters";
-import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
 import { itemHref } from "@/lib/deep-link";
 import { reportFeatureUse } from "@/lib/survey-client";
 
@@ -16,6 +16,8 @@ interface ChallengeResult {
   number: string;
   title: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
+  /** §39.7: every member in order, masked — the compact form. */
+  authors?: TeamPerson[];
   status: string;
   namespaceSlug: string;
 }
@@ -24,6 +26,8 @@ interface SolutionResult {
   number: string;
   description: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
+  /** §39.7: every member in order, masked — the compact form. */
+  authors?: TeamPerson[];
   status: string;
   challengeNumber: string;
   challengeTitle: string;
@@ -148,8 +152,7 @@ function SearchPageInner() {
                   <span className="chip mono">{c.number}</span>
                   <span className={statusPillClass(c.status)}>{CHALLENGE_STATUS_LABEL[c.status] ?? c.status}</span>
                   <span className="ttl grow">{c.title}</span>
-                  <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} external={c.author.external === true} deactivated={c.author.active === false} scrubbed={c.author.scrubbed === true} />
-                  <span className="sub">{c.author.anonymous ? "Anonymous" : c.author.displayName}</span>
+                  <TeamByline className="sub" authors={teamOf(c)} />
                 </Link>
               ))}
             </div>
@@ -167,8 +170,7 @@ function SearchPageInner() {
                   <span className="chip mono">{s.number}</span>
                   <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
                   <span className="ttl grow">{s.description}</span>
-                  <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} scrubbed={s.author.scrubbed === true} />
-                  <span className="sub">{s.author.anonymous ? "Anonymous" : s.author.displayName}</span>
+                  <TeamByline className="sub" authors={teamOf(s)} />
                 </Link>
               ))}
             </div>

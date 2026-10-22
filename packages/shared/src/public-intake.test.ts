@@ -251,6 +251,6 @@ test("an authorless challenge has no author recipient and no author viewer", () 
   assert.deepEqual(finalizeRecipients([null, "a", undefined, "a", "b"], "b"), ["a"]);
   const GLOBAL = "00000000-0000-0000-0000-000000000001";
   const someone = { userId: "u1", roles: buildRoleSet([], { globalNamespaceId: GLOBAL }) };
-  assert.equal(canSeeChallenge(someone, { id: "cccccccc-0000-0000-0000-000000000001", namespaceId: GLOBAL, assigneeId: null, visibility: "org", status: "awaiting_triage", authorId: null, trashed: false }), false);
-  assert.equal(canSeeChallenge(someone, { id: "cccccccc-0000-0000-0000-000000000001", namespaceId: GLOBAL, assigneeId: null, visibility: "org", status: "in_review", authorId: null, trashed: false }), true);
+  assert.equal(canSeeChallenge(someone, { id: "cccccccc-0000-0000-0000-000000000001", namespaceId: GLOBAL, assigneeId: null, visibility: "org", status: "awaiting_triage", authorIds: [], trashed: false }), false);
+  assert.equal(canSeeChallenge(someone, { id: "cccccccc-0000-0000-0000-000000000001", namespaceId: GLOBAL, assigneeId: null, visibility: "org", status: "in_review", authorIds: [], trashed: false }), true);
 });

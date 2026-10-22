@@ -1,6 +1,7 @@
-// POST /api/solutions/:number/withdraw (INNOBOX_SPEC.md §10.1): the author withdraws their own
-// solution from any non-terminal status → `withdrawn`. Namespace + platform admins (§12.1 event
-// 10), the parent challenge's assignee, and the solution's existing followers are notified,
+// POST /api/solutions/:number/withdraw (INNOBOX_SPEC.md §10.1): an author — any member of the team,
+// for everyone (§39.5) — withdraws the solution from any non-terminal status → `withdrawn`. Namespace
+// + platform admins (§12.1 event 10), the parent challenge's assignee, the other members of the team
+// (§39.8) and the solution's existing followers are notified,
 // delivered directly (see the challenge withdraw route for the visibility rationale).
 import { formatSolutionNumber } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
@@ -29,13 +30,15 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
         getFollowerUserIds(pool, "solution", result.solutionId),
         getNamespaceAdminUserIds(pool, result.namespaceId),
       ]);
-      const recipients = [...new Set([...(result.assigneeId ? [result.assigneeId] : []), ...followers, ...admins])];
+      // §39.8: the other members of the team hear of it too (the actor never notifies themselves).
+      const recipients = [...new Set([...(result.assigneeId ? [result.assigneeId] : []), ...followers, ...admins, ...result.authorIds])];
       const ctx = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
       const label = formatSolutionNumber(number);
+      const by = result.authorIds.length > 1 ? "one of its authors" : "its author";
       await Promise.all(
         recipients.map((userId) =>
           dispatchToUser(ctx, userId, "status_changed", {
-            message: `${label} on ${result.challengeNumber} "${result.challengeTitle}" was withdrawn by its author.`,
+            message: `${label} on ${result.challengeNumber} "${result.challengeTitle}" was withdrawn by ${by}.`,
             link: `/challenges/${result.challengeNumber.replace("CH-", "")}#SOL-${number}`,
           }, { parentType: "solution", parentId: result.solutionId }),
         ),

@@ -13,7 +13,17 @@
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
-import { canSeeChallenge, canSeeSolution, isRestrictedVisibility, threadOrder, type ChallengeStatus, type ChallengeVisibility, type SolutionStatus } from "@innobox/shared";
+import {
+  canSeeChallenge,
+  canSeeSolution,
+  challengeAuthorIdsSql,
+  isRestrictedVisibility,
+  solutionAuthorIdsSql,
+  threadOrder,
+  type ChallengeStatus,
+  type ChallengeVisibility,
+  type SolutionStatus,
+} from "@innobox/shared";
 import {
   AI_SETTING_KEYS,
   DISCUSSION_LIMITS,
@@ -47,30 +57,31 @@ interface Item {
  *  tasks drop out, and a request to run one is refused with 409. */
 async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentType, number: string): Promise<Item | "trashed" | null> {
   if (parentType === "challenge") {
-    const { rows } = await pool.query<{ id: string; title: string; status: string; visibility: ChallengeVisibility; namespace_id: string; author_id: string; assignee_id: string | null; trashed: boolean }>(
-      `select id, title, status, visibility, namespace_id, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
+    const { rows } = await pool.query<{ id: string; title: string; status: string; visibility: ChallengeVisibility; namespace_id: string; author_ids: string[]; assignee_id: string | null; trashed: boolean }>(
+      `select c.id, c.title, c.status, c.visibility, c.namespace_id, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id, c.trashed_at is not null as trashed
+         from challenges c where c.number = $1`,
       [number],
     );
     const c = rows[0];
     if (c?.trashed) return viewer.roles.isPlatformAdmin ? "trashed" : null; // §10.4
-    if (!c || !canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, assigneeId: c.assignee_id, trashed: false })) return null;
+    if (!c || !canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorIds: c.author_ids, assigneeId: c.assignee_id, trashed: false })) return null;
     return { id: c.id, title: c.title, withdrawn: c.status === "withdrawn", restricted: isRestrictedVisibility(c.visibility) };
   }
   const { rows } = await pool.query<{
     id: string;
     status: string;
-    author_id: string;
+    author_ids: string[];
     c_title: string;
     c_status: string;
     c_id: string;
     c_visibility: ChallengeVisibility;
     c_namespace_id: string;
-    c_author_id: string;
+    c_author_ids: string[];
     c_assignee_id: string | null;
     trashed: boolean;
   }>(
-    `select s.id, s.status, s.author_id, c.id as c_id, c.title as c_title, c.status as c_status, c.visibility as c_visibility,
-            c.namespace_id as c_namespace_id, c.author_id as c_author_id, c.assignee_id as c_assignee_id,
+    `select s.id, s.status, ${solutionAuthorIdsSql("s")} as author_ids, c.id as c_id, c.title as c_title, c.status as c_status, c.visibility as c_visibility,
+            c.namespace_id as c_namespace_id, ${challengeAuthorIdsSql("c")} as c_author_ids, c.assignee_id as c_assignee_id,
             (s.trashed_at is not null or c.trashed_at is not null) as trashed
        from solutions s join challenges c on c.id = s.challenge_id
       where s.number = $1`,
@@ -84,11 +95,11 @@ async function loadItem(pool: Pool, viewer: Viewer, parentType: SummaryParentTyp
     namespaceId: s.c_namespace_id,
     visibility: s.c_visibility,
     status: s.c_status as ChallengeStatus,
-    authorId: s.c_author_id,
+    authorIds: s.c_author_ids,
     assigneeId: s.c_assignee_id,
     trashed: false,
   });
-  if (!challengeVisible || !canSeeSolution(viewer, { namespaceId: s.c_namespace_id, assigneeId: s.c_assignee_id }, { status: s.status as SolutionStatus, authorId: s.author_id, trashed: false })) return null;
+  if (!challengeVisible || !canSeeSolution(viewer, { namespaceId: s.c_namespace_id, assigneeId: s.c_assignee_id }, { status: s.status as SolutionStatus, authorIds: s.author_ids, trashed: false })) return null;
   // A solution has no title of its own: its challenge's title names what is being discussed.
   return { id: s.id, title: `A solution to: ${s.c_title}`, withdrawn: s.status === "withdrawn" || s.c_status === "withdrawn", restricted: isRestrictedVisibility(s.c_visibility) };
 }

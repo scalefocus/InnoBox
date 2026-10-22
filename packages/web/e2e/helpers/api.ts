@@ -103,6 +103,8 @@ export async function createChallengeViaApi(
     clientName?: string;
     /** §34.3: up to three topic ids. */
     topicIds?: string[];
+    /** §39: up to four co-authors' user ids. */
+    coAuthorIds?: string[];
   },
 ): Promise<CreatedChallenge> {
   const impactAreaId = input.impactAreaId ?? (await getImpactAreaId(request));
@@ -118,6 +120,7 @@ export async function createChallengeViaApi(
         isAnonymous: input.isAnonymous ?? false,
         clientName: input.clientName,
         ...(input.topicIds ? { topicIds: input.topicIds } : {}),
+        ...(input.coAuthorIds ? { coAuthorIds: input.coAuthorIds } : {}),
       },
       headers: JSON_HEADERS,
     }),
@@ -150,7 +153,7 @@ export interface CreatedSolution {
 export async function proposeSolutionViaApi(
   request: APIRequestContext,
   challengeDigits: string,
-  input: { description: string; costVsBenefits?: string; isAnonymous?: boolean },
+  input: { description: string; costVsBenefits?: string; isAnonymous?: boolean; coAuthorIds?: string[] },
 ): Promise<CreatedSolution> {
   const body = (await jsonOrThrow(
     await request.post(`${base()}/api/challenges/${challengeDigits}/solutions`, {
@@ -158,6 +161,7 @@ export async function proposeSolutionViaApi(
         description: input.description,
         costVsBenefits: input.costVsBenefits,
         isAnonymous: input.isAnonymous ?? false,
+        ...(input.coAuthorIds ? { coAuthorIds: input.coAuthorIds } : {}),
       },
       headers: JSON_HEADERS,
     }),

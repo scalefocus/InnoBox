@@ -3,14 +3,15 @@
 // The worker writes the notes; nothing here ever calls the provider.
 //
 // Who sees it: namespace and platform admins always; committee members of the namespace and the
-// assignee once the challenge is past awaiting_triage. NEVER the author (v1 — it is triage
-// material, not feedback), and only readers who can see the challenge at all (invariant 2). A
+// assignee once the challenge is past awaiting_triage. NEVER an author — any member of the team
+// (§39.12; v1 — it is triage material, not feedback), and only readers who can see the challenge at
+// all (invariant 2). A
 // withdrawn challenge has no note. Each duplicate is shown only when the reader can see that
 // challenge too — the AI output inherits the visibility of every input (§22.7).
 //
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool } from "pg";
-import { canSeeChallenge, isRestrictedVisibility, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
+import { canSeeChallenge, challengeAuthorIdsSql, isRestrictedVisibility, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
 import {
   AI_SETTING_KEYS,
   TRIAGE_INPUT_HASH_SQL,
@@ -49,7 +50,8 @@ interface ChallengeRow {
   status: string;
   visibility: ChallengeVisibility;
   namespace_id: string;
-  author_id: string;
+  /** §39.2: the team — none of them may read the note. */
+  author_ids: string[];
   assignee_id: string | null;
   trashed: boolean;
   hash: string;
@@ -61,7 +63,8 @@ type Access = { ok: true; row: ChallengeRow; isAdmin: boolean } | { ok: false; t
  *  (the route answers 404 either way, so the note's existence never leaks). */
 async function access(pool: Pool, viewer: Viewer, number: string): Promise<Access> {
   const { rows } = await pool.query<ChallengeRow>(
-    `select c.id, c.status, c.visibility, c.namespace_id, c.author_id, c.assignee_id, c.trashed_at is not null as trashed, ${TRIAGE_INPUT_HASH_SQL} as hash
+    `select c.id, c.status, c.visibility, c.namespace_id, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id, c.trashed_at is not null as trashed,
+            ${TRIAGE_INPUT_HASH_SQL} as hash
        from challenges c join impact_areas ia on ia.id = c.impact_area_id
       where c.number = $1`,
     [number],
@@ -76,11 +79,11 @@ async function access(pool: Pool, viewer: Viewer, number: string): Promise<Acces
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.status as ChallengeStatus,
-    authorId: row.author_id,
+    authorIds: row.author_ids,
     assigneeId: row.assignee_id,
     trashed: false,
   });
-  if (!visible || row.author_id === viewer.userId || row.status === "withdrawn") return { ok: false };
+  if (!visible || row.author_ids.includes(viewer.userId) || row.status === "withdrawn") return { ok: false };
   const isAdmin = viewer.roles.isNamespaceAdmin(row.namespace_id);
   if (isAdmin) return { ok: true, row, isAdmin };
   const pastTriage = row.status !== "awaiting_triage";
@@ -125,9 +128,10 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     const numbers = p.duplicates.map((d) => String(d.number));
     const dupRows = numbers.length
       ? (
-          await pool.query<{ id: string; number: string; title: string; status: string; visibility: ChallengeVisibility; namespace_id: string; author_id: string; assignee_id: string | null }>(
-            `select id, number::text, title, status, visibility, namespace_id, author_id, assignee_id from challenges
-              where number::text = any($1::text[]) and trashed_at is null`,
+          await pool.query<{ id: string; number: string; title: string; status: string; visibility: ChallengeVisibility; namespace_id: string; author_ids: string[]; assignee_id: string | null }>(
+            `select c.id, c.number::text, c.title, c.status, c.visibility, c.namespace_id, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id
+               from challenges c
+              where c.number::text = any($1::text[]) and c.trashed_at is null`,
             [numbers],
           )
         ).rows
@@ -136,7 +140,7 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
     for (const d of p.duplicates) {
       const c = dupRows.find((x) => x.number === String(d.number));
       if (!c) continue; // deleted or trashed since
-      if (!canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorId: c.author_id, assigneeId: c.assignee_id, trashed: false })) continue;
+      if (!canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorIds: c.author_ids, assigneeId: c.assignee_id, trashed: false })) continue;
       if (c.status === "withdrawn") continue;
       duplicates.push({ number: `CH-${c.number}`, title: c.title, reason: d.reason });
     }
@@ -180,14 +184,15 @@ export async function rerunTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer,
 export type TriageQueueNote = "ready" | "pending" | "failed" | null;
 
 /** The §14.1 queue indicator for many challenges at once (admins only — the queue is theirs).
- *  Null on the reader's own challenges: an author never learns a note exists. */
+ *  Null on the reader's own challenges — any they are a member of the team of (§39.12): an author
+ *  never learns a note exists. */
 export async function triageQueueNotes(pool: Pool, ai: AiClient, viewerUserId: string, challengeNumbers: string[]): Promise<Map<string, TriageQueueNote>> {
   const out = new Map<string, TriageQueueNote>();
   if (challengeNumbers.length === 0) return out;
   const isEffective = await effective(pool, ai);
   const restrictedOk = await readAiSwitch(pool, AI_SETTING_KEYS.restrictedContent);
-  const { rows } = await pool.query<{ number: string; status: string; visibility: string; author_id: string; current: boolean | null; result_status: string | null; has_payload: boolean }>(
-    `select c.number::text, c.status, c.visibility, c.author_id,
+  const { rows } = await pool.query<{ number: string; status: string; visibility: string; author_ids: string[]; current: boolean | null; result_status: string | null; has_payload: boolean }>(
+    `select c.number::text, c.status, c.visibility, ${challengeAuthorIdsSql("c")} as author_ids,
             (r.input_hash = ${TRIAGE_INPUT_HASH_SQL}) as current, r.status as result_status, (r.payload is not null) as has_payload
        from challenges c
        join impact_areas ia on ia.id = c.impact_area_id
@@ -196,7 +201,7 @@ export async function triageQueueNotes(pool: Pool, ai: AiClient, viewerUserId: s
     [TRIAGE_FEATURE, challengeNumbers.map((n) => n.replace(/^CH-/, ""))],
   );
   for (const r of rows) {
-    if (r.author_id === viewerUserId) {
+    if (r.author_ids.includes(viewerUserId)) {
       out.set(`CH-${r.number}`, null);
       continue;
     }

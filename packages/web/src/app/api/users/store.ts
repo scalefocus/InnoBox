@@ -46,7 +46,8 @@ function canSeeChallengeCondition(audience: ChallengeVisibilityInput, push: (v: 
   const namespace = push(audience.namespaceId);
 
   if (stateRule) {
-    return `(u.id = ${push(audience.authorId)} or ${grant(`(rm.role = 'namespace_admin' and rm.namespace_id = ${namespace})`)}${bootstrap})`;
+    // §39.6: every member of the team sees it; a public-form challenge (§24.6) has none.
+    return `(u.id = any(${push([...audience.authorIds])}::uuid[]) or ${grant(`(rm.role = 'namespace_admin' and rm.namespace_id = ${namespace})`)}${bootstrap})`;
   }
   // Namespace-visible: members of the namespace — and every active user is an implicit member
   // of the built-in global namespace (§4.1).
@@ -54,18 +55,70 @@ function canSeeChallengeCondition(audience: ChallengeVisibilityInput, push: (v: 
            or ${grant(`rm.namespace_id = ${namespace}`)}${bootstrap})`;
 }
 
-/** The directory search. With `audience`, only users who can see that challenge (§7.3). The query
- *  is a literal substring (§2.4): `%`, `_` and `\` match themselves, so `q=%` matches nobody. */
-export async function searchActiveUsers(pool: Pool, query: string, audience?: ChallengeVisibilityInput): Promise<UserSearchResult[]> {
+/** The roles join the co-author conditions share: user `u` holds a grant matching `namespaceCondition`,
+ *  or is a platform admin, or is in the bootstrap admin group (invariant 1). */
+function grantCondition(namespaceCondition: string, push: (v: unknown) => string): string {
+  const bootstrapGroup = process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
+  const bootstrap = bootstrapGroup
+    ? ` or exists (select 1 from group_members gm join groups g on g.id = gm.group_id
+                    where gm.user_id = u.id and g.external_id = ${push(bootstrapGroup)})`
+    : "";
+  return `(exists (select 1 from group_members gm
+                     join groups g on g.id = gm.group_id
+                     join role_mappings rm on rm.group_external_id = g.external_id
+                    where gm.user_id = u.id and (rm.role = 'platform_admin' or ${namespaceCondition}))${bootstrap})`;
+}
+
+/**
+ * §39.2: the SQL twin of `canJoinChallengeTeam` (`full: false`) and of `canSeeChallenge` (`full: true`,
+ * the solution form and a solution's team: the people who can see its parent) for every candidate at
+ * once. Unlike the §7.3 assignee condition it never relaxes for a `people` challenge — a member never
+ * widens visibility. Pinned to the JS predicates by store.dbtest.ts.
+ */
+function canJoinCondition(challenge: ChallengeVisibilityInput, full: boolean, push: (v: unknown) => string): string {
+  const namespace = () => push(challenge.namespaceId);
+  let rule: string;
+  if (challenge.visibility === "org") rule = "true";
+  else if (challenge.visibility === "namespace") {
+    const ns = namespace();
+    rule = `(${ns} = (select id from namespaces where slug = 'global') or ${grantCondition(`rm.namespace_id = ${ns}`, push)})`;
+  } else {
+    const ns = namespace();
+    rule = `(${grantCondition(`(rm.role in ('namespace_admin', 'committee') and rm.namespace_id = ${ns})`, push)}
+             or u.id = ${push(challenge.assigneeId)}::uuid
+             or exists (select 1 from challenge_access cax where cax.challenge_id = ${push(challenge.id)} and cax.user_id = u.id))`;
+  }
+  if (!full || (challenge.status !== "awaiting_triage" && challenge.status !== "withdrawn")) return rule;
+  return `(u.id = any(${push([...challenge.authorIds])}::uuid[]) or ${grantCondition(`(rm.role = 'namespace_admin' and rm.namespace_id = ${namespace()})`, push)})`;
+}
+
+/** Who a co-author picker searches (§39.2): the people who can join this challenge's team, or —
+ *  `full` — who can see this challenge under the whole §4.3 predicate (a solution's team). `exclude`
+ *  are the item's current members and everyone who left it (§39.4); the caller is always left out. */
+export interface CoAuthorAudience {
+  challenge: ChallengeVisibilityInput;
+  full: boolean;
+  exclude: readonly string[];
+  callerId: string;
+}
+
+/** The directory search. With `audience`, only users who can see that challenge (§7.3); with
+ *  `coAuthors`, only the people who can be added to that team (§39.2). The query is a literal
+ *  substring (§2.4): `%`, `_` and `\` match themselves, so `q=%` matches nobody. */
+export async function searchActiveUsers(pool: Pool, query: string, audience?: ChallengeVisibilityInput, coAuthors?: CoAuthorAudience): Promise<UserSearchResult[]> {
   const params: unknown[] = [`%${escapeLike(query)}%`];
   const push = (v: unknown) => {
     params.push(v);
     return `$${params.length}`;
   };
-  const visible = audience ? canSeeChallengeCondition(audience, push) : "true";
+  const conditions = [audience ? canSeeChallengeCondition(audience, push) : "true"];
+  if (coAuthors) {
+    conditions.push(canJoinCondition(coAuthors.challenge, coAuthors.full, push));
+    conditions.push(`u.scrubbed_at is null`, `u.id <> all(${push([coAuthors.callerId, ...coAuthors.exclude])}::uuid[])`);
+  }
   const { rows } = await pool.query<{ id: string; display_name: string; email: string | null }>(
     `select u.id, u.display_name, u.email from users u
-      where u.active = true and (u.display_name ilike $1 or u.email ilike $1) and ${visible}
+      where u.active = true and (u.display_name ilike $1 or u.email ilike $1) and ${conditions.join(" and ")}
       order by u.display_name limit ${RESULT_LIMIT}`,
     params,
   );

@@ -22,6 +22,13 @@
 // live org-visible test, windowed and tie-broken by the award's occurred_at, excluding users who
 // hide their gamification. The ranked boards are cached briefly per (metric, window) — the same
 // results the §23.5 leader badges are derived from.
+//
+// §39.9 co-authors: every metric but points counts a co-authored item once for EACH CURRENT member
+// of its team (membership is read live, so someone who left no longer counts it — their points
+// stay). A member's contribution time is the later of the event's time and their `added_at`: a late
+// joiner's submitted / proposed counts from the join, and their likes received only count likes
+// given after it. A like by a member of the item's team counts for nobody, as for the points.
+// Solutions implemented keeps its `status_changed_at`, which always follows the join.
 import type { Pool } from "pg";
 import type { LeaderboardMetric, LeaderboardWindow } from "@innobox/shared";
 
@@ -61,31 +68,34 @@ export async function getLeaderboard(
   switch (metric) {
     case "solutions_implemented":
       sql = `
-        select s.author_id as user_id, count(*)::int as cnt, min(s.status_changed_at) as first_at
+        select sa.user_id, count(*)::int as cnt, min(s.status_changed_at) as first_at
           from solutions s
+          join solution_authors sa on sa.solution_id = s.id
           join challenges c on c.id = s.challenge_id
          where s.status = 'implemented' and s.is_anonymous = false
            and ${CHALLENGE_ORG_VISIBLE}
            and ($1::timestamptz is null or s.status_changed_at >= $1)
-         group by s.author_id`;
+         group by sa.user_id`;
       break;
     case "challenges_submitted":
       sql = `
-        select c.author_id as user_id, count(*)::int as cnt, min(c.created_at) as first_at
+        select ca.user_id, count(*)::int as cnt, min(greatest(c.created_at, ca.added_at)) as first_at
           from challenges c
-         where c.is_anonymous = false and c.author_id is not null and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
-           and ($1::timestamptz is null or c.created_at >= $1)
-         group by c.author_id`;
+          join challenge_authors ca on ca.challenge_id = c.id
+         where c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+           and ($1::timestamptz is null or greatest(c.created_at, ca.added_at) >= $1)
+         group by ca.user_id`;
       break;
     case "solutions_proposed":
       sql = `
-        select s.author_id as user_id, count(*)::int as cnt, min(s.created_at) as first_at
+        select sa.user_id, count(*)::int as cnt, min(greatest(s.created_at, sa.added_at)) as first_at
           from solutions s
+          join solution_authors sa on sa.solution_id = s.id
           join challenges c on c.id = s.challenge_id
          where s.is_anonymous = false and ${SOLUTION_ORG_VISIBLE} and s.status <> 'rejected'
            and ${CHALLENGE_ORG_VISIBLE}
-           and ($1::timestamptz is null or s.created_at >= $1)
-         group by s.author_id`;
+           and ($1::timestamptz is null or greatest(s.created_at, sa.added_at) >= $1)
+         group by sa.user_id`;
       break;
     case "points":
       // §23.9: rows whose item no longer exists, or is no longer org-visible, drop out of the
@@ -110,25 +120,29 @@ export async function getLeaderboard(
       break;
     case "likes_received":
       sql = `
-        select author_id as user_id, count(*)::int as cnt, min(liked_at) as first_at
+        select user_id, count(*)::int as cnt, min(liked_at) as first_at
           from (
-            select c.author_id, l.created_at as liked_at
+            select ca.user_id, l.created_at as liked_at
               from likes l
               join challenges c on c.id = l.parent_id
+              join challenge_authors ca on ca.challenge_id = c.id and l.created_at >= ca.added_at
              where l.parent_type = 'challenge'
-               and c.is_anonymous = false and c.author_id is not null and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+               and c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+               and not exists (select 1 from challenge_authors lm where lm.challenge_id = c.id and lm.user_id = l.user_id)
                and ($1::timestamptz is null or l.created_at >= $1)
             union all
-            select s.author_id, l.created_at as liked_at
+            select sa.user_id, l.created_at as liked_at
               from likes l
               join solutions s on s.id = l.parent_id
+              join solution_authors sa on sa.solution_id = s.id and l.created_at >= sa.added_at
               join challenges c on c.id = s.challenge_id
              where l.parent_type = 'solution'
                and s.is_anonymous = false and ${SOLUTION_ORG_VISIBLE} and s.status <> 'rejected'
                and ${CHALLENGE_ORG_VISIBLE}
+               and not exists (select 1 from solution_authors lm where lm.solution_id = s.id and lm.user_id = l.user_id)
                and ($1::timestamptz is null or l.created_at >= $1)
           ) contributions
-         group by author_id`;
+         group by user_id`;
       break;
   }
 

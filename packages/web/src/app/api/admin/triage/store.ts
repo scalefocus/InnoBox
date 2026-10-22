@@ -8,16 +8,33 @@
 // same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
 // through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
-import { canAssignAtStatus, escapeLike, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type TopicRef, type ViaAgent } from "@innobox/shared";
+import {
+  canAssignAtStatus,
+  challengeTeamJsonSql,
+  escapeLike,
+  formatChallengeNumber,
+  formatSolutionNumber,
+  maskAuthor,
+  maskTeam,
+  solutionTeamJsonSql,
+  viaAgentOf,
+  type ChallengeStatus,
+  type MaskedAuthor,
+  type RoleSet,
+  type TeamMemberRow,
+  type TopicRef,
+  type ViaAgent,
+} from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
 import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged, notifyTopicFollowers } from "../../../../lib/notify-events";
-import { setChallengeAssigneeLean, setChallengeStatusLean, type Viewer } from "../../challenges/store";
+import { setChallengeAssigneeLean, setChallengeStatusLean, teamNameMatchSql, type Viewer } from "../../challenges/store";
 import { isEntityNumber } from "../../challenges/validation";
 
 export interface TriageRow {
   number: string;
   title: string;
+  /** The first member of the team (§39.7), masked — the `author*` fields below describe them. */
   authorDisplayName: string;
   authorAnonymous: boolean;
   /** Anonymity-safe (§9/§13.6): null when the author is anonymous — never the real id. */
@@ -28,6 +45,9 @@ export interface TriageRow {
   authorScrubbed?: boolean;
   /** §24.6: accepted from the public form — "External submission" with the neutral bubble. */
   authorExternal?: true;
+  /** §39.7: every member in team order, masked — the compact form's "+N" and stacked bubbles, and
+   *  the CSV's author cell. */
+  authors: MaskedAuthor[];
   status: ChallengeStatus;
   impactAreaName: string;
   /** §34.6: the challenge's topics, alphabetical — retired ones included (`active: false`). */
@@ -91,8 +111,8 @@ function buildTriageQuery(viewer: Viewer, filters: TriageFilters): { whereClause
   if (filters.authorName) {
     // Anonymity-safety (mirrors challenges/store.ts): the filter must never distinguish
     // "no match" from "hidden because anonymous", so anonymous rows are excluded outright.
-    // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves.
-    conditions.push(`c.is_anonymous = false and u.display_name ILIKE ${push(`%${escapeLike(filters.authorName)}%`)}`);
+    // §2.4: the name is a literal substring — `%`, `_` and `\` match themselves. §39.12: any member.
+    conditions.push(`c.is_anonymous = false and ${teamNameMatchSql("challenge", push(`%${escapeLike(filters.authorName)}%`))}`);
   }
   if (filters.assigneeId === "unassigned") {
     conditions.push(`c.assignee_id is null`);
@@ -117,6 +137,7 @@ interface TriageQueryRow {
   author_scrubbed: boolean | null;
   external_company: string | null;
   is_anonymous: boolean;
+  team: TeamMemberRow[];
   status: ChallengeStatus;
   impact_area_name: string;
   topics: TopicRef[];
@@ -130,19 +151,9 @@ interface TriageQueryRow {
   hype_points: number;
 }
 
-function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
-  // The one projection (§9 masking, §24.6 external label) every author surface uses.
-  const author = maskAuthor({
-    isAnonymous: row.is_anonymous,
-    authorId: row.author_id,
-    authorDisplayName: row.author_display_name,
-    authorActive: row.author_active,
-    authorScrubbed: row.author_scrubbed,
-    externalCompany: row.external_company,
-  });
+/** The `author*` fields of a triage row — the first member of the team, masked (§9, §39.7). */
+function authorFields(author: MaskedAuthor) {
   return {
-    number: formatChallengeNumber(row.number),
-    title: row.title,
     authorDisplayName: author.displayName,
     authorAnonymous: author.anonymous,
     // Anonymity-safe: never expose the real author id — nor their account state — for an
@@ -150,6 +161,27 @@ function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
     authorId: author.userId,
     ...(author.anonymous || author.external ? {} : { authorActive: author.active, authorScrubbed: author.scrubbed }),
     ...(author.external ? { authorExternal: true as const } : {}),
+  };
+}
+
+function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
+  // The one projection (§9 masking, §24.6 external label, §39.7 team) every author surface uses.
+  const authors = maskTeam(
+    maskAuthor({
+      isAnonymous: row.is_anonymous,
+      authorId: row.author_id,
+      authorDisplayName: row.author_display_name,
+      authorActive: row.author_active,
+      authorScrubbed: row.author_scrubbed,
+      externalCompany: row.external_company,
+    }),
+    row.team ?? [],
+  );
+  return {
+    number: formatChallengeNumber(row.number),
+    title: row.title,
+    ...authorFields(authors[0]!),
+    authors,
     status: row.status,
     impactAreaName: row.impact_area_name,
     topics: row.topics ?? [],
@@ -166,7 +198,7 @@ function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
 
 const TRIAGE_SELECT = `
   select c.number::text, c.title, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
-         ps.company as external_company, c.is_anonymous, c.status,
+         ps.company as external_company, c.is_anonymous, ${challengeTeamJsonSql("c")} as team, c.status,
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
          au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
          c.created_at, c.mcp_client_name,
@@ -230,7 +262,8 @@ export async function listTriageQueue(
 
 export interface BulkActionOutcome {
   number: string;
-  status: "ok" | "forbidden" | "not_found" | "invalid" | "terminal_status" | "unknown_user" | "assignee_cannot_see" | "external_no_author";
+  /** `own_item` cannot occur for an admin (they free-set, §39.5); it keeps the union closed. */
+  status: "ok" | "forbidden" | "own_item" | "not_found" | "invalid" | "terminal_status" | "unknown_user" | "assignee_cannot_see" | "external_no_author";
 }
 
 /** Bulk actions are independent per-item transactions (each individually audited) — running
@@ -393,6 +426,7 @@ export interface TriageSolutionRow {
   number: string;
   challengeNumber: string;
   challengeTitle: string;
+  /** The first member of the solution's team (§39.7), masked. */
   authorDisplayName: string;
   authorAnonymous: boolean;
   /** Anonymity-safe (§9/§13.6): null when the solution author is anonymous. */
@@ -401,6 +435,8 @@ export interface TriageSolutionRow {
   authorActive?: boolean;
   /** §13.6 "Deleted User" bubble: the author is GDPR-scrubbed. Absent when anonymous. */
   authorScrubbed?: boolean;
+  /** §39.7: every member in team order, masked. */
+  authors: MaskedAuthor[];
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
@@ -419,6 +455,7 @@ interface TriageSolutionQueryRow {
   author_active: boolean;
   author_scrubbed: boolean;
   is_anonymous: boolean;
+  team: TeamMemberRow[];
   impact_area_name: string;
   namespace_slug: string;
   created_at: Date;
@@ -427,14 +464,23 @@ interface TriageSolutionQueryRow {
 }
 
 function toTriageSolutionRow(row: TriageSolutionQueryRow, withHype: boolean): TriageSolutionRow {
+  const authors = maskTeam(
+    maskAuthor({
+      isAnonymous: row.is_anonymous,
+      authorId: row.author_id,
+      authorDisplayName: row.author_display_name,
+      authorActive: row.author_active,
+      authorScrubbed: row.author_scrubbed,
+    }),
+    row.team ?? [],
+  );
+  const { authorExternal: _external, ...author } = authorFields(authors[0]!);
   return {
     number: formatSolutionNumber(row.number),
     challengeNumber: formatChallengeNumber(row.challenge_number),
     challengeTitle: row.challenge_title,
-    authorDisplayName: row.is_anonymous ? "Anonymous" : row.author_display_name,
-    authorAnonymous: row.is_anonymous,
-    authorId: row.is_anonymous ? null : row.author_id,
-    ...(row.is_anonymous ? {} : { authorActive: row.author_active, authorScrubbed: row.author_scrubbed }),
+    ...author,
+    authors,
     impactAreaName: row.impact_area_name,
     namespaceSlug: row.namespace_slug,
     createdAt: row.created_at.toISOString(),
@@ -474,6 +520,7 @@ export async function listTriageSolutions(
     `select *, count(*) over()::text as total_count from (
        select s.number::text as number, c.number::text as challenge_number, c.title as challenge_title,
               s.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, s.is_anonymous,
+              ${solutionTeamJsonSql("s")} as team,
               ia.name as impact_area_name, ns.slug as namespace_slug, s.created_at, s.mcp_client_name,
               (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'solution' and h.parent_id = s.id) as hype_points
          from solutions s

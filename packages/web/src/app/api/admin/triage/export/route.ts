@@ -1,6 +1,6 @@
 // GET /api/admin/triage/export (INNOBOX_SPEC.md §14.1): CSV export of the current filtered
 // triage view — anonymous authors masked, audited (who, filter, row count).
-import { toCsvRow } from "@innobox/shared";
+import { teamCsvCell, toCsvRow } from "@innobox/shared";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, exportTriageCsv } from "../store";
@@ -31,7 +31,8 @@ async function handleGET(req: Request): Promise<Response> {
       toCsvRow([
         r.number,
         r.title,
-        r.authorDisplayName,
+        // §39.7: every member in order, joined by "; " — masked per §9 (the neutralization still applies).
+        teamCsvCell(r.authors),
         r.status,
         r.impactAreaName,
         // §34.6: the topic names, alphabetical, joined by "; " (the neutralization still applies).

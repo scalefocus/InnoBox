@@ -14,6 +14,7 @@ import {
   CHALLENGE_TERMINAL_STATUSES,
   assignmentsTransferredMessage,
   canSeeChallenge,
+  challengeAuthorIdsSql,
   formatChallengeNumber,
   type ChallengeStatus,
   type ChallengeVisibility,
@@ -70,13 +71,13 @@ export async function handOverOpenAssignments(
     namespace_id: string;
     visibility: ChallengeVisibility;
     status: ChallengeStatus;
-    author_id: string;
+    author_ids: string[];
     assignee_id: string;
   }>(
-    `select id, number::text as number, title, namespace_id, visibility, status, author_id, assignee_id
-       from challenges
-      where assignee_id = $1 and status::text <> all($2::text[])
-      order by challenges.number
+    `select c.id, c.number::text as number, c.title, c.namespace_id, c.visibility, c.status, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id
+       from challenges c
+      where c.assignee_id = $1 and c.status::text <> all($2::text[])
+      order by c.number
         for update`,
     [erasedUserId, [...CHALLENGE_TERMINAL_STATUSES]],
   );
@@ -92,7 +93,7 @@ export async function handOverOpenAssignments(
       namespaceId: row.namespace_id,
       visibility: row.visibility,
       status: row.status,
-      authorId: row.author_id,
+      authorIds: row.author_ids,
       // The erased user is the assignee here: the question is whether the successor sees it as
       // someone else would — on a `people` list, or as its namespace's admin or committee.
       assigneeId: row.assignee_id,

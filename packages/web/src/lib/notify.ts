@@ -375,15 +375,16 @@ export interface TopicNotice {
   challenge: { id: string; number: string; title: string; namespaceSlug: string; /** Masked per §9. */ author: string };
   /** Each candidate follower → the names of the relevant topics they follow. */
   followers: ReadonlyMap<string, readonly string[]>;
-  /** The challenge's author — never a recipient: event 3 already told them it is valid. */
-  authorId: string | null;
+  /** The challenge's authors — every member of its team (§39.12) — never recipients: event 3 already
+   *  told them it is valid. */
+  authorIds: readonly string[];
   via: Exclude<TopicNoticeVia, "shared">;
   /** "widened" only: the visibility before the change — whoever could already see it is skipped. */
   previousVisibility?: ChallengeVisibility;
 }
 
 /**
- * Event 18 delivery. Of the candidate followers, the actor and the author are dropped, then the
+ * Event 18 delivery. Of the candidate followers, the actor and the authors are dropped, then the
  * deactivated and erased (§12.1), then everyone who cannot see the challenge now (invariant 2) —
  * and, for a widening, everyone who could see it before. The survivors' `topic_notices` markers
  * are written in the same transaction as their inbox and outbox rows, and only a person whose
@@ -392,7 +393,7 @@ export interface TopicNotice {
  * were told.
  */
 export async function dispatchTopicNotices(ctx: NotifyContext, notice: TopicNotice): Promise<number> {
-  const candidates = finalizeRecipients([...notice.followers.keys()], ctx.actorId).filter((id) => id !== notice.authorId);
+  const candidates = finalizeRecipients([...notice.followers.keys()], ctx.actorId).filter((id) => !notice.authorIds.includes(id));
   const active = await activeRecipients(ctx.pool, candidates);
   if (active.length === 0) return 0;
   const parent = await loadParentVisibility(ctx.pool, "challenge", notice.challenge.id);
@@ -475,13 +476,14 @@ const HYPED_MESSAGE_SQL = (n: string, p: string) => `format('%s people hyped you
 /**
  * Event 16 delivery: one UNREAD inbox row per recipient per item, refreshed in place by every
  * further hype while unread (the 0050 partial unique index), with ONE outbox row — the e-mail
- * goes out with the first hype and is not re-sent until the row is read (§26.6). The recipient is
- * the item's author only; the usual drops apply (the actor, a deactivated or erased author, an
- * item they can no longer see). No per-event preference: the e-mail switch and digest choice are
- * the controls, and the outbox row is held for a recipient on a digest.
+ * goes out with the first hype and is not re-sent until the row is read (§26.6). The recipients are
+ * the item's authors only — every member of its team (§39.8); the usual drops apply (the actor, a
+ * deactivated or erased author, an item they can no longer see). No per-event preference: the
+ * e-mail switch and digest choice are the controls, and the outbox row is held for a recipient on a
+ * digest.
  */
-export async function dispatchCoalescedHype(ctx: NotifyContext, authorId: string | null, hype: HypeNotification): Promise<void> {
-  const recipients = await finalRecipients(ctx, { parentType: hype.parentType, parentId: hype.parentId }, [authorId]);
+export async function dispatchCoalescedHype(ctx: NotifyContext, authorIds: readonly string[], hype: HypeNotification): Promise<void> {
+  const recipients = await finalRecipients(ctx, { parentType: hype.parentType, parentId: hype.parentId }, authorIds);
   const hold: DigestHold = {
     event: 16,
     facts: {
@@ -527,6 +529,40 @@ export async function dispatchCoalescedHype(ctx: NotifyContext, authorId: string
       await writeOutbox(ctx.pool, userId, "hyped", payload, rows[0].id, slots.get(userId), hold);
     }
   }
+}
+
+/**
+ * §12.1 event 21 (§39.8): the one person another member added to or removed from an item's team. An
+ * add passes the visibility check by construction (§39.2) and a removal is delivered directly — the
+ * person could see the item a moment ago — so no visibility drop; the actor, a deactivated and an
+ * erased recipient are dropped (§12.1). Immediate and never digested. The daily e-mail cap: only the
+ * first event-21 row about this item for this person since UTC midnight gets an outbox row; later
+ * ones that day are in-app only, like event 13. Returns whether an e-mail was queued.
+ */
+export async function dispatchTeamChange(ctx: NotifyContext, userId: string, payload: NotificationPayload, target: NotificationTarget): Promise<boolean> {
+  if (userId === ctx.actorId) return false;
+  if ((await activeRecipients(ctx.pool, [userId])).length === 0) return false;
+  return inTransaction(ctx.pool, async (client) => {
+    // One recipient at a time per item: two changes racing for "the first today" serialize here.
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`coauthor_changed:${userId}:${target.parentId}`]);
+    const itemColumn = target.parentType === "challenge" ? "challenge_id" : "solution_id";
+    const solutionClause = target.parentType === "challenge" ? " and solution_id is null" : "";
+    const { rows: earlier } = await client.query(
+      `select 1 from notifications
+        where user_id = $1 and type = 'coauthor_changed' and ${itemColumn} = $2::uuid${solutionClause}
+          and created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
+        limit 1`,
+      [userId, target.parentId],
+    );
+    const full = withTarget(payload, target);
+    const { rows } = await client.query<{ id: string }>(`insert into notifications (user_id, type, payload) values ($1, 'coauthor_changed', $2) returning id`, [
+      userId,
+      JSON.stringify(full),
+    ]);
+    if (earlier.length > 0) return false;
+    await writeOutbox(client, userId, "coauthor_changed", full, rows[0]!.id, undefined, undefined);
+    return true;
+  });
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by

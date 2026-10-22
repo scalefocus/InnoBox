@@ -179,15 +179,17 @@ export interface ChallengeVisibilityInput {
   status: ChallengeStatus;
   /** §4.3 `people`: the challenge's assignee may read it. */
   assigneeId: string | null;
-  /** Null for a challenge accepted from the public form (§24.6) — nobody is its author. */
-  authorId: string | null;
+  /** §39.2: the members of the challenge's co-author team (`challenge_authors`) — the creator alone
+   *  for a solo item, nobody for a challenge accepted from the public form (§24.6). Every state rule
+   *  that names "the author" names each of them (§39.6). */
+  authorIds: readonly string[];
   /** §10.4: the challenge is in the trash (`trashed_at` is set). Required, so no read path can
    *  forget to say. */
   trashed: boolean;
 }
 
-/** §4.3: awaiting_triage/withdrawn are visible only to their author and the
- *  namespace's admins (platform admins included, via isNamespaceAdmin); otherwise
+/** §4.3: awaiting_triage/withdrawn are visible only to their authors (every member of the team,
+ *  §39.6) and the namespace's admins (platform admins included, via isNamespaceAdmin); otherwise
  *  org-visibility is open to everyone, namespace-visibility is member-only, and
  *  people-visibility is open to the access list, the namespace's admins and committee, and the
  *  assignee — namespace membership alone grants nothing. A trashed
@@ -197,17 +199,21 @@ export interface ChallengeVisibilityInput {
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
   if (viewer.orgVisibleOnly && isRestrictedVisibility(challenge.visibility)) return false;
   if (challenge.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
-  const isAuthor = viewer.userId === challenge.authorId;
-  const isNamespaceAdminHere = viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   if (challenge.status === "awaiting_triage" || challenge.status === "withdrawn") {
-    return isAuthor || isNamespaceAdminHere;
+    return challenge.authorIds.includes(viewer.userId) || viewer.roles.isNamespaceAdmin(challenge.namespaceId);
   }
+  return passesVisibilityRule(viewer, challenge);
+}
+
+/** The §4.3 visibility rule alone — org, namespace or people — without the state rule that hides an
+ *  `awaiting_triage` or `withdrawn` challenge. */
+function passesVisibilityRule(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
   if (challenge.visibility === "namespace") {
     return viewer.roles.isMemberOf(challenge.namespaceId);
   }
   if (challenge.visibility === "people") {
     return (
-      isNamespaceAdminHere ||
+      viewer.roles.isNamespaceAdmin(challenge.namespaceId) ||
       viewer.roles.isCommittee(challenge.namespaceId) ||
       (challenge.assigneeId !== null && viewer.userId === challenge.assigneeId) ||
       viewer.roles.isOnAccessList(challenge.id)
@@ -216,18 +222,27 @@ export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisib
   return true;
 }
 
+/** §39.2: who may join a CHALLENGE's team — whoever could see it under §4.3, judged without the state
+ *  rule that hides an `awaiting_triage` challenge (being a member is what lets them see that). A
+ *  member never widens visibility: a `people` challenge takes only those its list already admits. */
+export function canJoinChallengeTeam(candidate: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
+  return passesVisibilityRule(candidate, challenge);
+}
+
 export interface SolutionVisibilityInput {
   status: SolutionStatus;
-  authorId: string;
+  /** §39.2: the members of the solution's co-author team (`solution_authors`). */
+  authorIds: readonly string[];
   /** §10.4: the solution itself is in the trash (its challenge's flag is the parent's gate). */
   trashed: boolean;
 }
 
 /** §4.3: a solution inherits its parent challenge's visibility gate, and while
- *  `proposed` is additionally hidden except to its author, the challenge's assignee,
- *  and the namespace's committee/admins. Callers must have already resolved
+ *  `proposed` is additionally hidden except to its authors (every member, §39.6), the challenge's
+ *  assignee, and the namespace's committee/admins. Callers must have already resolved
  *  `canSeeChallenge` for the parent — this only applies the solution-specific narrowing. A
- *  trashed solution (§10.4) is visible to platform admins only. */
+ *  trashed solution (§10.4) is visible to platform admins only. A solution's team is joined by
+ *  whoever can see its parent under the full §4.3 predicate (§39.2) — `canSeeChallenge` itself. */
 export function canSeeSolution(
   viewer: ViewerContext,
   challenge: { namespaceId: string; assigneeId: string | null },
@@ -235,7 +250,7 @@ export function canSeeSolution(
 ): boolean {
   if (solution.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
   if (solution.status !== "proposed") return true;
-  const isAuthor = viewer.userId === solution.authorId;
+  const isAuthor = solution.authorIds.includes(viewer.userId);
   const isAssignee = challenge.assigneeId !== null && viewer.userId === challenge.assigneeId;
   const isCommitteeOrAdmin =
     viewer.roles.isCommittee(challenge.namespaceId) || viewer.roles.isNamespaceAdmin(challenge.namespaceId);
@@ -323,14 +338,18 @@ export type TransitionMode = "override" | "enforced";
 
 export type TransitionDecision =
   | { allowed: true; mode: TransitionMode; changed: boolean }
-  | { allowed: false; reason: "forbidden" | "illegal_transition" };
+  /** `own_item`: a committee member refused only because they are an author of the item (§39.5). */
+  | { allowed: false; reason: "forbidden" | "illegal_transition" | "own_item" };
 
 /** Pure authorization for a status transition, shared by challenges and solutions (§7.2/§8.2,
  *  invariant 6). The caller resolves the three capability booleans and whether the requested
  *  target is a legal enforced arrow from the current status:
  *  - `isAdmin`    — namespace/platform admin: free-sets any status (`override`), unconstrained.
- *  - `isEnforcer` — committee member of the namespace, OR the challenge's assignee.
+ *  - `isEnforcer` — committee member of the namespace who is not an author of the item, OR the
+ *                   challenge's assignee (`isReviewEnforcer`, §39.5).
  *  - `isLegalArrow` — target ∈ the enforced graph's arrows out of the current status.
+ *  - `barredAsAuthor` — a committee member whom only the §39.5 bar keeps out: refused with
+ *                   `own_item` so the API can say why.
  *  A same-status request (`from === to`) is an idempotent no-op for any authorized actor. */
 export function decideTransition(input: {
   from: string;
@@ -338,8 +357,9 @@ export function decideTransition(input: {
   isAdmin: boolean;
   isEnforcer: boolean;
   isLegalArrow: boolean;
+  barredAsAuthor?: boolean;
 }): TransitionDecision {
-  if (!input.isAdmin && !input.isEnforcer) return { allowed: false, reason: "forbidden" };
+  if (!input.isAdmin && !input.isEnforcer) return { allowed: false, reason: input.barredAsAuthor ? "own_item" : "forbidden" };
   const changed = input.from !== input.to;
   if (!changed) return { allowed: true, mode: input.isAdmin ? "override" : "enforced", changed: false };
   if (input.isAdmin) return { allowed: true, mode: "override", changed: true };

@@ -26,6 +26,11 @@
 //
 // Topics (§34.3): an optional picker of up to three active topics, absent while there are none.
 // A topic change is a form edit like any other — it re-arms the duplicate check.
+//
+// Co-authors (§6.1, §39.2): up to four colleagues who could see the challenge under the chosen
+// namespace and visibility. Changing either re-checks the picks and drops anyone who no longer
+// qualifies, with a note. Co-authors and "Submit anonymously" exclude each other (§39.3): while one
+// is set the other is disabled, with the hint — nothing is cleared silently.
 import Link from "next/link";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useRouter } from "next/navigation";
@@ -39,6 +44,9 @@ import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
 import { CHALLENGE_STATUS_LABEL } from "../status";
 import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicPicker";
+import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker } from "@/components/TeamPanel";
+import type { UserResult } from "@/components/UserResultButton";
+import { readJson } from "@/lib/api-client";
 
 interface ImpactArea {
   id: string;
@@ -83,6 +91,8 @@ export default function NewChallengePage() {
   const [namespaceId, setNamespaceId] = useState("");
   const [visibility, setVisibility] = useState<"org" | "namespace">("org");
   const [isAnonymous, setIsAnonymous] = useState(false);
+  const [coAuthors, setCoAuthors] = useState<UserResult[]>([]);
+  const [coAuthorNote, setCoAuthorNote] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicTag[]>([]);
   const topicOptions = useActiveTopics();
   const [draftKey] = useState(() => crypto.randomUUID());
@@ -128,6 +138,30 @@ export default function NewChallengePage() {
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast((cur) => (cur === message ? null : cur)), 3200);
+  };
+
+  // §39.2: the picker follows the form's namespace and visibility.
+  const variantFor = (nsId: string, vis: "org" | "namespace"): string | null => {
+    const slug = namespaces.find((ns) => ns.id === nsId)?.slug;
+    return slug ? `namespace=${encodeURIComponent(slug)}&visibility=${vis}` : null;
+  };
+  const coAuthorVariant = variantFor(namespaceId, visibility);
+  // Changing either re-checks the picks: each is looked up under the new variant, and whoever is
+  // no longer offered is dropped — with a note naming them.
+  const recheckCoAuthors = async (variant: string | null) => {
+    const picked = coAuthors;
+    if (!variant || picked.length === 0) return;
+    const ok = await Promise.all(
+      picked.map(async (u) => {
+        const res = await fetch(`/api/users?q=${encodeURIComponent(u.displayName)}&${variant}`);
+        const json = await readJson(res);
+        return ((json.users as UserResult[]) ?? []).some((r) => r.id === u.id);
+      }),
+    );
+    const dropped = picked.filter((_, i) => !ok[i]);
+    if (dropped.length === 0) return;
+    setCoAuthors((cur) => cur.filter((u) => !dropped.some((d) => d.id === u.id)));
+    setCoAuthorNote(`${dropped.map((d) => d.displayName).join(", ")} can't see a challenge with this namespace and visibility, so ${dropped.length === 1 ? "was" : "were"} taken off the co-authors.`);
   };
 
   const copyPublicUrl = async () => {
@@ -182,6 +216,7 @@ export default function NewChallengePage() {
           isAnonymous,
           draftKey,
           topicIds: topics.map((t) => t.id),
+          coAuthorIds: coAuthors.map((u) => u.id),
           similarAcknowledged: similar?.map((m) => m.number) ?? [],
         }),
       });
@@ -302,7 +337,17 @@ export default function NewChallengePage() {
             <label style={labelStyle} htmlFor="namespace">
               Namespace
             </label>
-            <select id="namespace" className="field" style={{ width: "100%" }} value={namespaceId} onChange={(e) => setNamespaceId(e.target.value)} required>
+            <select
+              id="namespace"
+              className="field"
+              style={{ width: "100%" }}
+              value={namespaceId}
+              onChange={(e) => {
+                setNamespaceId(e.target.value);
+                void recheckCoAuthors(variantFor(e.target.value, visibility));
+              }}
+              required
+            >
               {namespaces.map((ns) => (
                 <option key={ns.id} value={ns.id}>
                   {ns.displayName}
@@ -319,7 +364,11 @@ export default function NewChallengePage() {
               id="visibility"
               className="field" style={{ width: "100%" }}
               value={visibility}
-              onChange={(e) => setVisibility(e.target.value as "org" | "namespace")}
+              onChange={(e) => {
+                const next = e.target.value as "org" | "namespace";
+                setVisibility(next);
+                void recheckCoAuthors(variantFor(namespaceId, next));
+              }}
             >
               <option value="org">Everyone in the organization</option>
               <option value="namespace">Only this namespace&apos;s members</option>
@@ -334,9 +383,32 @@ export default function NewChallengePage() {
             dropLabel="Your new challenge"
           />
 
+          <div>
+            <label style={labelStyle} htmlFor="coauthors">
+              Co-authors <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional)</span>
+            </label>
+            <CoAuthorPicker
+              id="coauthors"
+              value={coAuthors}
+              onChange={(next) => {
+                setCoAuthors(next);
+                setCoAuthorNote(null);
+              }}
+              variant={coAuthorVariant}
+              disabled={isAnonymous || lock.locked}
+              disabledHint={isAnonymous ? ANONYMOUS_NO_COAUTHORS_HINT : null}
+            />
+            {coAuthorNote && (
+              <div className="access-editor-hint" role="status" data-testid="coauthor-note">
+                {coAuthorNote}
+              </div>
+            )}
+          </div>
+
           <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
-            <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
+            <input type="checkbox" checked={isAnonymous} disabled={coAuthors.length > 0} onChange={(e) => setIsAnonymous(e.target.checked)} />
             Submit anonymously
+            {coAuthors.length > 0 && <span className="muted" style={{ fontSize: 12.5 }}>— {ANONYMOUS_NO_COAUTHORS_HINT}</span>}
           </label>
 
           {similar && similar.length > 0 && (

@@ -5,9 +5,14 @@
 // reveals namespace membership and admin roles, so the filtered form answers only an admin of the
 // challenge's namespace — the same gate as the assign endpoint; anyone else, and any challenge the
 // caller cannot see or that does not exist, gets no users (§2.4 existence-not-disclosed).
+//
+// The §39.2 co-author pickers offer eligible people only, with one of `coAuthorFor=<CH-n | SOL-n>`
+// (the Team panel — a member of the item), `canSee=<CH-n>` (the solution form) or
+// `namespace=<slug>&visibility=org|namespace` (the challenge form). Every variant leaves out the
+// caller; a caller who may not use the variant gets no users.
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { getAssignmentAudience } from "../challenges/store";
+import { getAssignmentAudience, getCoAuthorPickerAudience } from "../challenges/store";
 import { searchActiveUsers } from "./store";
 import { withSystemLog } from "@/lib/system-log";
 import { rateLimit } from "@/lib/rate-limit";
@@ -21,10 +26,20 @@ async function handleGET(req: Request): Promise<Response> {
   const searchParams = new URL(req.url).searchParams;
   const q = searchParams.get("q")?.trim() ?? "";
   if (q.length < 2) return Response.json({ users: [] });
+  const viewer = { userId: gate.user.id, roles: gate.user.roles };
+
+  const coAuthorFor = searchParams.get("coAuthorFor");
+  const canSee = searchParams.get("canSee");
+  const namespaceSlug = searchParams.get("namespace");
+  if (coAuthorFor !== null || canSee !== null || namespaceSlug !== null) {
+    const audience = await getCoAuthorPickerAudience(pool, viewer, { coAuthorFor, canSee, namespaceSlug, visibility: searchParams.get("visibility") });
+    if (!audience) return Response.json({ users: [] });
+    return Response.json({ users: await searchActiveUsers(pool, q, undefined, { ...audience, callerId: gate.user.id }) });
+  }
 
   const challenge = searchParams.get("challenge");
   if (challenge === null) return Response.json({ users: await searchActiveUsers(pool, q) });
-  const audience = await getAssignmentAudience(pool, { userId: gate.user.id, roles: gate.user.roles }, challenge.replace(/^CH-/i, ""));
+  const audience = await getAssignmentAudience(pool, viewer, challenge.replace(/^CH-/i, ""));
   if (!audience) return Response.json({ users: [] });
   const users = await searchActiveUsers(pool, q, audience);
   return Response.json({ users });

@@ -38,7 +38,7 @@ export const NOT_ABOUT_TRASH = `not exists (
 /**
  * §12.1 read-time visibility gate (v1.16): hide a row about a challenge — or a solution on one —
  * the viewer can no longer see. The predicate is the §4.3 SQL twin (pushChallengeVisibilityConditions:
- * platform admins see everything; awaiting_triage/withdrawn only the author and the namespace's
+ * platform admins see everything; awaiting_triage/withdrawn only the authors (the team) and the namespace's
  * admins; `people` the access list, reviewers and assignee; else org-wide or members), so the
  * bell can never disagree with the detail page. A read-time predicate only — nothing is deleted,
  * and a row comes back as it was once access returns. Rows that name no item (`challenge_id` null)

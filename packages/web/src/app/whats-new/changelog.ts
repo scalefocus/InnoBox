@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.23.0",
+    date: "2026-10-22",
+    summary:
+      "New: co-authors. Write a challenge or a solution with up to four colleagues: pick them when you submit, or add them later from the Team panel on the item. Everyone on the team can edit it and earns the full credit, and anyone can leave at any time. A save from an out-of-date copy is now refused, and committee members no longer review items they wrote.",
+  },
+  {
     version: "1.22.0",
     date: "2026-10-22",
     summary:

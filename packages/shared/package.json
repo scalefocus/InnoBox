@@ -122,6 +122,10 @@
       "types": "./dist/topics.d.ts",
       "default": "./dist/topics.js"
     },
+    "./coauthors": {
+      "types": "./dist/coauthors.d.ts",
+      "default": "./dist/coauthors.js"
+    },
     "./rum": {
       "types": "./dist/rum.d.ts",
       "default": "./dist/rum.js"

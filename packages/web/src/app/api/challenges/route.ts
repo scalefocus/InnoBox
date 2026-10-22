@@ -1,11 +1,12 @@
 // GET/POST /api/challenges (INNOBOX_SPEC.md §13.1): the gallery list and challenge
 // submission (§6.1). Auth-required (any authenticated user may submit and browse per
 // their visibility); every list is visibility-filtered and anonymity-masked server-side.
-// Submission auto-follows the author (§12.3) and notifies namespace admins (§12.1 event 1).
-import { parseTopicIds, TOPIC_SET_ERROR } from "@innobox/shared";
+// Submission auto-follows the author and every co-author (§12.3, §39.8), notifies namespace admins
+// (§12.1 event 1) and tells each co-author they were added (event 21).
+import { parseCoAuthorIds, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { logNotifyFailure, notifyChallengeSubmitted } from "@/lib/notify-events";
+import { logNotifyFailure, notifyChallengeSubmitted, notifyCoAuthorsAdded } from "@/lib/notify-events";
 import { autoFollow } from "../follows/store";
 import { parseChallengeCreateIds, parseChallengeListFilters, parseSimilarAcknowledged } from "./validation";
 import { createChallenge, listChallenges } from "./store";
@@ -47,6 +48,9 @@ async function handlePOST(req: Request): Promise<Response> {
   // §34.3: optional — absent means no topics.
   const topicIds = body.topicIds === undefined ? { ok: true as const, value: [] } : parseTopicIds(body.topicIds);
   if (!topicIds.ok) return Response.json({ error: topicIds.error }, { status: 422 });
+  // §6.1 / §39: up to four co-authors.
+  const coAuthorIds = parseCoAuthorIds(body.coAuthorIds, gate.user.id);
+  if (!coAuthorIds.ok) return Response.json({ error: coAuthorIds.error }, { status: 400 });
 
   const result = await createChallenge(
     pool,
@@ -62,18 +66,29 @@ async function handlePOST(req: Request): Promise<Response> {
       draftKey: body.draftKey,
       similarAcknowledged: parseSimilarAcknowledged(body.similarAcknowledged),
       topicIds: topicIds.value,
+      coAuthors: { ids: coAuthorIds.value, resolveRoles: resolveRolesForUser },
     },
   );
 
   switch (result.status) {
     case "ok": {
-      await autoFollow(pool, gate.user.id, "challenge", result.challenge.id);
-      await notifyChallengeSubmitted(
-        { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-        { id: result.challenge.id, number: result.challenge.number, title: result.challenge.title, namespaceId: ids.value.namespaceId },
-      ).catch(logNotifyFailure("challenge.submitted notification failed"));
+      const ctx = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
+      // §12.3 / §39.8: every member auto-follows the item.
+      for (const userId of [gate.user.id, ...coAuthorIds.value]) await autoFollow(pool, userId, "challenge", result.challenge.id);
+      await notifyChallengeSubmitted(ctx, {
+        id: result.challenge.id,
+        number: result.challenge.number,
+        title: result.challenge.title,
+        namespaceId: ids.value.namespaceId,
+      }).catch(logNotifyFailure("challenge.submitted notification failed"));
+      // §12.1 event 21: each co-author is told, with the creator as the actor.
+      await notifyCoAuthorsAdded(ctx, { parentType: "challenge", parentId: result.challenge.id }, coAuthorIds.value).catch(
+        logNotifyFailure("co-author notification failed"),
+      );
       return Response.json({ challenge: result.challenge }, { status: 201 });
     }
+    case "ineligible_coauthor":
+      return Response.json({ error: TEAM_MESSAGES.ineligible }, { status: 422 });
     case "unknown_namespace":
       return Response.json({ error: "namespace not found" }, { status: 400 });
     case "namespace_archived":
