@@ -57,6 +57,12 @@ test("parseGalleryFilters: fails closed on a malformed filter", () => {
   assert.equal(parseGalleryFilters(new URLSearchParams({ status: "bogus" })).ok, false);
   assert.equal(parseGalleryFilters(new URLSearchParams({ impactAreaId: "nope" })).ok, false);
   assert.equal(parseGalleryFilters(new URLSearchParams({ namespaceId: "nope" })).ok, false);
+  assert.equal(parseGalleryFilters(new URLSearchParams({ topic: "nope" })).ok, false);
+});
+
+test("parseGalleryFilters: the §34.6 topic filter is a topic id, lower-cased", () => {
+  const result = parseGalleryFilters(new URLSearchParams({ topic: AREA_ID.toUpperCase() }));
+  assert.deepEqual(result, { ok: true, value: { topicId: AREA_ID } });
 });
 
 test("parseChallengeListFilters: rejects an unknown tab rather than silently defaulting", () => {

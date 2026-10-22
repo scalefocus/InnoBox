@@ -24,11 +24,22 @@ async function handleGET(req: Request): Promise<Response> {
   }
 
   const { rows } = await exportTriageCsv(pool, admin, parsed.value);
-  const header = toCsvRow(["Number", "Title", "Author", "Status", "Impact area", "Namespace", "Assignee", "Created"]);
+  const header = toCsvRow(["Number", "Title", "Author", "Status", "Impact area", "Topics", "Namespace", "Assignee", "Created"]);
   const body = [
     header,
     ...rows.map((r) =>
-      toCsvRow([r.number, r.title, r.authorDisplayName, r.status, r.impactAreaName, r.namespaceSlug, r.assigneeDisplayName ?? "Unassigned", r.createdAt]),
+      toCsvRow([
+        r.number,
+        r.title,
+        r.authorDisplayName,
+        r.status,
+        r.impactAreaName,
+        // §34.6: the topic names, alphabetical, joined by "; " (the neutralization still applies).
+        r.topics.map((t) => t.name).join("; "),
+        r.namespaceSlug,
+        r.assigneeDisplayName ?? "Unassigned",
+        r.createdAt,
+      ]),
     ),
   ].join("\r\n");
 

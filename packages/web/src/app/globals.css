@@ -1974,3 +1974,72 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .agent-conn-row .grow,
   .mcp-client-row .grow { flex-basis: 100%; }
 }
+
+/* ── §34 Topics: /topics, profile ── */
+.topic-follow { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.topic-follow .btn { min-width: 92px; justify-content: center; }
+.topic-row .ttl { display: inline-block; color: var(--ink); }
+.topic-row .ttl:hover { color: var(--accent); }
+.topic-open { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 560px) {
+  .topic-row { flex-wrap: wrap; gap: 8px 12px; padding: 12px 14px; }
+  .topic-row .grow { flex-basis: 100%; }
+}
+
+/* ── §34 Topics: admin card + triage ── */
+/* Platform settings card: name and description side by side, then the pill, counts and actions
+   (wrapping like .impact-row); on a phone the two fields each take a full line. */
+.topic-admin-create > .field:first-child { flex: 0 1 220px; min-width: 0; }
+.topic-admin-create > .field:nth-child(2) { flex: 1 1 260px; min-width: 0; }
+.topic-admin-row > .topic-admin-description { flex: 1 1 220px; min-width: 0; }
+.topic-admin-counts { font-size: 12.5px; white-space: nowrap; }
+/* Triage queue: the topics cell stays one line, ellipsized; the tooltip carries the full list. */
+.triage-rows .triage-topics { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topic-retired { color: var(--faint); }
+@media (max-width: 720px) {
+  /* Stacked rows: the topics line shows only when there are some. */
+  .triage-rows .triage-topics:empty { display: none; }
+}
+@media (max-width: 560px) {
+  .topic-admin-create > .field:first-child,
+  .topic-admin-create > .field:nth-child(2) { flex-basis: auto; }
+  .topic-admin-row > .topic-admin-description { flex-basis: 100%; max-width: none; }
+}
+
+/* ── §34 Topics: chips, picker, gallery ── */
+/* A topic chip: the .chip look with the accent tint, so it reads as a link beside the neutral
+   impact-area chip; a retired topic is muted and dashed (history, still filters). */
+.chip.topic-chip {
+  background: var(--accent-soft); color: var(--accent-2); border-color: transparent;
+  cursor: pointer; text-decoration: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: inline-block; transition: background 0.15s, color 0.15s;
+}
+.chip.topic-chip:hover { background: color-mix(in oklab, var(--accent) 22%, var(--surface-2)); }
+.chip.topic-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip.topic-chip.is-retired { background: var(--surface-2); color: var(--faint); border: 1px dashed var(--line-strong); }
+/* The picker's retired tag (already on the challenge, removable, not re-addable). */
+.tag.topic-tag-retired { color: var(--faint); }
+.topic-options { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
+.topic-option.is-active { background: var(--accent-soft); }
+/* The filtered gallery's header: the topic, its description, Follow and the ✕ that clears it. */
+.topic-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.topic-head-text { min-width: 0; }
+.topic-head-name { margin: 2px 0 0; font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.topic-head-desc { margin: 6px 0 0; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.topic-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.topic-head-retired { font-size: 13px; }
+.topic-head-clear {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); cursor: pointer; font-size: 12px;
+}
+.topic-head-clear:hover, .topic-head-clear:focus-visible { color: var(--ink); border-color: var(--line-strong); }
+/* The detail page's Topics row, under the meta chips. */
+.ch-topics { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.ch-topics-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.ch-topics-none { font-size: 13px; }
+.ch-topics-edit { flex: 1 1 320px; min-width: 0; max-width: 520px; }
+@media (max-width: 560px) {
+  .topic-head { flex-direction: column; gap: 10px; }
+  .topic-head-actions { align-self: stretch; justify-content: space-between; }
+  .ch-topics-edit { flex-basis: 100%; }
+}

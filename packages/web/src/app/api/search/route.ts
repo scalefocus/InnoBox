@@ -1,4 +1,4 @@
-// GET /api/search?q=[&status=&impactAreaId=&namespaceId=&authorName=] (INNOBOX_SPEC.md §13.4):
+// GET /api/search?q=[&status=&impactAreaId=&topic=&namespaceId=&authorName=] (INNOBOX_SPEC.md §13.4):
 // full-text search + exact number lookup, narrowed by the §13.1 gallery filters.
 // Auth-required; results are visibility-filtered and anonymity-masked (invariants 2-3).
 import { SEARCH_QUERY_MAX } from "@innobox/shared";

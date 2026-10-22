@@ -31,6 +31,9 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     "settings.%",
     "namespace.%",
     "impact_area.%",
+    // §34.2 the topic list: created, updated, retired, reactivated, deleted. An admin's re-tag of a
+    // challenge is `challenge.topics_changed`, under Challenges by prefix.
+    "topic.%",
     "system_banner.%",
     "presence.%",
     "email.%",

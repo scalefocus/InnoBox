@@ -26,11 +26,13 @@ import {
   type ChallengeVisibility,
   type MaskedAuthor,
   type SolutionStatus,
+  type TopicRef,
 } from "@innobox/shared";
 import {
   CHALLENGE_SELECT,
   pushChallengeVisibilityConditions,
   pushSolutionVisibilityConditions,
+  pushTopicFilter,
   toListItem,
   type ChallengeListItem,
   type ChallengeRow,
@@ -44,6 +46,8 @@ export interface ChallengeSearchResult {
   author: MaskedAuthor;
   status: string;
   namespaceSlug: string;
+  /** §34.6: the challenge's topics, alphabetical. */
+  topics: TopicRef[];
 }
 
 export interface SolutionSearchResult {
@@ -74,6 +78,8 @@ type Push = (v: unknown) => string;
 function pushChallengeFilterConditions(filters: GalleryFilters, push: Push, conditions: string[]): void {
   if (filters.status) conditions.push(`c.status = ${push(filters.status)}`);
   if (filters.impactAreaId) conditions.push(`c.impact_area_id = ${push(filters.impactAreaId)}`);
+  // §34.6: a solution hit is filtered by its parent challenge's topics, as by its impact area.
+  pushTopicFilter(filters, push, conditions);
   if (filters.namespaceId) conditions.push(`c.namespace_id = ${push(filters.namespaceId)}`);
 }
 
@@ -101,6 +107,7 @@ interface ChallengeCandidate {
   visibility: ChallengeVisibility;
   assignee_id: string | null;
   namespace_slug: string;
+  topics: TopicRef[];
 }
 
 interface SolutionCandidate {
@@ -147,7 +154,9 @@ async function challengeCandidates(pool: Pool, viewer: Viewer, match: Match, fil
   const { rows } = await pool.query<ChallengeCandidate>(
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
             u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
-            c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug
+            c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug,
+            (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
+               from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics
        from challenges c
        left join users u on u.id = c.author_id
        left join public_submissions ps on ps.id = c.public_submission_id
@@ -225,6 +234,7 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
       }),
       status: row.status,
       namespaceSlug: row.namespace_slug,
+      topics: row.topics ?? [],
     }));
 }
 

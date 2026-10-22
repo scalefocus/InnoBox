@@ -6,6 +6,7 @@
 // Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open.
 // While gamification is on (§23.6): the Achievements section, the level ring on the bubble, and the
 // two gamification switches (the Achievements notification and "Show my level and badges to others").
+// The Topics section (§34.6): a switch per active topic to follow or unfollow it.
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
@@ -50,6 +51,14 @@ interface OwnProfile {
   gamificationPreferences: GamificationPreferences | null;
 }
 
+/** §34.6: an active topic as GET /api/topics lists it. */
+interface TopicItem {
+  id: string;
+  name: string;
+  description: string | null;
+  following: boolean;
+}
+
 const GAMIFICATION_SWITCHES: { key: keyof GamificationPreferences; title: string; sub: string; on: string; off: string }[] = [
   { key: "notifyAchievements", title: "Achievements", sub: "A notification and a short celebration when you earn a badge or reach a new level.", on: "🏅", off: "🔕" },
   {
@@ -72,6 +81,9 @@ export default function ProfilePage() {
   const [surveyOpen, setSurveyOpen] = useState(false);
   // The on-demand survey: null while the platform switch is off, else the cooldown's end.
   const [selfSurvey, setSelfSurvey] = useState<{ nextAt: string | null } | null>(null);
+  // §34.6: the active topics with the viewer's follow state; null until loaded.
+  const [topics, setTopics] = useState<TopicItem[] | null>(null);
+  const [topicErrors, setTopicErrors] = useState<Record<string, string | undefined>>({});
 
   const refresh = () => {
     fetch("/api/profile", { headers: { accept: "application/json" } })
@@ -82,6 +94,13 @@ export default function ProfilePage() {
 
   useEffect(() => {
     refresh();
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/topics", { headers: { accept: "application/json" } })
+      .then((res) => res.json())
+      .then((json) => setTopics(Array.isArray(json.topics) ? json.topics : []))
+      .catch(() => setTopics([]));
   }, []);
 
   useEffect(() => {
@@ -209,6 +228,29 @@ export default function ProfilePage() {
         current?.gamificationPreferences ? { ...current, gamificationPreferences: { ...current.gamificationPreferences, [key]: previous } } : current,
       );
       setPrefErrors((cur) => ({ ...cur, [key]: err instanceof Error ? err.message : "Could not update preference" }));
+    }
+  };
+
+  // §34.4: follow or unfollow a topic — the same optimistic flip + slide-back-with-reason.
+  const toggleTopic = async (id: string) => {
+    const topic = topics?.find((t) => t.id === id);
+    if (!topic) return;
+    const previous = topic.following;
+    const next = !previous;
+    const setFollowing = (value: boolean) => setTopics((cur) => cur?.map((t) => (t.id === id ? { ...t, following: value } : t)) ?? cur);
+    setTopicErrors((cur) => ({ ...cur, [id]: undefined }));
+    setFollowing(next);
+    try {
+      const res = await fetch(`/api/topics/${id}/follow`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ following: next }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not update the topic");
+    } catch (err) {
+      setFollowing(previous);
+      setTopicErrors((cur) => ({ ...cur, [id]: err instanceof Error ? err.message : "Could not update the topic" }));
     }
   };
 
@@ -351,6 +393,54 @@ export default function ProfilePage() {
               </div>
             );
           })}
+      </div>
+
+      {/* §34.6: one switch per active topic — following one tells you when a challenge in it opens. */}
+      <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="profile-topics">
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 16, marginBottom: 4 }}>Topics</h3>
+        <p className="sub muted" style={{ margin: "0 0 12px" }}>
+          Hear when a new challenge in a topic you follow opens for solutions. <Link href="/topics">Browse topics</Link>
+        </p>
+        {topics === null && <p className="muted" style={{ margin: 0 }}>Loading…</p>}
+        {topics !== null && topics.length === 0 && (
+          <p className="muted" style={{ margin: 0 }}>
+            No topics yet.
+          </p>
+        )}
+        {topics?.map((topic, i) => (
+          <div
+            className="row"
+            style={i === 0 ? { border: 0, padding: 0 } : { border: 0, borderTop: "1px solid var(--line)", padding: "14px 0 0", marginTop: 14 }}
+            key={topic.id}
+          >
+            <div className="grow">
+              <div className="ttl">{topic.name}</div>
+              {topic.description && <div className="sub muted">{topic.description}</div>}
+              {topicErrors[topic.id] && (
+                <div className="sub" style={{ color: "var(--danger)" }} role="status">
+                  {topicErrors[topic.id]}
+                </div>
+              )}
+            </div>
+            <div className="toggle-field">
+              <span className={`toggle-state${topic.following ? " is-on" : ""}`} aria-hidden="true">
+                {topic.following ? "On" : "Off"}
+              </span>
+              <button
+                type="button"
+                className="toggle toggle-pref"
+                role="switch"
+                aria-checked={topic.following}
+                aria-label={`Follow ${topic.name}`}
+                onClick={() => toggleTopic(topic.id)}
+              >
+                <span className="toggle-knob" aria-hidden="true">
+                  {topic.following ? "🔔" : "🔕"}
+                </span>
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="profile-feedback">

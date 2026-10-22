@@ -20,9 +20,12 @@ import {
   DESCRIPTION_MAX,
   SOLUTION_STATUSES,
   TITLE_MAX,
+  TOPIC_SET_ERROR,
+  TOPICS_PER_CHALLENGE_MAX,
   canAuthorEditChallenge,
   canAuthorResubmit,
   isChallengeStatus,
+  parseTopicIds,
   type AttachmentView,
   type McpSettings,
   type MaskedAuthor,
@@ -50,6 +53,7 @@ import { autoFollow, follow, unfollow } from "../../app/api/follows/store";
 import { searchChallengePage } from "../../app/api/search/store";
 import { listInboxPage } from "../../app/api/notifications/store";
 import { listNamespaces } from "../../app/api/admin/store";
+import { listActiveTopics } from "../../app/api/topics/store";
 import { parseSimilarAcknowledged } from "../../app/api/challenges/validation";
 import type { RateLimitBucket } from "../rate-limit";
 import type { NotifyContext } from "../notify";
@@ -139,6 +143,21 @@ function parentType(args: Record<string, unknown>): "challenge" | "solution" {
   return value;
 }
 
+/** §34.3: an optional `topicIds` array of topic ids from innobox_get_reference_data. */
+function topicIdsArg(args: Record<string, unknown>): string[] | undefined {
+  if (args.topicIds === undefined || args.topicIds === null) return undefined;
+  const parsed = parseTopicIds(args.topicIds);
+  if (!parsed.ok) throw new ArgError(parsed.error);
+  return parsed.value;
+}
+
+const TOPIC_IDS_SCHEMA = {
+  type: "array",
+  items: { type: "string" },
+  maxItems: TOPICS_PER_CHALLENGE_MAX,
+  description: "Topic ids from innobox_get_reference_data, at most 3",
+};
+
 function uuidArg(args: Record<string, unknown>, key: string, required = false): string | undefined {
   const value = str(args, key, { required });
   if (value === undefined) return undefined;
@@ -194,7 +213,7 @@ export const TOOLS: readonly ToolDef[] = [
     name: "search_challenges",
     title: "Search challenges",
     description:
-      "Full-text search over the challenges the signed-in person can see, with optional filters. Returns one page (at most 25) of hits with number, title, status, namespace, impact area, author, like and solution counts, and a url.",
+      "Full-text search over the challenges the signed-in person can see, with optional filters. Returns one page (at most 25) of hits with number, title, status, namespace, impact area, topics, author, like and solution counts, and a url.",
     readOnly: true,
     bucket: "search",
     inputSchema: {
@@ -204,6 +223,7 @@ export const TOOLS: readonly ToolDef[] = [
         status: { type: "string", enum: [...CHALLENGE_STATUSES] },
         namespaceId: { type: "string", description: "A namespace id from innobox_get_reference_data" },
         impactAreaId: { type: "string", description: "An impact area id from innobox_get_reference_data" },
+        topicId: { type: "string", description: "A topic id from innobox_get_reference_data" },
         mine: { type: "boolean", description: "Only challenges the person submitted" },
         following: { type: "boolean", description: "Only challenges the person follows" },
         ...PAGING,
@@ -216,7 +236,7 @@ export const TOOLS: readonly ToolDef[] = [
       const paging = page(args);
       const { items, hasMore } = await searchChallengePage(ctx.pool, ctx.viewer, {
         query: str(args, "query", { max: 200 }) ?? "",
-        filters: { status: status as never, namespaceId: uuidArg(args, "namespaceId"), impactAreaId: uuidArg(args, "impactAreaId") },
+        filters: { status: status as never, namespaceId: uuidArg(args, "namespaceId"), impactAreaId: uuidArg(args, "impactAreaId"), topicId: uuidArg(args, "topicId")?.toLowerCase() },
         mine: bool(args, "mine") ?? false,
         following: bool(args, "following") ?? false,
         limit: paging.limit,
@@ -233,6 +253,7 @@ export const TOOLS: readonly ToolDef[] = [
             status: c.status,
             namespace: c.namespaceSlug,
             impactArea: c.impactAreaName,
+            topics: c.topics.map((t) => t.name),
             author: person(c.author),
             likeCount: c.likeCount,
             solutionCount: c.solutionCount,
@@ -262,6 +283,7 @@ export const TOOLS: readonly ToolDef[] = [
           namespace: c.namespaceSlug,
           visibility: c.visibility,
           impactArea: c.impactAreaName,
+          topics: c.topics.map((t) => t.name),
           clientName: c.clientName,
           author: person(c.author),
           isMine: c.isMine,
@@ -446,12 +468,12 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "get_reference_data",
     title: "Get reference data",
-    description: "What a submission needs: the namespaces the person can submit to, active impact areas, the statuses, field length limits, whether anonymous submission is available, and whether namespace-restricted content is shared with agents.",
+    description: "What a submission needs: the namespaces the person can submit to, active impact areas, active topics, the statuses, field length limits, whether anonymous submission is available, and whether namespace-restricted content is shared with agents.",
     readOnly: true,
     bucket: "search",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async run(ctx) {
-      const [namespaces, impactAreas] = await Promise.all([listNamespaces(ctx.pool), listActiveImpactAreas(ctx.pool)]);
+      const [namespaces, impactAreas, topics] = await Promise.all([listNamespaces(ctx.pool), listActiveImpactAreas(ctx.pool), listActiveTopics(ctx.pool)]);
       return {
         ok: true,
         data: {
@@ -459,6 +481,7 @@ export const TOOLS: readonly ToolDef[] = [
             .filter((ns) => !ns.archivedAt && ctx.viewer.roles.isMemberOf(ns.id))
             .map((ns) => ({ id: ns.id, slug: ns.slug, name: ns.displayName })),
           impactAreas: impactAreas.map((a) => ({ id: a.id, name: a.name, requiresClientName: a.name === "Client" })),
+          topics: topics.map((t) => ({ id: t.id, name: t.name, description: t.description })),
           challengeStatuses: [...CHALLENGE_STATUSES],
           solutionStatuses: [...SOLUTION_STATUSES],
           limits: {
@@ -493,6 +516,7 @@ export const TOOLS: readonly ToolDef[] = [
         clientName: { type: "string", maxLength: CLIENT_NAME_MAX, description: "Only for the Client impact area" },
         visibility: { type: "string", enum: ["org", "namespace"], default: "org" },
         anonymous: { type: "boolean", default: false },
+        topicIds: TOPIC_IDS_SCHEMA,
         similarAcknowledged: { type: "array", items: { type: "string" }, maxItems: 5 },
       },
       required: ["title", "description", "impactAreaId", "namespaceId"],
@@ -516,6 +540,7 @@ export const TOOLS: readonly ToolDef[] = [
           visibility,
           isAnonymous: bool(args, "anonymous") ?? false,
           similarAcknowledged: parseSimilarAcknowledged(args.similarAcknowledged),
+          topicIds: topicIdsArg(args) ?? [],
         },
         via(ctx),
       );
@@ -538,6 +563,8 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(400, "impact area not found");
         case "inactive_impact_area":
           return fail(400, "impact area is retired");
+        case "invalid_topics":
+          return fail(422, TOPIC_SET_ERROR[result.problem]);
         case "attachments_not_clean":
         case "attachments_over_limit":
           return fail(409, "attachments can only be added in the browser");
@@ -597,7 +624,7 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "edit_challenge",
     title: "Edit my challenge",
-    description: "Edits the title, description, impact area or client name of the person's own challenge, inside its edit window (awaiting triage or needs improvement). Fields left out keep their value.",
+    description: "Edits the title, description, impact area, client name or topics of the person's own challenge, inside its edit window (awaiting triage or needs improvement). Fields left out keep their value; topicIds replaces the topics.",
     readOnly: false,
     bucket: "mutation",
     inputSchema: {
@@ -608,6 +635,7 @@ export const TOOLS: readonly ToolDef[] = [
         description: { type: "string", maxLength: DESCRIPTION_MAX },
         impactAreaId: { type: "string" },
         clientName: { type: "string", maxLength: CLIENT_NAME_MAX },
+        topicIds: TOPIC_IDS_SCHEMA,
       },
       required: ["number"],
       additionalProperties: false,
@@ -625,6 +653,7 @@ export const TOOLS: readonly ToolDef[] = [
           description: str(args, "description") ?? current.description,
           clientName: args.clientName !== undefined ? str(args, "clientName") : current.clientName,
           impactAreaId: uuidArg(args, "impactAreaId") ?? current.impactAreaId,
+          ...(args.topicIds !== undefined && args.topicIds !== null ? { topicIds: topicIdsArg(args) } : {}),
         },
         via(ctx),
       );
@@ -642,6 +671,8 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(400, "unknown impact area");
         case "inactive_impact_area":
           return fail(400, "that impact area is retired");
+        case "invalid_topics":
+          return fail(422, TOPIC_SET_ERROR[result.problem]);
         case "invalid":
           return fail(400, result.error);
       }

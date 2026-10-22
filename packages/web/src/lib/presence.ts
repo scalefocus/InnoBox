@@ -203,6 +203,11 @@ export function presenceTouchFor(pathname: string, method: string): PresenceTouc
       // previews fire on render), and /attachments/config is form metadata.
       return isRead ? null : { tier: "touch" };
 
+    case "topics":
+      // §34: following a topic is a human act; the list is also the submit form's and the
+      // profile's picker data, read without anyone doing anything.
+      return isRead ? null : { tier: "touch" };
+
     // ── Silent by construction ────────────────────────────────────────────────────────
     // users/:id/photo + users/:id/card fire en masse from avatar bubbles and hover cards
     // (§3.1, §13.8); me / impact-areas / namespaces are app-shell and form metadata that

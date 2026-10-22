@@ -125,6 +125,7 @@ export const RUM_ROUTES: readonly { template: string; name: string }[] = [
   { template: "/challenges/new", name: "New challenge" },
   { template: "/challenges/[number]", name: "Challenge" },
   { template: "/search", name: "Search" },
+  { template: "/topics", name: "Topics" },
   { template: "/leaderboard", name: "Leaderboard" },
   { template: "/profile", name: "Profile" },
   { template: "/profile/[userId]", name: "User profile" },

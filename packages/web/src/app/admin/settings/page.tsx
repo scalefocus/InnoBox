@@ -12,6 +12,7 @@ import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { FeaturedLimitCard } from "@/components/FeaturedLimitCard";
 import { GamificationSettingsCard } from "@/components/GamificationSettingsCard";
 import { HypeSettingsCard } from "@/components/HypeSettingsCard";
+import { TopicsSettingsCard } from "@/components/TopicsSettingsCard";
 import { PublicSubmissionsSettingsCard, type PublicSubmissionsSettings } from "@/components/PublicSubmissionsSettingsCard";
 import { AiProviderCard } from "./AiProviderCard";
 import { McpCard } from "./McpCard";
@@ -43,7 +44,7 @@ export default function AdminSettingsPage() {
       <div className="page-head reveal">
         {gate === "ok" && <Breadcrumb items={adminCrumbs("Platform settings")} />}
         <h1 className="page-title">Platform settings</h1>
-        <p className="page-sub">Impact areas, attachment limits, date format, public submissions, the notification sender, the AI provider and AI agents. Every change is audited.</p>
+        <p className="page-sub">Impact areas, topics, attachment limits, date format, public submissions, the notification sender, the AI provider and AI agents. Every change is audited.</p>
       </div>
 
       {gate === "loading" && <p className="muted">Loading…</p>}
@@ -150,6 +151,8 @@ function SettingsConsole() {
         </div>
       )}
       <ImpactAreasCard areas={data.impactAreas} onChanged={refresh} onError={notify} />
+      {/* §34.2: directly below Impact areas; it loads its own list. */}
+      <TopicsSettingsCard onNotice={notify} />
       <AttachmentLimitsCard limits={data.attachmentLimits} onChanged={refresh} onError={notify} />
       <DateFormatCard current={data.dateFormat} onChanged={refresh} onError={notify} />
       <FeaturedLimitCard key={data.featuredLimit} limit={data.featuredLimit} onChanged={refresh} onError={notify} />

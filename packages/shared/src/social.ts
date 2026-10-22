@@ -73,6 +73,9 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 16 / §26.6: an item of yours received a hype — the author only, coalesced per item
   // while unread like comment_posted, e-mailed (digestable).
   "hyped",
+  // §12.1 event 18 / §34.5: a challenge in a topic the recipient follows opened for solutions —
+  // at most once per person per challenge, never coalesced, e-mailed (digestable).
+  "topic_challenge",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

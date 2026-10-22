@@ -74,12 +74,6 @@ export const UPCOMING: UpcomingEntry[] = [
     audience: "everyone",
   },
   {
-    ids: ["GAP-88"],
-    title: "Topics",
-    teaser: "Follow the topics you care about and hear when a new challenge in one of them opens for solutions.",
-    audience: "everyone",
-  },
-  {
     ids: ["GAP-89"],
     title: "Campaigns",
     teaser:

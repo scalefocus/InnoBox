@@ -14,12 +14,29 @@ import {
 } from "./email-digest.js";
 import { parsePreferencePatch } from "./notification-preferences.js";
 
-const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
 
-test("only the follower-type events (2, 3, 6, 8) and hyped (16) are digestable", () => {
+test("only the follower-type events (2, 3, 6, 8), hyped (16) and a new challenge in a followed topic (18) are digestable", () => {
   assert.deepEqual(
     ALL_EVENTS.filter((e) => isDigestableEvent(e)),
-    [2, 3, 6, 8, 16],
+    [2, 3, 6, 8, 16, 18],
+  );
+});
+
+test("renderDigest: a challenge new in a followed topic leads its block, topics merged and sorted (§34.5)", () => {
+  const digest = renderDigest(
+    [
+      update({ kind: "comment", count: 2 }),
+      update({ kind: "topic", topics: ["Automation"] }),
+      update({ kind: "topic", topics: ["AI", "Automation"] }),
+    ],
+    "daily",
+    "https://x.test",
+  );
+  assert.ok(digest);
+  assert.equal(
+    digest!.text.split("\n\n")[1],
+    ["CH-412 — Faster onboarding", "https://x.test/challenges/412", "- New in a topic you follow — AI, Automation", "- 2 new comments"].join("\n"),
   );
 });
 

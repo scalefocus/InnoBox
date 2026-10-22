@@ -21,6 +21,8 @@ interface TriageView {
     summary: string;
     missingInformation: string[];
     suggestedImpactArea: string | null;
+    /** §34.6: active topics only — advisory; an admin applies one through Edit topics. */
+    suggestedTopics?: string[];
     questions: string[];
     duplicates: { number: string; title: string; reason: string }[];
   } | null;
@@ -121,6 +123,11 @@ export function TriageNotesPanel({ challengeNumber, version }: { challengeNumber
           {n.suggestedImpactArea && (
             <p style={{ fontSize: 13 }}>
               <strong>Suggested impact area:</strong> {n.suggestedImpactArea}
+            </p>
+          )}
+          {n.suggestedTopics && n.suggestedTopics.length > 0 && (
+            <p style={{ fontSize: 13 }}>
+              <strong>Suggested topics:</strong> {n.suggestedTopics.join(", ")}
             </p>
           )}
           {n.questions.length > 0 && (

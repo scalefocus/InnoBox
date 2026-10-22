@@ -48,6 +48,14 @@ export function parseTriageFilters(params: URLSearchParams): Parsed<TriageFilter
     value.number = bare;
   }
 
+  // §34.6: a topic, or "none" for the challenges that carry no topic.
+  const topic = params.get("topic");
+  if (topic !== null) {
+    if (topic === "none") value.topicId = "none";
+    else if (isUuid(topic)) value.topicId = topic.toLowerCase();
+    else return fail("topic must be a topic id or 'none'");
+  }
+
   return { ok: true, value };
 }
 
@@ -80,6 +88,19 @@ export function parseBulkStatusBody(body: unknown, isValid: (s: string) => boole
   if (rec.numbers.length > BULK_NUMBERS_MAX) return fail(`numbers must contain at most ${BULK_NUMBERS_MAX} items`);
   if (typeof rec.status !== "string" || !isValid(rec.status)) return fail("status must be a valid status value");
   return { ok: true, value: { numbers: rec.numbers.map((n) => n.replace(/^ch-?/i, "")), status: rec.status } };
+}
+
+/** §34.6 bulk *Add topic* / *Remove topic*: `{ numbers, action: "add" | "remove", topicId }`. */
+export function parseBulkTopicBody(body: unknown): Parsed<{ numbers: string[]; action: "add" | "remove"; topicId: string }> {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return fail("request body must be a JSON object");
+  const rec = body as Record<string, unknown>;
+  if (!Array.isArray(rec.numbers) || rec.numbers.length === 0 || !rec.numbers.every((n) => typeof n === "string")) {
+    return fail("numbers must be a non-empty array of challenge numbers");
+  }
+  if (rec.numbers.length > BULK_NUMBERS_MAX) return fail(`numbers must contain at most ${BULK_NUMBERS_MAX} items`);
+  if (rec.action !== "add" && rec.action !== "remove") return fail("action must be 'add' or 'remove'");
+  if (typeof rec.topicId !== "string" || !isUuid(rec.topicId)) return fail("topicId must be a topic id");
+  return { ok: true, value: { numbers: rec.numbers.map((n) => n.replace(/^ch-?/i, "")), action: rec.action, topicId: rec.topicId.toLowerCase() } };
 }
 
 export function parseBulkAssignBody(body: unknown): Parsed<{ numbers: string[]; assigneeUserId: string | null }> {

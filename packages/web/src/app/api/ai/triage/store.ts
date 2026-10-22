@@ -140,7 +140,12 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
       if (c.status === "withdrawn") continue;
       duplicates.push({ number: `CH-${c.number}`, title: c.title, reason: d.reason });
     }
-    notes = { ...p, duplicates };
+    // §34.6: a suggested topic that has since been retired or deleted is not shown.
+    const suggested = p.suggestedTopics ?? [];
+    const activeTopics = suggested.length
+      ? new Set((await pool.query<{ name: string }>(`select name from topics where active and name = any($1::text[])`, [suggested])).rows.map((t) => t.name))
+      : new Set<string>();
+    notes = { ...p, suggestedTopics: suggested.filter((name) => activeTopics.has(name)), duplicates };
   }
 
   return {

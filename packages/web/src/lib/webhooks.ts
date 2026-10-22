@@ -87,15 +87,18 @@ export async function enqueueWebhookEvent(
  * The challenge half, called right after a challenge's status UPDATE: the first transition into
  * `valid` stamps `first_valid_at` (never cleared, stamped even while webhooks are off) and is the
  * only one that posts `challenge.validated`; every real transition into `solved` posts
- * `challenge.solved`.
+ * `challenge.solved`. Returns true when this transition was that first entry into `valid` — the
+ * challenge's §34.5 opening, which tells its topics' followers.
  */
-export async function onChallengeStatusChanged(client: PoolClient, challengeId: string, newStatus: string): Promise<void> {
+export async function onChallengeStatusChanged(client: PoolClient, challengeId: string, newStatus: string): Promise<boolean> {
   if (newStatus === "valid") {
     const stamped = await client.query(`update challenges set first_valid_at = now() where id = $1 and first_valid_at is null`, [challengeId]);
-    if ((stamped.rowCount ?? 0) > 0) await enqueueWebhookEvent(client, "challenge.validated", { type: "challenge", id: challengeId });
-  } else if (newStatus === "solved") {
-    await enqueueWebhookEvent(client, "challenge.solved", { type: "challenge", id: challengeId });
+    if ((stamped.rowCount ?? 0) === 0) return false;
+    await enqueueWebhookEvent(client, "challenge.validated", { type: "challenge", id: challengeId });
+    return true;
   }
+  if (newStatus === "solved") await enqueueWebhookEvent(client, "challenge.solved", { type: "challenge", id: challengeId });
+  return false;
 }
 
 /**
