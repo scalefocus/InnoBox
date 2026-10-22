@@ -81,6 +81,13 @@ test("parseSettingsPatch: gamificationEnabled is a boolean and may be sent alone
   for (const bad of ["true", 1, null]) assert.equal(parseSettingsPatch({ gamificationEnabled: bad }).ok, false, String(bad));
 });
 
+test("parseSettingsPatch: featureIdeasEnabled is a boolean and may be sent alone (§38.11)", () => {
+  const parsed = parseSettingsPatch({ featureIdeasEnabled: false });
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.deepEqual(parsed.value, { featureIdeasEnabled: false });
+  for (const bad of ["false", 0, null]) assert.equal(parseSettingsPatch({ featureIdeasEnabled: bad }).ok, false, String(bad));
+});
+
 test("parseSettingsPatch: hypeEnabled is a boolean and may be sent alone (§26.8)", () => {
   const parsed = parseSettingsPatch({ hypeEnabled: false });
   assert.equal(parsed.ok, true);

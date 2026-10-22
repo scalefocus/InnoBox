@@ -274,3 +274,21 @@ test("renderOutboxEmail: submitter mails carry no manage-notifications footer; u
     assert.ok(userMail.html.includes("Manage email notifications"));
   }
 });
+
+// §38.8 events 19 and 20: the e-mail may say more than the inbox line — `emailText` is its body.
+test("composeOutboxEmail: a user row's emailText is the body, the inbox message is not", () => {
+  const mail = composeOutboxEmail(
+    {
+      recipient_email: null,
+      payload: {
+        subject: "Your feature idea is planned",
+        message: "Your idea is planned: Dark mode.",
+        emailText: 'A platform admin approved your feature idea. It is now planned as "Dark mode": Easier at night.',
+        link: "/whats-new#coming-soon",
+      },
+    },
+    "https://innobox.example.com",
+  );
+  assert.equal(mail.subject, "Your feature idea is planned");
+  assert.equal(mail.body, 'A platform admin approved your feature idea. It is now planned as "Dark mode": Easier at night.\n\nhttps://innobox.example.com/whats-new#coming-soon');
+});

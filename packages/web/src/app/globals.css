@@ -826,6 +826,68 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .soon-chevron { transition: none; }
 }
 
+/* Feature ideas on "Coming soon" (§38.3, §38.4): the propose button beside the heading block (outside
+   its toggle button), the upvote button at each row's right edge — muted like the row at rest, the
+   section's only accent once pressed — and the "Proposed by" and voter lines under the teaser. */
+.soon-header { display: flex; align-items: center; gap: 12px; }
+.soon-header .soon-heading { flex: 1; min-width: 0; }
+.soon.open .soon-header { margin-bottom: 14px; }
+.soon.open .soon-header .soon-head { margin-bottom: 0; }
+.soon-propose { flex-shrink: 0; }
+.soon-item.has-vote { grid-template-columns: auto minmax(0, 1fr) auto; }
+.soon-vote {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 1px; min-width: 46px; padding: 5px 9px;
+  border: 1px dashed var(--line-strong); border-radius: 10px; background: transparent; color: var(--muted);
+  font: inherit; cursor: pointer; transition: color 0.16s, border-color 0.16s, background 0.16s;
+}
+.soon-vote:hover { color: var(--ink); border-color: var(--muted); }
+.soon-vote:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.soon-vote.is-on { color: var(--accent); background: var(--accent-soft); border-style: solid; border-color: color-mix(in oklab, var(--accent) 45%, var(--line)); }
+.soon-vote-count { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.soon-by { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.soon-by-name { color: color-mix(in oklab, var(--muted) 70%, var(--ink)); }
+.soon-voters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.soon-error { margin: 6px 0 0; font-size: 12.5px; color: var(--danger); }
+.soon-empty { margin: 0 0 12px; font-size: 13.5px; color: var(--muted); }
+@media (max-width: 560px) {
+  .soon-header { flex-wrap: wrap; }
+  .soon-header .soon-heading { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .soon-vote { transition: none; }
+}
+
+/* The "Propose a feature" dialog (§38.4) — the native modal <dialog> of the reveal dialog. */
+.propose-dialog { width: min(520px, calc(100vw - 32px)); }
+.propose-body { display: flex; flex-direction: column; gap: 12px; padding: 22px 22px 20px; }
+.propose-title { font-family: var(--font-display); font-size: 20px; margin: 0; }
+.propose-sub { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.propose-hint { margin: 0; font-size: 13px; color: var(--warn); }
+.propose-label {
+  display: block; margin-bottom: 6px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--faint);
+}
+.propose-body textarea { width: 100%; min-height: 140px; resize: vertical; }
+.propose-counter { text-align: right; margin-top: 4px; }
+.propose-thanks { margin: 4px 0; font-size: 14.5px; }
+.propose-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* The profile's "Your ideas" (§38.7). */
+.idea-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.idea-row { padding: 10px 0; border-top: 1px solid var(--line); }
+.idea-row:first-child { border-top: 0; padding-top: 0; }
+.idea-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.idea-withdraw { margin-left: auto; }
+.idea-row-line { margin: 6px 0 0; font-size: 14px; }
+.idea-text { margin: 6px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.idea-text.is-clamped { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.idea-note { margin: 6px 0 0; }
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; text-decoration: underline; cursor: pointer; }
+
+/* The Administration console's Feature ideas card (§38.5): a card holding a link and a switch. */
+.feature-ideas-card-link { color: inherit; text-decoration: none; }
+.feature-ideas-card-link:hover h3 { text-decoration: underline; }
+
 /* What's new — the release list (§13.9). The entries the viewer missed get a left accent border,
    the accent-soft fill and a "New" tag, grouped above a labelled divider; the running release
    carries a small "current" label. */

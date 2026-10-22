@@ -165,6 +165,14 @@ function SettingsConsole() {
           Collection and sampling are set on the <Link href="/admin/monitoring">Real user monitoring</Link> page.
         </p>
       </div>
+      {/* The feature-ideas switch lives on its Administration console card (§38.11); this is the pointer. */}
+      <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Feature ideas</h3>
+        <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>
+          Upvotes and proposals on What&apos;s new are switched on and off on the <Link href="/admin">Feature ideas</Link> card of the Administration
+          console.
+        </p>
+      </div>
       <PublicSubmissionsSettingsCard
         key={JSON.stringify(data.publicSubmissions)}
         settings={data.publicSubmissions}

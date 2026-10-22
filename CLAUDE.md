@@ -170,8 +170,8 @@ notice (§13.9). No bump → no entry.
 
 **Specified but not built.** A feature specified ahead of its implementation carries a
 `⚠ GAP-nn · new feature` marker in the spec. Each such marker also needs an entry in the
-*Coming soon* list (§13.9), `packages/web/src/app/whats-new/upcoming.ts` (a test enforces
-it), and the commit that
+*Coming soon* list (§13.9), `packages/shared/src/upcoming.ts` (a test enforces it; give the
+entry a permanent `key`, §38.2), and the commit that
 ships the feature deletes the marker, removes the teaser and adds the changelog entry.
 
 **`changelog.ts` is itself the source of truth for past versions.** The history was

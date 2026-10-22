@@ -35,6 +35,8 @@ test("weights are fixed: outcomes dominate, social activity earns 1", () => {
     agent_connected: 0, // §25.12: a marker for Plugged In, never points
     hype_received: 3, // §26.7: three times a like, for a signal three-a-week scarce
     hype_fulfilled: 0, // §26.7: a marker for Talent Scout, never points
+    idea_approved: 10, // §38.10: a feature idea a platform admin approved
+    idea_shipped: 25, // §38.10: a feature idea that shipped — drives Roadmapper
   });
 });
 
@@ -107,7 +109,8 @@ test("badge thresholds match the catalogue", () => {
   assert.deepEqual(t.crowd_favorite, [10, 50, 200]);
   assert.deepEqual(t.conversation_starter, [10, 50, 200]);
   assert.deepEqual(t.talent_scout, [1, 5, 20]);
-  assert.equal(BADGES.length, 15, "the ten §23.4 badges, the four §25.12 agent badges and §26.7 Talent Scout");
+  assert.deepEqual(t.roadmapper, [1, 3, 10]);
+  assert.equal(BADGES.length, 16, "the ten §23.4 badges, the four §25.12 agent badges, §26.7 Talent Scout and §38.10 Roadmapper");
 });
 
 test("badgeProgress names the next step and stops once fully earned", () => {

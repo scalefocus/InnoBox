@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.21.0",
+    date: "2026-10-22",
+    summary:
+      "New on What's new: upvote anything in Coming soon, and propose a feature of your own. A platform admin reviews every idea. An approved one joins Coming soon with your name on it (you can turn that off in your profile), and you hear when it ships. Platform admins review ideas, and can switch the feature off, under Administration → Feature ideas.",
+  },
+  {
     version: "1.20.0",
     date: "2026-10-22",
     summary:

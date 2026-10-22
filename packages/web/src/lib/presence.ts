@@ -194,6 +194,16 @@ export function presenceTouchFor(pathname: string, method: string): PresenceTouc
     case "follows":
       return { tier: "touch" };
 
+    // §38.12: upvoting a Coming soon entry and proposing a feature idea are user-initiated writes;
+    // the GET that fills the section is not (the page navigation already stamped).
+    case "coming-soon":
+    case "feature-ideas":
+      return isRead ? null : { tier: "touch" };
+
+    case "me":
+      // Withdrawing a pending feature idea (§38.7). Every other `me` route is app-shell metadata.
+      return second === "feature-ideas" && !isRead ? { tier: "touch" } : null;
+
     case "notifications":
       // GET is the 30-second bell poll — silent. A PATCH is a human marking one read.
       return isRead ? null : { tier: "touch" };

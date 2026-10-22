@@ -35,7 +35,8 @@ import {
 export interface AwardInput {
   userId: string;
   reason: GamificationReason;
-  /** Null exactly for the item-less `agent_connected` reason (§25.12). */
+  /** Null exactly for the item-less reasons — `agent_connected` (§25.12) and the §38.10
+   *  `idea_approved` / `idea_shipped`. */
   itemType: AwardItemType | null;
   itemId: string | null;
   awardKey: string;

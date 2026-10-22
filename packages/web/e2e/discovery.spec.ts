@@ -4,7 +4,7 @@
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { createChallengeViaApi } from "./helpers/api";
-import { UPCOMING } from "../src/app/whats-new/upcoming";
+import { UPCOMING } from "@innobox/shared/upcoming";
 import { uniqueStamp } from "./helpers/stamp";
 
 test("dashboard: a signed-in member sees KPIs, quick links, and the account menu", async ({ browser }) => {
@@ -78,13 +78,13 @@ test("what's new: Coming soon starts collapsed, expands on click, and hides admi
   const page = await ctx.newPage();
   await page.goto("/whats-new");
 
-  // Driven by the live teaser list, never by named features — those ship and leave the list.
+  // Driven by the live teaser list, never by named features — those ship and leave the list. With
+  // no member teaser the section shows only while feature ideas are on (§38.11), a platform-wide
+  // switch another spec may be flipping right now, so there is nothing stable to assert about it.
   const toggle = page.locator(".soon-head");
   const forMembers = UPCOMING.filter((e) => e.audience === "everyone");
   if (forMembers.length === 0) {
-    // Nothing applies to a member → the section is hidden entirely.
     await expect(page.getByRole("heading", { name: "What's new" })).toBeVisible();
-    await expect(toggle).toHaveCount(0);
     await ctx.close();
     return;
   }

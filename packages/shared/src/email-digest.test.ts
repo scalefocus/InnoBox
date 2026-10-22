@@ -14,12 +14,12 @@ import {
 } from "./email-digest.js";
 import { parsePreferencePatch } from "./notification-preferences.js";
 
-const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
 
-test("only the follower-type events (2, 3, 6, 8), hyped (16) and a new challenge in a followed topic (18) are digestable", () => {
+test("only the follower-type events (2, 3, 6, 8), hyped (16), a new challenge in a followed topic (18) and feature now available (20) are digestable", () => {
   assert.deepEqual(
     ALL_EVENTS.filter((e) => isDigestableEvent(e)),
-    [2, 3, 6, 8, 16, 18],
+    [2, 3, 6, 8, 16, 18, 20],
   );
 });
 
@@ -50,7 +50,7 @@ test("a recipient on the admin route is never held — event 2 to admins and the
 });
 
 test("the admin attention and actionable events are never held", () => {
-  for (const e of [1, 4, 5, 7, 9, 10, 11, 12, 13, 14] as const) assert.equal(isDigestableEvent(e), false, `event ${e}`);
+  for (const e of [1, 4, 5, 7, 9, 10, 11, 12, 13, 14, 17, 19] as const) assert.equal(isDigestableEvent(e), false, `event ${e}`);
 });
 
 test("renderDigest: hypes get one line per item — the challenge's first, then each solution's (§26.6)", () => {
@@ -184,4 +184,30 @@ test("renderDigest lists at most 25 items, then one 'and K more' line", () => {
 test("parsePreferencePatch accepts the delivery choice and refuses an unknown one", () => {
   assert.deepEqual(parsePreferencePatch({ emailDelivery: "weekly" }), { ok: true, value: { emailDelivery: "weekly" } });
   assert.deepEqual(parsePreferencePatch({ emailDelivery: "hourly" }), { ok: false, error: "emailDelivery must be one of immediate, daily, weekly" });
+});
+
+test("renderDigest: features now available get their own block ahead of the items, one line each (§38.8)", () => {
+  const digest = renderDigest(
+    [
+      update({ kind: "comment", count: 2 }),
+      update({ kind: "feature", challengeNumber: "", challengeTitle: "", featureTitle: "Dark mode" }),
+      update({ kind: "feature", challengeNumber: "", challengeTitle: "", featureTitle: "Saved\nfilters" }),
+      update({ kind: "feature", challengeNumber: "", challengeTitle: "", featureTitle: "Dark mode" }),
+    ],
+    "weekly",
+    "https://x.test/",
+  );
+  assert.ok(digest);
+  const blocks = digest!.text.split("\n\n");
+  assert.equal(blocks[1], "Now available in InnoBox\nhttps://x.test/whats-new\n- Dark mode\n- Saved filters", "one line per feature, deduplicated, on one line");
+  assert.ok(blocks[2]!.startsWith("CH-412 — Faster onboarding"), "the items follow");
+  assert.equal(digest!.itemCount, 1, "a feature is not a challenge item");
+  assert.equal(digest!.updateCount, 5);
+});
+
+test("renderDigest: a digest of features alone has no challenge block", () => {
+  const digest = renderDigest([update({ kind: "feature", challengeNumber: "", challengeTitle: "", featureTitle: "Dark mode" })], "daily", "https://x.test");
+  assert.ok(digest);
+  assert.doesNotMatch(digest!.text, /CH-/);
+  assert.match(digest!.subject, /1 update$/);
 });

@@ -139,6 +139,7 @@ export const RUM_ROUTES: readonly { template: string; name: string }[] = [
   { template: "/admin/system-log", name: "System log" },
   { template: "/admin/trash", name: "Trash" },
   { template: "/admin/public-submissions", name: "Public submissions" },
+  { template: "/admin/feature-ideas", name: "Feature ideas" },
   { template: "/admin/monitoring", name: "Real user monitoring" },
 ];
 

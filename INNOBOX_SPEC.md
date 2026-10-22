@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.22 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
+> Status: **v0.23 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -70,7 +70,11 @@
 > pulse (§37), lifting the "no campaigns" non-goal and narrowing the digest one (§19); v0.22
 > (2026-10-22) specified **topics** — curated tags, up to three per challenge, that anyone
 > can follow to hear when a new challenge in them opens for solutions — completing the §34
-> stub).
+> stub); v0.23
+> (2026-10-22) specified **feature ideas** — an upvote on every *Coming soon* entry, and
+> proposals that a platform admin writes up and approves into the plan, credited to the
+> proposer unless they opt out, with decision and "now available" notifications, points
+> on approval and shipping, and a Roadmapper badge (§38, §13.9)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -134,7 +138,8 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
   (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
-  upload sessions §11, the real-user-monitoring rollup and trims §14.12). Pure-DB sweeps are scheduled before the Entra-credential check,
+  upload sessions §11, the real-user-monitoring rollup and trims §14.12), plus the
+  one-shot **shipped-teaser sweep** each time it acquires leadership (§38.9). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
   credentials; the notification sweep (SMTP needs no Entra), the ClamAV scan sweep, and
@@ -761,6 +766,9 @@ these rules close the generic web-platform paths by which it could.
     minute** (the `survey` bucket; its 429 warning omits the user id);
   - submitting a bug report (§13.10) — **3 per minute and 20 per day** (the `bug_report`
     bucket, both limits enforced; its 429 warning omits the user id too);
+  - proposing a feature idea (§38.4) — **2 per minute and 5 per day** (the
+    `feature_idea` bucket, both limits enforced; its warning carries the user id, since a
+    proposal is not anonymous). Upvotes use the `mutation` bucket;
   - sending a real-user-monitoring beacon (§14.12) — **20 per minute** (the `rum`
     bucket; its 429s are **not** recorded in the system log — telemetry must never
     turn into log noise);
@@ -963,7 +971,10 @@ Entra runbook); on conflict this document wins.
   untouched — nulls `ai_usage.user_id` (§22.3), deletes the user's §23
   `gamification_ledger` and `user_badges` rows (resetting `gamification_public` and
   `notify_achievements` to their defaults and nulling `achievements_seen_at`), deletes the
-  user's §34 `topic_follows` and `topic_notices` rows, and resets the notification preferences
+  user's §34 `topic_follows` and `topic_notices` rows, deletes the user's §38 `pending`,
+  `declined` and `merged` feature ideas, clears the text of their `planned` ones (kept,
+  unnamed) and resets `feature_ideas_named` to its default — their votes stay and are
+  counted unnamed (§38.12) — and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
   `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
@@ -1328,6 +1339,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   inserts/deletes the row.
 - **`hypes`** — (user_id, parent) unique; weight (`1 | 2`), created_at. The §26
   weekly endorsement: insert-only, never updated, removed only by the §10.3 cascade.
+- **`feature_ideas`**, **`feature_idea_votes`**, **`coming_soon_teasers`** — the §38
+  proposals, the upvotes on *Coming soon* entries (a specified teaser's key or an idea),
+  and the worker's mirror of the specified teasers' keys and titles. None of them is a
+  challenge or a solution, and none carries a namespace (§38.13).
 - **`follows`** — (user_id, parent) unique; created_at.
 - **`attachments`** — id, parent (challenge | solution; `parent_id` **nullable while
   staged**, §11), **`draft_key`** (nullable UUID; set only while staged, before the
@@ -2553,6 +2568,8 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
 | 17 | Co-author added / removed (§27.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable |
 | 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
+| 19 | Feature idea reviewed — approved, declined or merged (§38.8) | The proposer only. Immediate, never digested, not mutable |
+| 20 | Feature now available — a planned idea deleted as shipped, or a specified feature that shipped (§38.8, §38.9) | The idea's proposer and its voters, to whom the entry still applies — never the deleting admin. Follower-type for the digest |
 
 **Authors are teams (§27).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2582,7 +2599,8 @@ comes back if access returns, exactly as rows about the trash are kept but hidde
 (§10.4). The read-time predicate is the §4.3 SQL twin evaluated on the challenge the
 row is about — the row's `challenge_id` column (§5), joined to `challenges` by primary
 key — and the trash filter looks up `challenge_id` and `solution_id` the same way; rows
-that name no item (both columns null — achievements, scan failures) are unaffected.
+that name no item (both columns null — achievements, scan failures, the §38 feature-idea
+events) are unaffected.
 **Since v1.18 neither gate matches on payload keys or the deep link**, so each costs one
 index lookup per row rather than a scan of the challenges table. The web inbox list,
 the §12.2 pulse count and the §25.6 agent view share this one predicate, so they can
@@ -2618,10 +2636,11 @@ a day or a week.
 - **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
   challenge author and followers, not the admin and committee route), 3 (status
   changed), 6 (comments, including replies), 8 (solution implemented), 16 (hyped,
-  §26.6) and 18 (new challenge in a topic you follow, §34.5). Everything
+  §26.6), 18 (new challenge in a topic you follow, §34.5) and 20 (feature now
+  available, §38.8). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 17). Event 13 has no e-mail at all.
+  12, 17, and 19 to a proposer). Event 13 has no e-mail at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
   and the dispatcher skips it until then. The inbox row is written and shown exactly as
@@ -3420,7 +3439,9 @@ I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
 flip and inline-error revert), then the §34.6 **Topics** section (a pill switch of the
 same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
-feedback* switch and *Give feedback now*). While gamification is on (§23), the own
+feedback* switch and *Give feedback now*) and, while feature ideas are on, the §38.7
+**Feature ideas** section (the *Show my name on feature ideas* switch and *Your ideas*,
+with Withdraw on a pending one). While gamification is on (§23), the own
 profile also shows the **Achievements** section (level, points, progress, *Currently
 leading*, earned and locked badges, §23.6) and two more switches of the same kind:
 *Achievements* (the §12.1 event 13 notification and toast, §23.7) and *Show my level
@@ -3789,45 +3810,68 @@ missed.
 #### Coming soon — what's next, greyed out
 
 The page opens with a **"Coming soon"** section, above the release list, that teases the
-features this specification already defines but that have **not shipped yet** — so users
-see where InnoBox is heading.
+features that are planned but have **not shipped yet**, so users see where InnoBox is
+heading. It holds two kinds of entry: the features this specification already defines,
+and the **community ideas** a platform admin has approved (§38). While feature ideas are
+on (§38.11), people can also upvote any entry and propose new ones from here.
 
-- **Source of truth.** A hand-maintained, client-safe list in
-  `app/whats-new/upcoming.ts`, beside the changelog: `UPCOMING: { ids, title, teaser,
-  audience }[]`, in the order to display. `ids` lists the open **new-feature** markers in
-  this document that the entry covers — one teaser may cover a feature's several markers
-  (e.g. `["GAP-62", "GAP-63", "GAP-64"]` for the §13.10 survey) — and is internal only,
-  **never rendered**. `title` is a short user-facing name (*"Have your say"*), `teaser` one or two
-  plain sentences on what it will do for the user. `audience` is `everyone`, `admins`
-  (platform or namespace admins) or `platform_admin`; an entry is shown only to viewers
-  whose resolved roles match, so admin-only tooling is teased only to the people who will
-  use it.
+- **Source of truth.** For specified features: a hand-maintained, client-safe list in
+  **`@innobox/shared/upcoming`** (`packages/shared/src/upcoming.ts`; it moved out of
+  `app/whats-new/` so the worker can read it, §38.9): `UPCOMING: { key, ids, title,
+  teaser, audience }[]`, in hand order. `key` is a permanent kebab-case slug, unique and
+  never reused, that votes are stored against (§38.2). `ids` lists the open
+  **new-feature** markers in this document that the entry covers. One teaser may cover a
+  feature's several markers (e.g. `["GAP-62", "GAP-63", "GAP-64"]` for the §13.10
+  survey). Both are internal only and **never rendered**. `title` is a short user-facing
+  name (*"Have your say"*), `teaser` one or two plain sentences on what it will do for
+  the user. `audience` is `everyone`, `admins` (platform or namespace admins) or
+  `platform_admin`; an entry is shown only to viewers whose resolved roles match, so
+  admin-only tooling is teased only to the people who will use it. For community ideas:
+  the `planned` rows of `feature_ideas`, with the title, teaser and audience the admin
+  wrote (§38.5). The page reads both through **`GET /api/coming-soon`** (§38.14), which
+  applies the audience rule server-side and orders the entries by votes (§38.2). While
+  feature ideas are off, the same route returns the specified teasers alone, in hand
+  order.
 - **Kept in sync with the spec, by test.** A unit test reads `INNOBOX_SPEC.md` and
   `ENTRA_AUTH_SPEC.md` and fails when an `UPCOMING` id has no open
   `⚠ GAP-nn · new feature` marker, or when an open new-feature marker belongs to no
   `UPCOMING` entry or to more than one. An entry whose ids have all closed must go. Since a feature's marker is deleted in the same commit that ships it (see the
   preamble), shipping a feature **forces** its teaser out — and its changelog entry
   announces it instead — while specifying a new feature **forces** a teaser in. Code-fix
-  markers are never teased.
+  markers are never teased. The test covers `UPCOMING` only: community ideas carry no
+  marker. It lives beside the module, in `packages/shared/src/upcoming.test.ts`.
 - **Look — deliberately greyed out.** A section heading **"Coming soon"** with the
-  sub-line *"Planned and specified, not available yet. Plans can change."*; each entry is a
+  sub-line *"Planned, not available yet. Plans can change."*; each entry is a
   row like a release row but muted: text in `--muted`, a **dashed** `--line` border, no
   accent, a neutral **"Coming soon"** chip in place of the version chip, and **no date,
-  no version and no ETA** — nothing that reads as a promise. Rows are not links and not
-  focusable; the section is a plain list (`aria-label="Coming soon"`). Hidden entirely
-  when no entry applies to the viewer.
+  no version and no ETA** — nothing that reads as a promise. Rows are not links; the
+  section is a plain list (`aria-label="Coming soon"`). While feature ideas are on, each
+  row also carries the §38.3 **upvote button** and, once it has votes, the **voter list**,
+  and a community idea the §38.6 **"Proposed by"** line. Those are a row's only focusable
+  controls, and the pressed upvote is the section's only accent. While feature ideas are
+  off, rows are not focusable at all, and the section is hidden entirely when no entry
+  applies to the viewer. While they are on, it always shows, so **Propose a feature** can
+  be reached (§38.4), and an empty list reads *"Nothing planned yet. Propose the first
+  feature."*
 - **Collapsed by default.** The section opens **collapsed** on every visit to the page:
   only its heading block shows — a compass glyph, **"Coming soon"** with the number of
-  entries that apply to this viewer (*"Coming soon · 9"*), the sub-line, and a chevron.
-  The whole heading block is one `<button>` (`aria-expanded`, `aria-controls` the list)
-  that expands and collapses the list in place; Enter and Space work as on any button.
-  The open state is **not remembered** — no storage, no server state — so the release
-  history stays the first thing a visitor reads. Expanding fades the list in, with no
-  motion under `prefers-reduced-motion: reduce`. While collapsed the list is not
-  rendered, so its rows are neither visible nor read out by assistive tech.
+  entries that apply to this viewer (*"Coming soon · 9"*; no count at zero), the
+  sub-line, and a chevron. The whole heading block is one `<button>` (`aria-expanded`,
+  `aria-controls` the list) that expands and collapses the list in place; Enter and Space
+  work as on any button. **Propose a feature** sits on the same header row, outside that
+  button (§38.4). The open state is **not remembered** — no storage, no server state — so
+  the release history stays the first thing a visitor reads. The one exception is the
+  fragment **`#coming-soon`**: a page loaded with it (the links in §38 notifications and
+  the profile's idea list) opens the section expanded and scrolls it into view. Expanding
+  fades the list in, with no motion under `prefers-reduced-motion: reduce`. While
+  collapsed the list is not rendered, so its rows are neither visible nor read out by
+  assistive tech. The section renders nothing until `GET /api/coming-soon` has answered,
+  so no entry outside the viewer's audience can flash up.
 - **Copy rules.** Titles and teasers follow the §21.9 rule (no `§`, no marker ids), name
   no person, item or namespace, and describe the feature in user terms — they are product
-  copy, written when the feature is specified.
+  copy, written when the feature is specified or, for a community idea, by the admin who
+  approves it (§38.5). The only names in the section are the *"Proposed by"* line and the
+  voter lists, both governed by the person's own switch (§38.6).
 - **Not in the notice.** The §13.9 update notice lists only shipped releases; teasers
   appear on the page alone.
 
@@ -3941,7 +3985,8 @@ see where InnoBox is heading.
   APP_VERSION`; every version strict `x.y.z`, unique and strictly descending; every date a
   valid `YYYY-MM-DD`), which the notice depends on. (The *Coming
   soon* spec-sync test, both directions, and the `UPCOMING` audience filter per role
-  live in `app/whats-new/upcoming.test.ts`.)
+  live in `packages/shared/src/upcoming.test.ts`; voting and proposing are tested under
+  §38.14.)
 - **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →
   unchanged with `previous == current`, invalid or future version → 400, unauthenticated
   → 401, `whats_new_since_date` cleared on stamp; Continue on Quick start sets the marker;
@@ -4559,10 +4604,10 @@ All auth-required (401 otherwise), Origin-checked mutations (§2.4).
 The **Administration console** (`/admin`) is the hub: namespace admins and platform
 admins land here (platform-admin-only cards — settings, audit, system banner §14.6,
 system log §14.7, channel webhooks §12.4, identity sync §14.10, survey results
-§14.11, the trash §10.4, public submissions §24.5, real user monitoring §14.12 — are
-hidden from namespace admins, §4). Its sub-pages — the triage queue (§14.1), platform
-settings (§14.3), the audit browser (§15), the system log (§14.7) and real user
-monitoring (§14.12) — each render a
+§14.11, the trash §10.4, public submissions §24.5, real user monitoring §14.12, feature
+ideas §38.5 — are hidden from namespace admins, §4). Its sub-pages — the triage queue
+(§14.1), platform settings (§14.3), the audit browser (§15), the system log (§14.7), real
+user monitoring (§14.12) and feature ideas (§38.5) — each render a
 **breadcrumb** above the page title, via a shared component: **Administration** (a link back to `/admin`) › *current
 page* (the trailing crumb is plain text, not a link). Every present and future
 `/admin/*` sub-page carries it, so the way back to the console is consistent. The
@@ -4743,6 +4788,10 @@ delegated per namespace.**
   `rum_sample_rate` (100 / 50 / 25 / 10 / 1 %, default 100). Both are edited on the
   monitoring page itself (`/admin/monitoring`, §14.12), not here; the settings page
   carries only a link. Audited as `settings.telemetry_changed`.
+- **Feature ideas** — the `feature_ideas_enabled` switch (**on** by default, §38.11):
+  upvotes and proposals on What's new's *Coming soon*. Edited in the action slot of the
+  console's **Feature ideas** card, not here; the settings page carries only a link.
+  Audited as `settings.feature_ideas_enabled_changed`.
 
 All settings changes are audited.
 
@@ -5730,7 +5779,13 @@ anomalies. Since v0.10 also:
   and `topic.deleted` (§34.2), and `challenge.topics_changed` for an admin's re-tagging
   (`added`, `removed`, `via: "detail" | "bulk"`, or `trigger: "topic_deleted"`; §34.3).
   An author's change of topics is part of `challenge.edited`. Topic follows and event 18
-  are not audited.
+  are not audited;
+- **feature ideas** — `feature_idea.proposed` and `feature_idea.withdrawn` (actor the
+  proposer); `feature_idea.voted` and `feature_idea.unvoted` (under All only, as
+  `like.*`); `feature_idea.approved`, `feature_idea.declined`, `feature_idea.merged`,
+  `feature_idea.edited` and `feature_idea.deleted` under Admin; and
+  `settings.feature_ideas_enabled_changed` (§38.14). **No row carries a proposal's
+  text.** The shipped-teaser sweep, the awards and events 19–20 are not audited.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6040,8 +6095,18 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   **`admin/mcp`** (`GET`/`PATCH`), **`admin/mcp/clients`** (`GET`) and
   **`admin/mcp/clients/:id/block`** / **`…/unblock`** (`POST`) (§25.13);
   **`admin/topics`** (`GET`/`POST`) and **`admin/topics/:id`** (`PATCH`/`DELETE`)
-  (§34.9)
+  (§34.9);
+  **`admin/feature-ideas`** (`GET ?tab=`), `admin/feature-ideas/count`, and
+  `admin/feature-ideas/:id` with its `approve`, `decline` and `merge` (`POST`), `PATCH`
+  and `DELETE` routes (§38.14)
   — all platform admin only)
+- `coming-soon` (`GET` the §13.9 entries with their votes, voters and proposer, filtered
+  by audience; `coming-soon/votes` `POST` the toggle), `feature-ideas` (`POST` a
+  proposal, the `feature_idea` bucket), `me/feature-ideas` (`GET` the caller's own list;
+  `me/feature-ideas/:id` `DELETE` withdraws a pending one). While feature ideas are off,
+  the vote, proposal and own-list routes answer **404** and the `coming-soon` read returns
+  the specified teasers alone. `me` gains `featureIdeas` and `profile` the
+  `featureIdeasNamed` switch (§38.14)
 - `public-submissions/link` (`GET` → `{ url | null }`, any authenticated user — the §6.1
   copy link to the §24 public form, `url` set only while that feature is live, §24.9)
 - `me/agents` (`GET` the server URL, the on/off state and the caller's connections;
@@ -6131,7 +6196,13 @@ its own, but no challenge ever does — the former "no campaigns" non-goal is li
 take-backs or refunds, no admin-tunable budget, weight or window, no paid or bonus
 hypes, no hype on comments, no hype through MCP, no "hypes received" leaderboard metric
 or author badge, no per-namespace board, no hypers list in any e-mail, and no weekly
-reset job (the week is computed); for §23 gamification: no
+reset job (the week is computed); for §38 feature ideas: no downvotes and no vote
+budget, no comments or discussion on an idea, no stages between pending and planned
+and no "in progress" or "shipped" status (an admin deletes a shipped idea), no title,
+attachment or audience chosen by the proposer, no review by namespace admins, no
+notification to admins on a new proposal, no dates or ETAs on any entry, no export,
+nothing forwarded outside the deployment (no issue-tracker link), no AI drafting of the
+published copy, and nothing through MCP; for §23 gamification: no
 redeemable rewards (points buy and unlock nothing), no admin-tunable weights, caps or
 level curve, no custom or manually granted or revoked badges, no point deductions, no
 per-namespace boards, and no e-mail for achievements; for comment replies (§10.2): no
@@ -6972,6 +7043,8 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
 | `comment_posted` | **1** | the commenter | a comment is posted | `comment_posted:<commentId>` |
 | `hype_received` | **3** | the hyped item's author | a hype (§26) — never on your own item, which is refused | `hype_received:<parentType>:<parentId>:<hyperId>` |
 | `hype_fulfilled` | **0** | the hyper | an item they hyped first reaches `solved` (challenge) or `implemented` (solution) — drives the Talent Scout badge (§26.7) | `hype_fulfilled:<parentType>:<parentId>:<hyperId>` |
+| `idea_approved` | **10** | the feature idea's proposer | a platform admin approves it (§38.10) — never a merge, a decline or a spam delete | `idea_approved:<ideaId>` |
+| `idea_shipped` | **25** | the feature idea's proposer | a platform admin deletes the planned idea with *Notify that it shipped* ticked (§38.10) — drives the Roadmapper badge | `idea_shipped:<ideaId>` |
 
 - **Who moved it doesn't matter.** A milestone counts whether the transition was an
   enforced one by a committee member or assignee, or an admin override (§7.2, §8.2).
@@ -7056,6 +7129,7 @@ and count capped (0-point) rows too.
 | **Agent of Change** (`agent_of_change`) | one-off | your first solution proposed through an agent | — |
 | **Human in the Loop** (`human_in_the_loop`) | one-off | a challenge or solution you submitted through an agent reached `valid` | — |
 | **Talent Scout** (`talent_scout`) | tiered | items you hyped that were later solved or implemented (§26.7) | 1 / 5 / 20 |
+| **Roadmapper** (`roadmapper`) | tiered | feature ideas you proposed that shipped (§38.10) | 1 / 3 / 10 |
 
 - **Evaluation.** After writing award rows, the same transaction re-counts the affected
   user's relevant reasons and inserts any newly reached `(badge, tier)` rows
@@ -7158,7 +7232,8 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   exists only so the Points ranking can apply the live org-visible test. With §25 the
   ledger also gains `via_mcp` (boolean) and the 0-point, item-less `agent_connected`
   reason (§25.12, §25.13); with §26 the reasons `hype_received` and the 0-point
-  `hype_fulfilled` (§26.7, §26.10).
+  `hype_fulfilled` (§26.7, §26.10); with §38 the item-less reasons `idea_approved` and
+  `idea_shipped` (§38.10, §38.13).
 - **`user_badges`** — user_id (FK), badge_key, tier (`1 | 2 | 3`, null for a one-off),
   earned_at. Unique `(user_id, badge_key, coalesce(tier, 0))`. Same grants as the
   ledger.
@@ -7195,6 +7270,9 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   restricted challenge (decision 5). The **Points ranking** applies the live §13.3
   org-visible test to each ledger row's item (rows whose item no longer exists, or is
   no longer org-visible, drop out of the ranking — not out of the person's total).
+  **Item-less rows** (`agent_connected`, and the §38.10 `idea_approved` and
+  `idea_shipped`) have no item to test and count in full: they name no item or
+  namespace.
 - **Invariant 3.** No award exists for an anonymous item's author until self-reveal,
   so nothing in the ledger, a badge's earned date, a level change or a notification
   can correlate a person with an anonymous item. The replay at reveal backdates
@@ -7684,7 +7762,7 @@ administration is reachable through it (§25.6).
 | 5 | **Restricted content (namespace-only or shared with specific people) is invisible through MCP** unless a platform admin turns on *"Allow restricted content over MCP"* (off by default). | The agent's model is outside InnoBox's control — the same rule as the AI provider (§22.7). |
 | 6 | **Any active user** may connect once it is on. | Consumption is universal (§4.2); per-connection revoke and per-client block cover incidents. |
 | 7 | **Anonymity works exactly as on the web.** An agent may submit anonymously; every read is masked; reveal and self-reveal stay in the browser. | Anonymity is the person's choice wherever they submit; reveal is one-way. |
-| 8 | **No likes — and no hypes (§26) — through MCP.** | A like or a hype is a human signal that drives ranking, spotlights and points. |
+| 8 | **No likes — and no hypes (§26) or feature-idea votes and proposals (§38) — through MCP.** | A like, a hype or an upvote is a human signal that drives ranking, spotlights and points. |
 | 9 | **Attachments: metadata only.** No bytes, no uploads. | The gateway (invariant 4) stays the only byte path. |
 | 10 | **Visible attribution.** Items and comments created through MCP carry a **"via agent"** tag wherever people read them. | Reviewers and readers should know how a contribution arrived. The person is still the author. |
 | 11 | **Points as normal, plus four "first" badges.** MCP contributions earn §23 points like any other; four one-off badges mark a person's first agent milestones. | The person is responsible for what their agent submits; the badges encourage trying it. |
@@ -9377,3 +9455,465 @@ their namespace: what is emerging, what is stuck, and what looks duplicated.
 inputs and their limits; how results are cached and kept; whether committee members see
 it; an organization-wide pulse for platform admins; how it relates to triage assist
 (§22.11).
+
+---
+
+## §38 Feature ideas (upvotes and proposals)
+
+The What's new page's **Coming soon** list (§13.9) becomes a two-way roadmap. Every
+signed-in person can **upvote** the entries they most want, and can **propose** a new
+feature in a few sentences. A platform admin reviews each proposal. An approved one is
+written up by the admin and joins *Coming soon* as **planned**, beside the features this
+specification already defines, credited to the person who proposed it unless they have
+opted out. The admin removes it by hand once it is implemented, and everyone who
+proposed or upvoted it hears that it has arrived. Votes are a signal for prioritising:
+nothing about a release, this specification or its build order is decided by them.
+
+### §38.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Two kinds of entry, one list.** *Coming soon* holds the specified teasers (`UPCOMING`, §13.9) and the **community ideas** a platform admin approved. | An approved idea is planned. A reader should not need to know where a plan came from. |
+| 2 | **Approval means planned.** There is no "under consideration" stage. | The admin decides what goes on the roadmap, and *Coming soon* is the roadmap. |
+| 3 | **One upvote per person per entry, toggled.** No budget, no downvote. Specified teasers and ideas are voted on alike. | A light preference signal, like a like. Scarcity is hype's job (§26). |
+| 4 | **One list ordered by votes.** Ties go to specified teasers in hand order, then to the oldest approval. | It shows what people want most, with a stable order between equals. |
+| 5 | **A proposal is one text box.** On approval the admin writes the published **title and teaser** and picks the **audience**. | Users describe. The admin turns it into product copy that follows the §13.9 copy rules: no item, namespace or person, nothing that reads as a promise. |
+| 6 | **The proposer is named on the entry**, unless they opt out with one profile switch, read live. | Credit for a good idea, with a way out for those who don't want it. |
+| 7 | **Voters are public, under the same switch.** Voters who opted out are counted but not named. | An upvote is a real-name endorsement, like a hype (§26 decision 8). |
+| 8 | **Platform admins review; nobody else does.** Approve, Decline (with an optional note), Merge as duplicate, Delete as spam. | The product is platform-wide. A namespace admin has no say over it. |
+| 9 | **A planned idea leaves the list only when an admin deletes it**, normally once it has shipped. No status machine. | The changelog announces what shipped. An idea needs no lifecycle beyond "planned". |
+| 10 | **The proposer hears every decision**, in-app and by e-mail. **The proposer and every voter hear "now available"** when a planned idea is deleted as shipped or a specified feature ships. | Closing the loop is what makes a vote worth casting. |
+| 11 | **At most 3 proposals pending per person**, plus 2 a minute and 5 a day. | Keeps the review queue readable. |
+| 12 | **10 points when an idea is approved, 25 when it ships, and a tiered Roadmapper badge.** Nothing for proposing alone or for voting. | Rewards ideas that make it, not volume (§23 decision 2). |
+| 13 | **Own platform switch, on by default.** | Like bug reports (§13.10): low risk, and a deployment can still turn it off. |
+| 14 | **Nothing through MCP** (§25 decision 8 extended). | A human signal that drives an order and points, like a like. |
+
+### §38.2 The entries
+
+- **Entry ids.** A specified teaser is `spec:<key>`; a community idea is `idea:<uuid>`.
+  Ids are internal: the API carries them, and nothing renders them.
+- **Specified teasers** stay hand-maintained, but `UPCOMING` moves to the client-safe
+  shared module **`@innobox/shared/upcoming`** (`packages/shared/src/upcoming.ts`) so the
+  worker can read it (§38.9). Each entry gains a **`key`**: a permanent kebab-case slug,
+  unique, **never reused** once retired, internal and never rendered. Votes on a teaser
+  are stored against its key.
+- **`DROPPED_UPCOMING_KEYS`** (same module) lists the keys of teasers taken out of the
+  plan **without** shipping (a feature descoped from this specification). Their votes are
+  cleared silently. Every other key that leaves `UPCOMING` counts as shipped (§38.9).
+- **Community ideas** are the `feature_ideas` rows in `planned` status (§38.13). Their
+  title, teaser and audience are the admin's (§38.5).
+- **Audience.** Both kinds use the §13.9 `appliesTo` rule (`everyone`, `admins`,
+  `platform_admin`) against the viewer's resolved roles (invariant 1). It is now applied
+  **server-side**, because ideas come from the database: an entry outside the viewer's
+  audience is never returned, never counted, and is a 404 for every route that names it.
+- **Order.** Votes descending. Among equals, specified teasers come first in `UPCOMING`
+  order, then ideas by approval time, oldest first.
+- **The vote count** counts every vote on the entry, including those of voters who
+  opted out, are deactivated or are erased, and of voters an audience change has since
+  put out of sight (§38.12). The section's heading count (*"Coming soon · 9"*, §13.9)
+  counts the entries that apply to the viewer, ideas included.
+
+### §38.3 Upvoting
+
+- **The button.** Each row gets an upvote button at its right edge: an inline-SVG
+  up-chevron in `currentColor` and the count beside it. **0 is shown.** At rest it is
+  `--muted`, like the rest of the row. Pressed (`aria-pressed="true"`), it takes `--accent`
+  text on an `--accent-soft` fill, the only accent in the greyed section, so a viewer can
+  find their own votes at a glance. `aria-label` is *"Upvote: {title}"*, or *"Remove your
+  upvote: {title}"* while pressed, and the `title` tooltip matches. No new token or icon
+  dependency.
+- **A click toggles**, optimistically: the count and the pressed state flip at once and
+  revert, with a short inline error under the row, if the request fails. It asks for no
+  confirmation. The proposer may vote for their own idea; their vote is added when the
+  idea is approved (§38.5) and they can remove it like any other.
+- **The voter list** sits under the teaser once an entry has at least one vote. It shows
+  the **named** voters as small avatar bubbles with the §13.8 hover card, newest first:
+  the first **12**, then *"+N"*, which expands to the full named list on click (as the
+  §26.5 hypers list does). Voters who opted out (§38.6) or were erased follow as one muted
+  line, *"and 3 others"*, which never expands. When the viewer is one of them, it reads
+  *"and 3 others, including you"*. A deactivated voter shows the greyed bubble.
+- **Eligibility.** The feature is on, and the entry exists and applies to the viewer
+  (§38.2). Nothing else: there is no budget, and any entry in the list can be voted on.
+- **Concurrency.** The unique key on `(user, entry)` makes the toggle idempotent. A
+  retried "add" is a no-op, never a second row.
+- A vote on a teaser key that is no longer in `UPCOMING` is a 404, so no vote can land
+  on a shipped teaser between a deploy and the §38.9 sweep.
+
+### §38.4 Proposing
+
+- **The button.** **"Propose a feature"** (`btn btn-sm`,
+  `data-testid="propose-feature"`) sits on the *Coming soon* header row, to the right of
+  the heading block's toggle button and **outside** it (a button cannot hold a button), so
+  it is reachable while the section is collapsed. At ≤ 560 px it wraps under the heading
+  block. It shows while the feature is on.
+- **The dialog.** A modal `role="dialog"` (`aria-modal="true"`, labelled by its
+  heading), on the §2.2 tokens. Focus moves to the text box on open and returns to the
+  button on close. Escape, **Cancel** or a backdrop click closes it. If the box holds
+  text, closing first asks *"Discard your idea?"* through the browser's confirm dialog.
+  - Heading ***"Propose a feature"***, and the sub-line *"Describe what you'd like
+    InnoBox to do and why. A platform admin reviews every idea. If it's planned, it
+    appears here with your name."* When the viewer has opted out (§38.6), the last
+    sentence reads *"If it's planned, it appears here."*
+  - One text box labelled ***"Your idea"***, placeholder *"What should InnoBox do, and
+    what would it help you with?"*. It is **required**, at most **1 000** characters,
+    with a live `N / 1000` counter, and input beyond the cap is blocked. No title, no
+    attachment, no audience choice: those are the admin's (decision 5).
+  - **Send idea** (disabled until the box holds non-whitespace) and **Cancel**. Send
+    locks the dialog while in flight (§6.4 submission lock).
+  - **Success** replaces the body with *"Thanks, a platform admin will review your idea.
+    You'll hear back either way."*, and the dialog closes itself after ~4 s (or on
+    Close). Any failure keeps the text and shows an inline error with a retry.
+- **The pending cap.** A person may have at most **3** proposals in `pending` at once
+  (`MAX_PENDING_IDEAS` in `@innobox/shared/feature-ideas`). With 3 pending, the dialog
+  opens with the hint *"You have 3 ideas waiting for review. You can propose another once
+  one of them is decided."* and **Send idea** disabled. The server re-checks the cap
+  under a per-person advisory lock and answers **409 `too_many_pending`** with the same
+  message, so two tabs can never both slip under it.
+- **Rate limit.** The new **`feature_idea`** bucket (§2.4): **2 per minute and 5 per
+  day** per person, both enforced, tighter than bug reports because every proposal lands
+  in a queue a person reviews. **429** with `Retry-After`. Unlike the survey buckets, its
+  warning carries the user id: a proposal is not anonymous.
+- **Who can see the raw text.** Only the proposer (§38.7) and platform admins (§38.5).
+  It is never rendered on *Coming soon*: the published title and teaser are the
+  admin's. It is always rendered as **plain text**.
+
+### §38.5 Review — `/admin/feature-ideas` (platform admin)
+
+- **The card.** A **Feature ideas** card in the Administration console's platform-admin
+  section, after **Public submissions**. It links to `/admin/feature-ideas`, carries a
+  count bubble for `pending` proposals (`1`–`9`, then `9+`, hidden at zero, as §24.5),
+  and holds the **`feature_ideas_enabled`** switch (the §2.2 preference pill) in its
+  **action slot**, usable without opening the page (§38.11). **Platform admins only**:
+  namespace admins never see the card, and every admin route answers **403** to anyone
+  else.
+- **The page** carries the §14 breadcrumb (*Administration › Feature ideas*) and three
+  tabs:
+  - **Pending** (the default) — oldest first. Each row: when it was sent
+    (`useDateFmt()`), the proposer (bubble and name, **always**, whatever their §38.6
+    switch says: admins review people's ideas), and the first 160 characters of the text.
+  - **Planned** — the approved ideas in the §38.2 order: title, teaser, an audience chip
+    (*Everyone* / *Admins* / *Platform admins*), the vote count, the proposer (with a
+    muted *"name hidden on What's new"* tag when they opted out) and when it was
+    approved. Specified teasers are not listed here: they are managed in code, and their
+    votes show on What's new.
+  - **Decided** — declined and merged proposals from the last **90 days**, newest
+    first, with the decision, the note or the merge target, who decided and when.
+    Older ones stay in the database and in the proposer's own list (§38.7).
+- **Selecting a pending row** opens a review panel with the full text, the proposer and
+  the date, and four actions:
+  - **Approve** — a dialog with **Title** (required, ≤ **60** characters, pre-filled
+    with the text's first sentence cut at a word boundary), **Teaser** (required, ≤
+    **280** characters, pre-filled with the text cut at a word boundary) and
+    **Audience** (*Everyone*, the default, *Admins* or *Platform admins*). A note under
+    the fields repeats the copy rules: *"This is shown to everyone in the audience. Don't
+    name people, challenges or teams, and don't promise a date."* The server rejects a
+    title or teaser containing a `§` or a `GAP-<n>` marker (**422**), as the §13.9 test
+    does for `UPCOMING`. One transaction: the row becomes `planned`, the proposer's vote
+    is inserted, event 19 is written (§38.8) and the `idea_approved` award (§38.10).
+  - **Decline** — an optional note to the proposer (≤ **1 000** characters, plain text),
+    included in event 19. The row becomes `declined`.
+  - **Merge as duplicate** — a picker of the current *Coming soon* entries (specified
+    teasers and planned ideas, every audience). An entry whose audience does not include
+    the **proposer** is listed but disabled, with *"Not visible to the person who
+    proposed this"*: the notification would otherwise name an entry they cannot see. The
+    row becomes `merged` with `merged_into` set, the proposer's vote is added to the
+    target (if they had not voted for it already), and event 19 tells them it is already
+    planned. No award.
+  - **Delete as spam** — one confirm. The row is deleted at once and nothing is sent.
+- **A decision on a row someone else has already decided** (or the proposer withdrew)
+  is **409**, *"Another admin has already reviewed this idea."* Every decision is one
+  guarded `UPDATE … WHERE status = 'pending'`.
+- **On the Planned tab**, each row has:
+  - **Edit** — the Approve dialog again, pre-filled with the current title, teaser and
+    audience. Votes are kept and nobody is notified. Narrowing the audience keeps the
+    votes of people who can no longer see the idea (§38.12).
+  - **Delete** — a dialog *"Delete this planned idea?"* with a checkbox **"Notify that
+    it shipped"**, **ticked by default**, and the helper *"The person who proposed it and
+    the {N} people who upvoted it get a 'now available' notification."* Deleting
+    removes the row and its votes. Ticked, it also writes event 20 (§38.8) and the
+    `idea_shipped` award (§38.10) in the same transaction. Unticked, it is silent: the
+    path for an idea that was dropped.
+
+### §38.6 The name switch
+
+- **`users.feature_ideas_named`** (boolean, not null, default **true**). On the own
+  profile's **Feature ideas** section (§38.7) as the §2.2 pill switch, **"Show my name on
+  feature ideas"**, with the helper, on: *"Ideas you propose and upvote show your name on
+  What's new."*; off: *"Your ideas and upvotes still count, but your name isn't shown."*
+  Optimistic flip and inline-error revert, as every profile switch. Not audited, like
+  every profile preference.
+- **Live.** It is read when an entry is rendered, never copied onto a row, so switching
+  it off unnames every idea and vote already published, and switching it back on names
+  them again.
+- **What it governs.** The *"Proposed by"* line and the person's place in voter lists,
+  on *Coming soon* only. It does not hide the proposer from platform admins on the review
+  page, and it is not anonymity in the §9 sense: the person is stored, and admins and
+  the audit log see them (§38.12).
+- **The "Proposed by" line.** Under an idea's teaser: *"Proposed by"*, the proposer's
+  small bubble with the §13.8 hover card, and their display name. A deactivated proposer
+  shows the greyed bubble and stays named. The line is **omitted** when the proposer has
+  opted out or has been erased. Specified teasers have no such line.
+
+### §38.7 The proposer's own list
+
+The own profile gains a **Feature ideas** section after **Feedback** (§13.5), shown while
+the feature is on. It holds the §38.6 switch, then **"Your ideas"**, newest first. Each
+row shows a status pill and the date sent:
+
+- **Waiting for review** — the text (clamped to two lines, expandable) and a
+  **Withdraw** button. Withdrawing asks for a browser confirm, then deletes the row
+  (**409** if it was decided meanwhile).
+- **Planned** — the published title and its vote count, linked to
+  `/whats-new#coming-soon` (§13.9), and the original text, collapsed.
+- **Declined** — the text and the admin's note, if any.
+- **Merged** — *"Already planned as {title}"*, linked like Planned. When the target has
+  since been deleted or has shipped, *"Already planned"* alone.
+
+An idea deleted from the Planned tab leaves the list: its notification (event 20) is the
+record. With no ideas the list reads *"You haven't proposed any features yet."* Other
+people's profiles show none of this.
+
+### §38.8 Notifications — events 19 and 20
+
+Two new rows of the §12.1 matrix. Neither names a challenge or a solution, so both
+inbox columns `challenge_id` and `solution_id` are null and the §12.1 read-time gates
+pass them through, as for achievements. Neither names the admin who acted: the copy says
+*"a platform admin"* where it needs a subject.
+
+- **Event 19 — "Feature idea reviewed".** The proposer only, for each of their own
+  proposals' decisions. **Immediate**, never digested and not mutable: it is about the
+  person's own submission, like events 4 and 5.
+  - *Approved* — inbox *"Your idea is planned: {title}"*; e-mail subject *"Your feature
+    idea is planned"*, with the published title and teaser. Linked to
+    `/whats-new#coming-soon`.
+  - *Declined* — inbox *"Your feature idea wasn't taken forward"*; e-mail subject *"Your
+    feature idea was reviewed"*, with the first 200 characters of their text and the
+    admin's note when there is one. Linked to `/profile` (the §38.7 list).
+  - *Merged* — inbox *"Your idea is already planned: {title}"*; e-mail subject *"Your
+    feature idea is already planned"*, with the target's title and teaser and a line
+    saying their upvote was added. Linked to `/whats-new#coming-soon`.
+- **Event 20 — "Feature now available".** Written when a planned idea is deleted with
+  **Notify that it shipped** ticked (§38.5), and when a specified teaser ships (§38.9).
+  Recipients: the idea's proposer and every voter, deduplicated, **to whom the entry
+  still applied** at that moment (§38.2 audience), so a person narrowed out of an
+  admin-only entry is not told about it. The deleting admin, as the actor, is not
+  notified (§12.1). Inbox *"{title} is now available"*; e-mail subject *"Now available:
+  {title}"*, with the title, *"You proposed it"* or *"You upvoted it"*, and a link to
+  `/whats-new`. A **follower-type** event for the digest (held on `daily` / `weekly`, one
+  line per feature), not coalesced.
+- **E-mail content safety (§12.1)** applies: titles, teasers, notes and the excerpt
+  are plain text, escaped, never linked.
+- **No admin notification.** A new proposal raises no event for platform admins: the
+  card's count bubble (§38.5) is how they see the queue.
+- **Not written** while the feature is off (decisions are blocked then, §38.11), or to a
+  deactivated or erased person (the §12.1 drop).
+
+### §38.9 Shipped teasers — the worker's sweep
+
+Specified teasers leave `UPCOMING` in the commit that ships them (§13.9). The worker
+notices on its next start, tells the voters, and clears the votes.
+
+- **`coming_soon_teasers`** (§38.13) mirrors the keys, titles and audiences of `UPCOMING`. A
+  teaser's title and audience must be kept somewhere, because the shipping release no longer
+  has them, and event 20 goes only to the voters the teaser still applies to (§38.8).
+- **When.** Each time a worker replica **acquires leadership** (§2): after every deploy,
+  and after a failover. It runs once, before the leader's regular sweeps.
+- **What.**
+  1. Upsert every `UPCOMING` entry's key, current title and audience.
+  2. For each mirrored key that is no longer in `UPCOMING`, **in one transaction**:
+     - a key in `DROPPED_UPCOMING_KEYS` → delete its votes, silently;
+     - any other key → write event 20 to its voters (while the feature is on; while it
+       is off, nothing is written), then delete its votes;
+     - delete the mirror row.
+- **Idempotent.** A crash before a commit leaves the key for the next run. After the
+  commit nothing remains to repeat, so no voter is told twice.
+- **The first run** finds an empty mirror, seeds it, and announces nothing.
+- **A rollback** that brings a retired key back re-seeds it with no votes. The votes
+  cleared by the newer release are not restored. Accepted.
+- **Orphans.** A teaser added and removed again between two runs was never mirrored, so
+  nothing remembers its title: after the steps above, votes on any key that is not in
+  `UPCOMING` are cleared silently.
+- **Never audited**, like every scheduled sweep (§15).
+
+### §38.10 Gamification
+
+Two new §23.2 reasons and one badge, following §23 to the letter: append-only, written
+in the triggering transaction, accrued whatever the gamification switch says, nothing
+deducted.
+
+- **`idea_approved` — 10 points to the proposer**, award key `idea_approved:<ideaId>`,
+  `occurred_at` = the approval. Written by Approve only: never by a merge, a decline, a
+  withdrawal or a spam delete.
+- **`idea_shipped` — 25 points to the proposer**, award key `idea_shipped:<ideaId>`,
+  `occurred_at` = the delete. Written only by a Planned-tab delete with **Notify that it
+  shipped** ticked. Specified teasers earn no one anything.
+- **No daily cap**: each award needs an admin decision.
+- **Roadmapper** (`roadmapper`) — a **tiered** achievement badge: *ideas you proposed
+  that shipped*, **1 / 3 / 10**, counting `idea_shipped` rows. Notified as any
+  achievement (§23.7, event 13). It appears among a profile's **locked** badges only
+  while feature ideas are on. An earned tier stays visible either way.
+- **Item-less rows.** Both reasons are written with `item_type` and `item_id` null, like
+  `agent_connected` (§25.12). An idea is not a challenge or a solution, and the row must
+  survive the idea's delete. Item-less rows count in full toward the Points ranking
+  (§23.9): they name no item and no namespace.
+- **The name switch does not touch awards.** Gamification surfaces never name the idea
+  behind an award, and `gamification_public` (§23.9) governs who sees the badge.
+- **No points for voting**, or for proposing alone (§23's "never points for giving").
+
+### §38.11 Platform switch
+
+- **`feature_ideas_enabled`** (`platform_settings`, default **true**), written through
+  `PATCH /api/admin/settings` (key `featureIdeasEnabled`), platform admins only, and
+  audited as **`settings.feature_ideas_enabled_changed`** (`after: { enabled }`). The
+  pill lives in the action slot of the **Feature ideas** card (§38.5). The Platform
+  settings page carries only a line pointing to it (§14.3).
+- **Off:**
+  - *Coming soon* reverts exactly to its read-only §13.9 form: specified teasers only,
+    in hand order, with no upvote buttons, counts, voter lists, ideas, *"Proposed by"*
+    lines or **Propose a feature** button, and hidden when no teaser applies.
+  - The profile's **Feature ideas** section is hidden.
+  - The user routes (votes, proposing, the own list, withdrawing) answer **404**.
+  - The admin page stays readable under the note *"Feature ideas are off. Turn them on
+    to review."*, with every decision and Planned-tab action disabled. Their routes
+    answer **409 `feature_ideas_off`**.
+  - No event 19 or 18 is written. The §38.9 sweep still clears the votes of retired keys.
+- **On again:** pending proposals, planned ideas, votes and the switch states are as
+  they were. Nothing is backfilled.
+
+### §38.12 Visibility, anonymity and privacy
+
+- **Invariant 2.** Ideas are product feedback, not namespace content. The published
+  copy is admin-written under the copy rules, which the Approve dialog states and the
+  server partly enforces (§38.5). The raw text, which may name anything, reaches only its
+  author and platform admins, who see every item anyway. Audience filtering is
+  server-side (§38.2): an entry outside the viewer's audience is never returned, counted
+  or acted on. Narrowing an idea's audience keeps the votes already cast. Those voters
+  stop seeing the idea, and event 20 skips them (§38.8).
+- **Invariant 3** is untouched. Ideas are never anonymous in the §9 sense: the name
+  switch (§38.6) is a display preference, not masking. The person is stored, shown to
+  platform admins, and recorded in the audit log.
+- **Erasure (§3)** deletes the person's `pending`, `declined` and `merged` proposals:
+  their text is personal and serves no one else. It keeps their **planned** ideas, which
+  are now admin-written product copy: the raw text is cleared (`description` set to
+  null) and the *"Proposed by"* line is omitted. Their votes are kept and counted among
+  *"others"*, and `feature_ideas_named` returns to its default. Their award rows go with
+  the §23 erasure.
+- **Deactivation** keeps everything. A deactivated person is never a notification
+  recipient (§12.1).
+- **Presence (§14.5).** `/admin/feature-ideas` reports the `Administration` category;
+  `/whats-new` keeps its static label. The vote, proposal and withdraw mutations join the
+  presence allowlist, as user-initiated writes do. `GET /api/coming-soon` does not: the
+  page navigation that triggers it has already stamped.
+- **MCP (§25).** No tool reads, votes on or proposes feature ideas, and no tool result
+  carries a vote count (decision 14).
+
+### §38.13 Data model (migration 0054)
+
+- **`feature_ideas`** — `id` (uuid, `gen_random_uuid()`), `author_id` (FK `users`, not
+  null), `description` (text, ≤ 1 000 characters; **null only** for a planned idea whose
+  author was erased, §38.12), `status` (CHECK `pending | planned | declined | merged`),
+  `title` (text, ≤ 60), `teaser` (text, ≤ 280), `audience` (CHECK `everyone | admins |
+  platform_admin`), `decision_note` (text, ≤ 1 000), `merged_into` (text: an entry id,
+  §38.2), `decided_by` (FK `users`, nullable), `decided_at` (timestamptz), `created_at`
+  (timestamptz, default `now()`), `updated_at` (timestamptz). Shape CHECKs: `planned` ⇒
+  title, teaser and audience not null; any status but `pending` ⇒ `decided_at` not
+  null; `merged` ⇒ `merged_into` not null; `description` is null only when `status =
+  'planned'`. Indexes on `(status, created_at)` and `(author_id, status)`. Grants to
+  `innobox_app`: SELECT, INSERT, UPDATE and DELETE (withdraw, spam, a Planned-tab delete,
+  erasure).
+- **`feature_idea_votes`** — `user_id` (FK `users`), `spec_key` (text, nullable),
+  `idea_id` (uuid, FK `feature_ideas` **`ON DELETE CASCADE`**, nullable), `created_at`
+  (timestamptz, default `now()`). CHECK: exactly one of `spec_key` and `idea_id` is set.
+  Partial unique indexes `(user_id, spec_key) WHERE spec_key IS NOT NULL` and `(user_id,
+  idea_id) WHERE idea_id IS NOT NULL`, plus indexes on `spec_key` and `idea_id`. Grants:
+  SELECT, INSERT and DELETE. **No UPDATE**: a vote is added or removed, never changed.
+- **`coming_soon_teasers`** — `key` (text PK), `title` (text), `audience` (text, CHECK `everyone
+  | admins | platform_admin`, default `everyone`), `seen_at` (timestamptz). Written by the
+  worker only (§38.9). Grants: SELECT, INSERT, UPDATE and DELETE.
+- **`users`** gains **`feature_ideas_named`** (boolean, not null, default true).
+- **`platform_settings`** gains **`feature_ideas_enabled`** (default **true**, seeded
+  `ON CONFLICT DO NOTHING`).
+- **`gamification_ledger.reason`** gains `idea_approved` and `idea_shipped`. `roadmapper`
+  joins the fixed badge catalogue (`user_badges` needs no change).
+- **`notifications.type`** gains `feature_idea_reviewed` (event 19) and
+  `feature_available` (event 20).
+
+Idempotent per the `db/migrations` README.
+
+### §38.14 API, audit, tests
+
+- **API (§16).** All session-authenticated, `Origin`-checked mutations (§2.4), `mutation`
+  bucket unless stated.
+  - `GET /api/coming-soon` → `{ enabled, entries: [{ id, kind: 'spec' | 'idea', title,
+    teaser, votes, voted, voters: [{ id, displayName, deactivated }], othersCount,
+    othersIncludesYou, proposedBy: { id, displayName, deactivated } | null }],
+    myPendingCount, maxPending, named }`, in the §38.2 order and filtered by audience
+    (`named` is the viewer's own §38.6 switch, for the propose dialog's sub-line). While the
+    feature is off: `{ enabled: false, entries: [{ id, kind: 'spec', title, teaser }] }`
+    in hand order. The What's new page's only read for the section (§13.9).
+  - `POST /api/coming-soon/votes { entry }` → `{ voted, votes, voters, othersCount,
+    othersIncludesYou }`: the toggle. **404** while off, or for an unknown, retired or
+    inapplicable entry.
+  - `POST /api/feature-ideas { description }` → **201** `{ id }`. **422** for empty or
+    over 1 000 characters, **409 `too_many_pending`**, **404** while off. The
+    `feature_idea` bucket (§2.4).
+  - `GET /api/me/feature-ideas` → the §38.7 list. `DELETE /api/me/feature-ideas/:id` →
+    withdraw a pending one, **409** once decided, **404** for someone else's.
+  - Admin, platform admin only (**403** otherwise): `GET /api/admin/feature-ideas?tab=
+    pending|planned|decided`, `GET /api/admin/feature-ideas/count` (the card bubble),
+    `POST /api/admin/feature-ideas/:id/approve { title, teaser, audience }`, `…/:id/
+    decline { note? }`, `…/:id/merge { entry }`, `PATCH /api/admin/feature-ideas/:id {
+    title, teaser, audience }` (planned only), and `DELETE /api/admin/feature-ideas/:id`
+    (a pending row: spam, no body; a planned row: `{ notifyShipped: boolean }`
+    required). **409** for a row already decided, or in the wrong status for the action,
+    and **409 `feature_ideas_off`** while off.
+  - `GET /api/me` gains **`featureIdeas: boolean`** (the switch). `GET|PATCH
+    /api/profile` carries **`featureIdeasNamed`**. `PATCH /api/admin/settings` accepts
+    **`featureIdeasEnabled`**.
+- **Audit (§15).** **`feature_idea.proposed`** and **`feature_idea.withdrawn`** (actor
+  the proposer, target the idea); **`feature_idea.voted`** and
+  **`feature_idea.unvoted`** (actor the voter, target the entry id; under **All** only,
+  as `like.*`); **`feature_idea.approved`** (`after: { title, teaser, audience }`),
+  **`feature_idea.declined`** (`after: { note }`), **`feature_idea.merged`** (`after: {
+  entry }`), **`feature_idea.edited`** (a before/after diff) and
+  **`feature_idea.deleted`** (`before: { status, title }`, `after: { notifyShipped }`
+  for a planned row), under **Admin**; and **`settings.feature_ideas_enabled_changed`**.
+  **No audit row ever carries a proposal's text**: `audit_log` is immutable and exempt
+  from erasure (invariant 5), and the text is personal data that the spam delete and the
+  erasure exist to remove. The §38.9 sweep, the awards and events 19–20 are not audited.
+- **Tests** (shipped with the change):
+  - **Unit** (`@innobox/shared/upcoming`, `@innobox/shared/feature-ideas`): the moved
+    spec-sync test (both directions, unchanged); every `UPCOMING` key is a unique
+    kebab-case slug and none is in `DROPPED_UPCOMING_KEYS`; the §38.2 ordering
+    comparator (votes, then spec hand order, then approval time); the audience filter
+    for both kinds; the proposal validation (required, trimmed, the 1 000 cap); the
+    approve-copy check (`§`, `GAP-<n>`, the 60 and 280 caps); the title and teaser
+    pre-fill (first sentence, word boundary); the voter-list split (named, *others*,
+    *including you*); the event 20 recipient set (dedupe, audience, actor excluded); the
+    sweep's plan (ship, drop, seed); the award keys, the Roadmapper tiers.
+  - **Integration (`*.dbtest.ts`):** a proposal is stored pending and audited without
+    its text; the fourth pending is 409, also for two concurrent requests; the rate
+    limit's 429; withdraw deletes a pending row and is 409 once decided. Approve writes
+    `planned`, the proposer's vote, event 19 and `idea_approved` in one transaction, and
+    rejects `§` and over-long copy with 422. Decline stores the note and notifies. Merge
+    moves the vote, refuses a target outside the proposer's audience, and awards
+    nothing. A second decision is 409. Spam delete sends nothing. Edit keeps votes. A
+    planned delete with `notifyShipped` writes event 20 to the proposer and voters (not
+    the actor, not a deactivated voter, not a voter outside the audience) and
+    `idea_shipped`; without it, nothing. The vote toggle is idempotent, 404s for a
+    retired key, an inapplicable entry or while off. `GET /api/coming-soon` never returns
+    an entry outside the viewer's audience, orders by votes, and honours the name switch
+    live. The sweep announces a shipped key once, clears a dropped key silently, writes
+    nothing while off, and survives a re-run. Erasure deletes pending, declined and
+    merged rows, clears a planned idea's text and keeps the votes. Switch off: user
+    routes 404, admin decisions 409, audited switch. The migration's CHECKs (a planned
+    row without a title, a vote with both or neither target) fail.
+  - **e2e** (`e2e/feature-ideas.spec.ts`): a user opens What's new, proposes an idea
+    (the thank-you shows, the profile lists it as *Waiting for review*); a platform
+    admin sees the card's bubble, approves it with an edited title on
+    `/admin/feature-ideas`; the idea appears in *Coming soon* with *"Proposed by"* and
+    one vote; a second user upvotes it (count 2, their bubble appears), toggles the vote
+    off and on; the proposer turns the name switch off and the line disappears; the
+    admin deletes it as shipped and the proposer's inbox shows *"… is now available"*.
+    With the switch off, the propose button and the vote buttons are gone and the profile
+    section is hidden.
