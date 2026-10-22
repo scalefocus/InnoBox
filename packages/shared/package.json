@@ -136,7 +136,8 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
+    "build": "pnpm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && cd dist && node --test",
     "lint": "eslint ."

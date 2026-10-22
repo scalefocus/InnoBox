@@ -7,7 +7,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
+    "build": "pnpm run clean && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && cd dist && node --test",
