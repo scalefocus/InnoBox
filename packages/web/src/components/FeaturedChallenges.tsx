@@ -4,7 +4,7 @@
 // visibility (invariant 2) and author masking (invariant 3); when nothing is visible this renders
 // nothing at all — no heading, no empty state.
 import Link from "next/link";
-import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
 import { HypeCount } from "@/components/Hype";
 
@@ -13,6 +13,8 @@ export interface FeaturedChallengeCard {
   number: string;
   title: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
+  /** §39.7: every member in order, masked — the compact form. */
+  authors?: TeamPerson[];
   impactAreaName: string;
   status: string;
   likeCount: number;
@@ -41,8 +43,7 @@ export function FeaturedChallenges({ items }: { items: FeaturedChallengeCard[] }
             </div>
             <h3>{c.title}</h3>
             <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <AvatarBubble size="sm" userId={c.author.userId} displayName={c.author.displayName} anonymous={c.author.anonymous} external={c.author.external === true} deactivated={c.author.active === false} scrubbed={c.author.scrubbed === true} />
-              <span>{c.author.anonymous ? "Anonymous" : c.author.displayName}</span>
+              <TeamByline authors={teamOf(c)} />
             </div>
             <div className="meta">
               <span className="chip">❤ {c.likeCount}</span>

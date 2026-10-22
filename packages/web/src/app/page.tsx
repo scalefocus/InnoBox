@@ -11,7 +11,7 @@ import { getProviders, signIn, useSession } from "next-auth/react";
 import { cachedGet } from "@/lib/ui";
 import { authErrorMessage } from "@/lib/auth-pages";
 import { useDateFmt } from "@/components/DateFormat";
-import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "./challenges/status";
 import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/FeaturedChallenges";
 import { HypedThisWeek, type HypedBoard } from "@/components/Hype";
@@ -20,6 +20,8 @@ interface SpotlightSolution {
   number: string;
   description: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean };
+  /** §39.7: every member in order, masked — the compact form. */
+  authors?: TeamPerson[];
   challengeNumber: string;
   challengeTitle: string;
   updatedAt: string;
@@ -278,8 +280,7 @@ function SpotlightCard({ title, solution, empty }: { title: string; solution: Sp
           </p>
           <div className="sub mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {solution.number} ·{" "}
-            <AvatarBubble size="sm" userId={solution.author.userId} displayName={solution.author.displayName} anonymous={solution.author.anonymous} deactivated={solution.author.active === false} scrubbed={solution.author.scrubbed === true} />
-            {solution.author.anonymous ? "Anonymous" : solution.author.displayName} · {fmt.date(solution.updatedAt)}
+            <TeamByline authors={teamOf(solution)} /> · {fmt.date(solution.updatedAt)}
           </div>
         </Link>
       )}

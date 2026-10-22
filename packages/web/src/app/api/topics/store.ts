@@ -9,6 +9,7 @@ import {
   ACTIVE_TOPICS_MAX,
   bulkTopicChange,
   canSeeChallenge,
+  challengeAuthorIdsSql,
   formatChallengeNumber,
   type BulkTopicOutcome,
   type ChallengeStatus,
@@ -131,7 +132,8 @@ interface RetagTarget {
   namespace_id: string;
   visibility: ChallengeVisibility;
   status: string;
-  author_id: string | null;
+  /** §39.2: the team. */
+  author_ids: string[];
   assignee_id: string | null;
   trashed: boolean;
 }
@@ -142,7 +144,8 @@ interface RetagTarget {
 async function loadRetagTarget(pool: Pool, admin: Viewer, number: string): Promise<{ status: "ok"; row: RetagTarget } | { status: "not_found" | "trashed" | "forbidden" }> {
   if (!isEntityNumber(number)) return { status: "not_found" };
   const { rows } = await pool.query<RetagTarget>(
-    `select id, namespace_id, visibility, status, author_id, assignee_id, trashed_at is not null as trashed from challenges where number = $1`,
+    `select c.id, c.namespace_id, c.visibility, c.status, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id, c.trashed_at is not null as trashed
+       from challenges c where c.number = $1`,
     [number],
   );
   const row = rows[0];
@@ -153,7 +156,7 @@ async function loadRetagTarget(pool: Pool, admin: Viewer, number: string): Promi
       namespaceId: row.namespace_id,
       visibility: row.visibility,
       status: row.status as ChallengeStatus,
-      authorId: row.author_id,
+      authorIds: row.author_ids,
       assigneeId: row.assignee_id,
       trashed: row.trashed,
     });

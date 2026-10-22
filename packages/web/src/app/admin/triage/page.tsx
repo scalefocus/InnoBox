@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, type TeamPerson } from "@/components/TeamByline";
 import { FloatingResults } from "@/components/FloatingResults";
 import { UserResultButton } from "@/components/UserResultButton";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
@@ -36,6 +37,8 @@ interface TriageRow {
   authorActive?: boolean;
   authorScrubbed?: boolean;
   authorExternal?: boolean;
+  /** §39.7: every member in order, masked. */
+  authors?: TeamPerson[];
   status: string;
   impactAreaName: string;
   /** §34.6: the challenge's topics, alphabetical — retired ones included (`active: false`). */
@@ -588,16 +591,8 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                 ))}
               </span>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <AvatarBubble
-                  size="sm"
-                  userId={r.authorId}
-                  displayName={r.authorDisplayName}
-                  anonymous={r.authorAnonymous}
-                  external={r.authorExternal === true}
-                  deactivated={r.authorActive === false}
-                  scrubbed={r.authorScrubbed === true}
-                />
-                {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
+                {/* §39.7: the compact form — stacked bubbles, the first member's name and "+N". */}
+                <TeamByline authors={triageTeam(r)} />
                 <ViaAgentTag via={r.viaAgent} flush />
               </span>
               <span className={statusPillClass(r.status)}>{CHALLENGE_STATUS_LABEL[r.status] ?? r.status}</span>
@@ -646,6 +641,8 @@ interface TriageSolutionRow {
   authorId: string | null;
   authorActive?: boolean;
   authorScrubbed?: boolean;
+  /** §39.7: every member in order, masked. */
+  authors?: TeamPerson[];
   impactAreaName: string;
   namespaceSlug: string;
   createdAt: string;
@@ -714,15 +711,7 @@ function SolutionsQueue() {
                 </div>
               </div>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <AvatarBubble
-                  size="sm"
-                  userId={r.authorId}
-                  displayName={r.authorDisplayName}
-                  anonymous={r.authorAnonymous}
-                  deactivated={r.authorActive === false}
-                  scrubbed={r.authorScrubbed === true}
-                />
-                {r.authorAnonymous ? "Anonymous" : r.authorDisplayName}
+                <TeamByline authors={triageTeam(r)} />
                 <ViaAgentTag via={r.viaAgent} flush />
               </span>
               <span className="sub">{r.impactAreaName}</span>
@@ -896,4 +885,27 @@ function InlineAssign({ row, onAssigned }: { row: TriageRow; onAssigned: (messag
       )}
     </span>
   );
+}
+
+/** §39.7: a triage row's team — `authors`, or the row's own author fields as a team of one. */
+function triageTeam(r: {
+  authors?: TeamPerson[];
+  authorId: string | null;
+  authorDisplayName: string;
+  authorAnonymous: boolean;
+  authorActive?: boolean;
+  authorScrubbed?: boolean;
+  authorExternal?: boolean;
+}): TeamPerson[] {
+  if (r.authors && r.authors.length > 0) return r.authors;
+  return [
+    {
+      userId: r.authorId,
+      displayName: r.authorAnonymous ? "Anonymous" : r.authorDisplayName,
+      anonymous: r.authorAnonymous,
+      active: r.authorActive,
+      scrubbed: r.authorScrubbed,
+      external: r.authorExternal,
+    },
+  ];
 }

@@ -18,6 +18,8 @@ import type { Pool } from "pg";
 import {
   buildRoleSet,
   canSeeChallenge,
+  challengeAuthorIdsSql,
+  solutionAuthorIdsSql,
   type ChallengeVisibility,
   canSeeSolution,
   getEmailWrapperHtml,
@@ -133,18 +135,20 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
     namespace_id: string;
     visibility: ChallengeVisibility;
     challenge_status: ChallengeStatus;
-    challenge_author_id: string;
+    /** §39.2: the challenge's team. */
+    challenge_author_ids: string[];
     assignee_id: string | null;
     solution_status: SolutionStatus | null;
-    solution_author_id: string | null;
+    /** §39.2: the solution's team — empty for a challenge row. */
+    solution_author_ids: string[];
     trashed: boolean;
   }>(
     parentType === "challenge"
-      ? `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
-                null as solution_status, null as solution_author_id, c.trashed_at is not null as trashed
+      ? `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, ${challengeAuthorIdsSql("c")} as challenge_author_ids,
+                c.assignee_id, null as solution_status, '{}'::text[] as solution_author_ids, c.trashed_at is not null as trashed
            from challenges c where c.id = $1`
-      : `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, c.author_id as challenge_author_id, c.assignee_id,
-                s.status as solution_status, s.author_id as solution_author_id,
+      : `select c.id as challenge_id, c.namespace_id, c.visibility, c.status as challenge_status, ${challengeAuthorIdsSql("c")} as challenge_author_ids,
+                c.assignee_id, s.status as solution_status, ${solutionAuthorIdsSql("s")} as solution_author_ids,
                 (s.trashed_at is not null or c.trashed_at is not null) as trashed
            from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [parentId],
@@ -156,7 +160,7 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
     namespaceId: row.namespace_id,
     visibility: row.visibility,
     status: row.challenge_status,
-    authorId: row.challenge_author_id,
+    authorIds: row.challenge_author_ids,
     assigneeId: row.assignee_id,
     trashed: false,
   });
@@ -164,7 +168,7 @@ async function isVisibleTo(pool: Pool, viewer: { userId: string; roles: RoleSet 
   return canSeeSolution(
     viewer,
     { namespaceId: row.namespace_id, assigneeId: row.assignee_id },
-    { status: row.solution_status!, authorId: row.solution_author_id!, trashed: false },
+    { status: row.solution_status!, authorIds: row.solution_author_ids, trashed: false },
   );
 }
 

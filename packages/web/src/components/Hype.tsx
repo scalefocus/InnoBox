@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { HYPERS_SHOWN, HYPE_MESSAGES, hypeBudgetLine, hypeButtonLabel, hypeTooltip, type HypeReason } from "@innobox/shared/hype";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
 
 export const HYPE_GLYPH = "🔥";
@@ -117,6 +118,8 @@ export interface HypedBoardItem {
   parentTitle?: string;
   challengeNumber: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
+  /** §39.7: every member in order, masked — the compact form. */
+  authors?: TeamPerson[];
   status: string;
   points: number;
 }
@@ -150,8 +153,7 @@ export function HypedThisWeek({ board }: { board: HypedBoard | null | undefined 
                 <span className="ttl">{item.title}</span>
                 {item.parentTitle && <span className="sub">on {item.parentTitle}</span>}
                 <span className="hyped-meta">
-                  <AvatarBubble size="sm" userId={item.author.userId} displayName={item.author.displayName} anonymous={item.author.anonymous} external={item.author.external === true} deactivated={item.author.active === false} scrubbed={item.author.scrubbed === true} />
-                  <span className="sub hyped-author">{item.author.anonymous ? "Anonymous" : item.author.displayName}</span>
+                  <TeamByline className="sub hyped-author" authors={teamOf(item)} />
                   <span className={statusPillClass(item.status)}>{label ?? item.status}</span>
                 </span>
               </span>

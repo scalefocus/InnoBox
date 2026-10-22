@@ -602,6 +602,9 @@ test(
       const vanished = await mkChallenge("Abort: parent not found");
       const upVanished = await openUpload({ parentId: vanished.id });
       await pool.query(`update challenges set author_id = $2 where id = $1`, [vanished.id, other.userId]);
+      // §39.2: authorship is the team — the member row moves with it (the app role holds no UPDATE on it).
+      await pool.query(`delete from challenge_authors where challenge_id = $1`, [vanished.id]);
+      await pool.query(`insert into challenge_authors (challenge_id, user_id) values ($1, $2)`, [vanished.id, other.userId]);
       assert.equal((await completeChunkedUpload(deps, author, upVanished.uploadId)).status, "not_found");
       assert.deepEqual(await abortReasons(upVanished.attachmentId), ["parent_not_found"]);
       assert.equal(await sessionGone(upVanished.uploadId), true);
@@ -611,6 +614,9 @@ test(
       const upForbidden = await openUpload({ parentId: handedOver.id });
       assert.equal((await setChallengeStatus(pool, nsAdmin, handedOver.number, "valid")).status, "ok");
       await pool.query(`update challenges set author_id = $2 where id = $1`, [handedOver.id, other.userId]);
+      // §39.2: authorship is the team — the member row moves with it (the app role holds no UPDATE on it).
+      await pool.query(`delete from challenge_authors where challenge_id = $1`, [handedOver.id]);
+      await pool.query(`insert into challenge_authors (challenge_id, user_id) values ($1, $2)`, [handedOver.id, other.userId]);
       assert.equal((await completeChunkedUpload(deps, author, upForbidden.uploadId)).status, "forbidden");
       assert.deepEqual(await abortReasons(upForbidden.attachmentId), ["forbidden"]);
       assert.equal(await sessionGone(upForbidden.uploadId), true);

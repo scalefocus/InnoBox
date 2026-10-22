@@ -5,7 +5,7 @@
 // parent challenge's assignee traverse the enforced §8.2 graph (illegal moves → 422). NOT
 // exempt from §8.3 either way: the store enforces the single-winner gate and the implemented
 // auto-close cascade. A real transition fires event 3/4/5, and `implemented` also fires event 8.
-import { isSolutionStatus, validateDeleteReason } from "@innobox/shared";
+import { isSolutionStatus, parseBaseEditedAt, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifySolutionStatusChanged } from "@/lib/notify-events";
@@ -64,6 +64,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
       return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be an admin, committee member, or the assignee to change status" }, { status: 403 });
+    case "own_item":
+      return Response.json({ error: TEAM_MESSAGES.ownItemReview, code: "own_item" }, { status: 403 });
     case "illegal_transition":
       return Response.json({ error: "that status change is not a permitted transition from the current status" }, { status: 422 });
     case "invalid_status":
@@ -87,10 +89,14 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
   const body = read.value;
+  // §39.5: the editedAt the editor loaded — a save from a stale copy is refused.
+  const baseEditedAt = parseBaseEditedAt(body.baseEditedAt);
+  if (!baseEditedAt.ok) return Response.json({ error: baseEditedAt.error }, { status: 400 });
 
   const result = await editSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     description: body.description,
     costVsBenefits: body.costVsBenefits,
+    baseEditedAt: baseEditedAt.value,
   });
   switch (result.status) {
     case "ok":
@@ -103,6 +109,8 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
       return Response.json({ error: "only the author can edit this solution" }, { status: 403 });
     case "not_editable":
       return Response.json({ error: "this solution is not editable in its current status" }, { status: 409 });
+    case "stale":
+      return Response.json({ error: TEAM_MESSAGES.staleEdit, code: "stale_edit" }, { status: 409 });
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
   }

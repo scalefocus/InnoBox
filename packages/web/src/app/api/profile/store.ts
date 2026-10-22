@@ -11,6 +11,8 @@ import {
   NOTIFICATION_PREFERENCES,
   formatChallengeNumber,
   formatSolutionNumber,
+  isChallengeMemberSql,
+  isSolutionMemberSql,
   nextDigestSlot,
   type ChallengeStatus,
   type EmailDelivery,
@@ -19,6 +21,10 @@ import {
   type SolutionStatus,
 } from "@innobox/shared";
 import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, type Viewer } from "../challenges/store";
+
+/** §39.12: "authored by $1" — a member of the item's team, co-authored items included. */
+const CHALLENGE_MEMBER = isChallengeMemberSql("c", "$1");
+const SOLUTION_MEMBER = isSolutionMemberSql("s", "$1");
 
 export interface OwnProfile {
   user: { id: string; displayName: string; email: string | null; department: string | null; jobTitle: string | null; officeLocation: string | null };
@@ -108,35 +114,35 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
       // §10.4: a trashed item — or a solution under a trashed challenge — is gone from its own
       // author's profile too, until it is restored.
       pool.query<{ status: ChallengeStatus; count: string }>(
-        `select status, count(*)::text as count from challenges where author_id = $1 and trashed_at is null group by status`,
+        `select c.status, count(*)::text as count from challenges c where ${CHALLENGE_MEMBER} and c.trashed_at is null group by c.status`,
         [userId],
       ),
       pool.query<{ status: SolutionStatus; count: string }>(
         `select s.status, count(*)::text as count
            from solutions s join challenges c on c.id = s.challenge_id
-          where s.author_id = $1 and s.trashed_at is null and c.trashed_at is null
+          where ${SOLUTION_MEMBER} and s.trashed_at is null and c.trashed_at is null
           group by s.status`,
         [userId],
       ),
       pool.query<{ count: string }>(
         `select count(*)::text as count
            from likes l
-          where (l.parent_type = 'challenge' and exists(select 1 from challenges c where c.id = l.parent_id and c.author_id = $1 and c.trashed_at is null))
+          where (l.parent_type = 'challenge' and exists(select 1 from challenges c where c.id = l.parent_id and ${CHALLENGE_MEMBER} and c.trashed_at is null))
              or (l.parent_type = 'solution' and exists(select 1 from solutions s join challenges sc on sc.id = s.challenge_id
-                                                        where s.id = l.parent_id and s.author_id = $1 and s.trashed_at is null and sc.trashed_at is null))`,
+                                                        where s.id = l.parent_id and ${SOLUTION_MEMBER} and s.trashed_at is null and sc.trashed_at is null))`,
         [userId],
       ),
       ...followedQueries(pool, viewer),
       pool.query<{ number: string; title: string; status: string; at: Date }>(
-        `select number::text, title, status, greatest(created_at, updated_at) as at
-           from challenges where author_id = $1 and trashed_at is null
+        `select c.number::text, c.title, c.status, greatest(c.created_at, c.updated_at) as at
+           from challenges c where ${CHALLENGE_MEMBER} and c.trashed_at is null
           order by at desc limit 20`,
         [userId],
       ),
       pool.query<{ number: string; description: string; status: string; at: Date; challenge_number: string }>(
         `select s.number::text, s.description, s.status, greatest(s.created_at, s.updated_at) as at, c.number::text as challenge_number
            from solutions s join challenges c on c.id = s.challenge_id
-          where s.author_id = $1 and s.trashed_at is null and c.trashed_at is null
+          where ${SOLUTION_MEMBER} and s.trashed_at is null and c.trashed_at is null
           order by at desc limit 20`,
         [userId],
       ),
@@ -315,16 +321,16 @@ export async function getPublicProfile(pool: Pool, userId: string): Promise<Publ
 
   const [challengeRows, solutionRows] = await Promise.all([
     pool.query<{ number: string; title: string; status: string }>(
-      `select number::text, title, status from challenges
-        where author_id = $1 and is_anonymous = false and visibility = 'org'
-          and status not in ('awaiting_triage', 'withdrawn') and trashed_at is null
-        order by created_at desc limit 50`,
+      `select c.number::text, c.title, c.status from challenges c
+        where ${CHALLENGE_MEMBER} and c.is_anonymous = false and c.visibility = 'org'
+          and c.status not in ('awaiting_triage', 'withdrawn') and c.trashed_at is null
+        order by c.created_at desc limit 50`,
       [userId],
     ),
     pool.query<{ number: string; description: string; status: string; challenge_number: string }>(
       `select s.number::text, s.description, s.status, c.number::text as challenge_number
          from solutions s join challenges c on c.id = s.challenge_id
-        where s.author_id = $1 and s.is_anonymous = false and c.visibility = 'org'
+        where ${SOLUTION_MEMBER} and s.is_anonymous = false and c.visibility = 'org'
           and s.status not in ('proposed', 'withdrawn')
           -- §13.5: a solution inherits its parent challenge's visibility (§4.3), so the parent
           -- must pass the same public test as a listed challenge.

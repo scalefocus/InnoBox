@@ -9,10 +9,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { MouseEvent } from "react";
 import { useDateFmt } from "@/components/DateFormat";
-import { AvatarBubble } from "@/components/AvatarBubble";
 import { challengeHref, shouldRowNavigate, solutionCountLabel, type ChallengesView } from "@/lib/challenges-view";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
-import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges, type ChallengeBadgeData } from "./ChallengeBadges";
+import { ChallengeAuthorBubbles, ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges, type ChallengeBadgeData } from "./ChallengeBadges";
 import { HYPE_GLYPH } from "@/components/Hype";
 
 /** The subset of the list payload a row reads (the page's list item satisfies it). */
@@ -97,7 +96,7 @@ function ChallengeRow({
         /{challenge.namespaceSlug}
       </span>
       <span className="ch-c-author">
-        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} external={challenge.author.external === true} deactivated={challenge.author.active === false} scrubbed={challenge.author.scrubbed === true} />
+        <ChallengeAuthorBubbles challenge={challenge} />
         <span className="ch-author-name">
           <ChallengeAuthorName challenge={challenge} />
         </span>

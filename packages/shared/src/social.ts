@@ -82,6 +82,9 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 20 / §38.8: a feature you proposed or upvoted is now available — written by the web
   // tier (a planned idea deleted as shipped) and the worker (a specified teaser shipped); digestable.
   "feature_available",
+  // §12.1 event 21 / §39.8: another member added you to, or removed you from, an item's co-author
+  // team — immediate, never digested, not mutable; at most one e-mail per item per UTC day.
+  "coauthor_changed",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

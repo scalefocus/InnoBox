@@ -1,5 +1,6 @@
 // Data layer for attachments (INNOBOX_SPEC.md §11). Enforces the author-only + edit-window
-// upload/remove rules (§10.1), the §14.3 limits (the per-item cap atomically, under
+// upload/remove rules (§10.1) — "the author" being every member of the item's team, any of whom may
+// remove any of its files (§39.5) — the §14.3 limits (the per-item cap atomically, under
 // concurrency), the content-type allowlist + content (magic-byte) check, the chunked-upload size
 // binding, and the download gateway's parent-visibility + clean-scan gate (invariant 4). Anonymity is preserved here:
 // list projections never emit `uploaded_by` (invariant 3). Object bytes live in MinIO, injected
@@ -10,7 +11,9 @@ import type { Pool, PoolClient } from "pg";
 import {
   attachmentContentMatchesType,
   attachmentObjectKey,
+  challengeAuthorIdsSql,
   checkChunkPart,
+  solutionAuthorIdsSql,
   isAllowedAttachmentType,
   isAttachmentDownloadable,
   parentAcceptsAttachmentChanges,
@@ -79,23 +82,24 @@ function toRecord(row: AttachmentDbRow): AttachmentRecord {
   };
 }
 
-/** The parent's author + current status, or null when it doesn't exist. */
+/** The parent's authors (every member of its team, §39.5) + current status, or null when it doesn't
+ *  exist. */
 async function loadParent(
   pool: Pool | PoolClient,
   parentType: AttachmentParentType,
   parentId: string,
-): Promise<{ authorId: string; status: string; trashed: boolean } | null> {
+): Promise<{ authorIds: string[]; status: string; trashed: boolean } | null> {
   if (!isUuid(parentId)) return null;
   // §10.4: `trashed` is the item's own flag or, for a solution, its challenge's.
-  const { rows } = await pool.query<{ author_id: string; status: string; trashed: boolean }>(
+  const { rows } = await pool.query<{ author_ids: string[]; status: string; trashed: boolean }>(
     parentType === "challenge"
-      ? `select author_id, status, trashed_at is not null as trashed from challenges where id = $1`
-      : `select s.author_id, s.status, (s.trashed_at is not null or c.trashed_at is not null) as trashed
+      ? `select ${challengeAuthorIdsSql("c")} as author_ids, c.status, c.trashed_at is not null as trashed from challenges c where c.id = $1`
+      : `select ${solutionAuthorIdsSql("s")} as author_ids, s.status, (s.trashed_at is not null or c.trashed_at is not null) as trashed
            from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [parentId],
   );
   const row = rows[0];
-  return row ? { authorId: row.author_id, status: row.status, trashed: row.trashed } : null;
+  return row ? { authorIds: row.author_ids, status: row.status, trashed: row.trashed } : null;
 }
 
 /** §10.4: a trashed parent takes no attachment change. Only a platform admin can see it, and is
@@ -213,7 +217,7 @@ export async function uploadAttachment(
   if (parent.trashed) return trashedParentRefusal(viewer);
   // Author-only (404 for a parent the caller cannot see), and only within the parent's §10.1
   // author-edit window.
-  if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, input.parentId);
+  if (!parent.authorIds.includes(viewer.userId)) return nonAuthorRefusal(deps.pool, viewer, input.parentType, input.parentId);
   if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
 
   // Allowlist (415) — both extension AND declared MIME must be in the set — and the content
@@ -461,7 +465,10 @@ export async function removeAttachment(
   );
   const att = rows[0];
   if (!att) return { status: "not_found" };
-  if (att.uploaded_by !== viewer.userId) {
+  // §39.5: on a bound row, any member of the parent's team may remove it — not only its uploader.
+  const parent = att.parent_id !== null ? await loadParent(deps.pool, att.parent_type, att.parent_id) : null;
+  const mayRemove = att.uploaded_by === viewer.userId || (parent !== null && parent.authorIds.includes(viewer.userId));
+  if (!mayRemove) {
     // §2.4: 403 only for an attachment this viewer can actually see (bound, clean, not removed,
     // parent visible) — anything else is the same 404 as a nonexistent id.
     const seen =
@@ -476,7 +483,6 @@ export async function removeAttachment(
   // Unbound staged rows (§11): the uploader may remove them at any time — no parent, no
   // edit-window. Bound rows keep the §10.1 author-edit-window gate.
   if (att.parent_id !== null) {
-    const parent = await loadParent(deps.pool, att.parent_type, att.parent_id);
     if (!parent) return { status: "not_found" };
     if (parent.trashed) return trashedParentRefusal(viewer);
     if (!parentAcceptsAttachmentChanges(att.parent_type, parent.status)) return { status: "not_editable" };
@@ -643,7 +649,7 @@ export async function initiateChunkedUpload(
     const parent = await loadParent(deps.pool, input.parentType, parentId);
     if (!parent) return { status: "not_found" };
     if (parent.trashed) return trashedParentRefusal(viewer);
-    if (parent.authorId !== viewer.userId) return nonAuthorRefusal(deps.pool, viewer, input.parentType, parentId);
+    if (!parent.authorIds.includes(viewer.userId)) return nonAuthorRefusal(deps.pool, viewer, input.parentType, parentId);
     if (!parentAcceptsAttachmentChanges(input.parentType, parent.status)) return { status: "not_editable" };
     if ((await countLiveAttachments(deps.pool, { kind: "parent", parentType: input.parentType, parentId })) >= limits.maxPerItem) {
       return { status: "too_many" };
@@ -798,7 +804,7 @@ export async function completeChunkedUpload(deps: AttachmentDeps, viewer: Viewer
     const parent = await loadParent(deps.pool, capTarget.parentType, capTarget.parentId);
     // §10.4: trashing drops the parent's open sessions, so a trashed parent is a lost race — gone.
     if (!parent || parent.trashed) return abortAnd({ status: "not_found" });
-    if (parent.authorId !== viewer.userId) {
+    if (!parent.authorIds.includes(viewer.userId)) {
       return abortAnd(await nonAuthorRefusal(deps.pool, viewer, capTarget.parentType, capTarget.parentId));
     }
     if (!parentAcceptsAttachmentChanges(session.parent_type, parent.status)) return abortAnd({ status: "not_editable" });

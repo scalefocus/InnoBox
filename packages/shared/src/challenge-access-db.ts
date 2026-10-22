@@ -9,7 +9,9 @@
 //   - event 15 fires at most once per entry, pinned by `challenge_access.notified_at`, and only
 //     while the challenge is past triage, not withdrawn and not trashed (§12.1).
 import { appendAudit } from "./audit.js";
-import { formatChallengeNumber, maskAuthor } from "./challenges.js";
+import { formatChallengeNumber } from "./challenges.js";
+import { challengeTeamJsonSql, teamDisplayText } from "./coauthors-db.js";
+import type { TeamMemberRow } from "./coauthors.js";
 import type { AccessEntryView, AccessListInput } from "./challenge-access.js";
 import type { DbClient } from "./email-graph.js";
 
@@ -249,9 +251,10 @@ export async function deliverShareNotifications(db: DbClient, challengeId: strin
     author_id: string | null;
     author_display_name: string | null;
     company: string | null;
+    team: TeamMemberRow[];
   }>(
     `select ca.id as access_id, ca.user_id, c.number::text as number, c.title, c.is_anonymous, c.author_id,
-            au.display_name as author_display_name, ps.company
+            au.display_name as author_display_name, ps.company, ${challengeTeamJsonSql("c")} as team
        from challenge_access ca
        join challenges c on c.id = ca.challenge_id
        join users u on u.id = ca.user_id and u.active and u.scrubbed_at is null
@@ -265,7 +268,8 @@ export async function deliverShareNotifications(db: DbClient, challengeId: strin
   for (const row of rows) {
     const { rowCount } = await db.query(`update challenge_access set notified_at = now() where id = $1 and notified_at is null`, [row.access_id]);
     if (!rowCount || row.user_id === actorId) continue;
-    const author = maskAuthor({ isAnonymous: row.is_anonymous, authorId: row.author_id, authorDisplayName: row.author_display_name, externalCompany: row.company }).displayName;
+    // §39.7: a team is named by its first member plus "and N others".
+    const author = teamDisplayText({ isAnonymous: row.is_anonymous, authorId: row.author_id, authorDisplayName: row.author_display_name, externalCompany: row.company, team: row.team });
     const payload = {
       message: challengeSharedMessage({ number: row.number, title: row.title, author }),
       link: `/challenges/${row.number}`,

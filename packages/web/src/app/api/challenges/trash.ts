@@ -10,15 +10,19 @@
 // no content, like the delete's. Relative imports only (the gated dbtests run under plain node).
 import type { Pool, PoolClient } from "pg";
 import {
+  challengeTeamJsonSql,
   daysInTrash,
   formatChallengeNumber,
   formatSolutionNumber,
   maskAuthor,
+  maskTeam,
   notificationLinkScope,
   solutionRestoreBlocked,
+  solutionTeamJsonSql,
   trashPurgesOn,
   escapeLike,
   type MaskedAuthor,
+  type TeamMemberRow,
 } from "@innobox/shared";
 import { abortUploadSessions, dropUploadSessions, removeUnsentAbout, unpinChallenge, type PurgeStorage } from "@innobox/shared/item-delete";
 import { appendAudit } from "../../../lib/audit";
@@ -205,8 +209,10 @@ export interface TrashRow {
   /** The challenge's title; for a solution, the title of the challenge it answers. */
   title: string;
   namespaceSlug: string;
-  /** Masked per §9 — the trash is not a reveal path. */
+  /** Masked per §9 — the trash is not a reveal path. The first member of the team (§39.7). */
   author: MaskedAuthor;
+  /** §39.7: every member in team order, masked. */
+  authors: MaskedAuthor[];
   trashedBy: string;
   trashedAt: string;
   reason: string;
@@ -239,6 +245,7 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
     author_active: boolean | null;
     author_scrubbed: boolean | null;
     external_company: string | null;
+    team: TeamMemberRow[];
     trashed_by: string | null;
     trashed_at: Date;
     reason: string;
@@ -247,7 +254,8 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
     `select * from (
        select 'challenge' as type, c.number::text as number, c.number::text as challenge_number, c.title, ns.slug as namespace_slug,
               c.is_anonymous, c.author_id, u.display_name as author_display_name, u.active as author_active,
-              u.scrubbed_at is not null as author_scrubbed, ps.company as external_company, tu.display_name as trashed_by, c.trashed_at,
+              u.scrubbed_at is not null as author_scrubbed, ps.company as external_company, ${challengeTeamJsonSql("c")} as team,
+              tu.display_name as trashed_by, c.trashed_at,
               c.trash_reason as reason, false as restore_blocked
          from challenges c
          -- §24.6: an external challenge has no author; the masked projection labels it instead.
@@ -259,7 +267,8 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
        union all
        select 'solution' as type, s.number::text as number, c.number::text as challenge_number, c.title, ns.slug as namespace_slug,
               s.is_anonymous, s.author_id, u.display_name as author_display_name, u.active as author_active,
-              u.scrubbed_at is not null as author_scrubbed, null as external_company, tu.display_name as trashed_by, s.trashed_at,
+              u.scrubbed_at is not null as author_scrubbed, null as external_company, ${solutionTeamJsonSql("s")} as team,
+              tu.display_name as trashed_by, s.trashed_at,
               s.trash_reason as reason, c.trashed_at is not null as restore_blocked
          from solutions s
          join challenges c on c.id = s.challenge_id
@@ -275,24 +284,31 @@ export async function listTrash(pool: Pool, admin: Viewer, query: string | null)
      limit ${TRASH_LIST_LIMIT}`,
     [q, digits, numberType, escapeLike(q)],
   );
-  return rows.map((r) => ({
-    type: r.type,
-    number: r.type === "challenge" ? formatChallengeNumber(r.number) : formatSolutionNumber(r.number),
-    challengeNumber: formatChallengeNumber(r.challenge_number),
-    title: r.title,
-    namespaceSlug: r.namespace_slug,
-    author: maskAuthor({
-      isAnonymous: r.is_anonymous,
-      authorId: r.author_id,
-      authorDisplayName: r.author_display_name,
-      authorActive: r.author_active,
-      authorScrubbed: r.author_scrubbed,
-      externalCompany: r.external_company,
-    }),
-    trashedBy: r.trashed_by ?? "",
-    trashedAt: r.trashed_at.toISOString(),
-    reason: r.reason,
-    purgesOn: trashPurgesOn(r.trashed_at).toISOString(),
-    restoreBlocked: r.restore_blocked,
-  }));
+  return rows.map((r) => {
+    const authors = maskTeam(
+      maskAuthor({
+        isAnonymous: r.is_anonymous,
+        authorId: r.author_id,
+        authorDisplayName: r.author_display_name,
+        authorActive: r.author_active,
+        authorScrubbed: r.author_scrubbed,
+        externalCompany: r.external_company,
+      }),
+      r.team ?? [],
+    );
+    return {
+      type: r.type,
+      number: r.type === "challenge" ? formatChallengeNumber(r.number) : formatSolutionNumber(r.number),
+      challengeNumber: formatChallengeNumber(r.challenge_number),
+      title: r.title,
+      namespaceSlug: r.namespace_slug,
+      author: authors[0]!,
+      authors,
+      trashedBy: r.trashed_by ?? "",
+      trashedAt: r.trashed_at.toISOString(),
+      reason: r.reason,
+      purgesOn: trashPurgesOn(r.trashed_at).toISOString(),
+      restoreBlocked: r.restore_blocked,
+    };
+  });
 }

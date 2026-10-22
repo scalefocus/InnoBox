@@ -268,7 +268,7 @@ test(
       // ── The author's edit window ──────────────────────────────────────────────────────────
       const ch6 = await mustCreate("Editable", [tA.id]);
       const edit = (topicIds: string[]) =>
-        store.editChallenge(pool, author, ch6.num, { title: `Editable ${stamp}`, description: "d", clientName: null, impactAreaId: internal.id, topicIds });
+        store.editChallenge(pool, author, ch6.num, { title: `Editable ${stamp}`, description: "d", clientName: null, impactAreaId: internal.id, topicIds, baseEditedAt: null });
       assert.deepEqual(await edit([tA.id, tR.id]), { status: "invalid_topics", problem: "inactive" });
       const editOk = await edit([tB.id, tA.id]);
       assert.equal(editOk.status, "ok");

@@ -1676,6 +1676,37 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .ch-title-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
 .ch-title-link:hover { color: var(--accent-2); }
 .ch-c-ns { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* §39.7 co-author teams, the compact form: up to three overlapping small bubbles (the first three
+   members), then the first member's name and "+N". A solo item is one bubble, as before. */
+.team-stack { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.team-stack-item { display: inline-flex; }
+.team-stack-item + .team-stack-item { margin-left: -8px; }
+.team-stack-item .avatar { box-shadow: 0 0 0 2px var(--surface); }
+.team-bubbles, .team-byline { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.team-byline-names { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-more { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* §39.7 the full form (detail headers) and the Team panel a member sees. */
+.team-full { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.team-full-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.team-panel { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.team-panel-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.team-panel-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.team-panel-member {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 4px 3px 3px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: 13px;
+}
+.team-panel-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-creator-tag {
+  flex-shrink: 0; padding: 1px 7px; border-radius: 999px; font-family: var(--font-mono); font-size: 10.5px;
+  background: var(--accent-soft); color: var(--accent-2);
+}
+.team-panel-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.team-panel-add { position: relative; flex: 1 1 260px; max-width: 360px; }
+.team-panel-results, .coauthor-results { position: absolute; z-index: 10; margin-top: 4px; width: 100%; max-width: 360px; }
+.coauthor-picker { position: relative; }
+/* §39.5: a save from a stale copy — the text stays in the form; Reload re-reads the item. */
+.stale-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--danger); font-size: 13.5px; }
+.tag-field.is-disabled { opacity: 0.6; cursor: not-allowed; }
 .ch-c-author { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
 .ch-author-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-c-likes, .ch-c-sol, .ch-c-date { font-size: 13px; color: var(--muted); white-space: nowrap; }

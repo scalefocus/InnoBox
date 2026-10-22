@@ -69,7 +69,7 @@ test(
       const expected = (v: typeof author) =>
         all
           .filter((c) =>
-            canSeeChallenge(v, { id: c.id, namespaceId: nsId, visibility: "namespace", status: c.status, authorId: author.userId, assigneeId: null, trashed: false }),
+            canSeeChallenge(v, { id: c.id, namespaceId: nsId, visibility: "namespace", status: c.status, authorIds: [author.userId], assigneeId: null, trashed: false }),
           )
           .map((c) => c.number)
           .sort();

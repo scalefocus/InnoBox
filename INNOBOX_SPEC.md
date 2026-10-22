@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.24 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
+> Status: **v0.25 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -80,7 +80,12 @@
 > document with them — co-authors (§27) and the nine remaining stubs (§28–§33, §35–§37),
 > whose numbers are retired, not reused. A new-feature marker no longer needs a teaser,
 > and the feature-ideas switch now gates only proposals from people who are not
-> platform admins (§13.9, §38)).
+> platform admins (§13.9, §38); v0.25 (2026-10-22) brought **co-authors** back to be
+> built, as §39 with notification event 21 (the retired §27 and event 17 stay unused),
+> hardened against takeover and churn — nobody else can remove the creator, a leave is
+> final, and team-change e-mails are capped at one per person per item a day — and
+> barred a committee member from moving an item they are an author of, solo or team
+> (§39, §4.2, §7.2, §8.2)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -1019,7 +1024,8 @@ Entra runbook); on conflict this document wins.
     `updated_at` bumps; `edited_at` does not; status is untouched.
   - **Authorship never moves.** Challenges, solutions and comments the erased user
     wrote stay attributed to the de-identified row, exactly as without a successor.
-    Only the assignee role is handed over.
+    So do their places on co-author teams (§39.11). Only the assignee role is handed
+    over.
   - **One notification:** after commit the successor receives **one** summary item
     (§12.1 event 12) listing the moved challenges — not one event-7 item per move.
     No other recipient is notified (the erased user is not).
@@ -1108,7 +1114,7 @@ shown (§13.6).
 |---|---|---|
 | **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area and **topic** management (§34.2); **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); real user monitoring (§14.12); audit integrity verification (§15) |
 | **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; **re-tagging topics** (§34.3); bulk actions; CSV export |
-| **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2); comment with a committee badge. No assignment, no reveal, no bulk/config |
+| **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
 | **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
@@ -1193,13 +1199,15 @@ bounded:
   gamification ranking, §12.4 webhooks) leave it out; AI tasks and MCP treat it as
   restricted content (§22.7, §25.5).
 - Additional state-based visibility (applies on top, most restrictive wins):
-  - `awaiting_triage` and `withdrawn` challenges: visible only to their author,
-    the namespace's admins, and platform admins. For these three the state rule
+  - `awaiting_triage` and `withdrawn` challenges: visible only to their author
+    (every member of a co-author team, §39.6), the namespace's admins, and platform
+    admins. For these three the state rule
     **replaces** the namespace rule rather than narrowing it: the author of a
     `namespace`-visible item keeps seeing it even after losing membership of its
     namespace. The same predicate holds in every list, count and search (the SQL form)
     as on the detail page.
-  - Solutions in `proposed` status: visible only to their author, the challenge's
+  - Solutions in `proposed` status: visible only to their author (every member of a
+    co-author team, §39.6), the challenge's
     assignee, and the namespace's committee/admins (mirrors the legacy behavior of
     hiding un-reviewed solutions).
   - `rejected` / `not_selected` / `withdrawn` solutions: shown in a collapsed
@@ -1312,6 +1320,16 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   trashed_at + trashed_by + trash_reason (as challenges, §10.4).
   Hard-deletable by a platform admin on the same terms (§10.3), and removed with its
   parent challenge when that is deleted.
+- **`challenge_authors`** / **`solution_authors`** — the §39 co-author teams:
+  challenge_id / solution_id (FK, `ON DELETE CASCADE`), user_id (FK), added_at,
+  added_by (nullable user FK); primary key on the pair. One row per member, the
+  creator's included, so every authored item has at least one. On `challenges` and
+  `solutions`, `author_id` stays as the **creator** and never changes; every
+  authorship rule reads the member table (§39.2, §39.12).
+- **`challenge_author_exits`** / **`solution_author_exits`** — who has left a §39 team:
+  challenge_id / solution_id (FK, `ON DELETE CASCADE`), user_id (FK), left_at; primary
+  key on the pair. Written by a leave only, never by a removal, and never undone: a
+  person with a row can't be added back to that item (§39.4).
 - **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
   **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
   for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
@@ -1468,13 +1486,16 @@ active topics, §34.3 — absent while there are none), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11 — picked, **dropped
 anywhere on the page, or pasted**, §11 *Drop and paste*), **"Submit
-anonymously"** checkbox (§9).
+anonymously"** checkbox (§9), **co-authors** (up to four colleagues from the eligible
+people of the chosen namespace and visibility; never together with *Submit
+anonymously*, §39.2, §39.3).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
 is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
-available (§11 *Binding at submit* scan gate) — author auto-follows it (§12.3),
-notifications fire (§12.1 event 1), audit entry.
+available (§11 *Binding at submit* scan gate) — every author (the submitter and any
+co-authors, §39) auto-follows it (§12.3), notifications fire (§12.1 event 1, and event
+21 to each co-author), audit entry.
 
 **Duplicate warning.** The first **Submit** click runs a server-side similarity check
 before anything is created: `POST /api/challenges/similar { title, description }`
@@ -1503,13 +1524,15 @@ action otherwise; the API enforces it).
 
 Form: description, cost vs benefits (optional), attachments (**staged inline via a
 `draftKey`**, §11 — picked, dropped, or pasted, §11 *Drop and paste*), "Submit
-anonymously".
+anonymously", co-authors (up to four colleagues who can see the challenge; never
+together with "Submit anonymously", §39.2, §39.3).
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
 **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
-available (§11 *Binding at submit* scan gate) — author auto-follows it, notifications
-fire (§12.1 event 2), audit entry. The form locks
+available (§11 *Binding at submit* scan gate) — every author (the proposer and any
+co-authors, §39) auto-follows it, notifications fire (§12.1 event 2, and event 21 to
+each co-author), audit entry. The form locks
 while the request is in flight and closes only once the challenge has re-rendered
 (§6.4).
 
@@ -1614,6 +1637,11 @@ committee members operate from `in_review` onward.
   `needs_improvement`. They may NOT leave `awaiting_triage` (triage is a
   namespace-admin action), set `valid → solved` (automatic/admin-override only), or
   exit a terminal status. Enforced transitions are audited `override: false`.
+- **Not on their own challenge.** A committee member may traverse no arrow on a
+  challenge they are an author of — a member of its team, a solo author included
+  (§39.5) — and is refused (403, *"You can't review an item you're an author of."*).
+  The bar removes only the committee basis: an author who is also the challenge's
+  **assignee** keeps the assignee's transitions, and an admin keeps the override.
 - Any other actor is refused (403). A committee/assignee request for a target that
   is not a legal arrow from the current status is refused (422, illegal transition).
 
@@ -1719,7 +1747,10 @@ Admin free-set and audit rules identical to §7.2.
 
 *Enforcement:* mirrors §7.2 — admins free-set any status (`override: true`);
 committee members of the challenge's namespace and the challenge's assignee traverse
-the arrows above (`override: false`); anyone else is refused. **Unlike challenges,
+the arrows above (`override: false`); anyone else is refused. The §7.2 bar applies to
+the solution itself: a committee member moves no solution they are an author of
+(§39.5), while being on the parent challenge's team does not bar them from its
+solutions. **Unlike challenges,
 there is no admin-only "triage" step for solutions:** committee/assignee may take
 `proposed → in_review | rejected` directly. Terminal statuses
 (`implemented`/`rejected`/`not_selected`/`withdrawn`) are exited by admin override
@@ -1790,6 +1821,9 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
   and even for the anonymous author's own comments). The UI warns an author before
   they comment on their own anonymous item ("commenting will not reveal you as the
   author, but your comment shows your name").
+- **No co-authors on an anonymous item** (§39.3): an anonymous challenge or solution
+  always has exactly one author. The author self-reveals before anyone can join it, so
+  masking only ever hides one person.
 - **Leaderboard exclusion:** contributions made anonymously do not count toward any
   leaderboard (challenges submitted, solutions proposed/implemented, likes received
   on anonymous items). After self-reveal, they count.
@@ -1820,6 +1854,10 @@ reveal actions never apply to it.
 ## §10 Editing, withdrawal, deletion
 
 ### §10.1 Challenges & solutions
+
+Throughout §10.1, *the author* means **each member** of the item's co-author team
+(§39.5), every one with the same rights. Every edit also carries the `baseEditedAt`
+check, which refuses a save made from a stale copy (§39.5).
 
 - **Author edit windows:** a challenge is editable by its **author** while
   `awaiting_triage`; a solution while `proposed`. The **`needs_improvement`** status
@@ -2167,7 +2205,8 @@ trashed item is gone for everyone else from the moment it is trashed.
   immutable object — never direct-to-store (invariant 4). Files **at or below** the
   chunk size upload in one request as before.
 - Authors may **remove** their own attachment while the parent is within an
-  author-edit window (§10.1); removal is a soft-remove (row retained, object
+  author-edit window (§10.1) — on a co-authored item **any** member may remove **any**
+  of its attachments (§39.5); removal is a soft-remove (row retained, object
   purged) and audited.
 - Objects are stored immutably in MinIO; DB rows carry metadata + `scan_status`.
 - **Scan pipeline:** uploads enter `pending` (visible only to the uploader as
@@ -2219,6 +2258,7 @@ trashed item is gone for everyone else from the moment it is trashed.
 - **Single-shot upload (files ≤ chunk size)** — `POST /api/attachments` (multipart: `parentType`, `file`, and **either**
   `parentId` for a **bound** upload **or** `draftKey` for a **staged** upload — see
   *Staged upload* below). A **bound** upload is allowed **only** to the parent's author
+  (any member of its co-author team, §39.5)
   and **only while the parent is in an author-edit window** (§10.1: challenge
   `awaiting_triage`/`needs_improvement`, solution `proposed`/`needs_improvement`). The
   parent's visibility is checked **first** (§2.4): a caller who cannot see the parent
@@ -2336,7 +2376,8 @@ trashed item is gone for everyone else from the moment it is trashed.
   than the cap allows → `code: "attachments_over_limit"` (rather than binding some and
   silently dropping the rest).
 - **Author removal** — `DELETE /api/attachments/:id`: allowed **only** to the
-  uploader (who is the parent's author) and **only while the parent is in an
+  uploader (who is the parent's author) — or, on a co-authored item, to any current
+  member of its team (§39.5) — and **only while the parent is in an
   author-edit window** (§10.1); **unbound staged rows are removable by their uploader at
   any time** (no parent, no window). Soft-remove: `removed_at` is stamped, the MinIO
   object is purged, the row is retained as a tombstone, and `attachment.removed` is
@@ -2541,16 +2582,22 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 7 | Challenge assigned / unassigned | The assignee; on a reassignment also the previous assignee (unassigned, §7.3) |
 | 8 | Solution implemented (auto-close) | Challenge author, authors of `not_selected` siblings, followers of the challenge and its solutions |
 | 9 | Resubmitted (`needs_improvement` → `in_review` by the author, §10.1) | Namespace admins + committee, the assignee, followers |
-| 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/followers already had it) |
+| 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, the item's other co-authors (§39.8), and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/co-authors/followers already had it) |
 | 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader — bound files only; a staged file's failure shows in the form (§11) |
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
 | 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
 | 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
 | 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
-| 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
+| 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author (any member of its team, §39.12) or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
 | 19 | Feature idea reviewed — approved, declined or merged (§38.8) | The proposer only. Immediate, never digested, not mutable |
 | 20 | Feature now available — a *Coming soon* entry deleted as shipped (§38.8) | The entry's proposer, when it has one, and its voters, to whom the entry still applied — never the deleting admin. Follower-type for the digest |
+| 21 | Co-author added / removed (§39.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable; at most one e-mail per person per item per UTC day, the in-app line always |
+
+**Authors are teams (§39).** Wherever this matrix names the *item author*, the
+*challenge author* or the *authors of `not_selected` siblings*, every member of that
+item's co-author team is a recipient. An e-mail or inbox line that names an item's
+author names its first member plus *"and N others"* (§39.7).
 
 Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
 in-app only, by design (§23.1).
@@ -2616,7 +2663,7 @@ a day or a week.
   available, §38.8). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, and 19 to a proposer). Event 13 has no e-mail at all.
+  12, 21, and 19 to a proposer). Event 13 has no e-mail at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
   and the dispatcher skips it until then. The inbox row is written and shown exactly as
@@ -2667,7 +2714,7 @@ true; existing users backfilled on):
 - *Status changes on items I follow* — gates **event 3** for followers **and**
   authors. It does **not** touch the actionable author/assignee events — 4 (rejected),
   5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed), 12
-  (assignments transferred) — which stay non-mutable.
+  (assignments transferred), 21 (co-author added or removed) — which stay non-mutable.
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
   and followers; the admin/committee recipients of event 2 are unaffected.
 
@@ -2790,7 +2837,8 @@ concurrently after one §4.2 resolution.
 
 ### §12.3 Follows
 
-Any user may follow/unfollow any challenge or solution they can see. Authors and
+Any user may follow/unfollow any challenge or solution they can see. Authors (every
+member of a co-author team, including one who joins later, §39.8) and
 assignees are auto-followed to their items (can unfollow). Followers receive events
 3, 6, 8 (and 2 for challenge followers).
 
@@ -3076,11 +3124,14 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 
 **List (gallery):**
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
-  **Mine** (own items incl. `awaiting_triage`), **Completed** (`solved` +
+  **Mine** (own items incl. `awaiting_triage` — every item the viewer is a co-author
+  of, §39), **Completed** (`solved` +
   `rejected`). Filters: status, impact area, **topic** (§34.6 — with its filtered
-  header and Follow button), namespace, author name; sort: newest
+  header and Follow button), namespace, author name (matching any
+  member of a co-author team, §39); sort: newest
   (default), most liked, most solutions, and — while hype is on — most hyped (§26.5).
-- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9), created
+- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9; a co-author
+  team in its compact form, §39.7), created
   date, impact area, **topic chips** (each a link that filters by the topic, §34.6),
   status, like count, the hype number while hype is on (§26.5), and
   a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
@@ -3140,7 +3191,8 @@ whole visit, and the next visit flags only genuinely newer items.
 - Full fields: number, title, description, impact area, **topics** (chips linking to
   the filtered gallery, plus **Edit topics** for the challenge's namespace admins and
   platform admins, §34.3), client name (if
-  applicable), namespace, visibility, author (masked/anonymous per §9), status,
+  applicable), namespace, visibility, author (masked/anonymous per §9; every member of
+  a co-author team, with the **Team** panel for members, §39.7), status,
   assignee (if any), created/updated/edited dates.
 - Like button (toggle) with live count — disabled while the challenge is closed
   (§8.3).
@@ -3176,8 +3228,11 @@ whole visit, and the next visit flags only genuinely newer items.
     assignee): a control offering **only the legal next statuses** per §7.2/§8.2 for
     the current status, audited `override: false`. Hidden when there is no legal
     move (e.g. a terminal status, or `awaiting_triage` for a committee member — see
-    §7.2). The challenge detail response carries each viewer's allowed transitions
-    so the control renders exactly the permitted moves.
+    §7.2). A committee member who is an author of the item (§39.5), and not its
+    assignee, gets no control; in its place a muted line reads *"You're an author of
+    this item, so another reviewer moves it."* The challenge detail response carries
+    each viewer's allowed transitions so the control renders exactly the permitted
+    moves.
   - A viewer who is both admin and committee sees the admin override (the superset).
 - **Feature on Home** (platform admin only, §13.2 *Featured challenges*): pins or unpins
   the challenge on the Home dashboard. It is rendered from `canFeature` and offered only
@@ -3321,13 +3376,18 @@ not `proposed`/`withdrawn` and its parent passes the challenge test. Likes count
 on items that pass. The test is **viewer-independent**: every viewer sees the same
 board, so it is not the per-viewer §4.3 predicate.
 
+**Co-authored items** count once for **every current member** of the team, on every
+metric. A member's contribution time is the later of the event's time and the moment
+they joined, so a late joiner is never backdated into a window (§39.9).
+
 ### §13.4 Search
 
 Postgres `tsvector` full-text search over challenge
 title/description/client name and solution description/cost-vs-benefits, plus exact
 lookup by number (`CH-123`, `SOL-456`). Strictly visibility-filtered including
 autocomplete and result counts (invariant 2). §13.1's gallery filters
-(status/impact area/topic/namespace/author) narrow the list alongside it: the `/search`
+(status/impact area/topic/namespace/author — the author filter matching any member of a
+co-author team, §39) narrow the list alongside it: the `/search`
 results page shows the same filter controls as the gallery, and `GET /api/search`
 accepts them as query parameters beside `q`. Autocomplete stays query-only. Visibility
 is applied **inside** the ranked query, before any result limit, so the viewer's top
@@ -3426,6 +3486,9 @@ and, for a solution, its parent challenge:
   visible again.
 
 The owner's own profile is unaffected: it lists all of their own contributions, as above.
+
+A person's contributions — on their own profile and, by the same org-visible test, on
+other people's view of it — include every item they are a co-author of (§39.12).
 
 A **deactivated** user's profile still renders — the greyed bubble (§13.6), a muted
 **"Deactivated"** notice, their directory fields and their contributions by the rules
@@ -4571,9 +4634,11 @@ the existing brand link tokens; the separator is a `›` glyph.
 ### §14.1 Namespace triage queue (namespace admins; platform admins everywhere)
 
 A filterable queue of the namespace's challenges: columns number, title, author
-(masked when anonymous until revealed §9), status, impact area, **topics** (§34.6),
-assignee, hype (the §26 number, while hype is on), created.
-Filters: author name (matches non-anonymous items only), **assignee — Any,
+(masked when anonymous until revealed §9; a co-author team in its compact form,
+§39.7), status, impact area, **topics** (§34.6), assignee, hype (the
+§26 number, while hype is on), created.
+Filters: author name (matches non-anonymous items only, and any member of a co-author
+team, §39), **assignee — Any,
 "Unassigned", "Assigned to me", or a specific person (searchable)**, status, number,
 **topic — Any, "No topic", or a topic** (retired ones included and marked, §34.6).
 
@@ -4615,7 +4680,8 @@ Permanent
 delete (§10.3) is deliberately **not** a bulk action — it is one item at a time, from
 the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
-the export; a **Topics** column carries the topic names joined by `; `
+the export, and a co-author team fills the author cell with every member in order,
+separated by `; ` (§39.7); a **Topics** column carries the topic names joined by `; `
 (§34.6); every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
@@ -4633,7 +4699,8 @@ machine round-tripping, so that trade-off is accepted.
 described above. A second **Solutions** tab lists the namespace's **`proposed`**
 solutions — the state awaiting committee/assignee attention (§8.2) and counted by the
 §14.4 badge: columns number (`SOL-<n>`), parent challenge (`CH-<n>` + title), author
-(masked when anonymous until revealed §9), impact area, namespace, proposed date;
+(masked when anonymous until revealed §9; a team in its compact form, §39.7), impact
+area, namespace, proposed date;
 clicking anywhere on the row (the whole-row behavior above) opens the solution detail,
 where status changes live (§8.2 — no admin-only triage step for solutions, so the tab
 is navigational, not a transition surface). Solution rows have no checkbox or assignee
@@ -5680,7 +5747,9 @@ changes; visibility changes (`challenge.visibility_changed`, now also to and fro
 via: "editor" | "accept" | "assignment" | "binding" }`, where each side lists user ids
 and only a **count** of pending e-mails — an address never enters the append-only log;
 a switch away from `people` records the removed list on the `visibility_changed` row
-the same way); anonymity reveals (admin and self); comment posted,
+the same way); anonymity reveals (admin and self); co-author team changes
+(`challenge.author_added` / `challenge.author_removed` and the `solution.*` twins,
+§39.13); comment posted,
 edited, deleted (incl. moderator deletes); like/unlike; attachment uploaded, bound
 (staged → parent), draft-expired and **chunk-upload-aborted** (§11, with its reason —
 `stale`, `client_abort`, or `size_mismatch`), scan verdict (clean, infected, or
@@ -5958,6 +6027,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   hard delete (§10.3): reason required in the body, cascading, irreversible, **404 (not
   403)** to anyone else; `challenges/:number/trash`, `solutions/:number/trash` and
   `…/restore` (`POST`) are the §10.4 trash, platform admin only on the same 404 terms
+- co-authors (§39.13): both creates accept `coAuthorIds` (≤ 4);
+  `challenges/:number/authors` and `solutions/:number/authors` — `POST { userId }` adds
+  a member, `DELETE …/:userId` removes one (the caller's own id leaves; never the
+  creator, and a leave is final), members only;
+  `users?q=` accepts `coAuthorFor`, `canSee`, or `namespace` + `visibility` for the
+  eligible-people picker; challenge and solution payloads carry `authors`, the detail
+  payload `canManageTeam`, `canLeave` and each member's `creator` flag; the challenge
+  and solution `PUT` edits require `baseEditedAt` (409 on a stale copy, §39.5); a
+  committee member's transition on an item they are an author of is 403 (§39.5)
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -6153,7 +6231,12 @@ status changes other than the author's resubmit, assignment, triage, reveal, wit
 delete or administration through an agent, no attachment bytes or uploads, no
 client-credentials or other machine path, no confidential clients, no capability scopes,
 no server-sent stream, no organization-wide "revoke all", no per-namespace switch, and no
-notification when a new agent connects; for topics (§34): no namespace-scoped topics, no
+notification when a new agent connects; for co-authors (§39): no invitations,
+acceptance or join requests, no lead or owner role, no co-authors on an anonymous item
+or on a challenge accepted from the public form, no team changes by admins, committee
+members or assignees, no split or weighted points, no per-member anonymity, no
+co-authored comments, no team changes through MCP, and no team-change notification to
+the other members; for topics (§34): no namespace-scoped topics, no
 free-text or user-created tags, no topic hierarchy, no merge, no topics on solutions, no
 notice for anything in a topic but a challenge opening, no backfill on follow, no
 auto-follow of the challenges a notice is about, no topic follows or admin re-tagging
@@ -6855,7 +6938,8 @@ transitions, assigns, rejects or notifies (invariant 6).
   reason). Suggestions are advisory text: applying one is an ordinary **Edit topics**
   by an admin (§34.3).
 - **Who sees it.** Namespace admins and platform admins always; committee members and
-  the assignee once the challenge is past `awaiting_triage`. **Never the author** in v1 —
+  the assignee once the challenge is past `awaiting_triage`. **Never the author** (no
+  member of a co-author team, §39.12) in v1 —
   it is triage material, not feedback. A collapsible **"{name} triage notes"** panel on
   the challenge detail page and an indicator on the §14.1 queue row; *Pending* until it
   lands; **Re-run** for namespace and platform admins.
@@ -6907,7 +6991,8 @@ transitions, assigns, rejects or notifies (invariant 6).
   viewer who can see the item.
 - **Egress:** the item's title, and the comments' **text only**, in §10.2 thread order
   (each reply marked with the participant it answers), each labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
-  appearance — **never** marking which participant is the item's author, and never a
+  appearance — **never** marking which participant is the item's author (or any member
+  of its co-author team, §39.12), and never a
   name. Soft-deleted comments are excluded.
 - **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
   text, headed *"Summary by {name}"* with the time it was made and *"May be inaccurate."*
@@ -6962,7 +7047,7 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
 | `challenge_submitted` | **5** | challenge author | the challenge is created | `challenge_submitted:<challengeId>` |
 | `challenge_validated` | **20** | challenge author | its first entry into `valid` (`first_valid_at` is set) | `challenge_validated:<challengeId>` |
 | `challenge_solved` | **15** | challenge author | its first entry into `solved` | `challenge_solved:<challengeId>` |
-| `assignment_solved` | **15** | the challenge's assignee at that moment | its first entry into `solved`, when it has an assignee who is not also the author | `assignment_solved:<challengeId>` |
+| `assignment_solved` | **15** | the challenge's assignee at that moment | its first entry into `solved`, when it has an assignee who is not also an author (a member of its co-author team, §39.9) | `assignment_solved:<challengeId>` |
 | `solution_proposed` | **5** | solution author | the solution is created | `solution_proposed:<solutionId>` |
 | `solution_validated` | **20** | solution author | its first entry into `valid` | `solution_validated:<solutionId>` |
 | `solution_implemented` | **50** | solution author | its first entry into `implemented` | `solution_implemented:<solutionId>` |
@@ -6999,6 +7084,10 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   or the like's `created_at`). The daily caps apply per original UTC day. Badges and
   levels reached by the replay notify normally (§23.7).
 - **Restricted namespaces** count in full (decision 5).
+- **Co-authors (§39.9).** On a co-authored item, every row above that goes to the
+  *author* goes to **each member** of the team in full, under the same award key, and
+  a like by any member earns no member anything. A member who joins later gets the
+  milestones the item already reached, dated to the join; leaving deducts nothing.
 - **Agent access (§25.12)** adds one reason, `agent_connected` — **0 points**, once per
   user, written when they first approve an AI agent connection — and marks every award
   row whose item was created through an agent (`via_mcp`). Points themselves are
@@ -7059,7 +7148,8 @@ and count capped (0-point) rows too.
   (`ON CONFLICT DO NOTHING`). A jump across several tiers at once (a self-reveal, the
   backfill) inserts each tier reached.
 - **Full Circle** is checked when a `solution_implemented` award is written: the
-  solution's author also wrote the parent challenge and has an award row for it. While
+  solution's author also wrote the parent challenge and has an award row for it — for
+  co-authored items, each person who is a member of both teams (§39.9). While
   either item is anonymous no award exists, so the badge waits for both reveals; the
   replay of the second reveal earns it.
 - The four **agent badges** count ledger rows with `via_mcp = true` (and, for Plugged
@@ -7528,7 +7618,8 @@ How an external challenge appears:
   panel is the **only** place the name and e-mail appear. They are never in search,
   exports, webhooks, e-mails to employees, AI prompts (§22.7) or audit payloads.
 - **No author.** The author-only actions (edit, withdraw, resubmit, self-reveal, §10.1)
-  belong to nobody, and the author recipient route of every §12.1 event is empty. An
+  belong to nobody, and the author recipient route of every §12.1 event is empty. Nor
+  can it have co-authors: a team only grows from its members, and it has none (§39.4). An
   admin may still edit the challenge as on any other. **`needs_improvement` is
   refused** for an external challenge, for every role (**422**, *"An outside submission
   has no author who can improve it."*), because nobody could act on it. The enforced
@@ -7879,11 +7970,11 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | Tool | Behavior |
 |---|---|
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
-| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked), assignee, dates, like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
-| `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§39.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
-| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
+| `list_my_items` | The caller's own challenges and solutions (every item they are a co-author of, §39.10) with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
 | `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the active topics (id, name, description, §34.2), the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
 
@@ -7893,8 +7984,8 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 |---|---|
 | `submit_challenge` | §6.1: title, description, impact area, topics (optional, at most 3 active topic ids, §34.3), client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
 | `propose_solution` | §6.2: challenge number, description, cost vs benefits, `anonymous`. Only while the challenge is `valid`. Created `proposed`; event 2 fires. |
-| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. |
-| `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. |
+| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§39.5). |
+| `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. Requires `baseEditedAt` from `get_solution`; a stale copy is refused (§39.5). |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
 | `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
 | `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
@@ -8176,7 +8267,8 @@ A person may hype an item when **all** of the following hold; the detail payload
    freezes hypes on its solutions exactly as it freezes likes (§8.3). `awaiting_triage`
    is not hypeable: it is visible only to the author (who cannot self-hype) and the
    namespace's admins, and a signal before triage would pre-empt it.
-4. **The viewer is not the item's author** (decision 9). This holds for an anonymous
+4. **The viewer is not the item's author** (decision 9) — nor any member of its
+   co-author team (§39.9). This holds for an anonymous
    item too: `canHype` is a per-viewer flag, so a `false` on your own anonymous item is
    seen by nobody else. The API refuses with the same generic message as any other
    ineligible item, so the refusal itself reveals nothing.
@@ -8269,7 +8361,8 @@ absent, and `/api/hypes` answers 404.
 
 A new row of the §12.1 matrix, **"Hyped"**: an item of yours received a hype.
 
-- **Recipient:** the item's author only — never the hyper (they are the actor), never
+- **Recipient:** the item's author only (every member of a co-author team, §39.8) —
+  never the hyper (they are the actor), never
   followers, admins or the assignee. The author of an **anonymous** item is a safe
   recipient: nobody else receives it, and the item's masking is unaffected.
 - **In-app:** coalesced per item while unread, exactly as event 6 (one row per
@@ -8576,7 +8669,8 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
     challenge, §10.4);
   - are active and not erased (§12.1);
   - hold no marker for it;
-  - are not its **author** — anonymous or not; event 3 already tells them it is valid;
+  - are not its **author** (any member of its team, §39.12) — anonymous or not; event
+    3 already tells them it is valid;
   - are not the person whose action caused the trigger.
 
   A person following two relevant topics gets **one** notice naming both. Nobody left
@@ -9253,3 +9347,458 @@ EXISTS`, so a re-run is a no-op.
     proposer's inbox shows *"… is now available"*. With proposals closed, a non-admin
     sees no propose button but can still vote, and the platform admin can still
     propose.
+
+---
+
+## §39 Co-authors
+
+A challenge or a solution can be written by a **team of up to five people**. Every
+member is a full author: each can edit the item inside its edit windows, resubmit it,
+withdraw it, change the team and receive the author's notifications, and each earns the
+author's full credit. There is no lead and no invitation: a member adds a colleague
+directly, the colleague is told, and anyone may leave at any time — for good. The
+creator's one difference is that nobody else can remove them.
+
+Teams never meet anonymity: an anonymous item always has exactly one author (§39.3).
+And no author reviews their own item: a committee member never moves an item they are
+on the team of (§39.5).
+
+### §39.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Challenges and solutions** both take co-authors. | A problem is often spotted together and a solution is usually team work; one rule for both entities. |
+| 2 | **Direct add, no invitation.** A member picks a colleague; the colleague is on the team at once and is told (event 21). | No pending state and no request queue. Leaving at any time (decision 7) is the way out for someone added against their wishes, and it is final (decision 18), so nobody can put them back. |
+| 3 | **The team changes only while the item is open to joining:** a solution until it moves past `valid`, a challenge in any non-terminal status. | Authorship is frozen before the big awards (`implemented`, `solved`), so nobody is added just for the credit. |
+| 4 | **At most five members** — the creator plus four. | Fits the stacked bubbles on a card and bounds how many people one award multiplies to. |
+| 5 | **No co-authors on an anonymous item.** The author self-reveals first. | A direct add has to tell the added person who added them, and a named teammate on an "Anonymous" item narrows who wrote it (invariant 3). |
+| 6 | **Full parity.** Every member edits, resubmits, withdraws and changes the team — except that nobody removes the creator (decision 17). | No lead role to define, lose, hand over or erase. |
+| 7 | **Anyone leaves at any time; others are added or removed only while joining is open; the last member cannot leave.** | Nobody is stuck on a team, and the credit on a solved or implemented item cannot be rearranged afterwards. |
+| 8 | **A save made from a stale copy is refused** (409). | With several editors, nothing is silently overwritten. |
+| 9 | **Every member earns every author award in full** — the 5-point `*_submitted` / `*_proposed` awards included. | The ledger never deducts (§23 decision 3), so a split could not survive a later joiner; the cap of five bounds the inflation, and the large awards need a reviewer's transition, which no member can make on their own item (decision 20). |
+| 10 | **The leaderboard counts a co-authored item once for every member.** | The same rule as the points. |
+| 11 | **A late joiner gets the milestones the item already reached, dated to the join; likes and hypes count for them from the join on.** | Fair to the joiner, without backdating anyone's 30-day window. |
+| 12 | **Event 21 tells the person added or removed, by e-mail and in-app; nobody else is told.** Leaving notifies nobody. | They are put on an item without being asked, so they must hear of it; the team list and the audit log record the rest. The e-mail is capped (decision 19). |
+| 13 | **Agents act as a member through the existing tools; team changes are web-only.** Still 15 tools. | MCP has no people lookup, and resolving e-mails would reveal who exists and who can see what (§25.6). |
+| 14 | **An erased member stays on the team as "Deleted User".** | The same as a solo author today (§3, *authorship never moves*). |
+| 15 | **Cards and rows show the first member, "+N" and up to three stacked bubbles; the detail page lists everyone.** | Five names fit neither a card nor a row. |
+| 16 | **Author filters and search match any member.** | A co-author looking for their own work finds it. |
+| 17 | **Nobody else can remove the creator.** They leave only on their own; once erased, their "Deleted User" row can be removed like any other. The creator has no other power. | Otherwise a late joiner could remove the person whose idea it was before the large awards and collect them without them. |
+| 18 | **A leave is final.** Someone who left an item can never be added back to it; being removed by another member is not a leave. | Leaving is the answer to an unwanted add (decision 2), so it must stick: no re-add loop. |
+| 19 | **Event 21 sends at most one e-mail per person per item per UTC day**; the in-app line is always written. | Repeated adds and removals must not flood an inbox with an e-mail nobody can mute. |
+| 20 | **A committee member never moves an item they are an author of**, solo or team. The assignee role and admin overrides are unaffected, and being on a challenge's team does not stop someone reviewing the solutions under it. | A team could otherwise add a reviewer who then validates the item and shares its awards; the same self-approval path is already closed to agents (§25.1 decision 2). Barring the challenge's team from its solutions would leave small namespaces without a reviewer. |
+| 21 | **Any member's withdrawal stands for the whole team.** An admin override can restore the item. | Parity (decision 6): the withdrawal gains the withdrawer nothing, the other members are told (event 10) and the audit names who did it. |
+| 22 | **Admins never change a team** — not even to undo a mistaken leave. | Moving credit is not moderation. The Leave confirmation says the leave is final. |
+| 23 | **Only the Team panel marks the creator**, with a *Creator* tag where the ✕ would be. | The missing ✕ needs a reason; everywhere else parity should look like parity. |
+
+### §39.2 Membership
+
+- **The team is a member table**, `challenge_authors` / `solution_authors` (§5,
+  §39.13), with one row per member. The creator's row is written in the create
+  transaction, so every authored item has at least one member.
+- **`author_id` stays, as the creator.** It never changes (§3, *authorship never
+  moves*) and keeps its check constraint against `public_submission_id` (§5). It is
+  provenance, not permission: every rule that asks *"is this person an author?"* reads
+  the member table (§39.12, which also lists the few creator-only uses).
+- **Order.** Members are listed by `added_at`, then user id, so the creator comes first
+  while they remain a member. If the creator leaves or is removed, the next-earliest
+  member is listed first; nothing else changes.
+- **Size.** One to five members. Every row counts, a "Deleted User" one included
+  (§39.11). A sixth add is refused (**409**, *"A team can have at most five people."*).
+- **Who can be added** — all of:
+  - an **active**, not-erased user who is **not already a member**;
+  - who has **never left** this item: a leave is final (decision 18) and is kept in
+    `challenge_author_exits` / `solution_author_exits` (§39.13). Someone another member
+    removed has not left, and can be added again;
+  - who can **see the item** under §4.3, judged without the state rule that hides an
+    `awaiting_triage` challenge or a `proposed` solution (being a member is what lets
+    them see those, §39.6). For a **challenge**: anyone when it is `org`; a member of
+    its namespace or a platform admin when it is `namespace`; when it is `people`,
+    someone on its access list, an admin or committee member of its namespace, its
+    assignee or a platform admin. For a **solution**: anyone who can see its parent
+    challenge under the full §4.3 predicate — the §6.2 rule for proposing.
+- **Members never widen visibility.** Unlike assignment (§7.3), adding someone to a
+  `people` challenge, or to a solution under one, never adds them to the access list.
+  Widening stays with the namespace and platform admins (§4.3).
+- **The picker** offers eligible people only, through `GET /api/users?q=` with one of:
+  - `coAuthorFor=<CH-n | SOL-n>` — the **Team** panel of an existing item; the item's
+    current members, and everyone who left it, are left out;
+  - `canSee=<CH-n>` — the solution form: the people who can see that challenge under
+    the full §4.3 predicate (unlike the §7.3 `challenge=` search, which relaxes for a
+    `people` challenge);
+  - `namespace=<slug>&visibility=org|namespace` — the challenge form, where the item
+    does not exist yet; it follows the form's namespace and visibility fields, and
+    changing either drops any picked co-author who no longer qualifies, with a note.
+
+  Every variant leaves out the caller and uses the §7.3 result rows (bubble, name,
+  dimmed e-mail).
+- **One refusal for every reason.** An id that is unknown, inactive, erased, not
+  eligible or of someone who left the item is refused with the same **422**, *"This person can't be added to this
+  team."*, so the API reveals no more than the picker already shows.
+
+### §39.3 Anonymity
+
+- **An anonymous item has exactly one member**, its author. On both submit forms,
+  *Submit anonymously* and the co-author field exclude each other: while the box is
+  ticked the field is disabled, and while anyone is picked the box is disabled, each
+  with the hint *"Anonymous items can't have co-authors."* Nothing is cleared
+  silently.
+- The API refuses a create that carries both (**400**, the same message) and an add on
+  an anonymous item (**409**, *"Anonymous items can't have co-authors. Reveal yourself
+  as the author first."*).
+- **Self-reveal opens the door.** After the author's one-way self-reveal (§9) the item
+  is an ordinary named item, and a team can form while joining is open (§39.4).
+- **Nothing else in §9 changes.** The admin reveal still names one person; masking,
+  the anonymous bubble and the anonymous exclusions from leaderboards and gamification
+  apply exactly as before, because an anonymous item never has a co-author to mask.
+
+### §39.4 When the team can change
+
+- **Joining is open** while the item is in one of these statuses:
+  - a **solution**: `proposed`, `in_review`, `needs_improvement` or `valid`;
+  - a **challenge**: any non-terminal status — `awaiting_triage`, `in_review`,
+    `needs_improvement`, `meeting_scheduled` or `valid`.
+
+  An admin override, or the §10.3 revert, that moves an item back into one of these
+  statuses opens it again.
+- **Adding** — any member, while joining is open: on the submit form (up to four
+  co-authors, §6.1, §6.2) or later from the detail page's **Team** panel.
+- **Removing someone else** — any member, while joining is open. Any member can be
+  removed **except the creator** (the item's `author_id`), who leaves only on their own
+  (**409**, *"The creator can only leave on their own."*, decision 17). Once the
+  creator is erased, their "Deleted User" row can be removed like any other (§39.11).
+  When the creator leaves, nobody inherits the protection.
+- **Leaving** — any member, **at any time and in any status**, terminal ones and
+  `withdrawn` included, unless they are the **only** member (**409**, *"You're the only
+  author, so you can't leave."*). Leaving keeps the follow and every point earned
+  (§39.9). **A leave is final** (decision 18): the leave's transaction writes the
+  person's exit row, and they can never be added back to that item (§39.2).
+- **Outside the window**, adding and removing others are refused (**409**, *"This team
+  can no longer change."*); leaving still works.
+- **Serialized.** Every team change locks the item's row first, so two concurrent adds
+  cannot exceed five and two concurrent leaves cannot empty the team.
+- **Not an edit.** A team change stamps neither `edited_at` nor `updated_at` nor
+  `status_changed_at`, and fires no event but event 21 (§39.8).
+- **Nobody else changes a team** (decision 22). Admins, committee members and
+  assignees have no team controls, not even to undo a mistaken leave; an admin's tools
+  stay the status override, comment deletion and, for personal data, the §3 erasure.
+  A challenge accepted from the public form has no members (§24.6), so nobody can add
+  to it.
+
+### §39.5 What members can do
+
+**Full parity.** Every author right in §10.1 and §11 belongs to **each** member: edit
+inside the edit windows, resubmit, withdraw, upload attachments, remove **any** of the
+item's attachments (not only their own upload) inside an edit window, and use the
+§22.10 drafting aid. The detail payload's `canEdit` / `canResubmit` / `canWithdraw`
+are true for every member alike, and the §6.4 lock covers each member's action bar.
+Each action is audited with the member who took it as the actor, as today.
+
+**A withdrawal is the team's** (decision 21). One member's **Withdraw** withdraws the
+item for everyone; the other members hear of it through event 10 (§39.8), and only an
+admin override (§7.2, §8.2) brings it back.
+
+**No reviewing your own item** (decision 20). A committee member makes no enforced
+transition on an item they are a member of — a solo author included, since a solo
+author is a team of one. The request is refused (**403**, *"You can't review an item
+you're an author of."*) and writes nothing; the detail payload offers them no
+transitions, and the detail page shows the §13.1 line in place of the control. The bar
+removes only the committee basis:
+- an author who is also the challenge's **assignee** keeps the assignee's enforced
+  transitions (§7.2);
+- an author who is a namespace or platform **admin** keeps the override (invariant 6),
+  audited as one;
+- being on a **challenge's** team does not bar a committee member from the solutions
+  under it, nor the reverse;
+- an author's own **Resubmit** (§10.1) is an author action, not a review, and stays.
+
+The bar reads membership live: someone who leaves an item can review it from then on,
+and someone added to it loses the control at once — so a reviewer added only to sideline
+them leaves (§39.4) and reviews it.
+
+**Concurrent edits.** `PUT /api/challenges/:number` and `PUT /api/solutions/:number`
+require **`baseEditedAt`** — the item's `editedAt` as the editor loaded it (`null` for
+an item never edited). When it no longer matches the stored `edited_at`, the save is
+refused (**409**, *"Someone else edited this since you opened it. Reload to see their
+changes."*) and nothing is written; the check and the write are one statement
+(`… WHERE edited_at IS NOT DISTINCT FROM $baseEditedAt`). The form keeps the person's
+text so they can copy it before reloading. The check applies to every item, solo ones
+too (two open tabs). Resubmit and withdraw need no token: the state machine already
+refuses a stale move.
+
+### §39.6 Visibility
+
+- **Every state rule that names the author names every member** (§4.3): an
+  `awaiting_triage` or `withdrawn` challenge is visible to all its members and, as for
+  the author today, that rule replaces the namespace rule, so a member keeps seeing it
+  after leaving the namespace. A `proposed` solution is visible to all its members.
+- **Leaving or being removed** takes away exactly what membership gave, which is that
+  state-rule access. Anything the person can see on their own stays visible. Their
+  follow stays and, like any follow, delivers nothing they cannot see (§12.1).
+- **Losing visibility otherwise** works as for a solo author today: a member taken off
+  a `people` access list, or out of the namespace, loses the item (§4.3 *Removal*).
+  Their membership stays and grants nothing beyond the state rule above.
+- **The team list is part of the item** and appears only where the item does
+  (invariant 2): no count of a person's teams, and no "co-authored with" list on any
+  surface that does not already show the items.
+
+### §39.7 Display
+
+- **Compact form** — gallery cards and list rows (§13.1), the solution cards on the
+  detail page, triage rows on both tabs (§14.1), search results (§13.4), the Home
+  *Featured* and *Hyped this week* sections (§13.2, §26.5) and the profile's activity
+  (§13.5): the **first member's** bubble and name, then **"+N"** when there are more,
+  with up to **three** overlapping small bubbles (the first three members). Each is an
+  ordinary real-user bubble with its §13.8 hover card; the group's `aria-label` reads
+  *"Ana Petrova and 2 co-authors"*. The mobile meta line uses the same form.
+- **Full form** — the challenge detail header and each solution's header: every member
+  in order, bubble and name. For a member of the item, the **Team** panel adds
+  **Add co-author** (the picker, while joining is open and the team has fewer than
+  five), a **✕** on each other member (while joining is open) and **Leave** (unless
+  they are the only member). The creator's row never has a ✕: a small **Creator** tag
+  sits in its place (decision 23), and once the creator is erased their "Deleted User"
+  row takes the ✕ instead. The tag appears nowhere else. Removing someone asks for
+  confirmation; leaving asks too, and says that the person keeps their points and can't
+  be added back to this item.
+- **Anonymous** items are unchanged: one *"Anonymous"* with the anonymous bubble.
+  **"Deleted User"** members render the neutral bubble and **deactivated** ones the
+  greyed bubble (§13.6), each in its place in the order.
+- **Payloads.** Every payload that carries the masked-author shape gains **`authors`**
+  — the ordered members, each `{ id, displayName, active, scrubbed }`, or the single
+  anonymous shape for an anonymous item — and keeps `author` as its first entry, so
+  existing consumers keep working. In the **detail** payload only, each entry also
+  carries `creator` (true on the creator's row), which drives the Team panel.
+- **Text surfaces.** E-mails and inbox copy that name an item's author name the first
+  member plus *"and N others"*. The §14.1 CSV's author column lists every member in
+  order, separated by `; ` (masked per §9, neutralized per §14.1).
+
+### §39.8 Notifications — event 21
+
+- **"Author" in the §12.1 matrix means every member.** The *item author* of events 3,
+  4, 5, 6 and 16, the *challenge author* of events 2 and 8, and the *authors of
+  `not_selected` siblings* of event 8 are each the item's whole team. The usual rules
+  hold: recipients are deduplicated, and a member who acts (commenting, resubmitting)
+  does not notify themselves.
+- **Event 10** (withdrawn) adds **the other members** of the item's team to its
+  recipients, delivered directly like the rest of event 10.
+- **Auto-follow.** Every member auto-follows the item when they join (§12.3) and may
+  unfollow. Leaving or being removed does not unfollow.
+- **Event 21 — "Co-author added" / "Co-author removed".** A new row of the §12.1
+  matrix:
+  - **Recipient:** the person **another** member added or removed. Never the actor, so
+    leaving notifies nobody; never the other members, followers, admins or the
+    assignee.
+  - **When:** after commit, one per person. A create with co-authors writes one per
+    co-author, with the creator as the actor.
+  - **In-app and e-mail.** *"Ana Petrova added you as a co-author of SOL-34"* / *"Ana
+    Petrova removed you as a co-author of SOL-34"*, linked to the item. The e-mail's
+    subject is the same line; the body carries the number, the title, the actor's name
+    and the link.
+  - **Actionable, like events 4, 5 and 7:** always immediate, never held for a digest,
+    and not mutable by the three per-event toggles. The e-mail switch applies, and a
+    deactivated or erased recipient is dropped (§12.1).
+  - **Daily e-mail cap** (decision 19). At most **one** event-21 e-mail goes to a
+    person about one item per UTC day: the first add or removal that day writes the
+    outbox row, and later ones that day write the in-app line only (no outbox row, as
+    for event 13). The check looks for an earlier event-21 inbox row for the same
+    recipient about the same item (its `challenge_id` or `solution_id`, §5) created
+    since that UTC midnight, read or not. The cap is per item, so changes on two items
+    still send two e-mails.
+  - **Visibility.** An add passes the visibility check by construction (§39.2). A
+    removal is delivered directly, like event 10: the person could see the item until
+    a moment ago, so it leaks nothing.
+- **Channel webhooks** (§12.4) are unchanged: they carry no person, and team changes
+  post nothing.
+
+### §39.9 Points, badges and the leaderboard
+
+- **Every member earns every author award in full** (decision 9): `challenge_submitted`,
+  `challenge_validated`, `challenge_solved`, `solution_proposed`, `solution_validated`,
+  `solution_implemented`, `like_received` and `hype_received`. The ledger is unique per
+  `(user, award key)`, so the existing award keys serve unchanged, with one row per
+  member.
+- **"Someone other than the author" means someone outside the team.** A like by a
+  member earns no member a `like_received`, and hyping is refused to every member
+  (§26.3). A like or hype a person gave **before** joining stays where it is: it earned
+  the members of that time their award and earns the joiner nothing, and a hype is not
+  refunded (§26).
+- **Joining** writes, in the add's transaction, the milestones the item has already
+  reached — for a challenge `challenge_submitted`, plus `challenge_validated` once
+  `first_valid_at` is set; for a solution `solution_proposed`, plus
+  `solution_validated` when it has entered `valid` before (found from its status audit
+  rows, as the §23.2 self-reveal replay finds it) — each with `occurred_at` set to
+  **the join**. Likes and hypes given before the join earn the joiner nothing; later
+  ones earn them the usual award, under the daily caps. Nobody can join after the
+  window closes, so no `*_solved` or `*_implemented` award is ever replayed.
+  Re-joining writes nothing new, because the award keys already exist. `via_mcp`
+  follows the item (§25.12).
+- **Leaving or being removed deducts nothing** (§23 decision 3).
+- **`assignment_solved`** goes to the assignee when the assignee is **not a member** of
+  the challenge's team.
+- **Full Circle** is earned by each person who is a member of the implemented solution
+  **and** of its parent challenge and holds an award row for each, checked when their
+  `solution_implemented` row is written.
+- **Badges** count ledger rows (§23.4), so co-authored items count toward every
+  member's tiers — Problem Spotter, Solution Architect, Implementer and Challenge
+  Closer — and toward the one-off Icebreaker and First Idea.
+- **Leaderboard (§13.3).** Every metric counts a co-authored item **once for each
+  current member**. Membership is read live, so a person who left no longer counts the
+  item (their points stay). A member's contribution time is the **later** of the
+  event's time and their `added_at`: a late joiner's *challenges submitted* or
+  *solutions proposed* counts from the join, and their *likes received* counts only
+  likes given after it. *Solutions implemented* keeps its `status_changed_at`, which
+  always follows the join. The org-visible test is unchanged, and the Points metric
+  reads the ledger as before.
+- **Anonymous** items have no team, so the §23 anonymity rules are unchanged.
+
+### §39.10 Agents (MCP)
+
+- **Members act through the existing tools.** `edit_challenge`, `edit_solution` and
+  `resubmit` work on any item the caller is a member of; `list_my_items` lists those
+  items; the `mine` filter of `search_challenges` means "a member of"; and
+  `get_challenge` and `get_solution` return **`authors`** (display names in order, or
+  *"Anonymous"*, §25.4), `editedAt`, and `isMine: true` for a member.
+- **The edit tools take `baseEditedAt`** (required, read from `get_challenge` /
+  `get_solution`); a stale one returns the §39.5 message as a tool error. This is
+  folded into the existing tools, so the count stays at **15**.
+- **No team changes through an agent**, and `submit_challenge` / `propose_solution`
+  take no co-authors (decision 13).
+
+### §39.11 Erasure, deactivation, delete and trash
+
+- **Erasure (§3).** The membership stays on the de-identified row and renders as
+  *"Deleted User"* with the neutral bubble. It still takes one of the five places
+  until another member removes it while joining is open — the creator's row too, which
+  loses its protection with the erasure (§39.4). The erased user's ledger rows are
+  deleted as §3 says; nothing passes to the rest of the team. Their exit rows, if any,
+  stay: they name no one once the user row is de-identified.
+- **Deactivation.** A deactivated member stays listed with the greyed bubble, receives
+  nothing (§12.1) and, unable to sign in, acts on nothing. The rest of the team
+  carries on.
+- **Delete (§10.3)** cascades the member rows with the item. The `challenge.deleted` /
+  `solution.deleted` audit row adds `authorIds`, the members at deletion.
+- **Trash (§10.4)** hides the item from its members as from everyone else. Every team
+  endpoint answers as for an invisible item, and a restore brings the team back
+  unchanged.
+
+### §39.12 Where "author" now means every member
+
+Every rule below that says *the author* reads the member table, so it holds for each
+member alike:
+
+- §4.3 — the `awaiting_triage` / `withdrawn` challenge rule and the `proposed`
+  solution rule (§39.6).
+- §6.1, §6.2 — the co-author field; every member auto-follows.
+- §6.4 — the lock on the author action bar.
+- §10.1 — edit, resubmit, withdraw and their `can*` flags, plus `baseEditedAt`
+  (§39.5).
+- §11 — bound upload and removal; any member removes any of the item's attachments.
+- §12.1, §12.3 — the author recipients and the auto-follow (§39.8).
+- §13.1 — the **Mine** tab (items the viewer is a member of), the author filter (any
+  member) and the display (§39.7).
+- §13.2 — the state rule inside the KPI tiles and spotlights.
+- §13.3 — the leaderboard (§39.9).
+- §13.4 — the author filter.
+- §13.5 — a profile's own and public contributions include co-authored items, under
+  the same org-visible test.
+- §14.1 — the author column, the author-name filter and the CSV.
+- §22.10 — the drafting aid serves any member who edits; §22.11 — triage notes are
+  never shown to any member; §22.13 — the summary never marks any member.
+- §23 — points and badges (§39.9).
+- §25 — the MCP tools (§39.10).
+- §26.3, §26.6 — no member may hype the item, and event 16 goes to every member.
+- §34.3, §34.5 — any member tags the challenge in the edit window, and event 18
+  skips every member.
+- §4.2, §7.2, §8.2, §13.1 — the committee bar (§39.5): a committee member moves no
+  item they are a member of.
+
+**Creator only (`author_id`):** the actor of `challenge.created` /
+`solution.created`; the §13.10 feature-use count for submitting and proposing; the
+§25.8 *via agent* tag, which describes how the item was created; and, new with teams,
+the protection from removal by others (§39.4) with the Team panel's *Creator* tag
+(§39.7).
+
+**Not teams.** Feature ideas (§38) keep a single proposer and take no co-authors;
+comments keep a single author.
+
+### §39.13 Data model, API, audit, tests
+
+- **Data model (migration).** `challenge_authors` — `challenge_id` (FK, `ON DELETE
+  CASCADE`), `user_id` (FK), `added_at` (timestamptz, not null), `added_by` (nullable
+  user FK — null on the creator's own row and on backfilled rows), primary key
+  `(challenge_id, user_id)`, and an index on `user_id`. `solution_authors` is the same
+  over `solution_id`. The migration backfills one row per existing challenge with a
+  non-null `author_id` and one per solution, with `added_at` = the item's
+  `created_at`; from then on an `AFTER INSERT` trigger on each item table writes the
+  creator's row, so no create path can forget it. Grants: the app role gets SELECT,
+  INSERT and DELETE — a member row is
+  working state (leaving deletes it), and the audit log keeps the history.
+  `challenge_author_exits` — `challenge_id` (FK, `ON DELETE CASCADE`), `user_id` (FK),
+  `left_at` (timestamptz, not null), primary key `(challenge_id, user_id)`;
+  `solution_author_exits` the same over `solution_id`. Written in a leave's
+  transaction, never on a removal; nothing to backfill. Grants: SELECT and INSERT only
+  — a leave is never undone — plus the DELETE the §10.3 cascade needs. No column
+  changes on `challenges` or `solutions`. The one-member rule for anonymous items, the
+  cap of five, the creator's protection and the final leave are enforced by the API
+  inside the locked transaction (§39.4).
+- **API (§16).**
+  - `POST /api/challenges` and `POST /api/challenges/:number/solutions` accept
+    **`coAuthorIds`** (at most 4, distinct, never the caller): **400** together with
+    `anonymous: true` or over four; **422** for an ineligible id (§39.2).
+  - `POST /api/challenges/:number/authors { userId }` and
+    `DELETE /api/challenges/:number/authors/:userId` (the caller's own id is a leave),
+    and the `solutions/:number/authors` twins. Order of checks (§2.4): **404** when the
+    caller cannot see the item, the number is malformed or the item is trashed;
+    **403** for a caller who is not a member (*"Only the item's authors can change its
+    team."*); then **409** for an anonymous item, for a closed window (adding and
+    removing others only), at the cap, for removing the creator and for the last
+    member leaving; then **422** for an ineligible person, someone who left included.
+    Success returns `{ authors }`. `mutation` bucket, `Origin`-checked.
+  - `PATCH /api/challenges/:number` and `PATCH /api/solutions/:number`: a committee
+    member's enforced transition on an item they are a member of is **403** (§39.5),
+    unless they are also the challenge's assignee; the detail payload's allowed
+    transitions are empty for them.
+  - `GET /api/users` accepts `coAuthorFor`, `canSee`, or `namespace` + `visibility`
+    (§39.2).
+  - The detail payload carries `authors` on the challenge and on each solution, each
+    entry with its `creator` flag (§39.7), and per viewer `canManageTeam` (a member,
+    joining open, not anonymous) and `canLeave` (a member who is not the only one).
+    `PUT` edits require `baseEditedAt` (§39.5).
+- **Audit (§15).** `challenge.author_added` / `solution.author_added` — actor the
+  member who added, `after: { userId, via: "submit" | "team" }`;
+  `challenge.author_removed` / `solution.author_removed` — `after: { userId, trigger:
+  "removed" | "left" }`. A refused (409) edit and a refused (403) committee transition
+  write nothing. Event 21 and the awards are not audited (the inbox and the ledger are
+  their own records, §23.12).
+- **Tests.** *Unit:* the eligibility matrix (each visibility against an
+  `awaiting_triage` and a `valid` challenge, and a solution under each); the joining
+  window for every status of both entities; the cap counting a "Deleted User" row;
+  the last-member rule; the creator's protection (refused while live, removable once
+  erased, not inherited when the creator leaves); the final leave (someone who left is
+  ineligible, someone removed is not); the anonymity refusals on create and add; the
+  committee bar in the transition RBAC (refused on a solo and on a team item, kept for
+  an author who is the assignee, the admin override unaffected, a challenge's team free
+  to review its solutions); the compact display ("+N" and the `aria-label`); the join
+  replay set for each status; the leaderboard's contribution-time rule.
+  *Integration:* a create with co-authors writes the members,
+  their awards and one event 21 per co-author in one transaction; the add / remove /
+  leave matrix in the 404 → 403 → 409 → 422 order, removing the creator 409 and
+  re-adding someone who left 422 (and absent from the `coAuthorFor` picker); two
+  concurrent adds cannot exceed five, and the last two members leaving at once leave
+  one; a stale `baseEditedAt` is 409 and writes nothing; a committee member's
+  `PATCH` on their own item is 403, writes nothing, and their detail payload offers no
+  transitions; every member receives events 2–6, 8, 10 and 16 and
+  auto-follows; event 21 reaches only the person added or removed, never on a leave,
+  and is never digested; a second event 21 to the same person about the same item on
+  one UTC day writes the inbox line but no outbox row, while one about another item
+  still e-mails; full awards for each member, a member's like earns nothing,
+  the join replay is dated to the join, a re-join writes nothing, and leaving deducts
+  nothing; Full Circle for a member of both items; the leaderboard counts each current
+  member; a `proposed` solution and an `awaiting_triage` challenge are visible to every
+  member and stop being visible to a member who leaves; a team change never grows a
+  `people` challenge's access list; MCP lists co-authored items, refuses a stale edit
+  and still masks anonymous authors; erasure keeps the membership as "Deleted User".
+  *E2e:* a challenge submitted with a co-author appears under the co-author's **Mine**;
+  a user proposes a solution with a co-author picked in the form; the co-author
+  receives the inbox item, edits the solution and leaves it from the Team panel, after
+  which the proposed solution is hidden from them.

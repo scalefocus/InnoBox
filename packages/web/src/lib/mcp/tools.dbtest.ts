@@ -161,12 +161,20 @@ test(
       assert.ok((await badges(member.userId)).includes("co_pilot"));
 
       // ── edit: only the author, inside the window; audited with the source ──
-      assert.equal(statusOf(await call(ctx(outsider, true), "edit_challenge", { number: aNum, title: "hijack" })), 404, "an outsider cannot even see it (awaiting triage)");
-      assert.equal(statusOf(await call(ctx(nsAdmin, true), "edit_challenge", { number: aNum, title: "admin edit" })), 403, "only the author edits");
-      assert.equal(data(await call(ctx(member, true), "edit_challenge", { number: aNum, title: `Agent edited ${stamp}` })).title, `Agent edited ${stamp}`);
+      assert.equal(statusOf(await call(ctx(outsider, true), "edit_challenge", { number: aNum, title: "hijack", baseEditedAt: null })), 404, "an outsider cannot even see it (awaiting triage)");
+      assert.equal(statusOf(await call(ctx(nsAdmin, true), "edit_challenge", { number: aNum, title: "admin edit", baseEditedAt: null })), 403, "only the author edits");
+      assert.equal(statusOf(await call(ctx(member, true), "edit_challenge", { number: aNum, title: "no token" })), 400, "§39.10: baseEditedAt is required");
+      const editedNow = data(await call(ctx(member, true), "edit_challenge", { number: aNum, title: `Agent edited ${stamp}`, baseEditedAt: null }));
+      assert.equal(editedNow.title, `Agent edited ${stamp}`);
+      assert.ok(editedNow.editedAt, "the edit returns the new editedAt");
       const edited = (await audit(aId)).find((r) => r.action === "challenge.edited")!;
       assert.equal(edited.after.title, `Agent edited ${stamp}`);
       assert.equal(edited.after.source, "mcp");
+      // §39.5: a save from a stale copy is refused as a tool error, and writes nothing.
+      const stale = await call(ctx(member, true), "edit_challenge", { number: aNum, title: "stale", baseEditedAt: null });
+      assert.equal(statusOf(stale), 409);
+      assert.equal(data(await call(ctx(member, true), "get_challenge", { number: aNum })).title, `Agent edited ${stamp}`);
+      assert.equal(data(await call(ctx(member, true), "get_challenge", { number: aNum })).editedAt, editedNow.editedAt);
 
       // ── resubmit: the author's own, from needs_improvement only ──
       assert.equal(statusOf(await call(ctx(member, true), "resubmit", { parentType: "challenge", number: aNum })), 409);

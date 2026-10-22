@@ -32,6 +32,10 @@ import { HypeButton, HypeCount, HypersList, type HypeFields } from "@/components
 import { invalidateApi } from "@/lib/ui";
 import { TopicChips } from "@/components/TopicChips";
 import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicPicker";
+import { TeamBubbles } from "@/components/TeamByline";
+import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker, TeamFullNames, TeamPanel, type TeamMember } from "@/components/TeamPanel";
+import type { UserResult } from "@/components/UserResultButton";
+import { OWN_ITEM_REVIEW_HINT } from "@innobox/shared/coauthors";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -69,9 +73,13 @@ interface SolutionItem extends Partial<HypeFields> {
   description: string;
   costVsBenefits: string | null;
   author: MaskedAuthor;
+  /** §39.7: every member in order (the creator flagged) — or the single anonymous shape. */
+  authors?: TeamMember[];
   isMine: boolean;
   status: string;
   createdAt: string;
+  /** §39.5: sent back as `baseEditedAt` on an edit. */
+  editedAt: string | null;
   likeCount: number;
   likedByViewer: boolean;
   followedByViewer: boolean;
@@ -79,6 +87,10 @@ interface SolutionItem extends Partial<HypeFields> {
   canReveal: boolean;
   canSelfReveal: boolean;
   allowedTransitions: string[];
+  /** §39.5: a committee member who is an author of this solution. */
+  reviewBarred?: boolean;
+  canManageTeam?: boolean;
+  canLeave?: boolean;
   canEdit: boolean;
   canWithdraw: boolean;
   canResubmit: boolean;
@@ -101,6 +113,8 @@ interface ChallengeDetail extends Partial<HypeFields> {
   title: string;
   description: string;
   author: MaskedAuthor;
+  /** §39.7: every member in order (the creator flagged) — or the single anonymous/external shape. */
+  authors?: TeamMember[];
   namespaceSlug: string;
   namespaceId: string;
   impactAreaName: string;
@@ -134,6 +148,12 @@ interface ChallengeDetail extends Partial<HypeFields> {
   canAssign: boolean;
   canOverrideStatus: boolean;
   allowedTransitions: string[];
+  /** §39.5: a committee member who is an author of this challenge — the line in place of the control. */
+  reviewBarred?: boolean;
+  /** §39.13: a member, joining open, not anonymous. */
+  canManageTeam?: boolean;
+  /** §39.13: a member who is not the only one. */
+  canLeave?: boolean;
   canEdit: boolean;
   canWithdraw: boolean;
   canResubmit: boolean;
@@ -550,9 +570,10 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span className="chip mono">{s.number}</span>
         <span className={statusPillClass(s.status)}>{SOLUTION_STATUS_LABEL[s.status] ?? s.status}</span>
-        <AvatarBubble size="sm" userId={s.author.userId} displayName={s.author.displayName} anonymous={s.author.anonymous} deactivated={s.author.active === false} scrubbed={s.author.scrubbed === true} />
+        {/* §39.7: the full form — every member in order, bubble and name (one bubble for a solo item). */}
+        {teamOfItem(s).length === 1 && <TeamBubbles authors={teamOfItem(s)} />}
         <span className="sub" style={{ flex: 1 }}>
-          {s.author.anonymous ? "Anonymous" : s.author.displayName} · {fmt.date(s.createdAt)}
+          <TeamFullNames authors={teamOfItem(s)} /> · {fmt.date(s.createdAt)}
           <ViaAgentTag via={s.viaAgent} />
         </span>
         {solutionReadOnly ? (
@@ -626,6 +647,11 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           ))}
         </div>
       )}
+      {s.reviewBarred && (
+        <p className="muted review-barred" style={{ fontSize: 13, margin: 0 }}>
+          {OWN_ITEM_REVIEW_HINT}
+        </p>
+      )}
       {(s.canEdit || s.canResubmit || s.canWithdraw) && (
         <div className="form-lock" aria-busy={resubmitLock.lockedFor(s.id)} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignSelf: "flex-start" }}>
@@ -656,6 +682,16 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           )}
           <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
         </div>
+      )}
+      {s.isMine && !solutionReadOnly && !s.author.anonymous && (
+        <TeamPanel
+          itemNumber={s.number}
+          authors={teamOfItem(s)}
+          canManageTeam={s.canManageTeam === true}
+          canLeave={s.canLeave === true}
+          onChanged={onChanged}
+          onError={notify}
+        />
       )}
       {s.canDelete && !solutionReadOnly && (
         <DangerZone
@@ -725,17 +761,11 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
 
       <div className="card card-pad reveal" data-attach-scope style={{ marginBottom: 18 }}>
         <div className="row detail-head" style={{ border: 0, padding: 0, marginBottom: 16 }}>
-          <AvatarBubble
-            size="md"
-            userId={challenge.author.userId}
-            displayName={challenge.author.displayName}
-            anonymous={challenge.author.anonymous} external={challenge.author.external === true}
-            deactivated={challenge.author.active === false}
-            scrubbed={challenge.author.scrubbed === true}
-          />
+          {teamOfItem(challenge).length === 1 && <TeamBubbles authors={teamOfItem(challenge)} size="md" />}
           <div className="grow">
             <div className="ttl">
-              {challenge.author.anonymous ? "Anonymous" : challenge.author.displayName}
+              {/* §39.7: the full form — every member in order, bubble and name. */}
+              <TeamFullNames authors={teamOfItem(challenge)} />
               <ViaAgentTag via={challenge.viaAgent} />
             </div>
             <div className="sub mono">
@@ -833,6 +863,17 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           </div>
         )}
 
+        {challenge.isMine && !readOnly && !challenge.author.anonymous && (
+          <TeamPanel
+            itemNumber={challenge.number}
+            authors={teamOfItem(challenge)}
+            canManageTeam={challenge.canManageTeam === true}
+            canLeave={challenge.canLeave === true}
+            onChanged={onChanged}
+            onError={notify}
+          />
+        )}
+
         <div style={{ marginTop: 14 }}>
           <AttachmentControl
             parentType="challenge"
@@ -855,6 +896,12 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               ))}
             </div>
           </div>
+        )}
+
+        {challenge.reviewBarred && (
+          <p className="muted review-barred" style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)", fontSize: 13 }}>
+            {OWN_ITEM_REVIEW_HINT}
+          </p>
         )}
 
         {challenge.canOverrideStatus && (
@@ -1023,6 +1070,11 @@ interface RevealedAuthor {
 }
 
 /** `/api/challenges/<n>` or `/api/solutions/<n>` for a CH-/SOL- number. */
+/** §39.7: the item's team — `authors` when present, else the single `author`. */
+function teamOfItem(item: { author: MaskedAuthor; authors?: TeamMember[] }): TeamMember[] {
+  return item.authors && item.authors.length > 0 ? item.authors : [item.author];
+}
+
 function itemApiPath(itemNumber: string): string {
   return itemNumber.startsWith("SOL-")
     ? `/api/solutions/${itemNumber.replace("SOL-", "")}`
@@ -1169,6 +1221,8 @@ function ProposeSolutionForm({
   const [description, setDescription] = useState("");
   const [costVsBenefits, setCostVsBenefits] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
+  // §6.2 / §39: up to four co-authors who can see the challenge; exclusive with anonymity (§39.3).
+  const [coAuthors, setCoAuthors] = useState<UserResult[]>([]);
   const [draftKey] = useState(() => crypto.randomUUID());
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const lock = useFormLock();
@@ -1211,7 +1265,7 @@ function ProposeSolutionForm({
       const res = await fetch(`/api/challenges/${challengeNumber.replace("CH-", "")}/solutions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, isAnonymous, draftKey }),
+        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, isAnonymous, draftKey, coAuthorIds: coAuthors.map((u) => u.id) }),
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not propose solution");
@@ -1227,6 +1281,7 @@ function ProposeSolutionForm({
     setDescription("");
     setCostVsBenefits("");
     setIsAnonymous(false);
+    setCoAuthors([]);
     setOpen(false);
     lock.reset();
   };
@@ -1278,9 +1333,21 @@ function ProposeSolutionForm({
           onBusyChange={setAttachmentsBusy}
           dropLabel="Your new solution"
         />
+        <label style={EDIT_LABEL} htmlFor="propose-coauthors">
+          Co-authors (optional)
+        </label>
+        <CoAuthorPicker
+          id="propose-coauthors"
+          value={coAuthors}
+          onChange={setCoAuthors}
+          variant={`canSee=${encodeURIComponent(challengeNumber)}`}
+          disabled={isAnonymous || lock.locked}
+          disabledHint={isAnonymous ? ANONYMOUS_NO_COAUTHORS_HINT : null}
+        />
         <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 14 }}>
-          <input type="checkbox" checked={isAnonymous} onChange={(e) => setIsAnonymous(e.target.checked)} />
+          <input type="checkbox" checked={isAnonymous} disabled={coAuthors.length > 0} onChange={(e) => setIsAnonymous(e.target.checked)} />
           Submit anonymously
+          {coAuthors.length > 0 && <span className="muted" style={{ fontSize: 12.5 }}>— {ANONYMOUS_NO_COAUTHORS_HINT}</span>}
         </label>
         {error && (
           <p className="muted" role="alert" style={{ color: "var(--danger)" }}>
@@ -1417,6 +1484,8 @@ function ChallengeEditForm({
   const [topics, setTopics] = useState<TopicTag[]>(challenge.topics ?? []);
   const topicOptions = useActiveTopics();
   const [submitting, setSubmitting] = useState(false);
+  // §39.5: a save from a stale copy is refused; the form keeps the text so it can be copied.
+  const [stale, setStale] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/impact-areas", { headers: { accept: "application/json" } })
@@ -1434,9 +1503,20 @@ function ChallengeEditForm({
       const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, description, impactAreaId, clientName: isClient ? clientName : null, topicIds: topics.map((t) => t.id) }),
+        body: JSON.stringify({
+          title,
+          description,
+          impactAreaId,
+          clientName: isClient ? clientName : null,
+          topicIds: topics.map((t) => t.id),
+          baseEditedAt: challenge.editedAt,
+        }),
       });
       const json = await readJson(res);
+      if (res.status === 409 && json.code === "stale_edit") {
+        setStale((json.error as string) ?? "Someone else edited this since you opened it.");
+        return;
+      }
       if (!res.ok) throw new Error(json.error ?? "Could not save changes");
       onDone();
       onSaved();
@@ -1475,8 +1555,17 @@ function ChallengeEditForm({
           <input className="field" value={clientName} onChange={(e) => setClientName(e.target.value)} maxLength={200} required />
         </>
       )}
+      {stale && (
+        <StaleEditNotice
+          message={stale}
+          onReload={() => {
+            onDone();
+            onSaved();
+          }}
+        />
+      )}
       <div style={{ display: "flex", gap: 10 }}>
-        <button type="submit" className="btn btn-primary btn-sm" disabled={submitting}>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={submitting || stale !== null}>
           {submitting ? "Saving…" : "Save changes"}
         </button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onDone}>
@@ -1502,6 +1591,8 @@ function SolutionEditForm({
   const [description, setDescription] = useState(solution.description);
   const [costVsBenefits, setCostVsBenefits] = useState(solution.costVsBenefits ?? "");
   const [submitting, setSubmitting] = useState(false);
+  // §39.5: a save from a stale copy is refused; the form keeps the text so it can be copied.
+  const [stale, setStale] = useState<string | null>(null);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1510,9 +1601,13 @@ function SolutionEditForm({
       const res = await fetch(`/api/solutions/${solution.number.replace("SOL-", "")}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null }),
+        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, baseEditedAt: solution.editedAt }),
       });
       const json = await readJson(res);
+      if (res.status === 409 && json.code === "stale_edit") {
+        setStale((json.error as string) ?? "Someone else edited this since you opened it.");
+        return;
+      }
       if (!res.ok) throw new Error(json.error ?? "Could not save changes");
       onDone();
       onSaved();
@@ -1534,8 +1629,17 @@ function SolutionEditForm({
         onChange={(e) => setCostVsBenefits(e.target.value)}
         maxLength={5000}
       />
+      {stale && (
+        <StaleEditNotice
+          message={stale}
+          onReload={() => {
+            onDone();
+            onSaved();
+          }}
+        />
+      )}
       <div style={{ display: "flex", gap: 10 }}>
-        <button type="submit" className="btn btn-primary btn-sm" disabled={submitting}>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={submitting || stale !== null}>
           {submitting ? "Saving…" : "Save changes"}
         </button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onDone}>
@@ -1543,5 +1647,18 @@ function SolutionEditForm({
         </button>
       </div>
     </form>
+  );
+}
+
+// §39.5: the refused save's notice — the text stays in the form above it so it can be copied, and
+// Reload closes the form and re-reads the item with the other person's changes.
+function StaleEditNotice({ message, onReload }: { message: string; onReload: () => void }) {
+  return (
+    <div className="stale-edit" role="alert">
+      <span>{message}</span>
+      <button type="button" className="btn btn-sm" onClick={onReload}>
+        Reload
+      </button>
+    </div>
   );
 }

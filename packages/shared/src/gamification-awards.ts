@@ -153,15 +153,17 @@ export async function reasonCounts(db: DbClient, userId: string): Promise<Reason
   return counts;
 }
 
-/** Full Circle (§23.4): a solution the user wrote was implemented (an award row exists) on a
- *  challenge they also wrote and hold an award row for. Returns the qualifying event time. */
+/** Full Circle (§23.4, §39.9): a solution the user wrote was implemented (an award row exists) on a
+ *  challenge they are a member of the team of and hold an award row for. Returns the qualifying
+ *  event time. */
 async function fullCircleAt(db: DbClient, userId: string): Promise<Date | null> {
   const { rows } = await db.query<{ at: Date | null }>(
     `select min(gl.occurred_at) as at
        from gamification_ledger gl
        join solutions s on s.id = gl.item_id
        join challenges c on c.id = s.challenge_id
-      where gl.user_id = $1 and gl.reason = 'solution_implemented' and c.author_id = $1
+      where gl.user_id = $1 and gl.reason = 'solution_implemented'
+        and exists (select 1 from challenge_authors ca where ca.challenge_id = c.id and ca.user_id = $1)
         and exists (select 1 from gamification_ledger g2
                      where g2.user_id = $1 and g2.item_type = 'challenge' and g2.item_id = c.id
                        and g2.reason = 'challenge_submitted')`,
@@ -276,12 +278,41 @@ async function firstEntryAt(db: DbClient, itemType: AwardItemType, itemId: strin
   return rows[0]?.at ?? null;
 }
 
+/** A team member as the replays read it: who, and since when (§39.9). */
+interface TeamMember {
+  userId: string;
+  addedAt: Date;
+}
+
+/** The item's current members in team order (§39.2). The creator has been on the team since the
+ *  item was created, whatever their row's `added_at` says. */
+async function teamMembers(db: DbClient, itemType: AwardItemType, itemId: string): Promise<TeamMember[]> {
+  const { rows } = await db.query<{ user_id: string; added_at: Date }>(
+    itemType === "challenge"
+      ? `select m.user_id, case when m.user_id = i.author_id then least(m.added_at, i.created_at) else m.added_at end as added_at
+           from challenge_authors m join challenges i on i.id = m.challenge_id
+          where m.challenge_id = $1 order by m.added_at, m.user_id`
+      : `select m.user_id, case when m.user_id = i.author_id then least(m.added_at, i.created_at) else m.added_at end as added_at
+           from solution_authors m join solutions i on i.id = m.solution_id
+          where m.solution_id = $1 order by m.added_at, m.user_id`,
+    [itemId],
+  );
+  return rows.map((r) => ({ userId: r.user_id, addedAt: r.added_at }));
+}
+
+/** §39.9: a member's award for an event is dated to the later of the event and their join. */
+function laterOf(at: Date, addedAt: Date): Date {
+  return at.getTime() >= addedAt.getTime() ? at : addedAt;
+}
+
 /**
- * Every award a challenge has already earned, with its original event time: for the author
- * (submitted, validated, solved, and one like_received per current like by someone else) and,
- * when asked, for its current assignee (assignment_solved — the history of who held the
- * assignment at the solve is not reconstructed). Milestone times come from the first matching
- * status audit row, falling back to first_valid_at / resolved_at / status_changed_at.
+ * Every award a challenge has already earned, with its original event time: for each member of its
+ * team (submitted, validated, solved, and one like_received / hype_received per current like or hype
+ * by someone outside the team given since they joined — §39.9) and, when asked, for its current
+ * assignee when they are not a member (assignment_solved — the history of who held the assignment at
+ * the solve is not reconstructed). Milestone times come from the first matching status audit row,
+ * falling back to first_valid_at / resolved_at / status_changed_at; a later joiner's are dated to
+ * their join.
  */
 export async function challengeAwardsSoFar(
   db: DbClient,
@@ -289,39 +320,42 @@ export async function challengeAwardsSoFar(
   opts: { author: boolean; assignee: boolean },
 ): Promise<AwardInput[]> {
   const { rows } = await db.query<{
-    author_id: string | null;
     assignee_id: string | null;
     status: string;
     created_at: Date;
     first_valid_at: Date | null;
     resolved_at: Date | null;
     status_changed_at: Date | null;
-  }>(`select author_id, assignee_id, status, created_at, first_valid_at, resolved_at, status_changed_at from challenges where id = $1`, [challengeId]);
+  }>(`select assignee_id, status, created_at, first_valid_at, resolved_at, status_changed_at from challenges where id = $1`, [challengeId]);
   const c = rows[0];
   if (!c) return [];
   const validAt = (await firstEntryAt(db, "challenge", challengeId, "valid")) ?? c.first_valid_at;
   const solvedAt =
     (await firstEntryAt(db, "challenge", challengeId, "solved")) ?? (c.status === "solved" ? (c.resolved_at ?? c.status_changed_at ?? c.created_at) : null);
   const item = { itemType: "challenge" as const, itemId: challengeId };
+  // §24.6: an external challenge has no team — only its assignee's award applies.
+  const members = await teamMembers(db, "challenge", challengeId);
   const out: AwardInput[] = [];
-  // §24.6: an external challenge has no author — only its assignee's award applies.
-  if (opts.author && c.author_id !== null) {
-    out.push({ ...item, userId: c.author_id, reason: "challenge_submitted", awardKey: awardKey.challengeSubmitted(challengeId), occurredAt: c.created_at });
-    if (validAt) out.push({ ...item, userId: c.author_id, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId), occurredAt: validAt });
-    if (solvedAt) out.push({ ...item, userId: c.author_id, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId), occurredAt: solvedAt });
-    out.push(...(await likeAwards(db, "challenge", challengeId, c.author_id)));
-    out.push(...(await hypeAwards(db, "challenge", challengeId, c.author_id)));
+  if (opts.author) {
+    for (const m of members) {
+      const at = (when: Date) => laterOf(when, m.addedAt);
+      out.push({ ...item, userId: m.userId, reason: "challenge_submitted", awardKey: awardKey.challengeSubmitted(challengeId), occurredAt: at(c.created_at) });
+      if (validAt) out.push({ ...item, userId: m.userId, reason: "challenge_validated", awardKey: awardKey.challengeValidated(challengeId), occurredAt: at(validAt) });
+      if (solvedAt) out.push({ ...item, userId: m.userId, reason: "challenge_solved", awardKey: awardKey.challengeSolved(challengeId), occurredAt: at(solvedAt) });
+    }
+    out.push(...(await reactionAwards(db, "challenge", challengeId, members)));
   }
-  if (opts.assignee && solvedAt && c.assignee_id && c.assignee_id !== c.author_id) {
+  if (opts.assignee && solvedAt && c.assignee_id && !members.some((m) => m.userId === c.assignee_id)) {
     out.push({ ...item, userId: c.assignee_id, reason: "assignment_solved", awardKey: awardKey.assignmentSolved(challengeId), occurredAt: solvedAt });
   }
   return out;
 }
 
-/** Every award a solution's author has already earned (proposed, validated, implemented, likes). */
+/** Every award a solution's team has already earned (proposed, validated, implemented, likes and
+ *  hypes) — per member, as challengeAwardsSoFar. */
 export async function solutionAwardsSoFar(db: DbClient, solutionId: string): Promise<AwardInput[]> {
-  const { rows } = await db.query<{ author_id: string; status: string; created_at: Date; status_changed_at: Date | null }>(
-    `select author_id, status, created_at, status_changed_at from solutions where id = $1`,
+  const { rows } = await db.query<{ status: string; created_at: Date; status_changed_at: Date | null }>(
+    `select status, created_at, status_changed_at from solutions where id = $1`,
     [solutionId],
   );
   const s = rows[0];
@@ -329,44 +363,66 @@ export async function solutionAwardsSoFar(db: DbClient, solutionId: string): Pro
   const fallback = (status: string) => (s.status === status ? (s.status_changed_at ?? s.created_at) : null);
   const validAt = (await firstEntryAt(db, "solution", solutionId, "valid")) ?? fallback("valid");
   const implementedAt = (await firstEntryAt(db, "solution", solutionId, "implemented")) ?? fallback("implemented");
-  const item = { itemType: "solution" as const, itemId: solutionId, userId: s.author_id };
-  const out: AwardInput[] = [{ ...item, reason: "solution_proposed", awardKey: awardKey.solutionProposed(solutionId), occurredAt: s.created_at }];
-  if (validAt) out.push({ ...item, reason: "solution_validated", awardKey: awardKey.solutionValidated(solutionId), occurredAt: validAt });
-  if (implementedAt) out.push({ ...item, reason: "solution_implemented", awardKey: awardKey.solutionImplemented(solutionId), occurredAt: implementedAt });
-  out.push(...(await likeAwards(db, "solution", solutionId, s.author_id)));
-  out.push(...(await hypeAwards(db, "solution", solutionId, s.author_id)));
+  const members = await teamMembers(db, "solution", solutionId);
+  const out: AwardInput[] = [];
+  for (const m of members) {
+    const item = { itemType: "solution" as const, itemId: solutionId, userId: m.userId };
+    const at = (when: Date) => laterOf(when, m.addedAt);
+    out.push({ ...item, reason: "solution_proposed", awardKey: awardKey.solutionProposed(solutionId), occurredAt: at(s.created_at) });
+    if (validAt) out.push({ ...item, reason: "solution_validated", awardKey: awardKey.solutionValidated(solutionId), occurredAt: at(validAt) });
+    if (implementedAt) out.push({ ...item, reason: "solution_implemented", awardKey: awardKey.solutionImplemented(solutionId), occurredAt: at(implementedAt) });
+  }
+  out.push(...(await reactionAwards(db, "solution", solutionId, members)));
   return out;
 }
 
-/** §26.7: one hype_received per existing hype, backdated to the hype — what a self-reveal replays.
- *  Self-hype is refused at the API, so the author filter is belt and braces. */
-async function hypeAwards(db: DbClient, parentType: AwardItemType, parentId: string, authorId: string): Promise<AwardInput[]> {
-  const { rows } = await db.query<{ user_id: string; created_at: Date }>(
-    `select user_id, created_at from hypes where parent_type = $1 and parent_id = $2 and user_id <> $3`,
-    [parentType, parentId, authorId],
-  );
-  return rows.map((h) => ({
-    userId: authorId,
-    reason: "hype_received" as const,
-    itemType: parentType,
-    itemId: parentId,
-    awardKey: awardKey.hypeReceived(parentType, parentId, h.user_id),
-    occurredAt: h.created_at,
-  }));
+/**
+ * §39.9: the milestones a member who joins NOW is written, each dated to the join — the item's
+ * submit/propose award, plus its `*_validated` once it has entered `valid` (a challenge's
+ * `first_valid_at`; a solution's first `valid` status audit row, as the self-reveal replay finds
+ * it). Likes and hypes given before the join earn the joiner nothing. Re-joining writes nothing new:
+ * the award keys already exist.
+ */
+export async function joinReplayAwards(db: DbClient, itemType: AwardItemType, itemId: string, userId: string, joinedAt: Date): Promise<AwardInput[]> {
+  const validated =
+    itemType === "challenge"
+      ? ((await db.query<{ v: boolean }>(`select first_valid_at is not null as v from challenges where id = $1`, [itemId])).rows[0]?.v ?? false)
+      : (await firstEntryAt(db, "solution", itemId, "valid")) !== null;
+  const item = { itemType, itemId, userId, occurredAt: joinedAt };
+  if (itemType === "challenge") {
+    const out: AwardInput[] = [{ ...item, reason: "challenge_submitted", awardKey: awardKey.challengeSubmitted(itemId) }];
+    if (validated) out.push({ ...item, reason: "challenge_validated", awardKey: awardKey.challengeValidated(itemId) });
+    return out;
+  }
+  const out: AwardInput[] = [{ ...item, reason: "solution_proposed", awardKey: awardKey.solutionProposed(itemId) }];
+  if (validated) out.push({ ...item, reason: "solution_validated", awardKey: awardKey.solutionValidated(itemId) });
+  return out;
 }
 
-/** One like_received per current like by someone other than the author. */
-async function likeAwards(db: DbClient, parentType: AwardItemType, parentId: string, authorId: string): Promise<AwardInput[]> {
-  const { rows } = await db.query<{ user_id: string; created_at: Date }>(
-    `select user_id, created_at from likes where parent_type = $1 and parent_id = $2 and user_id <> $3`,
-    [parentType, parentId, authorId],
+/** One like_received and one hype_received per current like and hype by someone outside the team,
+ *  for each member who had joined by then (§39.9) — what a self-reveal or the backfill replays.
+ *  Liking and hyping your own item earn nothing (self-hype is refused at the API). */
+async function reactionAwards(db: DbClient, parentType: AwardItemType, parentId: string, members: readonly TeamMember[]): Promise<AwardInput[]> {
+  if (members.length === 0) return [];
+  const memberIds = members.map((m) => m.userId);
+  const { rows: likes } = await db.query<{ user_id: string; created_at: Date }>(
+    `select user_id, created_at from likes where parent_type = $1 and parent_id = $2 and user_id <> all($3::uuid[])`,
+    [parentType, parentId, memberIds],
   );
-  return rows.map((l) => ({
-    userId: authorId,
-    reason: "like_received" as const,
-    itemType: parentType,
-    itemId: parentId,
-    awardKey: awardKey.likeReceived(parentType, parentId, l.user_id),
-    occurredAt: l.created_at,
-  }));
+  const { rows: hypes } = await db.query<{ user_id: string; created_at: Date }>(
+    `select user_id, created_at from hypes where parent_type = $1 and parent_id = $2 and user_id <> all($3::uuid[])`,
+    [parentType, parentId, memberIds],
+  );
+  const out: AwardInput[] = [];
+  for (const m of members) {
+    for (const l of likes) {
+      if (l.created_at.getTime() < m.addedAt.getTime()) continue;
+      out.push({ userId: m.userId, reason: "like_received", itemType: parentType, itemId: parentId, awardKey: awardKey.likeReceived(parentType, parentId, l.user_id), occurredAt: l.created_at });
+    }
+    for (const h of hypes) {
+      if (h.created_at.getTime() < m.addedAt.getTime()) continue;
+      out.push({ userId: m.userId, reason: "hype_received", itemType: parentType, itemId: parentId, awardKey: awardKey.hypeReceived(parentType, parentId, h.user_id), occurredAt: h.created_at });
+    }
+  }
+  return out;
 }

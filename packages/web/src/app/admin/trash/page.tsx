@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
 import { readJson } from "@/lib/api-client";
 import { RESTORE_CHALLENGE_FIRST } from "@/lib/challenge-detail";
-import { AvatarBubble } from "@/components/AvatarBubble";
+import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
 import { Breadcrumb, adminCrumbs } from "@/components/Breadcrumb";
 import { useDateFmt } from "@/components/DateFormat";
 import { DeletePermanentlyConfirm } from "@/components/TrashControls";
@@ -25,6 +25,8 @@ interface TrashRow {
   title: string;
   namespaceSlug: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; external?: boolean; active?: boolean; scrubbed?: boolean };
+  /** §39.7: every member in order, masked. */
+  authors?: TeamPerson[];
   trashedBy: string;
   trashedAt: string;
   reason: string;
@@ -188,16 +190,7 @@ function TrashBrowser() {
                 {row.type === "solution" ? `A solution to: ${row.title}` : row.title}
               </Link>
               <div className="sub" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <AvatarBubble
-                  size="sm"
-                  userId={row.author.userId}
-                  displayName={row.author.displayName}
-                  anonymous={row.author.anonymous}
-                  external={row.author.external === true}
-                  deactivated={row.author.active === false}
-                  scrubbed={row.author.scrubbed === true}
-                />
-                <span>{row.author.anonymous ? "Anonymous" : row.author.displayName}</span>
+                <TeamByline authors={teamOf(row)} />
                 <span>·</span>
                 <span>
                   trashed by {row.trashedBy || "a platform admin"} on {fmt.dateTime(row.trashedAt)}

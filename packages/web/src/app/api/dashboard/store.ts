@@ -6,7 +6,17 @@
 // back to awaiting_triage by an admin), and such a solution must neither count nor surface its
 // challenge's title to a viewer who cannot see that challenge (invariant 2).
 import type { Pool } from "pg";
-import { formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeStatus, type MaskedAuthor, type SolutionStatus } from "@innobox/shared";
+import {
+  formatChallengeNumber,
+  formatSolutionNumber,
+  maskAuthor,
+  maskTeam,
+  solutionTeamJsonSql,
+  type ChallengeStatus,
+  type MaskedAuthor,
+  type SolutionStatus,
+  type TeamMemberRow,
+} from "@innobox/shared";
 import {
   pushChallengeVisibilityConditions,
   pushSolutionVisibilityConditions,
@@ -28,7 +38,10 @@ export interface DashboardKpis {
 export interface SpotlightSolution {
   number: string;
   description: string;
+  /** The first member of the team (§39.7). */
   author: MaskedAuthor;
+  /** §39.7: every member in team order, masked. */
+  authors: MaskedAuthor[];
   challengeNumber: string;
   challengeTitle: string;
   updatedAt: string;
@@ -108,12 +121,13 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
       author_display_name: string;
       author_active: boolean;
       author_scrubbed: boolean;
+      team: TeamMemberRow[];
       challenge_number: string;
       challenge_title: string;
       updated_at: Date;
     }>(
       `select s.number::text, s.description, s.is_anonymous, s.author_id, u.display_name as author_display_name,
-              u.active as author_active, u.scrubbed_at is not null as author_scrubbed,
+              u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ${solutionTeamJsonSql("s")} as team,
               c.number::text as challenge_number, c.title as challenge_title, s.updated_at
          from solutions s
          join challenges c on c.id = s.challenge_id
@@ -125,16 +139,21 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
     );
     const row = rows[0];
     if (!row) return null;
-    return {
-      number: formatSolutionNumber(row.number),
-      description: row.description,
-      author: maskAuthor({
+    const authors = maskTeam(
+      maskAuthor({
         isAnonymous: row.is_anonymous,
         authorId: row.author_id,
         authorDisplayName: row.author_display_name,
         authorActive: row.author_active,
         authorScrubbed: row.author_scrubbed,
       }),
+      row.team ?? [],
+    );
+    return {
+      number: formatSolutionNumber(row.number),
+      description: row.description,
+      author: authors[0]!,
+      authors,
       challengeNumber: formatChallengeNumber(row.challenge_number),
       challengeTitle: row.challenge_title,
       updatedAt: row.updated_at.toISOString(),

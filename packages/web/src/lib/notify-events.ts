@@ -5,13 +5,26 @@
 // mute) live in ./notify; this module only decides WHO the candidates are and WHAT the message
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
-import { formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeVisibility, type NotificationEventNumber } from "@innobox/shared";
+import {
+  challengeAuthorIdsSql,
+  challengeTeamJsonSql,
+  formatChallengeNumber,
+  formatSolutionNumber,
+  solutionAuthorIdsSql,
+  teamChangeMessage,
+  teamDisplayText,
+  type ChallengeVisibility,
+  type NotificationEventNumber,
+  type NotificationTarget,
+  type TeamMemberRow,
+} from "@innobox/shared";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
 import {
   dispatchCoalescedComment,
   dispatchCoalescedHype,
   dispatchEvent,
+  dispatchTeamChange,
   dispatchTopicNotices,
   dispatchToUser,
   getFollowerUserIds,
@@ -39,10 +52,11 @@ const STATUS_EVENT_NUMBER: Record<ReturnType<typeof statusEventType>, Notificati
 };
 
 /**
- * §12.1 events 3/4/5 for a CHALLENGE transition. Event 3 (plain status change) reaches the item
- * author, the assignee and followers — mutable for authors/followers, never for the assignee
- * (per-item duty). Events 4 (rejected) and 5 (needs improvement) are author-only, non-mutable.
- * `challenge` is looked up by id or number (the bulk path only has the number).
+ * §12.1 events 3/4/5 for a CHALLENGE transition. Event 3 (plain status change) reaches the item's
+ * authors (every member of its team, §39.8), the assignee and followers — mutable for
+ * authors/followers, never for the assignee (per-item duty). Events 4 (rejected) and 5 (needs
+ * improvement) are author-only, non-mutable. `challenge` is looked up by id or number (the bulk path
+ * only has the number).
  */
 export async function notifyChallengeStatusChanged(
   ctx: NotifyContext,
@@ -50,8 +64,9 @@ export async function notifyChallengeStatusChanged(
   newStatus: string,
 ): Promise<void> {
   const byId = "id" in challenge;
-  const { rows } = await ctx.pool.query<{ id: string; number: string; title: string; author_id: string | null; assignee_id: string | null }>(
-    `select id, number::text, title, author_id, assignee_id from challenges where ${byId ? "id = $1" : "number = $1"}`,
+  const { rows } = await ctx.pool.query<{ id: string; number: string; title: string; author_ids: string[]; assignee_id: string | null }>(
+    `select c.id, c.number::text, c.title, ${challengeAuthorIdsSql("c")} as author_ids, c.assignee_id
+       from challenges c where ${byId ? "c.id = $1" : "c.number = $1"}`,
     [byId ? challenge.id : digitsOf(challenge.number)],
   );
   const row = rows[0];
@@ -65,7 +80,7 @@ export async function notifyChallengeStatusChanged(
         ? `${label} "${row.title}" needs improvement — edit and resubmit.`
         : `${label} "${row.title}" moved to ${humanStatus(newStatus)}.`;
   const assignee = row.assignee_id ? [row.assignee_id] : [];
-  const recipients = type === "status_changed" ? [row.author_id, ...assignee, ...(await getFollowerUserIds(ctx.pool, "challenge", row.id))] : [row.author_id];
+  const recipients = type === "status_changed" ? [...row.author_ids, ...assignee, ...(await getFollowerUserIds(ctx.pool, "challenge", row.id))] : row.author_ids;
   await dispatchEvent(
     ctx,
     { parentType: "challenge", parentId: row.id },
@@ -104,14 +119,14 @@ export async function notifySolutionStatusChanged(
 ): Promise<void> {
   const { rows } = await ctx.pool.query<{
     number: string;
-    author_id: string;
+    author_ids: string[];
     challenge_number: string;
     challenge_title: string;
-    challenge_author_id: string | null;
+    challenge_author_ids: string[];
     assignee_id: string | null;
   }>(
-    `select s.number::text, s.author_id, c.number::text as challenge_number, c.title as challenge_title,
-            c.author_id as challenge_author_id, c.assignee_id
+    `select s.number::text, ${solutionAuthorIdsSql("s")} as author_ids, c.number::text as challenge_number, c.title as challenge_title,
+            ${challengeAuthorIdsSql("c")} as challenge_author_ids, c.assignee_id
        from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [solutionId],
   );
@@ -127,7 +142,7 @@ export async function notifySolutionStatusChanged(
         ? `Solution ${where} needs improvement — edit and resubmit.`
         : `Solution ${where} moved to ${humanStatus(newStatus)}.`;
   const assignee = row.assignee_id ? [row.assignee_id] : [];
-  const recipients = type === "status_changed" ? [row.author_id, ...assignee, ...(await getFollowerUserIds(ctx.pool, "solution", solutionId))] : [row.author_id];
+  const recipients = type === "status_changed" ? [...row.author_ids, ...assignee, ...(await getFollowerUserIds(ctx.pool, "solution", solutionId))] : row.author_ids;
   await dispatchEvent(
     ctx,
     { parentType: "solution", parentId: solutionId },
@@ -147,16 +162,16 @@ export async function notifySolutionStatusChanged(
     },
   );
 
-  if (autoClose) await notifyAutoClose(ctx, { ...autoClose, challengeAuthorId: row.challenge_author_id, implementedSolutionNumber: row.number });
+  if (autoClose) await notifyAutoClose(ctx, { ...autoClose, challengeAuthorIds: row.challenge_author_ids, implementedSolutionNumber: row.number });
 }
 
 /**
- * §12.1 event 8 (solution implemented → auto-close): the CHALLENGE author, the authors of the
- * siblings just closed as not_selected, and the followers of the challenge and of its solutions
- * (the implemented one and every closed sibling). Non-mutable. Deduplicated and visibility-
- * filtered against the challenge by dispatchEvent.
+ * §12.1 event 8 (solution implemented → auto-close): the CHALLENGE's team, the teams of the
+ * siblings just closed as not_selected (§39.8), and the followers of the challenge and of its
+ * solutions (the implemented one and every closed sibling). Non-mutable. Deduplicated and
+ * visibility-filtered against the challenge by dispatchEvent.
  */
-async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorId: string | null; implementedSolutionNumber: string }): Promise<void> {
+async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { challengeAuthorIds: string[]; implementedSolutionNumber: string }): Promise<void> {
   const [challengeFollowers, ...solutionFollowers] = await Promise.all([
     getFollowerUserIds(ctx.pool, "challenge", info.challengeId),
     ...info.solutionIds.map((sid) => getFollowerUserIds(ctx.pool, "solution", sid)),
@@ -165,7 +180,7 @@ async function notifyAutoClose(ctx: NotifyContext, info: AutoCloseInfo & { chall
   await dispatchEvent(
     ctx,
     { parentType: "challenge", parentId: info.challengeId },
-    [info.challengeAuthorId, ...info.notSelectedAuthorIds, ...challengeFollowers!, ...solutionFollowers.flat()],
+    [...info.challengeAuthorIds, ...info.notSelectedAuthorIds, ...challengeFollowers!, ...solutionFollowers.flat()],
     "solution_implemented",
     {
       message: `CH-${number} "${info.challengeTitle}" was solved — a solution was implemented.`,
@@ -221,8 +236,8 @@ export async function notifySolutionProposed(
   solution: { id: string; number: string },
 ): Promise<void> {
   const number = digitsOf(challengeNumber);
-  const { rows } = await ctx.pool.query<{ id: string; title: string; namespace_id: string; author_id: string | null }>(
-    `select id, title, namespace_id, author_id from challenges where number = $1`,
+  const { rows } = await ctx.pool.query<{ id: string; title: string; namespace_id: string; author_ids: string[] }>(
+    `select c.id, c.title, c.namespace_id, ${challengeAuthorIdsSql("c")} as author_ids from challenges c where c.number = $1`,
     [number],
   );
   const challenge = rows[0];
@@ -235,7 +250,7 @@ export async function notifySolutionProposed(
   await dispatchEvent(
     ctx,
     { parentType: "challenge", parentId: challenge.id },
-    [...admins, ...committee, challenge.author_id, ...followers],
+    [...admins, ...committee, ...challenge.author_ids, ...followers],
     "solution_proposed",
     {
       message: `A new solution was proposed on CH-${number} "${challenge.title}".`,
@@ -325,15 +340,19 @@ export async function notifyCommentPosted(
   const item =
     parentType === "challenge"
       ? await ctx.pool
-          .query<{ id: string; number: string; title: string; author_id: string }>(`select id, number::text, title, author_id from challenges where id = $1`, [parentId])
+          .query<{ id: string; number: string; title: string; author_ids: string[] }>(
+            `select c.id, c.number::text, c.title, ${challengeAuthorIdsSql("c")} as author_ids from challenges c where c.id = $1`,
+            [parentId],
+          )
           .then((r) =>
             r.rows[0]
-              ? { id: r.rows[0].id, authorId: r.rows[0].author_id, challengeId: r.rows[0].id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title, solutionNumber: null }
+              ? { id: r.rows[0].id, authorIds: r.rows[0].author_ids, challengeId: r.rows[0].id, challengeNumber: r.rows[0].number, challengeTitle: r.rows[0].title, solutionNumber: null }
               : null,
           )
       : await ctx.pool
-          .query<{ id: string; number: string; author_id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
-            `select s.id, s.number::text as number, s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title
+          .query<{ id: string; number: string; author_ids: string[]; challenge_id: string; challenge_number: string; challenge_title: string }>(
+            `select s.id, s.number::text as number, ${solutionAuthorIdsSql("s")} as author_ids, c.id as challenge_id, c.number::text as challenge_number,
+                    c.title as challenge_title
                from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
             [parentId],
           )
@@ -341,7 +360,7 @@ export async function notifyCommentPosted(
             r.rows[0]
               ? {
                   id: r.rows[0].id,
-                  authorId: r.rows[0].author_id,
+                  authorIds: r.rows[0].author_ids,
                   challengeId: r.rows[0].challenge_id,
                   challengeNumber: r.rows[0].challenge_number,
                   challengeTitle: r.rows[0].challenge_title,
@@ -359,8 +378,9 @@ export async function notifyCommentPosted(
   ]);
   await dispatchCoalescedComment(
     ctx,
-    // The author of a comment answered is always among the other commenters (§10.2).
-    [item.authorId, ...otherCommenters, ...followers],
+    // The author of a comment answered is always among the other commenters (§10.2). The item's
+    // authors are its whole team (§39.8).
+    [...item.authorIds, ...otherCommenters, ...followers],
     {
       parentType,
       parentId: item.id,
@@ -378,21 +398,24 @@ export async function notifyCommentPosted(
 }
 
 /**
- * §12.1 event 16 (hyped, §26.6): the hyped item's author only. Shared by the hype route; called
- * after the hype committed. `hype` is the item's points after this hype.
+ * §12.1 event 16 (hyped, §26.6): the hyped item's authors only — every member of its team (§39.8).
+ * Shared by the hype route; called after the hype committed. `hype` is the item's points after this
+ * hype.
  */
 export async function notifyHyped(ctx: NotifyContext, parentType: "challenge" | "solution", parentId: string, hyperId: string, hype: number): Promise<void> {
   const { rows } = await ctx.pool.query<{
-    author_id: string | null;
+    author_ids: string[];
     challenge_id: string;
     challenge_number: string;
     challenge_title: string;
     solution_number: string | null;
   }>(
     parentType === "challenge"
-      ? `select c.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, null::text as solution_number
+      ? `select ${challengeAuthorIdsSql("c")} as author_ids, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title,
+                null::text as solution_number
            from challenges c where c.id = $1`
-      : `select s.author_id, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, s.number::text as solution_number
+      : `select ${solutionAuthorIdsSql("s")} as author_ids, c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title,
+                s.number::text as solution_number
            from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
     [parentId],
   );
@@ -404,7 +427,7 @@ export async function notifyHyped(ctx: NotifyContext, parentType: "challenge" | 
   const itemLabel = item.solution_number
     ? `solution ${itemNumber} on ${challengeNumber} "${item.challenge_title}"`
     : `challenge ${challengeNumber} "${item.challenge_title}"`;
-  await dispatchCoalescedHype(ctx, item.author_id, {
+  await dispatchCoalescedHype(ctx, item.author_ids, {
     parentType,
     parentId,
     challengeId: item.challenge_id,
@@ -446,9 +469,10 @@ export async function notifyTopicFollowers(ctx: NotifyContext, challengeId: stri
     is_anonymous: boolean;
     author_display_name: string | null;
     company: string | null;
+    team: TeamMemberRow[];
   }>(
     `select c.number::text, c.title, c.status, c.trashed_at is not null as trashed, ns.archived_at is not null as archived, ns.slug,
-            c.author_id, c.is_anonymous, u.display_name as author_display_name, ps.company
+            c.author_id, c.is_anonymous, u.display_name as author_display_name, ps.company, ${challengeTeamJsonSql("c")} as team
        from challenges c
        join namespaces ns on ns.id = c.namespace_id
        left join users u on u.id = c.author_id
@@ -482,18 +506,79 @@ export async function notifyTopicFollowers(ctx: NotifyContext, challengeId: stri
       number: challenge.number,
       title: challenge.title,
       namespaceSlug: challenge.slug,
-      author: maskAuthor({
+      // §39.7: the first member plus "and N others", masked per §9.
+      author: teamDisplayText({
         isAnonymous: challenge.is_anonymous,
         authorId: challenge.author_id,
         authorDisplayName: challenge.author_display_name,
         externalCompany: challenge.company,
-      }).displayName,
+        team: challenge.team,
+      }),
     },
     followers: new Map(follows.map((r) => [r.user_id, r.names])),
-    authorId: challenge.author_id,
+    authorIds: challenge.team.map((m) => m.id),
     via: trigger.via,
     ...(trigger.via === "widened" ? { previousVisibility: trigger.previousVisibility } : {}),
   });
+}
+
+/** What an event-21 message names: the item ("CH-12" / "SOL-34") and its parent challenge. */
+interface TeamItemRef {
+  itemNumber: string;
+  challengeNumber: string;
+  challengeTitle: string;
+  solutionNumber: string | null;
+}
+
+/** The item a create's co-authors were added to, read after the commit. */
+async function teamItemRef(ctx: NotifyContext, target: NotificationTarget): Promise<TeamItemRef | null> {
+  const { rows } = await ctx.pool.query<{ challenge_number: string; challenge_title: string; solution_number: string | null }>(
+    target.parentType === "challenge"
+      ? `select c.number::text as challenge_number, c.title as challenge_title, null::text as solution_number from challenges c where c.id = $1`
+      : `select c.number::text as challenge_number, c.title as challenge_title, s.number::text as solution_number
+           from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+    [target.parentId],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    itemNumber: r.solution_number ? formatSolutionNumber(r.solution_number) : formatChallengeNumber(r.challenge_number),
+    challengeNumber: r.challenge_number,
+    challengeTitle: r.challenge_title,
+    solutionNumber: r.solution_number,
+  };
+}
+
+/**
+ * §12.1 event 21 (§39.8): "Ana Petrova added you as a co-author of SOL-34" — to the one person another
+ * member added or removed, in-app and by e-mail (the subject is the same line; the body carries the
+ * number, the title, the actor's name and the link). Immediate, never digested, not mutable; the
+ * daily e-mail cap and the drops live in dispatchTeamChange. Called after the change committed.
+ */
+export async function notifyTeamChange(
+  ctx: NotifyContext,
+  change: { userId: string; change: "added" | "removed"; target: NotificationTarget } & TeamItemRef,
+): Promise<void> {
+  if (!ctx.actorId) return;
+  const { rows } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [ctx.actorId]);
+  const message = teamChangeMessage(rows[0]?.display_name ?? "Someone", change.change, change.itemNumber);
+  const where = change.solutionNumber
+    ? `${change.itemNumber} on ${formatChallengeNumber(change.challengeNumber)} "${change.challengeTitle}"`
+    : `${change.itemNumber} "${change.challengeTitle}"`;
+  await dispatchTeamChange(
+    ctx,
+    change.userId,
+    { message, subject: message, emailDetail: where, link: itemHref(change.challengeNumber, change.solutionNumber) },
+    change.target,
+  );
+}
+
+/** §12.1 event 21 for a create with co-authors: one per co-author, with the creator as the actor. */
+export async function notifyCoAuthorsAdded(ctx: NotifyContext, target: NotificationTarget, coAuthorIds: readonly string[]): Promise<void> {
+  if (coAuthorIds.length === 0) return;
+  const ref = await teamItemRef(ctx, target);
+  if (!ref) return;
+  for (const userId of coAuthorIds) await notifyTeamChange(ctx, { userId, change: "added", target, ...ref });
 }
 
 /** Notification failures are logged, never thrown — the state change already committed. */

@@ -376,8 +376,8 @@ test(
 
       // Only the author may edit; edit allowed while awaiting_triage. (Another member cannot see
       // an awaiting_triage challenge at all, so they get not_found — §2.4.)
-      assert.equal((await editChallenge(pool, other, num, { title: "Hijack", description: "x", clientName: null, impactAreaId: internal.id })).status, "not_found");
-      const edited = await editChallenge(pool, author, num, { title: "Edited title", description: "Original body", clientName: null, impactAreaId: internal.id });
+      assert.equal((await editChallenge(pool, other, num, { title: "Hijack", description: "x", clientName: null, impactAreaId: internal.id, baseEditedAt: null })).status, "not_found");
+      const edited = await editChallenge(pool, author, num, { title: "Edited title", description: "Original body", clientName: null, impactAreaId: internal.id, baseEditedAt: null });
       assert.equal(edited.status, "ok");
       // edited_at stamped, and a field-level diff audited (only the changed field).
       const { rows: er } = await pool.query<{ edited_at: Date | null }>(`select edited_at from challenges where id = $1`, [chId]);
@@ -392,11 +392,15 @@ test(
 
       // Once in_review the author can no longer edit.
       assert.equal((await setChallengeStatus(pool, admin, num, "in_review")).status, "ok");
-      assert.equal((await editChallenge(pool, author, num, { title: "Nope", description: "x", clientName: null, impactAreaId: internal.id })).status, "not_editable");
+      assert.equal((await editChallenge(pool, author, num, { title: "Nope", description: "x", clientName: null, impactAreaId: internal.id, baseEditedAt: null })).status, "not_editable");
 
       // needs_improvement re-unlocks editing, and resubmit moves it back to in_review.
       assert.equal((await setChallengeStatus(pool, admin, num, "needs_improvement")).status, "ok");
-      assert.equal((await editChallenge(pool, author, num, { title: "Improved", description: "better body", clientName: null, impactAreaId: internal.id })).status, "ok");
+      // §39.5: a save from a stale copy (the editedAt before the last edit) is refused and writes nothing.
+      const staleEdit = await editChallenge(pool, author, num, { title: "Improved", description: "better body", clientName: null, impactAreaId: internal.id, baseEditedAt: null });
+      assert.equal(staleEdit.status, "stale");
+      const baseEditedAt = (await getChallengeByNumber(pool, author, num))!.editedAt;
+      assert.equal((await editChallenge(pool, author, num, { title: "Improved", description: "better body", clientName: null, impactAreaId: internal.id, baseEditedAt })).status, "ok");
       assert.equal((await resubmitChallenge(pool, author, num)).status, "ok");
       const { rows: rr } = await pool.query<{ status: string }>(`select status from challenges where id = $1`, [chId]);
       assert.equal(rr[0]!.status, "in_review");
@@ -422,8 +426,8 @@ test(
       const solId = sol.solution.id;
 
       // A `proposed` solution is invisible to another member → not_found (§2.4).
-      assert.equal((await editSolution(pool, other, solNum, { description: "hijack", costVsBenefits: null })).status, "not_found");
-      assert.equal((await editSolution(pool, author, solNum, { description: "Second draft", costVsBenefits: "cheap" })).status, "ok");
+      assert.equal((await editSolution(pool, other, solNum, { description: "hijack", costVsBenefits: null, baseEditedAt: null })).status, "not_found");
+      assert.equal((await editSolution(pool, author, solNum, { description: "Second draft", costVsBenefits: "cheap", baseEditedAt: null })).status, "ok");
       const { rows: se } = await pool.query<{ after: { description?: string; costVsBenefits?: string } }>(
         `select after from audit_log where action = 'solution.edited' and target_id = $1 order by id desc limit 1`,
         [solId],
@@ -432,7 +436,7 @@ test(
       assert.equal(se[0]!.after.costVsBenefits, "cheap");
 
       assert.equal((await setSolutionStatus(pool, admin, solNum, "in_review")).status, "ok");
-      assert.equal((await editSolution(pool, author, solNum, { description: "no", costVsBenefits: null })).status, "not_editable");
+      assert.equal((await editSolution(pool, author, solNum, { description: "no", costVsBenefits: null, baseEditedAt: null })).status, "not_editable");
       assert.equal((await setSolutionStatus(pool, admin, solNum, "needs_improvement")).status, "ok");
       assert.equal((await resubmitSolution(pool, author, solNum)).status, "ok");
       await assertAuditOverride(pool, "solution.status_changed", solId, false);
@@ -586,10 +590,10 @@ test(
         assign: () => store.setChallengeAssignee(pool, v, chNum, v.userId, rolesOf),
         visibility: () => store.setChallengeVisibility(pool, v, chNum, "org"),
         transition: () => store.setChallengeStatus(pool, v, chNum, "rejected"),
-        edit: () => store.editChallenge(pool, v, chNum, { title: "x", description: "x", clientName: null, impactAreaId: internal.id }),
+        edit: () => store.editChallenge(pool, v, chNum, { title: "x", description: "x", clientName: null, impactAreaId: internal.id, baseEditedAt: null }),
         propose: () => store.createSolution(pool, v, chNum, { description: "x", costVsBenefits: null, isAnonymous: false }),
         solutionTransition: () => store.setSolutionStatus(pool, v, sNum, "rejected"),
-        editSolution: () => store.editSolution(pool, v, sNum, { description: "x", costVsBenefits: null }),
+        editSolution: () => store.editSolution(pool, v, sNum, { description: "x", costVsBenefits: null, baseEditedAt: null }),
         withdrawSolution: () => store.withdrawSolution(pool, v, sNum),
         resubmitSolution: () => store.resubmitSolution(pool, v, sNum),
         revealSolution: () => store.revealSolutionAuthor(pool, v, sNum),

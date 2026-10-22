@@ -3,7 +3,7 @@
 // status (override), while a committee member or the assignee traverses the enforced graph — the
 // store derives the mode from the caller's role. An illegal enforced transition is a 422. A real
 // transition fires notification event 3/4/5 (§12.1) to author/assignee/followers.
-import { isChallengeStatus, parseTopicIds, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
+import { isChallengeStatus, parseBaseEditedAt, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
@@ -72,6 +72,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
       return trashedResponse();
     case "forbidden":
       return Response.json({ error: "you must be an admin, committee member, or the assignee to change status" }, { status: 403 });
+    case "own_item":
+      return Response.json({ error: TEAM_MESSAGES.ownItemReview, code: "own_item" }, { status: 403 });
     case "illegal_transition":
       return Response.json({ error: "that status change is not a permitted transition from the current status" }, { status: 422 });
     case "external_no_author":
@@ -98,6 +100,9 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
   // §34.3: present replaces the challenge's topics; absent leaves them as they are.
   const topicIds = body.topicIds === undefined ? null : parseTopicIds(body.topicIds);
   if (topicIds && !topicIds.ok) return Response.json({ error: topicIds.error }, { status: 422 });
+  // §39.5: the editedAt the editor loaded — a save from a stale copy is refused.
+  const baseEditedAt = parseBaseEditedAt(body.baseEditedAt);
+  if (!baseEditedAt.ok) return Response.json({ error: baseEditedAt.error }, { status: 400 });
 
   const result = await editChallenge(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     title: body.title,
@@ -105,6 +110,7 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
     clientName: body.clientName,
     impactAreaId: body.impactAreaId,
     ...(topicIds ? { topicIds: topicIds.value } : {}),
+    baseEditedAt: baseEditedAt.value,
   });
   switch (result.status) {
     case "ok":
@@ -117,6 +123,8 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
       return Response.json({ error: "only the author can edit this challenge" }, { status: 403 });
     case "not_editable":
       return Response.json({ error: "this challenge is not editable in its current status" }, { status: 409 });
+    case "stale":
+      return Response.json({ error: TEAM_MESSAGES.staleEdit, code: "stale_edit" }, { status: 409 });
     case "unknown_impact_area":
       return Response.json({ error: "unknown impact area" }, { status: 400 });
     case "inactive_impact_area":

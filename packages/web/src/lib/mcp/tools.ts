@@ -25,7 +25,9 @@ import {
   canAuthorEditChallenge,
   canAuthorResubmit,
   isChallengeStatus,
+  parseBaseEditedAt,
   parseTopicIds,
+  TEAM_MESSAGES,
   type AttachmentView,
   type McpSettings,
   type MaskedAuthor,
@@ -180,6 +182,18 @@ const challengeUrl = (ctx: ToolContext, number: string) => `${ctx.baseUrl}/chall
 const solutionUrl = (ctx: ToolContext, challengeNumber: string, number: string) => `${ctx.baseUrl}/challenges/${digits(challengeNumber)}#SOL-${digits(number)}`;
 /** People by display name only — never an id, e-mail or account state. */
 const person = (author: MaskedAuthor): string => author.displayName;
+/** §39.10: a team by display names in order — or ["Anonymous"]. */
+const people = (authors: readonly MaskedAuthor[]): string[] => authors.map(person);
+/** §39.10: the editedAt an edit tool sends back (`baseEditedAt`) — null for an item never edited. */
+function baseEditedAtArg(args: Record<string, unknown>): string | null {
+  const parsed = parseBaseEditedAt(args.baseEditedAt);
+  if (!parsed.ok) throw new ArgError("baseEditedAt is required: pass editedAt from innobox_get_challenge or innobox_get_solution (null if never edited)");
+  return parsed.value;
+}
+const BASE_EDITED_AT_SCHEMA = {
+  type: ["string", "null"],
+  description: "The item's editedAt as innobox_get_challenge / innobox_get_solution returned it (null if never edited). A stale value is refused: someone else edited it since.",
+};
 /** §25.7: clean attachments only, metadata only — no bytes, link or uploader. */
 const attachmentMeta = (list: AttachmentView[]) =>
   list.filter((a) => a.status === "clean").map((a) => ({ fileName: a.filename, sizeBytes: a.sizeBytes, contentType: a.mime, uploadedAt: a.createdAt }));
@@ -224,7 +238,7 @@ export const TOOLS: readonly ToolDef[] = [
         namespaceId: { type: "string", description: "A namespace id from innobox_get_reference_data" },
         impactAreaId: { type: "string", description: "An impact area id from innobox_get_reference_data" },
         topicId: { type: "string", description: "A topic id from innobox_get_reference_data" },
-        mine: { type: "boolean", description: "Only challenges the person submitted" },
+        mine: { type: "boolean", description: "Only challenges the person is an author of (alone or as a co-author)" },
         following: { type: "boolean", description: "Only challenges the person follows" },
         ...PAGING,
       },
@@ -255,6 +269,7 @@ export const TOOLS: readonly ToolDef[] = [
             impactArea: c.impactAreaName,
             topics: c.topics.map((t) => t.name),
             author: person(c.author),
+            authors: people(c.authors),
             likeCount: c.likeCount,
             solutionCount: c.solutionCount,
             url: challengeUrl(ctx, c.number),
@@ -286,6 +301,8 @@ export const TOOLS: readonly ToolDef[] = [
           topics: c.topics.map((t) => t.name),
           clientName: c.clientName,
           author: person(c.author),
+          // §39.10: the team in order (or "Anonymous"), and whether the person is on it.
+          authors: people(c.authors),
           isMine: c.isMine,
           assignee: c.assigneeDisplayName,
           createdAt: c.createdAt,
@@ -299,6 +316,7 @@ export const TOOLS: readonly ToolDef[] = [
             number: s.number,
             status: s.status,
             author: person(s.author),
+            authors: people(s.authors),
             isMine: s.isMine,
             summary: s.description.slice(0, 280),
             url: solutionUrl(ctx, c.number, s.number),
@@ -314,7 +332,8 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "get_solution",
     title: "Get a solution",
-    description: "One solution in full: description, cost vs benefits, status, author, dates, attachments' metadata, canEdit, canResubmit and its parent challenge.",
+    description:
+      "One solution in full: description, cost vs benefits, status, authors, dates (editedAt is what innobox_edit_solution needs), attachments' metadata, canEdit, canResubmit and its parent challenge.",
     readOnly: true,
     bucket: "search",
     inputSchema: { type: "object", properties: { number: NUMBER_SCHEMA("Solution") }, required: ["number"], additionalProperties: false },
@@ -330,8 +349,10 @@ export const TOOLS: readonly ToolDef[] = [
           costVsBenefits: s.costVsBenefits,
           status: s.status,
           author: person(s.author),
+          authors: people(s.authors),
           isMine: s.isMine,
           createdAt: s.createdAt,
+          editedAt: s.editedAt,
           likeCount: s.likeCount,
           following: s.followedByViewer,
           attachments: attachmentMeta(s.attachments),
@@ -407,7 +428,8 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "list_my_items",
     title: "List my items",
-    description: "The person's own challenges and solutions with their status and whether each can be edited or resubmitted now — including challenges still awaiting triage.",
+    description:
+      "The person's own challenges and solutions — every one they are an author of, alone or as a co-author — with their status and whether each can be edited or resubmitted now, including challenges still awaiting triage.",
     readOnly: true,
     bucket: "search",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -568,6 +590,8 @@ export const TOOLS: readonly ToolDef[] = [
         case "attachments_not_clean":
         case "attachments_over_limit":
           return fail(409, "attachments can only be added in the browser");
+        case "ineligible_coauthor": // §39.10: an agent adds no co-authors, so this cannot occur
+          return fail(422, TEAM_MESSAGES.ineligible);
         case "invalid":
           return fail(400, result.error);
       }
@@ -616,6 +640,8 @@ export const TOOLS: readonly ToolDef[] = [
         case "attachments_not_clean":
         case "attachments_over_limit":
           return fail(409, "attachments can only be added in the browser");
+        case "ineligible_coauthor": // §39.10: an agent adds no co-authors, so this cannot occur
+          return fail(422, TEAM_MESSAGES.ineligible);
         case "invalid":
           return fail(400, result.error);
       }
@@ -624,24 +650,27 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "edit_challenge",
     title: "Edit my challenge",
-    description: "Edits the title, description, impact area, client name or topics of the person's own challenge, inside its edit window (awaiting triage or needs improvement). Fields left out keep their value; topicIds replaces the topics.",
+    description:
+      "Edits the title, description, impact area, client name or topics of a challenge the person is an author of, inside its edit window (awaiting triage or needs improvement). Pass baseEditedAt — the editedAt from innobox_get_challenge. Fields left out keep their value; topicIds replaces the topics.",
     readOnly: false,
     bucket: "mutation",
     inputSchema: {
       type: "object",
       properties: {
         number: NUMBER_SCHEMA("Challenge"),
+        baseEditedAt: BASE_EDITED_AT_SCHEMA,
         title: { type: "string", maxLength: TITLE_MAX },
         description: { type: "string", maxLength: DESCRIPTION_MAX },
         impactAreaId: { type: "string" },
         clientName: { type: "string", maxLength: CLIENT_NAME_MAX },
         topicIds: TOPIC_IDS_SCHEMA,
       },
-      required: ["number"],
+      required: ["number", "baseEditedAt"],
       additionalProperties: false,
     },
     async run(ctx, args) {
       const number = itemNumber(args, "number", "CH");
+      const baseEditedAt = baseEditedAtArg(args);
       const current = await getChallengeByNumber(ctx.pool, ctx.viewer, number);
       if (!current) return NOT_FOUND("challenge");
       const result = await editChallenge(
@@ -654,12 +683,22 @@ export const TOOLS: readonly ToolDef[] = [
           clientName: args.clientName !== undefined ? str(args, "clientName") : current.clientName,
           impactAreaId: uuidArg(args, "impactAreaId") ?? current.impactAreaId,
           ...(args.topicIds !== undefined && args.topicIds !== null ? { topicIds: topicIdsArg(args) } : {}),
+          baseEditedAt,
         },
         via(ctx),
       );
       switch (result.status) {
         case "ok":
-          return { ok: true, data: { number: result.challenge.number, title: result.challenge.title, status: result.challenge.status, url: challengeUrl(ctx, number) } };
+          return {
+            ok: true,
+            data: {
+              number: result.challenge.number,
+              title: result.challenge.title,
+              status: result.challenge.status,
+              editedAt: result.challenge.editedAt,
+              url: challengeUrl(ctx, number),
+            },
+          };
         case "trashed": // §10.4: an agent never sees the trash, so it reads as missing
         case "not_found":
           return NOT_FOUND("challenge");
@@ -667,6 +706,8 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(403, "only the author can edit this challenge");
         case "not_editable":
           return fail(409, "this challenge is not editable in its current status");
+        case "stale":
+          return fail(409, TEAM_MESSAGES.staleEdit);
         case "unknown_impact_area":
           return fail(400, "unknown impact area");
         case "inactive_impact_area":
@@ -681,17 +722,24 @@ export const TOOLS: readonly ToolDef[] = [
   {
     name: "edit_solution",
     title: "Edit my solution",
-    description: "Edits the description or cost vs benefits of the person's own solution, inside its edit window. Fields left out keep their value.",
+    description:
+      "Edits the description or cost vs benefits of a solution the person is an author of, inside its edit window. Pass baseEditedAt — the editedAt from innobox_get_solution. Fields left out keep their value.",
     readOnly: false,
     bucket: "mutation",
     inputSchema: {
       type: "object",
-      properties: { number: NUMBER_SCHEMA("Solution"), description: { type: "string", maxLength: DESCRIPTION_MAX }, costVsBenefits: { type: "string", maxLength: COST_VS_BENEFITS_MAX } },
-      required: ["number"],
+      properties: {
+        number: NUMBER_SCHEMA("Solution"),
+        baseEditedAt: BASE_EDITED_AT_SCHEMA,
+        description: { type: "string", maxLength: DESCRIPTION_MAX },
+        costVsBenefits: { type: "string", maxLength: COST_VS_BENEFITS_MAX },
+      },
+      required: ["number", "baseEditedAt"],
       additionalProperties: false,
     },
     async run(ctx, args) {
       const number = itemNumber(args, "number", "SOL");
+      const baseEditedAt = baseEditedAtArg(args);
       const current = await getSolutionByNumber(ctx.pool, ctx.viewer, number);
       if (!current) return NOT_FOUND("solution");
       const result = await editSolution(
@@ -701,12 +749,16 @@ export const TOOLS: readonly ToolDef[] = [
         {
           description: str(args, "description") ?? current.solution.description,
           costVsBenefits: args.costVsBenefits !== undefined ? str(args, "costVsBenefits") : current.solution.costVsBenefits,
+          baseEditedAt,
         },
         via(ctx),
       );
       switch (result.status) {
         case "ok":
-          return { ok: true, data: { number: result.solution.number, status: result.solution.status, url: solutionUrl(ctx, current.challenge.number, number) } };
+          return {
+            ok: true,
+            data: { number: result.solution.number, status: result.solution.status, editedAt: result.solution.editedAt, url: solutionUrl(ctx, current.challenge.number, number) },
+          };
         case "trashed": // §10.4: an agent never sees the trash, so it reads as missing
         case "not_found":
           return NOT_FOUND("solution");
@@ -714,6 +766,8 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(403, "only the author can edit this solution");
         case "not_editable":
           return fail(409, "this solution is not editable in its current status");
+        case "stale":
+          return fail(409, TEAM_MESSAGES.staleEdit);
         case "invalid":
           return fail(400, result.error);
       }

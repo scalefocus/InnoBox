@@ -9,11 +9,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useDateFmt } from "@/components/DateFormat";
-import { AvatarBubble } from "@/components/AvatarBubble";
+import type { TeamPerson } from "@/components/TeamByline";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
 import { readChallengesView, writeChallengesView, type ChallengesView } from "@/lib/challenges-view";
 import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
-import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
+import { ChallengeAuthorBubbles, ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
 import { HypeCount } from "@/components/Hype";
 import { TopicChips, type TopicChipData } from "@/components/TopicChips";
@@ -25,6 +25,8 @@ interface ChallengeListItem {
   number: string;
   title: string;
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
+  /** §39.7: the team in order — the compact form's stacked bubbles and "+N". */
+  authors?: TeamPerson[];
   namespaceSlug: string;
   impactAreaName: string;
   /** §34.6: alphabetical; a retired one is muted but still filters. */
@@ -275,7 +277,7 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       </div>
       <h3>{challenge.title}</h3>
       <div className="desc" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <AvatarBubble size="sm" userId={challenge.author.userId} displayName={challenge.author.displayName} anonymous={challenge.author.anonymous} external={challenge.author.external === true} deactivated={challenge.author.active === false} scrubbed={challenge.author.scrubbed === true} />
+        <ChallengeAuthorBubbles challenge={challenge} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
           <span>
             <ChallengeAuthorName challenge={challenge} />

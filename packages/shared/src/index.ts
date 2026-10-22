@@ -112,6 +112,11 @@ export * from "./hype.js";
 // §34 topics: the field limits, the tagging rules, the bulk outcomes and the event-18 copy
 // (client-safe, also at `@innobox/shared/topics`).
 export * from "./topics.js";
+// §39 co-authors: the team cap, the joining window, the team-change decision, the masked team and
+// its compact and text forms (client-safe, also at `@innobox/shared/coauthors`).
+export * from "./coauthors.js";
+// …and the server-only SQL every read path uses to see an item's team.
+export * from "./coauthors-db.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the
