@@ -1,8 +1,9 @@
 // POST /api/coming-soon/votes { entry } (INNOBOX_SPEC.md §38.3, §38.14): toggles the viewer's
-// upvote on one Coming soon entry (`spec:<key>` or `idea:<uuid>`) and answers its new state —
-// `{ voted, votes, voters, othersCount, othersIncludesYou }`. 404 while feature ideas are off, for a
-// malformed id, and for an entry that is not live or does not apply to the viewer. Audited under All.
-import { getFeatureIdeasEnabled, parseEntryId } from "@innobox/shared";
+// upvote on one Coming soon entry (its row's uuid) and answers its new state — `{ voted, votes,
+// voters, othersCount, othersIncludesYou }`. 404 for a malformed id, and for an entry that is not
+// planned (deleted meanwhile) or does not apply to the viewer. The proposals switch never touches
+// voting (§38.11). Audited under All.
+import { parseEntryId } from "@innobox/shared";
 import { requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
@@ -19,13 +20,12 @@ async function handlePOST(req: Request): Promise<Response> {
   if (!gate.ok) return gate.response;
   const limited = rateLimit(gate.user.id, "mutation");
   if (limited) return limited;
-  if (!(await getFeatureIdeasEnabled(pool))) return notFound();
 
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
-  const ref = parseEntryId(read.value.entry);
-  if (!ref) return notFound();
-  const result = await toggleVote(pool, { userId: gate.user.id, roles: gate.user.roles }, ref);
+  const id = parseEntryId(read.value.entry);
+  if (!id) return notFound();
+  const result = await toggleVote(pool, { userId: gate.user.id, roles: gate.user.roles }, id);
   if (result.status === "not_found") return notFound();
   return Response.json({
     voted: result.voted,

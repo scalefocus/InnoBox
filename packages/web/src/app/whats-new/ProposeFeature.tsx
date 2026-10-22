@@ -3,7 +3,8 @@
 // trap, Escape and the inert page behind it — with one required text box, a live counter, and the
 // §6.4 submission lock on Send. Closing with text in the box asks first. The person's §38.6 name
 // switch decides whether the sub-line promises their name. With MAX_PENDING_IDEAS proposals already
-// waiting, the dialog says so and Send stays disabled; the server re-checks the cap either way.
+// waiting, the dialog says so and Send stays disabled; the server re-checks the cap either way. A
+// platform admin has no cap (§38.4), so for them `atCap` is never true.
 import { useEffect, useRef, useState } from "react";
 import { FEATURE_IDEA_MESSAGES, FEATURE_IDEA_TEXT_MAX } from "@innobox/shared/feature-ideas";
 import { PrimaryButtonLabel, useFormLock } from "@/components/FormLock";

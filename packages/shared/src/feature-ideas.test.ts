@@ -1,50 +1,65 @@
-// Unit tests for the pure feature-ideas rules (INNOBOX_SPEC.md §38): the entry ids, proposal and
-// published-copy validation, the Approve dialog's pre-fill, the §38.2 order, the §38.3 voter split,
-// the §38.8 notification copy and recipient candidates, the §38.9 sweep plan, and the §38.10 award
-// keys and Roadmapper badge.
+// Unit tests for the pure feature-ideas rules (INNOBOX_SPEC.md §38): the audiences, the entry ids,
+// proposal and published-copy validation, the Approve dialog's pre-fill, the §38.2 order and the
+// §38.3 re-sort and announcement, the §38.3 voter split, who may propose (§38.11) and who earns
+// (§38.10), the §38.8 notification copy and recipient candidates, and the §38.10 award keys and
+// Roadmapper badge.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FEATURE_IDEA_TEASER_MAX,
   FEATURE_IDEA_TEXT_MAX,
   FEATURE_IDEA_TITLE_MAX,
+  ENTRY_AUDIENCES,
+  appliesTo,
+  applyOwnVote,
+  audienceViewerOf,
+  canProposeFeature,
   compareEntries,
   cutAtWord,
-  entryIdOf,
   featureAvailableCandidates,
   featureAvailableNotification,
   hasInternalReference,
-  ideaEntryId,
+  ideaEarnsAwards,
   ideaReviewedNotification,
+  isEntryAudience,
+  moveAnnouncement,
+  ordinal,
   othersLine,
   parseEntryId,
-  planTeaserSweep,
-  specEntryId,
+  sortEntries,
   splitVoters,
   teaserPrefill,
   titlePrefill,
-  upcomingViewerOf,
   validateDecisionNote,
   validateIdeaText,
   validatePublishedCopy,
   type OrderableEntry,
 } from "./feature-ideas.js";
 import { BADGES, ITEMLESS_REASONS, awardKey, badgeTiersReached } from "./gamification.js";
-import type { UpcomingEntry } from "./upcoming.js";
 
 const ID = "3f2b8c1e-7d4a-4e5b-9c6d-0a1b2c3d4e5f";
 
-test("entry ids: spec:<key> and idea:<uuid> round-trip; anything else is refused", () => {
-  assert.deepEqual(parseEntryId(specEntryId("dark-mode")), { kind: "spec", key: "dark-mode" });
-  assert.deepEqual(parseEntryId(ideaEntryId(ID.toUpperCase())), { kind: "idea", id: ID });
-  assert.equal(entryIdOf({ kind: "idea", id: ID }), `idea:${ID}`);
-  for (const bad of [undefined, 42, "", "spec:", "spec:Dark Mode", "idea:not-a-uuid", "dark-mode", `teaser:${ID}`]) {
+test("entry ids: a row's uuid, lower-cased; anything else is refused", () => {
+  assert.equal(parseEntryId(ID), ID);
+  assert.equal(parseEntryId(ID.toUpperCase()), ID);
+  for (const bad of [undefined, 42, "", `idea:${ID}`, `spec:dark-mode`, "dark-mode", `${ID}x`]) {
     assert.equal(parseEntryId(bad), null, String(bad));
   }
 });
 
-test("upcomingViewerOf: platform admin, and the distinct namespaces administered", () => {
-  const viewer = upcomingViewerOf({
+test("audiences: a member sees everyone-entries, an admin also admin ones, a platform admin all", () => {
+  const member = { platformAdmin: false, namespaceAdmin: [] };
+  const nsAdmin = { platformAdmin: false, namespaceAdmin: ["ns-1"] };
+  const platform = { platformAdmin: true, namespaceAdmin: [] };
+  assert.deepEqual(ENTRY_AUDIENCES.filter((a) => appliesTo(a, member)), ["everyone"]);
+  assert.deepEqual(ENTRY_AUDIENCES.filter((a) => appliesTo(a, nsAdmin)), ["everyone", "admins"]);
+  assert.deepEqual(ENTRY_AUDIENCES.filter((a) => appliesTo(a, platform)), ["everyone", "admins", "platform_admin"]);
+  assert.equal(isEntryAudience("admins"), true);
+  assert.equal(isEntryAudience("namespace_admin"), false);
+});
+
+test("audienceViewerOf: platform admin, and the distinct namespaces administered", () => {
+  const viewer = audienceViewerOf({
     isPlatformAdmin: false,
     grants: [
       { role: "namespace_admin", namespaceId: "ns-1" },
@@ -53,7 +68,22 @@ test("upcomingViewerOf: platform admin, and the distinct namespaces administered
     ],
   });
   assert.deepEqual(viewer, { platformAdmin: false, namespaceAdmin: ["ns-1"] });
-  assert.equal(upcomingViewerOf({ isPlatformAdmin: true, grants: [] }).platformAdmin, true);
+  assert.equal(audienceViewerOf({ isPlatformAdmin: true, grants: [] }).platformAdmin, true);
+});
+
+test("canProposeFeature: platform admins always; everyone else while proposals are open", () => {
+  assert.equal(canProposeFeature(true, false), true);
+  assert.equal(canProposeFeature(true, true), true);
+  assert.equal(canProposeFeature(false, true), true);
+  assert.equal(canProposeFeature(false, false), false);
+});
+
+test("ideaEarnsAwards: only a proposer someone else approved", () => {
+  assert.equal(ideaEarnsAwards("p", "admin"), true);
+  assert.equal(ideaEarnsAwards("admin", "admin"), false, "self-approval earns nothing");
+  assert.equal(ideaEarnsAwards(null, null), false, "a seeded entry has no proposer");
+  assert.equal(ideaEarnsAwards(null, "admin"), false);
+  assert.equal(ideaEarnsAwards("p", null), true, "an approver erased since does not take the award away");
 });
 
 test("validateIdeaText: required, trimmed, capped at 1 000 characters", () => {
@@ -114,19 +144,45 @@ test("pre-fill stays linear on long punctuation runs — whatever a person typed
   assert.ok(Date.now() - started < 1000, "no backtracking blow-up");
 });
 
-test("compareEntries: votes first; among equals specified teasers in hand order, then the oldest approval", () => {
+test("compareEntries: votes first; among equals the oldest approval, then the id", () => {
   const entries: (OrderableEntry & { name: string })[] = [
-    { name: "idea-new", kind: "idea", votes: 2, approvedAt: "2026-10-20T10:00:00Z" },
-    { name: "spec-b", kind: "spec", votes: 2, specIndex: 1 },
-    { name: "idea-old", kind: "idea", votes: 2, approvedAt: "2026-10-01T10:00:00Z" },
-    { name: "top", kind: "idea", votes: 9, approvedAt: "2026-10-21T10:00:00Z" },
-    { name: "spec-a", kind: "spec", votes: 2, specIndex: 0 },
-    { name: "none", kind: "spec", votes: 0, specIndex: 2 },
+    { id: "e", name: "new", votes: 2, approvedAt: "2026-10-20T10:00:00.000Z" },
+    { id: "b", name: "seeded-2", votes: 2, approvedAt: "2026-10-22T00:00:02.000Z" },
+    { id: "d", name: "old", votes: 2, approvedAt: "2026-10-01T10:00:00.000Z" },
+    { id: "f", name: "top", votes: 9, approvedAt: "2026-10-21T10:00:00.000Z" },
+    { id: "z", name: "same-time-z", votes: 0, approvedAt: "2026-10-22T00:00:01.000Z" },
+    { id: "a", name: "same-time-a", votes: 0, approvedAt: "2026-10-22T00:00:01.000Z" },
   ];
   assert.deepEqual(
-    [...entries].sort(compareEntries).map((e) => e.name),
-    ["top", "spec-a", "spec-b", "idea-old", "idea-new", "none"],
+    sortEntries(entries).map((e) => e.name),
+    ["top", "old", "new", "seeded-2", "same-time-a", "same-time-z"],
   );
+  assert.equal(compareEntries(entries[0]!, entries[0]!), 0);
+});
+
+test("applyOwnVote: flips the vote, moves the count by one and re-sorts; a repeat is a no-op", () => {
+  const list = sortEntries([
+    { id: "a", title: "A", votes: 3, voted: false, approvedAt: "2026-10-01T00:00:00.000Z" },
+    { id: "b", title: "B", votes: 3, voted: false, approvedAt: "2026-10-02T00:00:00.000Z" },
+    { id: "c", title: "C", votes: 1, voted: true, approvedAt: "2026-10-03T00:00:00.000Z" },
+  ]);
+  const up = applyOwnVote(list, "b", true);
+  assert.deepEqual(up.map((e) => [e.id, e.votes, e.voted]), [["b", 4, true], ["a", 3, false], ["c", 1, true]]);
+  assert.deepEqual(applyOwnVote(up, "b", true), up, "already voted: nothing changes");
+  const back = applyOwnVote(up, "b", false);
+  assert.deepEqual(back.map((e) => e.id), ["a", "b", "c"], "the revert restores the order");
+  const down = applyOwnVote(list, "c", false);
+  assert.equal(down.find((e) => e.id === "c")!.votes, 0);
+  assert.equal(list[0]!.votes, 3, "the input is never mutated");
+});
+
+test("ordinal and moveAnnouncement: the voted row's new place, or nothing when it stayed", () => {
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal), ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]);
+  const before = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
+  const after = [{ id: "b", title: "B" }, { id: "a", title: "A" }, { id: "c", title: "C" }];
+  assert.equal(moveAnnouncement(before, after, "b"), "B is now 1st of 3");
+  assert.equal(moveAnnouncement(before, before, "b"), null);
+  assert.equal(moveAnnouncement(before, after, "gone"), null);
 });
 
 test("splitVoters: named voters in order, opted-out and erased ones counted, the viewer's own vote found", () => {
@@ -196,31 +252,13 @@ test("event 20 copy and candidates: the proposer first, voters deduplicated, the
   assert.deepEqual(featureAvailableCandidates("admin", [], "admin"), []);
 });
 
-test("planTeaserSweep: live teasers upserted; a vanished key is shipped unless it was dropped", () => {
-  const live: UpcomingEntry[] = [{ key: "still-here", ids: ["GAP-1"], title: "Still here (renamed)", teaser: "t", audience: "everyone" }];
-  const plan = planTeaserSweep(
-    [
-      { key: "still-here", title: "Still here", audience: "everyone" },
-      { key: "shipped-one", title: "Shipped one", audience: "admins" },
-      { key: "descoped", title: "Descoped", audience: "everyone" },
-    ],
-    live,
-    ["descoped"],
-  );
-  assert.deepEqual(plan.upserts, [{ key: "still-here", title: "Still here (renamed)", audience: "everyone" }]);
-  assert.deepEqual(plan.shipped, [{ key: "shipped-one", title: "Shipped one", audience: "admins" }]);
-  assert.deepEqual(plan.dropped, [{ key: "descoped", title: "Descoped", audience: "everyone" }]);
-  const first = planTeaserSweep([], live, []);
-  assert.deepEqual(first.shipped, [], "the first run, with an empty mirror, announces nothing");
-});
-
 test("awards: once-per-idea keys, item-less reasons, and Roadmapper at 1 / 3 / 10 shipped ideas", () => {
   assert.equal(awardKey.ideaApproved(ID), `idea_approved:${ID}`);
   assert.equal(awardKey.ideaShipped(ID), `idea_shipped:${ID}`);
   assert.deepEqual([...ITEMLESS_REASONS].sort(), ["agent_connected", "idea_approved", "idea_shipped"]);
   const roadmapper = BADGES.find((b) => b.key === "roadmapper")!;
   assert.equal(roadmapper.counts, "idea_shipped");
-  assert.equal(roadmapper.featureIdeas, true);
+  assert.equal("featureIdeas" in roadmapper, false, "Roadmapper is never hidden by the proposals switch");
   assert.deepEqual(
     badgeTiersReached({ idea_shipped: 3 }).filter((r) => r.badgeKey === "roadmapper").map((r) => r.tier),
     [1, 2],

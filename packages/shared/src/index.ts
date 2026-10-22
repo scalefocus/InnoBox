@@ -141,10 +141,8 @@ export * from "./mcp-grants.js";
 // (gallery/search/triage author filters, directory search, audit and system-log searches).
 export * from "./sql-like.js";
 
-// §13.9 / §38 feature ideas: the Coming soon teasers (client-safe, also at
-// `@innobox/shared/upcoming`), the limits, validation, order and copy (client-safe, also at
-// `@innobox/shared/feature-ideas`), and the server-only switch, audience test and events 19–20 web
-// and worker share.
-export * from "./upcoming.js";
+// §13.9 / §38 feature ideas: the audiences, limits, validation, order and copy (client-safe, also at
+// `@innobox/shared/feature-ideas`), and the server-only switch, audience test and events 19–20 the
+// web stores share. Coming soon itself lives only in the database.
 export * from "./feature-ideas.js";
 export * from "./feature-ideas-db.js";

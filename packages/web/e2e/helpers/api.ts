@@ -180,3 +180,33 @@ export async function setSolutionStatusViaApi(
     `PATCH /api/solutions/${digits} → ${status}`,
   );
 }
+
+/** A planned Coming soon entry, as a platform admin plants one (INNOBOX_SPEC.md §38.4–§38.5): proposed
+ *  (no pending cap for platform admins) and approved with `title` and `audience` at once. Coming soon
+ *  lives only in the database, so specs plant their own entries instead of relying on the ones a
+ *  migration seeded — an admin may have edited or deleted those. Returns the entry id. */
+export async function plantComingSoonEntryViaApi(
+  adminRequest: APIRequestContext,
+  opts: { title: string; teaser?: string; audience?: "everyone" | "admins" | "platform_admin" },
+): Promise<string> {
+  const proposed = (await jsonOrThrow(
+    await adminRequest.post(`${base()}/api/feature-ideas`, { headers: JSON_HEADERS, data: { description: `${opts.title}: planted by an e2e spec.` } }),
+    201,
+    "POST /api/feature-ideas",
+  )) as { id: string };
+  await jsonOrThrow(
+    await adminRequest.post(`${base()}/api/admin/feature-ideas/${proposed.id}/approve`, {
+      headers: JSON_HEADERS,
+      data: { title: opts.title, teaser: opts.teaser ?? `${opts.title}, planted by an e2e spec.`, audience: opts.audience ?? "everyone" },
+    }),
+    200,
+    "POST /api/admin/feature-ideas/:id/approve",
+  );
+  return proposed.id;
+}
+
+/** Deletes a planned Coming soon entry silently (no "now available" notification). Best effort, for
+ *  a spec's cleanup. */
+export async function removeComingSoonEntryViaApi(adminRequest: APIRequestContext, id: string): Promise<void> {
+  await adminRequest.delete(`${base()}/api/admin/feature-ideas/${id}`, { headers: JSON_HEADERS, data: { notifyShipped: false } }).catch(() => undefined);
+}

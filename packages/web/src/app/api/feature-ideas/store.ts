@@ -1,9 +1,12 @@
 // Data layer for §38 feature ideas (INNOBOX_SPEC.md §38): the Coming soon read with its votes,
 // voters and proposers (GET /api/coming-soon), the vote toggle, proposing, the proposer's own list
 // and withdraw, and the platform admin's review — list, count, approve, decline, merge, edit and
-// delete. The pure rules (limits, validation, order, voter split, copy) live in @innobox/shared
-// (feature-ideas.ts); the switch, the audience test and events 19–20 in feature-ideas-db.ts, which
-// the worker shares.
+// delete. The pure rules (audiences, limits, validation, order, voter split, award rule, copy) live
+// in @innobox/shared (feature-ideas.ts); the switch, the audience test and events 19–20 in
+// feature-ideas-db.ts.
+//
+// Coming soon lives only here (§38.1 decision 1): every entry is a `planned` feature_ideas row, its
+// id the row's uuid. The ten entries seeded by migration 0055 have no proposer (author_id null).
 //
 // Visibility (invariant 2): ideas carry no namespace, and every entry is filtered by its audience
 // against the viewer's resolved roles before anything about it — a count, a voter, a proposer — is
@@ -15,26 +18,22 @@ import type { Pool, PoolClient } from "pg";
 import {
   MAX_PENDING_IDEAS,
   PENDING_ROW_EXCERPT_MAX,
-  UPCOMING,
   appliesTo,
   audienceMembers,
+  audienceViewerOf,
+  canProposeFeature,
   compareEntries,
   deliverFeatureAvailable,
   deliverIdeaReviewed,
-  entryIdOf,
-  ideaEntryId,
+  ideaEarnsAwards,
   ideaExcerpt,
-  specEntryId,
+  parseEntryId,
+  sortEntries,
   splitVoters,
-  upcomingByKey,
-  upcomingFor,
-  upcomingViewerOf,
-  type EntryRef,
+  type EntryAudience,
   type FeatureIdeaStatus,
   type PublishedCopy,
   type RoleSet,
-  type UpcomingAudience,
-  type UpcomingEntry,
   type VoteRow,
   type VoterList,
 } from "@innobox/shared";
@@ -56,121 +55,110 @@ export interface NamedPerson {
   deactivated: boolean;
 }
 
-/** One Coming soon entry while feature ideas are on (§38.14). */
+/** One Coming soon entry (§38.14). `approvedAt` lets the page re-sort after a vote (§38.3). */
 export interface ComingSoonEntry extends VoterList {
   id: string;
-  kind: "spec" | "idea";
   title: string;
   teaser: string;
+  approvedAt: string;
   proposedBy: NamedPerson | null;
 }
 
-/** While feature ideas are off: the specified teasers alone, read-only (§38.11). */
-export interface ComingSoonTeaser {
-  id: string;
-  kind: "spec";
-  title: string;
-  teaser: string;
+export interface ComingSoon {
+  entries: ComingSoonEntry[];
+  /** §38.11: a platform admin, or anyone while proposals are open. */
+  canPropose: boolean;
+  myPendingCount: number;
+  /** Null for a platform admin, who has no pending cap (§38.4). */
+  maxPending: number | null;
+  /** The viewer's §38.6 switch — the propose dialog's sub-line. */
+  named: boolean;
 }
-
-export type ComingSoon =
-  | { enabled: true; entries: ComingSoonEntry[]; myPendingCount: number; maxPending: number; /** The viewer's §38.6 switch — the propose dialog's sub-line. */ named: boolean }
-  | { enabled: false; entries: ComingSoonTeaser[] };
 
 const bootstrapGroup = (): string | undefined => process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP;
 
 /** The audiences an entry may have to reach this viewer (§13.9 `appliesTo`). */
-function audiencesFor(roles: RoleSet): UpcomingAudience[] {
-  const viewer = upcomingViewerOf(roles);
+function audiencesFor(roles: RoleSet): EntryAudience[] {
+  const viewer = audienceViewerOf(roles);
   return (["everyone", "admins", "platform_admin"] as const).filter((a) => appliesTo(a, viewer));
 }
 
 // ── Votes ────────────────────────────────────────────────────────────────────────────────
 
 /** Every vote on the given entries, newest first, grouped by entry id. */
-async function loadVotes(db: Db, specKeys: readonly string[], ideaIds: readonly string[]): Promise<Map<string, VoteRow[]>> {
+async function loadVotes(db: Db, ids: readonly string[]): Promise<Map<string, VoteRow[]>> {
   const out = new Map<string, VoteRow[]>();
-  if (specKeys.length === 0 && ideaIds.length === 0) return out;
-  const { rows } = await db.query<{ spec_key: string | null; idea_id: string | null; user_id: string; display_name: string; deactivated: boolean; named: boolean }>(
-    `select v.spec_key, v.idea_id, v.user_id, u.display_name, not u.active as deactivated,
+  if (ids.length === 0) return out;
+  const { rows } = await db.query<{ idea_id: string; user_id: string; display_name: string; deactivated: boolean; named: boolean }>(
+    `select v.idea_id, v.user_id, u.display_name, not u.active as deactivated,
             (u.feature_ideas_named and u.scrubbed_at is null) as named
        from feature_idea_votes v join users u on u.id = v.user_id
-      where v.spec_key = any($1::text[]) or v.idea_id = any($2::uuid[])
+      where v.idea_id = any($1::uuid[])
       order by v.created_at desc, v.user_id`,
-    [[...specKeys], [...ideaIds]],
+    [[...ids]],
   );
   for (const r of rows) {
-    const id = r.spec_key !== null ? specEntryId(r.spec_key) : ideaEntryId(r.idea_id!);
-    const list = out.get(id) ?? [];
+    const list = out.get(r.idea_id) ?? [];
     list.push({ userId: r.user_id, displayName: r.display_name, deactivated: r.deactivated, named: r.named });
-    out.set(id, list);
+    out.set(r.idea_id, list);
   }
   return out;
 }
 
-async function entryVoters(db: Db, ref: EntryRef, viewerId: string): Promise<VoterList> {
-  const votes = await loadVotes(db, ref.kind === "spec" ? [ref.key] : [], ref.kind === "idea" ? [ref.id] : []);
-  return splitVoters(votes.get(entryIdOf(ref)) ?? [], viewerId);
+async function entryVoters(db: Db, id: string, viewerId: string): Promise<VoterList> {
+  const votes = await loadVotes(db, [id]);
+  return splitVoters(votes.get(id) ?? [], viewerId);
 }
 
 // ── The Coming soon read (GET /api/coming-soon) ──────────────────────────────────────────
 
 /**
  * The entries that apply to the viewer, in the §38.2 order, each with its votes, the viewer's own
- * vote, the named voters and the proposer. While feature ideas are off, the specified teasers alone
- * in hand order. `entries` is UPCOMING outside tests.
+ * vote, the named voters and the proposer (none for a seeded entry, §38.2) — plus whether the viewer
+ * may propose (`proposalsOpen` is the §38.11 switch) and their pending count against the cap.
  */
-export async function getComingSoon(db: Db, viewer: IdeaViewer, enabled: boolean, entries: readonly UpcomingEntry[] = UPCOMING): Promise<ComingSoon> {
-  const specs = upcomingFor(upcomingViewerOf(viewer.roles), entries);
-  if (!enabled) return { enabled: false, entries: specs.map((e) => ({ id: specEntryId(e.key), kind: "spec", title: e.title, teaser: e.teaser })) };
-
+export async function getComingSoon(db: Db, viewer: IdeaViewer, proposalsOpen: boolean): Promise<ComingSoon> {
   const { rows: ideas } = await db.query<{
     id: string;
     title: string;
     teaser: string;
     decided_at: Date;
-    author_id: string;
-    display_name: string;
-    deactivated: boolean;
-    named: boolean;
+    author_id: string | null;
+    display_name: string | null;
+    deactivated: boolean | null;
+    named: boolean | null;
   }>(
     `select f.id, f.title, f.teaser, f.decided_at, f.author_id, u.display_name, not u.active as deactivated,
             (u.feature_ideas_named and u.scrubbed_at is null) as named
-       from feature_ideas f join users u on u.id = f.author_id
+       from feature_ideas f left join users u on u.id = f.author_id
       where f.status = 'planned' and f.audience = any($1::text[])`,
     [audiencesFor(viewer.roles)],
   );
   const votes = await loadVotes(
     db,
-    specs.map((e) => e.key),
     ideas.map((i) => i.id),
   );
-  const index = new Map(entries.map((e, i) => [e.key, i]));
-  const rows = [
-    ...specs.map((e) => {
-      const id = specEntryId(e.key);
-      return {
-        order: { kind: "spec" as const, votes: votes.get(id)?.length ?? 0, specIndex: index.get(e.key) ?? 0 },
-        entry: { id, kind: "spec" as const, title: e.title, teaser: e.teaser, proposedBy: null, ...splitVoters(votes.get(id) ?? [], viewer.userId) },
-      };
-    }),
-    ...ideas.map((i) => {
-      const id = ideaEntryId(i.id);
-      return {
-        order: { kind: "idea" as const, votes: votes.get(id)?.length ?? 0, approvedAt: i.decided_at.toISOString() },
-        entry: {
-          id,
-          kind: "idea" as const,
-          title: i.title,
-          teaser: i.teaser,
-          proposedBy: i.named ? { id: i.author_id, displayName: i.display_name, deactivated: i.deactivated } : null,
-          ...splitVoters(votes.get(id) ?? [], viewer.userId),
-        },
-      };
-    }),
-  ].sort((a, b) => compareEntries(a.order, b.order));
+  const entries = sortEntries(
+    ideas.map(
+      (i): ComingSoonEntry => ({
+        id: i.id,
+        title: i.title,
+        teaser: i.teaser,
+        approvedAt: i.decided_at.toISOString(),
+        proposedBy: i.author_id && i.named ? { id: i.author_id, displayName: i.display_name ?? "", deactivated: i.deactivated === true } : null,
+        ...splitVoters(votes.get(i.id) ?? [], viewer.userId),
+      }),
+    ),
+  );
+  const platformAdmin = viewer.roles.isPlatformAdmin;
   const [myPendingCount, named] = await Promise.all([pendingCount(db, viewer.userId), getFeatureIdeasNamed(db, viewer.userId)]);
-  return { enabled: true, entries: rows.map((r) => r.entry), myPendingCount, maxPending: MAX_PENDING_IDEAS, named };
+  return {
+    entries,
+    canPropose: canProposeFeature(platformAdmin, proposalsOpen),
+    myPendingCount,
+    maxPending: platformAdmin ? null : MAX_PENDING_IDEAS,
+    named,
+  };
 }
 
 /** The §38.6 name switch. */
@@ -196,39 +184,21 @@ export type ToggleVoteResult = ({ status: "ok" } & VoterList) | { status: "not_f
 /**
  * One click: removes the viewer's vote on the entry if there is one, adds it otherwise — in one
  * transaction under a per-(person, entry) advisory lock, so a double click is two toggles in order,
- * never two rows. 404 for an entry that is not live or does not apply to the viewer: a retired
- * teaser key, an idea that is not planned, an audience the viewer is outside of.
+ * never two rows. 404 for an entry that is not planned (deleted meanwhile, or still pending) or does
+ * not apply to the viewer.
  */
-export async function toggleVote(pool: Pool, viewer: IdeaViewer, ref: EntryRef, entries: readonly UpcomingEntry[] = UPCOMING): Promise<ToggleVoteResult> {
-  const audience = upcomingViewerOf(viewer.roles);
-  const entryId = entryIdOf(ref);
+export async function toggleVote(pool: Pool, viewer: IdeaViewer, id: string): Promise<ToggleVoteResult> {
+  const audience = audienceViewerOf(viewer.roles);
   return inTransaction(pool, async (client) => {
-    if (ref.kind === "spec") {
-      const entry = upcomingByKey(ref.key, entries);
-      if (!entry || !appliesTo(entry.audience, audience)) return { status: "not_found" } as const;
-    } else {
-      // FOR SHARE: a concurrent delete or edit waits, so a vote never lands on a vanishing idea.
-      const { rows } = await client.query<{ audience: UpcomingAudience }>(`select audience from feature_ideas where id = $1 and status = 'planned' for share`, [ref.id]);
-      if (!rows[0] || !appliesTo(rows[0].audience, audience)) return { status: "not_found" } as const;
-    }
-    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`feature-vote:${viewer.userId}:${entryId}`]);
-    const removed = await client.query(
-      ref.kind === "spec"
-        ? `delete from feature_idea_votes where user_id = $1 and spec_key = $2`
-        : `delete from feature_idea_votes where user_id = $1 and idea_id = $2::uuid`,
-      [viewer.userId, ref.kind === "spec" ? ref.key : ref.id],
-    );
+    // FOR SHARE: a concurrent delete or edit waits, so a vote never lands on a vanishing entry.
+    const { rows } = await client.query<{ audience: EntryAudience }>(`select audience from feature_ideas where id = $1 and status = 'planned' for share`, [id]);
+    if (!rows[0] || !appliesTo(rows[0].audience, audience)) return { status: "not_found" } as const;
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`feature-vote:${viewer.userId}:${id}`]);
+    const removed = await client.query(`delete from feature_idea_votes where user_id = $1 and idea_id = $2::uuid`, [viewer.userId, id]);
     const voted = (removed.rowCount ?? 0) === 0;
-    if (voted) {
-      await client.query(
-        ref.kind === "spec"
-          ? `insert into feature_idea_votes (user_id, spec_key) values ($1, $2) on conflict do nothing`
-          : `insert into feature_idea_votes (user_id, idea_id) values ($1, $2::uuid) on conflict do nothing`,
-        [viewer.userId, ref.kind === "spec" ? ref.key : ref.id],
-      );
-    }
-    await appendAudit(client, { actorUserId: viewer.userId, action: voted ? "feature_idea.voted" : "feature_idea.unvoted", targetType: "coming_soon_entry", targetId: entryId });
-    return { status: "ok", ...(await entryVoters(client, ref, viewer.userId)) } as const;
+    if (voted) await client.query(`insert into feature_idea_votes (user_id, idea_id) values ($1, $2::uuid) on conflict do nothing`, [viewer.userId, id]);
+    await appendAudit(client, { actorUserId: viewer.userId, action: voted ? "feature_idea.voted" : "feature_idea.unvoted", targetType: "coming_soon_entry", targetId: id });
+    return { status: "ok", ...(await entryVoters(client, id, viewer.userId)) } as const;
   });
 }
 
@@ -237,11 +207,12 @@ export async function toggleVote(pool: Pool, viewer: IdeaViewer, ref: EntryRef, 
 export type ProposeResult = { status: "ok"; id: string } | { status: "too_many_pending" };
 
 /** A new pending proposal. The pending cap is re-checked under a per-person advisory lock, so two
- *  tabs can never both slip under it. Audited without its text (§38.14). */
-export async function proposeIdea(pool: Pool, userId: string, text: string): Promise<ProposeResult> {
+ *  tabs can never both slip under it; `uncapped` (a platform admin, §38.4) skips it. Audited without
+ *  its text (§38.14). */
+export async function proposeIdea(pool: Pool, userId: string, text: string, opts: { uncapped?: boolean } = {}): Promise<ProposeResult> {
   return inTransaction(pool, async (client) => {
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`feature-idea:${userId}`]);
-    if ((await pendingCount(client, userId)) >= MAX_PENDING_IDEAS) return { status: "too_many_pending" } as const;
+    if (!opts.uncapped && (await pendingCount(client, userId)) >= MAX_PENDING_IDEAS) return { status: "too_many_pending" } as const;
     const { rows } = await client.query<{ id: string }>(`insert into feature_ideas (author_id, description) values ($1, $2) returning id`, [userId, text]);
     const id = rows[0]!.id;
     await appendAudit(client, { actorUserId: userId, action: "feature_idea.proposed", targetType: "feature_idea", targetId: id });
@@ -265,28 +236,20 @@ export interface OwnIdea {
   mergedTitle: string | null;
 }
 
-/** A live Coming soon entry's copy — a teaser still in UPCOMING, or a planned idea (read FOR SHARE
- *  when `lock`, so a merge can rely on it until commit). */
-async function liveEntryTitle(
-  db: Db,
-  entryId: string | null,
-  entries: readonly UpcomingEntry[],
-  lock = false,
-): Promise<{ title: string; teaser: string; audience: UpcomingAudience } | null> {
-  if (!entryId) return null;
-  if (entryId.startsWith("spec:")) {
-    const entry = upcomingByKey(entryId.slice("spec:".length), entries);
-    return entry ? { title: entry.title, teaser: entry.teaser, audience: entry.audience } : null;
-  }
-  const id = entryId.slice("idea:".length);
-  const { rows } = await db.query<{ title: string; teaser: string; audience: UpcomingAudience }>(
+/** A live Coming soon entry's copy — a planned row (read FOR SHARE when `lock`, so a merge can rely
+ *  on it until commit). `merged_into` may name an entry deleted since, or hold a value that is no
+ *  uuid at all (a key no row replaced, §38.9): both read as gone. */
+async function liveEntryTitle(db: Db, entryId: string | null, lock = false): Promise<{ title: string; teaser: string; audience: EntryAudience } | null> {
+  const id = parseEntryId(entryId);
+  if (!id) return null;
+  const { rows } = await db.query<{ title: string; teaser: string; audience: EntryAudience }>(
     `select title, teaser, audience from feature_ideas where id = $1::uuid and status = 'planned'${lock ? " for share" : ""}`,
     [id],
   );
   return rows[0] ?? null;
 }
 
-export async function listOwnIdeas(db: Db, userId: string, entries: readonly UpcomingEntry[] = UPCOMING): Promise<OwnIdea[]> {
+export async function listOwnIdeas(db: Db, userId: string): Promise<OwnIdea[]> {
   const { rows } = await db.query<{
     id: string;
     status: FeatureIdeaStatus;
@@ -314,7 +277,7 @@ export async function listOwnIdeas(db: Db, userId: string, entries: readonly Upc
       title: r.status === "planned" ? r.title : null,
       votes: r.status === "planned" ? r.votes : null,
       decisionNote: r.status === "declined" ? r.decision_note : null,
-      mergedTitle: r.status === "merged" ? ((await liveEntryTitle(db, r.merged_into, entries))?.title ?? null) : null,
+      mergedTitle: r.status === "merged" ? ((await liveEntryTitle(db, r.merged_into))?.title ?? null) : null,
     });
   }
   return out;
@@ -354,12 +317,13 @@ export interface AdminIdeaRow {
   createdAt: string;
   description: string | null;
   excerpt: string;
-  proposer: AdminPerson;
+  /** Null for an entry without a proposer — the ones migration 0055 seeded (§38.2). */
+  proposer: AdminPerson | null;
   /** Pending: the widest audience the proposer belongs to — a merge target outside it is disabled. */
-  proposerScope: UpcomingAudience | null;
+  proposerScope: EntryAudience | null;
   title: string | null;
   teaser: string | null;
-  audience: UpcomingAudience | null;
+  audience: EntryAudience | null;
   votes: number;
   decisionNote: string | null;
   mergedInto: string | null;
@@ -371,9 +335,8 @@ export interface AdminIdeaRow {
 /** A Coming soon entry a pending proposal can be merged into. */
 export interface MergeTarget {
   id: string;
-  kind: "spec" | "idea";
   title: string;
-  audience: UpcomingAudience;
+  audience: EntryAudience;
 }
 
 export interface AdminIdeaList {
@@ -383,7 +346,7 @@ export interface AdminIdeaList {
 }
 
 /** The widest audience that still includes each user: platform_admin ⊂ admins ⊂ everyone. */
-async function scopesOf(db: Db, userIds: readonly string[]): Promise<Map<string, UpcomingAudience>> {
+async function scopesOf(db: Db, userIds: readonly string[]): Promise<Map<string, EntryAudience>> {
   const [platform, admins] = await Promise.all([
     audienceMembers(db, userIds, "platform_admin", bootstrapGroup()),
     audienceMembers(db, userIds, "admins", bootstrapGroup()),
@@ -392,13 +355,13 @@ async function scopesOf(db: Db, userIds: readonly string[]): Promise<Map<string,
 }
 
 /** True when an entry with `audience` reaches someone whose widest audience is `scope`. */
-export function audienceIncludesScope(audience: UpcomingAudience, scope: UpcomingAudience): boolean {
+export function audienceIncludesScope(audience: EntryAudience, scope: EntryAudience): boolean {
   if (audience === "everyone") return true;
   if (audience === "admins") return scope !== "everyone";
   return scope === "platform_admin";
 }
 
-export async function listAdminIdeas(db: Db, tab: AdminTab, entries: readonly UpcomingEntry[] = UPCOMING): Promise<AdminIdeaList> {
+export async function listAdminIdeas(db: Db, tab: AdminTab): Promise<AdminIdeaList> {
   const where =
     tab === "pending"
       ? `f.status = 'pending'`
@@ -411,14 +374,14 @@ export async function listAdminIdeas(db: Db, tab: AdminTab, entries: readonly Up
     status: FeatureIdeaStatus;
     created_at: Date;
     description: string | null;
-    author_id: string;
-    display_name: string;
-    deactivated: boolean;
-    scrubbed: boolean;
-    named: boolean;
+    author_id: string | null;
+    display_name: string | null;
+    deactivated: boolean | null;
+    scrubbed: boolean | null;
+    named: boolean | null;
     title: string | null;
     teaser: string | null;
-    audience: UpcomingAudience | null;
+    audience: EntryAudience | null;
     decision_note: string | null;
     merged_into: string | null;
     decided_by_name: string | null;
@@ -430,12 +393,13 @@ export async function listAdminIdeas(db: Db, tab: AdminTab, entries: readonly Up
             f.title, f.teaser, f.audience, f.decision_note, f.merged_into, d.display_name as decided_by_name, f.decided_at,
             (select count(*)::int from feature_idea_votes v where v.idea_id = f.id) as votes
        from feature_ideas f
-       join users u on u.id = f.author_id
+       left join users u on u.id = f.author_id
        left join users d on d.id = f.decided_by
       where ${where}
       order by ${order}`,
   );
-  const scopes = tab === "pending" ? await scopesOf(db, [...new Set(rows.map((r) => r.author_id))]) : new Map<string, UpcomingAudience>();
+  const authors = [...new Set(rows.flatMap((r) => (r.author_id ? [r.author_id] : [])))];
+  const scopes = tab === "pending" ? await scopesOf(db, authors) : new Map<string, EntryAudience>();
   const ideas: AdminIdeaRow[] = [];
   for (const r of rows) {
     ideas.push({
@@ -444,34 +408,32 @@ export async function listAdminIdeas(db: Db, tab: AdminTab, entries: readonly Up
       createdAt: r.created_at.toISOString(),
       description: r.description,
       excerpt: r.description ? ideaExcerpt(r.description, PENDING_ROW_EXCERPT_MAX) : "",
-      proposer: { id: r.author_id, displayName: r.display_name, deactivated: r.deactivated, scrubbed: r.scrubbed, named: r.named },
-      proposerScope: scopes.get(r.author_id) ?? null,
+      proposer: r.author_id
+        ? { id: r.author_id, displayName: r.display_name ?? "", deactivated: r.deactivated === true, scrubbed: r.scrubbed === true, named: r.named === true }
+        : null,
+      proposerScope: r.author_id ? (scopes.get(r.author_id) ?? null) : null,
       title: r.title,
       teaser: r.teaser,
       audience: r.audience,
       votes: r.votes,
       decisionNote: r.decision_note,
       mergedInto: r.merged_into,
-      mergedTitle: r.status === "merged" ? ((await liveEntryTitle(db, r.merged_into, entries))?.title ?? null) : null,
+      mergedTitle: r.status === "merged" ? ((await liveEntryTitle(db, r.merged_into))?.title ?? null) : null,
       decidedBy: r.decided_by_name,
       decidedAt: r.decided_at ? r.decided_at.toISOString() : null,
     });
   }
   if (tab === "planned") {
-    // The §38.2 order among ideas: votes, then the oldest approval (the query's order).
-    ideas.sort((a, b) => compareEntries({ kind: "idea", votes: a.votes, approvedAt: a.decidedAt ?? "" }, { kind: "idea", votes: b.votes, approvedAt: b.decidedAt ?? "" }));
+    // The §38.2 order: votes, then the oldest approval, then the id.
+    ideas.sort((a, b) => compareEntries({ id: a.id, votes: a.votes, approvedAt: a.decidedAt ?? "" }, { id: b.id, votes: b.votes, approvedAt: b.decidedAt ?? "" }));
   }
-  return { ideas, targets: tab === "pending" ? await mergeTargets(db, entries) : [] };
+  return { ideas, targets: tab === "pending" ? await mergeTargets(db) : [] };
 }
 
-async function mergeTargets(db: Db, entries: readonly UpcomingEntry[]): Promise<MergeTarget[]> {
-  const { rows } = await db.query<{ id: string; title: string; audience: UpcomingAudience }>(
-    `select id, title, audience from feature_ideas where status = 'planned' order by decided_at, id`,
-  );
-  return [
-    ...entries.map((e) => ({ id: specEntryId(e.key), kind: "spec" as const, title: e.title, audience: e.audience })),
-    ...rows.map((r) => ({ id: ideaEntryId(r.id), kind: "idea" as const, title: r.title, audience: r.audience })),
-  ];
+/** Every planned entry, every audience, oldest approval first. */
+async function mergeTargets(db: Db): Promise<MergeTarget[]> {
+  const { rows } = await db.query<MergeTarget>(`select id, title, audience from feature_ideas where status = 'planned' order by decided_at, id`);
+  return rows;
 }
 
 export async function countPendingIdeas(db: Db): Promise<number> {
@@ -489,8 +451,9 @@ async function missOrConflict(db: Db, id: string): Promise<DecisionResult> {
 
 /**
  * Approve (§38.5), in one transaction: the row becomes `planned` with the admin's copy, the
- * proposer's vote is added, the audit row, the `idea_approved` award and event 19. A guarded UPDATE
- * on `status = 'pending'`, so a second admin deciding at the same moment gets the 409.
+ * proposer's vote is added, the audit row, the `idea_approved` award and event 19 — both skipped when
+ * the admin approves their own proposal (§38.4, §38.10). A guarded UPDATE on `status = 'pending'`, so
+ * a second admin deciding at the same moment gets the 409.
  */
 export async function approveIdea(pool: Pool, actorId: string, id: string, copy: PublishedCopy): Promise<DecisionResult> {
   return inTransaction(pool, async (client) => {
@@ -503,7 +466,7 @@ export async function approveIdea(pool: Pool, actorId: string, id: string, copy:
     if (!idea) return missOrConflict(client, id);
     await client.query(`insert into feature_idea_votes (user_id, idea_id) values ($1, $2) on conflict do nothing`, [idea.author_id, id]);
     await appendAudit(client, { actorUserId: actorId, action: "feature_idea.approved", targetType: "feature_idea", targetId: id, after: copy });
-    await awardIdeaApproved(client, idea.author_id, id);
+    if (ideaEarnsAwards(idea.author_id, actorId)) await awardIdeaApproved(client, idea.author_id, id);
     await deliverIdeaReviewed(client, { proposerId: idea.author_id, actorId, outcome: "approved", title: copy.title, teaser: copy.teaser, text: idea.description });
     return { status: "ok" } as const;
   });
@@ -530,11 +493,10 @@ export async function declineIdea(pool: Pool, actorId: string, id: string, note:
  * (otherwise event 19 would name an entry they cannot see — `not_visible`), the proposer's vote moves
  * to it, and event 19 says it is already planned. No award.
  */
-export async function mergeIdea(pool: Pool, actorId: string, id: string, target: EntryRef, entries: readonly UpcomingEntry[] = UPCOMING): Promise<DecisionResult> {
+export async function mergeIdea(pool: Pool, actorId: string, id: string, targetId: string): Promise<DecisionResult> {
   return inTransaction(pool, async (client) => {
-    if (target.kind === "idea" && target.id === id) return { status: "bad_target" } as const;
-    const targetId = entryIdOf(target);
-    const live = await liveEntryTitle(client, targetId, entries, true);
+    if (targetId === id) return { status: "bad_target" } as const;
+    const live = await liveEntryTitle(client, targetId, true);
     if (!live) return { status: "bad_target" } as const;
     const { rows: pending } = await client.query<{ author_id: string; description: string }>(
       `select author_id, description from feature_ideas where id = $1 and status = 'pending' for update`,
@@ -548,12 +510,7 @@ export async function mergeIdea(pool: Pool, actorId: string, id: string, target:
       `update feature_ideas set status = 'merged', merged_into = $2, decided_by = $3, decided_at = now(), updated_at = now() where id = $1`,
       [id, targetId, actorId],
     );
-    await client.query(
-      target.kind === "spec"
-        ? `insert into feature_idea_votes (user_id, spec_key) values ($1, $2) on conflict do nothing`
-        : `insert into feature_idea_votes (user_id, idea_id) values ($1, $2::uuid) on conflict do nothing`,
-      [idea.author_id, target.kind === "spec" ? target.key : target.id],
-    );
+    await client.query(`insert into feature_idea_votes (user_id, idea_id) values ($1, $2::uuid) on conflict do nothing`, [idea.author_id, targetId]);
     await appendAudit(client, { actorUserId: actorId, action: "feature_idea.merged", targetType: "feature_idea", targetId: id, after: { entry: targetId } });
     await deliverIdeaReviewed(client, { proposerId: idea.author_id, actorId, outcome: "merged", title: live.title, teaser: live.teaser, text: idea.description });
     return { status: "ok" } as const;
@@ -584,14 +541,15 @@ export type DeleteResult = DecisionResult | { status: "needs_choice" };
 
 /**
  * Delete (§38.5): a PENDING row is the spam delete — gone at once, nothing sent. A PLANNED row needs
- * `notifyShipped`: its votes go with it (cascade), and, ticked, event 20 reaches the proposer and
- * every voter the idea still applies to, and the proposer earns `idea_shipped`. Declined and merged
- * rows are not deleted here. The audit row never carries the proposal's text.
+ * `notifyShipped`: its votes go with it (cascade), and, ticked, event 20 reaches the proposer (when
+ * it has one) and every voter the entry still applies to, and a proposer someone else approved earns
+ * `idea_shipped`. Declined and merged rows are not deleted here. The audit row never carries the
+ * proposal's text.
  */
 export async function deleteIdea(pool: Pool, actorId: string, id: string, notifyShipped: boolean | undefined): Promise<DeleteResult> {
   return inTransaction(pool, async (client) => {
-    const { rows } = await client.query<{ status: FeatureIdeaStatus; author_id: string; title: string | null; audience: UpcomingAudience | null }>(
-      `select status, author_id, title, audience from feature_ideas where id = $1 for update`,
+    const { rows } = await client.query<{ status: FeatureIdeaStatus; author_id: string | null; decided_by: string | null; title: string | null; audience: EntryAudience | null }>(
+      `select status, author_id, decided_by, title, audience from feature_ideas where id = $1 for update`,
       [id],
     );
     const idea = rows[0];
@@ -610,7 +568,7 @@ export async function deleteIdea(pool: Pool, actorId: string, id: string, notify
       ...(idea.status === "planned" ? { after: { notifyShipped } } : {}),
     });
     if (idea.status === "planned" && notifyShipped) {
-      await awardIdeaShipped(client, idea.author_id, id);
+      if (idea.author_id && ideaEarnsAwards(idea.author_id, idea.decided_by)) await awardIdeaShipped(client, idea.author_id, id);
       await deliverFeatureAvailable(client, {
         title: idea.title!,
         proposerId: idea.author_id,

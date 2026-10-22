@@ -1,8 +1,8 @@
 // POST /api/admin/feature-ideas/:id/approve { title, teaser, audience } (INNOBOX_SPEC.md §38.5,
 // §38.14): the pending idea becomes planned with the admin's published copy — one transaction with
-// the proposer's vote, the audit row, the idea_approved award and event 19. 422 for missing or
-// over-long copy or an internal reference in it; 409 when another admin decided first or while
-// feature ideas are off. Platform admin only.
+// the proposer's vote, the audit row, the idea_approved award and event 19 (neither for an admin
+// approving their own proposal). 422 for missing or over-long copy or an internal reference in it;
+// 409 when another admin decided first. Platform admin only.
 import { validatePublishedCopy } from "@innobox/shared";
 import { pool } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";

@@ -1,5 +1,6 @@
 // GET /api/admin/feature-ideas/count (INNOBOX_SPEC.md §38.5, §38.14): `{ pending, enabled }` for the
-// Administration console card — its bubble and its switch. Platform admin only.
+// Administration console card — its bubble and its "Anyone can propose" switch (§38.11). Platform
+// admin only.
 import { getFeatureIdeasEnabled } from "@innobox/shared";
 import { requirePlatformAdmin } from "@/lib/auth";
 import { pool } from "@/lib/db";

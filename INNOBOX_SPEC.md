@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.23 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
+> Status: **v0.24 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -74,7 +74,13 @@
 > (2026-10-22) specified **feature ideas** — an upvote on every *Coming soon* entry, and
 > proposals that a platform admin writes up and approves into the plan, credited to the
 > proposer unless they opt out, with decision and "now available" notifications, points
-> on approval and shipping, and a Roadmapper badge (§38, §13.9)).
+> on approval and shipping, and a Roadmapper badge (§38, §13.9); v0.24 (2026-10-22) made
+> the database the only home of *Coming soon*: the ten teased features became planned
+> entries that a migration seeds and platform admins edit, and their sections left this
+> document with them — co-authors (§27) and the nine remaining stubs (§28–§33, §35–§37),
+> whose numbers are retired, not reused. A new-feature marker no longer needs a teaser,
+> and the feature-ideas switch now gates only proposals from people who are not
+> platform admins (§13.9, §38)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -86,8 +92,8 @@
 > shipped code does not yet do what the surrounding text says. The spec text is
 > authoritative; the marker states what the code must change to match it. A
 > **`· code fix`** marker is a divergence in something that exists; a **`· new
-> feature`** marker is a specified feature not yet built — each of those is also teased
-> on the What's new page's *Coming soon* list (§13.9), kept in sync by a test. Markers are
+> feature`** marker is a specified feature not yet built. Neither kind is tied to the
+> What's new page's *Coming soon* list (§13.9), which lives in the database. Markers are
 > numbered across this document and `ENTRA_AUTH_SPEC.md`, and each is deleted in the
 > same commit that closes it, so `grep -n "GAP-" INNOBOX_SPEC.md ENTRA_AUTH_SPEC.md`
 > always lists exactly the open work.
@@ -138,8 +144,7 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
   (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
-  upload sessions §11, the real-user-monitoring rollup and trims §14.12), plus the
-  one-shot **shipped-teaser sweep** each time it acquires leadership (§38.9). Pure-DB sweeps are scheduled before the Entra-credential check,
+  upload sessions §11, the real-user-monitoring rollup and trims §14.12). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
   Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
   credentials; the notification sweep (SMTP needs no Entra), the ClamAV scan sweep, and
@@ -973,8 +978,9 @@ Entra runbook); on conflict this document wins.
   `notify_achievements` to their defaults and nulling `achievements_seen_at`), deletes the
   user's §34 `topic_follows` and `topic_notices` rows, deletes the user's §38 `pending`,
   `declined` and `merged` feature ideas, clears the text of their `planned` ones (kept,
-  unnamed) and resets `feature_ideas_named` to its default — their votes stay and are
-  counted unnamed (§38.12) — and resets the notification preferences
+  unnamed; the row keeps `author_id`, so the entry still counts as proposed, §38.12)
+  and resets `feature_ideas_named` to its default — their votes stay and are counted
+  unnamed (§38.12) — and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
   `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
@@ -1013,8 +1019,7 @@ Entra runbook); on conflict this document wins.
     `updated_at` bumps; `edited_at` does not; status is untouched.
   - **Authorship never moves.** Challenges, solutions and comments the erased user
     wrote stay attributed to the de-identified row, exactly as without a successor.
-    So do their places on co-author teams (§27.11). Only the assignee role is handed
-    over.
+    Only the assignee role is handed over.
   - **One notification:** after commit the successor receives **one** summary item
     (§12.1 event 12) listing the moved challenges — not one event-7 item per move.
     No other recipient is notified (the erased user is not).
@@ -1188,15 +1193,13 @@ bounded:
   gamification ranking, §12.4 webhooks) leave it out; AI tasks and MCP treat it as
   restricted content (§22.7, §25.5).
 - Additional state-based visibility (applies on top, most restrictive wins):
-  - `awaiting_triage` and `withdrawn` challenges: visible only to their author
-    (every member of a co-author team, §27.6), the namespace's admins, and platform
-    admins. For these three the state rule
+  - `awaiting_triage` and `withdrawn` challenges: visible only to their author,
+    the namespace's admins, and platform admins. For these three the state rule
     **replaces** the namespace rule rather than narrowing it: the author of a
     `namespace`-visible item keeps seeing it even after losing membership of its
     namespace. The same predicate holds in every list, count and search (the SQL form)
     as on the detail page.
-  - Solutions in `proposed` status: visible only to their author (every member of a
-    co-author team, §27.6), the challenge's
+  - Solutions in `proposed` status: visible only to their author, the challenge's
     assignee, and the namespace's committee/admins (mirrors the legacy behavior of
     hiding un-reviewed solutions).
   - `rejected` / `not_selected` / `withdrawn` solutions: shown in a collapsed
@@ -1309,12 +1312,6 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   trashed_at + trashed_by + trash_reason (as challenges, §10.4).
   Hard-deletable by a platform admin on the same terms (§10.3), and removed with its
   parent challenge when that is deleted.
-- **`challenge_authors`** / **`solution_authors`** — the §27 co-author teams:
-  challenge_id / solution_id (FK, `ON DELETE CASCADE`), user_id (FK), added_at,
-  added_by (nullable user FK); primary key on the pair. One row per member, the
-  creator's included, so every authored item has at least one. On `challenges` and
-  `solutions`, `author_id` stays as the **creator** and never changes; every
-  authorship rule reads the member table (§27.2, §27.12).
 - **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
   **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
   for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
@@ -1339,10 +1336,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   inserts/deletes the row.
 - **`hypes`** — (user_id, parent) unique; weight (`1 | 2`), created_at. The §26
   weekly endorsement: insert-only, never updated, removed only by the §10.3 cascade.
-- **`feature_ideas`**, **`feature_idea_votes`**, **`coming_soon_teasers`** — the §38
-  proposals, the upvotes on *Coming soon* entries (a specified teaser's key or an idea),
-  and the worker's mirror of the specified teasers' keys and titles. None of them is a
-  challenge or a solution, and none carries a namespace (§38.13).
+- **`feature_ideas`**, **`feature_idea_votes`** — the §38 proposals and *Coming soon*
+  entries (every entry is a `planned` row, the only place the list lives), and the
+  upvotes on them. Neither is a challenge or a solution, and neither carries a namespace
+  (§38.13).
 - **`follows`** — (user_id, parent) unique; created_at.
 - **`attachments`** — id, parent (challenge | solution; `parent_id` **nullable while
   staged**, §11), **`draft_key`** (nullable UUID; set only while staged, before the
@@ -1471,16 +1468,13 @@ active topics, §34.3 — absent while there are none), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11 — picked, **dropped
 anywhere on the page, or pasted**, §11 *Drop and paste*), **"Submit
-anonymously"** checkbox (§9), **co-authors** (up to four colleagues from the eligible
-people of the chosen namespace and visibility; never together with *Submit
-anonymously*, §27.2, §27.3).
+anonymously"** checkbox (§9).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
 is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
-available (§11 *Binding at submit* scan gate) — every author (the submitter and any
-co-authors, §27) auto-follows it (§12.3), notifications fire (§12.1 event 1, and event
-17 to each co-author), audit entry.
+available (§11 *Binding at submit* scan gate) — author auto-follows it (§12.3),
+notifications fire (§12.1 event 1), audit entry.
 
 **Duplicate warning.** The first **Submit** click runs a server-side similarity check
 before anything is created: `POST /api/challenges/similar { title, description }`
@@ -1509,15 +1503,13 @@ action otherwise; the API enforces it).
 
 Form: description, cost vs benefits (optional), attachments (**staged inline via a
 `draftKey`**, §11 — picked, dropped, or pasted, §11 *Drop and paste*), "Submit
-anonymously", co-authors (up to four colleagues who can see the challenge; never
-together with "Submit anonymously", §27.2, §27.3).
+anonymously".
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
 **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
-available (§11 *Binding at submit* scan gate) — every author (the proposer and any
-co-authors, §27) auto-follows it, notifications fire (§12.1 event 2, and event 17 to
-each co-author), audit entry. The form locks
+available (§11 *Binding at submit* scan gate) — author auto-follows it, notifications
+fire (§12.1 event 2), audit entry. The form locks
 while the request is in flight and closes only once the challenge has re-rendered
 (§6.4).
 
@@ -1798,9 +1790,6 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
   and even for the anonymous author's own comments). The UI warns an author before
   they comment on their own anonymous item ("commenting will not reveal you as the
   author, but your comment shows your name").
-- **No co-authors on an anonymous item** (§27.3): an anonymous challenge or solution
-  always has exactly one author. The author self-reveals before anyone can join it, so
-  masking only ever hides one person.
 - **Leaderboard exclusion:** contributions made anonymously do not count toward any
   leaderboard (challenges submitted, solutions proposed/implemented, likes received
   on anonymous items). After self-reveal, they count.
@@ -1831,10 +1820,6 @@ reveal actions never apply to it.
 ## §10 Editing, withdrawal, deletion
 
 ### §10.1 Challenges & solutions
-
-Throughout §10.1, *the author* means **each member** of the item's co-author team
-(§27.5), every one with the same rights. Every edit also carries the `baseEditedAt`
-check, which refuses a save made from a stale copy (§27.5).
 
 - **Author edit windows:** a challenge is editable by its **author** while
   `awaiting_triage`; a solution while `proposed`. The **`needs_improvement`** status
@@ -2182,8 +2167,7 @@ trashed item is gone for everyone else from the moment it is trashed.
   immutable object — never direct-to-store (invariant 4). Files **at or below** the
   chunk size upload in one request as before.
 - Authors may **remove** their own attachment while the parent is within an
-  author-edit window (§10.1) — on a co-authored item **any** member may remove **any**
-  of its attachments (§27.5); removal is a soft-remove (row retained, object
+  author-edit window (§10.1); removal is a soft-remove (row retained, object
   purged) and audited.
 - Objects are stored immutably in MinIO; DB rows carry metadata + `scan_status`.
 - **Scan pipeline:** uploads enter `pending` (visible only to the uploader as
@@ -2235,7 +2219,6 @@ trashed item is gone for everyone else from the moment it is trashed.
 - **Single-shot upload (files ≤ chunk size)** — `POST /api/attachments` (multipart: `parentType`, `file`, and **either**
   `parentId` for a **bound** upload **or** `draftKey` for a **staged** upload — see
   *Staged upload* below). A **bound** upload is allowed **only** to the parent's author
-  (any member of its co-author team, §27.5)
   and **only while the parent is in an author-edit window** (§10.1: challenge
   `awaiting_triage`/`needs_improvement`, solution `proposed`/`needs_improvement`). The
   parent's visibility is checked **first** (§2.4): a caller who cannot see the parent
@@ -2353,8 +2336,7 @@ trashed item is gone for everyone else from the moment it is trashed.
   than the cap allows → `code: "attachments_over_limit"` (rather than binding some and
   silently dropping the rest).
 - **Author removal** — `DELETE /api/attachments/:id`: allowed **only** to the
-  uploader (who is the parent's author) — or, on a co-authored item, to any current
-  member of its team (§27.5) — and **only while the parent is in an
+  uploader (who is the parent's author) and **only while the parent is in an
   author-edit window** (§10.1); **unbound staged rows are removable by their uploader at
   any time** (no parent, no window). Soft-remove: `removed_at` is stamped, the MinIO
   object is purged, the row is retained as a tombstone, and `attachment.removed` is
@@ -2559,22 +2541,16 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 7 | Challenge assigned / unassigned | The assignee; on a reassignment also the previous assignee (unassigned, §7.3) |
 | 8 | Solution implemented (auto-close) | Challenge author, authors of `not_selected` siblings, followers of the challenge and its solutions |
 | 9 | Resubmitted (`needs_improvement` → `in_review` by the author, §10.1) | Namespace admins + committee, the assignee, followers |
-| 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, the item's other co-authors (§27.8), and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/co-authors/followers already had it) |
+| 10 | Withdrawn (by the author, §10.1) | Namespace + platform admins, the assignee, and existing followers — delivered directly (a withdrawn item is hidden per §4.3, but admins retain access and the assignee/followers already had it) |
 | 11 | Attachment failed its scan, or couldn't be scanned (§11) | The uploader — bound files only; a staged file's failure shows in the form (§11) |
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
 | 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
 | 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
 | 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
-| 17 | Co-author added / removed (§27.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable |
 | 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
 | 19 | Feature idea reviewed — approved, declined or merged (§38.8) | The proposer only. Immediate, never digested, not mutable |
-| 20 | Feature now available — a planned idea deleted as shipped, or a specified feature that shipped (§38.8, §38.9) | The idea's proposer and its voters, to whom the entry still applies — never the deleting admin. Follower-type for the digest |
-
-**Authors are teams (§27).** Wherever this matrix names the *item author*, the
-*challenge author* or the *authors of `not_selected` siblings*, every member of that
-item's co-author team is a recipient. An e-mail or inbox line that names an item's
-author names its first member plus *"and N others"* (§27.7).
+| 20 | Feature now available — a *Coming soon* entry deleted as shipped (§38.8) | The entry's proposer, when it has one, and its voters, to whom the entry still applied — never the deleting admin. Follower-type for the digest |
 
 Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
 in-app only, by design (§23.1).
@@ -2640,7 +2616,7 @@ a day or a week.
   available, §38.8). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 17, and 19 to a proposer). Event 13 has no e-mail at all.
+  12, and 19 to a proposer). Event 13 has no e-mail at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
   and the dispatcher skips it until then. The inbox row is written and shown exactly as
@@ -2691,7 +2667,7 @@ true; existing users backfilled on):
 - *Status changes on items I follow* — gates **event 3** for followers **and**
   authors. It does **not** touch the actionable author/assignee events — 4 (rejected),
   5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed), 12
-  (assignments transferred), 17 (co-author added or removed) — which stay non-mutable.
+  (assignments transferred) — which stay non-mutable.
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
   and followers; the admin/committee recipients of event 2 are unaffected.
 
@@ -2814,8 +2790,7 @@ concurrently after one §4.2 resolution.
 
 ### §12.3 Follows
 
-Any user may follow/unfollow any challenge or solution they can see. Authors (every
-member of a co-author team, including one who joins later, §27.8) and
+Any user may follow/unfollow any challenge or solution they can see. Authors and
 assignees are auto-followed to their items (can unfollow). Followers receive events
 3, 6, 8 (and 2 for challenge followers).
 
@@ -3101,14 +3076,11 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 
 **List (gallery):**
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
-  **Mine** (own items incl. `awaiting_triage` — every item the viewer is a co-author
-  of, §27), **Completed** (`solved` +
+  **Mine** (own items incl. `awaiting_triage`), **Completed** (`solved` +
   `rejected`). Filters: status, impact area, **topic** (§34.6 — with its filtered
-  header and Follow button), namespace, author name (matching any
-  member of a co-author team, §27); sort: newest
+  header and Follow button), namespace, author name; sort: newest
   (default), most liked, most solutions, and — while hype is on — most hyped (§26.5).
-- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9; a co-author
-  team in its compact form, §27.7), created
+- Cards show number (`CH-<n>`), title, author (masked if anonymous, §9), created
   date, impact area, **topic chips** (each a link that filters by the topic, §34.6),
   status, like count, the hype number while hype is on (§26.5), and
   a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
@@ -3168,8 +3140,7 @@ whole visit, and the next visit flags only genuinely newer items.
 - Full fields: number, title, description, impact area, **topics** (chips linking to
   the filtered gallery, plus **Edit topics** for the challenge's namespace admins and
   platform admins, §34.3), client name (if
-  applicable), namespace, visibility, author (masked/anonymous per §9; every member of
-  a co-author team, with the **Team** panel for members, §27.7), status,
+  applicable), namespace, visibility, author (masked/anonymous per §9), status,
   assignee (if any), created/updated/edited dates.
 - Like button (toggle) with live count — disabled while the challenge is closed
   (§8.3).
@@ -3350,18 +3321,13 @@ not `proposed`/`withdrawn` and its parent passes the challenge test. Likes count
 on items that pass. The test is **viewer-independent**: every viewer sees the same
 board, so it is not the per-viewer §4.3 predicate.
 
-**Co-authored items** count once for **every current member** of the team, on every
-metric. A member's contribution time is the later of the event's time and the moment
-they joined, so a late joiner is never backdated into a window (§27.9).
-
 ### §13.4 Search
 
 Postgres `tsvector` full-text search over challenge
 title/description/client name and solution description/cost-vs-benefits, plus exact
 lookup by number (`CH-123`, `SOL-456`). Strictly visibility-filtered including
 autocomplete and result counts (invariant 2). §13.1's gallery filters
-(status/impact area/topic/namespace/author — the author filter matching any member of a
-co-author team, §27) narrow the list alongside it: the `/search`
+(status/impact area/topic/namespace/author) narrow the list alongside it: the `/search`
 results page shows the same filter controls as the gallery, and `GET /api/search`
 accepts them as query parameters beside `q`. Autocomplete stays query-only. Visibility
 is applied **inside** the ranked query, before any result limit, so the viewer's top
@@ -3439,7 +3405,7 @@ I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
 flip and inline-error revert), then the §34.6 **Topics** section (a pill switch of the
 same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
-feedback* switch and *Give feedback now*) and, while feature ideas are on, the §38.7
+feedback* switch and *Give feedback now*) and the §38.7
 **Feature ideas** section (the *Show my name on feature ideas* switch and *Your ideas*,
 with Withdraw on a pending one). While gamification is on (§23), the own
 profile also shows the **Achievements** section (level, points, progress, *Currently
@@ -3460,9 +3426,6 @@ and, for a solution, its parent challenge:
   visible again.
 
 The owner's own profile is unaffected: it lists all of their own contributions, as above.
-
-A person's contributions — on their own profile and, by the same org-visible test, on
-other people's view of it — include every item they are a co-author of (§27.12).
 
 A **deactivated** user's profile still renders — the greyed bubble (§13.6), a muted
 **"Deactivated"** notice, their directory fields and their contributions by the rules
@@ -3811,48 +3774,37 @@ missed.
 
 The page opens with a **"Coming soon"** section, above the release list, that teases the
 features that are planned but have **not shipped yet**, so users see where InnoBox is
-heading. It holds two kinds of entry: the features this specification already defines,
-and the **community ideas** a platform admin has approved (§38). While feature ideas are
-on (§38.11), people can also upvote any entry and propose new ones from here.
+heading. It is the product's roadmap, ordered by what people want most: everyone can
+upvote any entry and propose new ones from here, and platform admins decide what goes on
+it (§38).
 
-- **Source of truth.** For specified features: a hand-maintained, client-safe list in
-  **`@innobox/shared/upcoming`** (`packages/shared/src/upcoming.ts`; it moved out of
-  `app/whats-new/` so the worker can read it, §38.9): `UPCOMING: { key, ids, title,
-  teaser, audience }[]`, in hand order. `key` is a permanent kebab-case slug, unique and
-  never reused, that votes are stored against (§38.2). `ids` lists the open
-  **new-feature** markers in this document that the entry covers. One teaser may cover a
-  feature's several markers (e.g. `["GAP-62", "GAP-63", "GAP-64"]` for the §13.10
-  survey). Both are internal only and **never rendered**. `title` is a short user-facing
-  name (*"Have your say"*), `teaser` one or two plain sentences on what it will do for
-  the user. `audience` is `everyone`, `admins` (platform or namespace admins) or
-  `platform_admin`; an entry is shown only to viewers whose resolved roles match, so
-  admin-only tooling is teased only to the people who will use it. For community ideas:
-  the `planned` rows of `feature_ideas`, with the title, teaser and audience the admin
-  wrote (§38.5). The page reads both through **`GET /api/coming-soon`** (§38.14), which
-  applies the audience rule server-side and orders the entries by votes (§38.2). While
-  feature ideas are off, the same route returns the specified teasers alone, in hand
-  order.
-- **Kept in sync with the spec, by test.** A unit test reads `INNOBOX_SPEC.md` and
-  `ENTRA_AUTH_SPEC.md` and fails when an `UPCOMING` id has no open
-  `⚠ GAP-nn · new feature` marker, or when an open new-feature marker belongs to no
-  `UPCOMING` entry or to more than one. An entry whose ids have all closed must go. Since a feature's marker is deleted in the same commit that ships it (see the
-  preamble), shipping a feature **forces** its teaser out — and its changelog entry
-  announces it instead — while specifying a new feature **forces** a teaser in. Code-fix
-  markers are never teased. The test covers `UPCOMING` only: community ideas carry no
-  marker. It lives beside the module, in `packages/shared/src/upcoming.test.ts`.
+- **Source of truth: the database, only.** Every entry is a `planned` row of
+  `feature_ideas` (§38.13), with the title, teaser and audience a platform admin wrote
+  or last edited (§38.5). Nothing about the list lives in code or in this document: no
+  hand-maintained list, no marker ids, no test tying entries to the spec. The ten
+  features teased before the move were seeded as rows by migration 0055 (§38.9). `title`
+  is a short user-facing name (*"Have your say"*), `teaser` one or two plain sentences on
+  what it will do for the user. `audience` is `everyone`, `admins` (platform or namespace
+  admins) or `platform_admin`; an entry is shown only to viewers whose resolved roles
+  match, so admin-only tooling is teased only to the people who will use it. The page
+  reads the list through **`GET /api/coming-soon`** (§38.14), which applies the audience
+  rule server-side and orders the entries by votes (§38.2).
+- **Not tied to the spec.** Specifying a feature adds no entry, and shipping one removes
+  none by itself: a platform admin deletes the entry, normally with **Notify that it
+  shipped** (§38.5), when the release that delivers it is out, and that release's
+  changelog entry announces it.
 - **Look — deliberately greyed out.** A section heading **"Coming soon"** with the
   sub-line *"Planned, not available yet. Plans can change."*; each entry is a
   row like a release row but muted: text in `--muted`, a **dashed** `--line` border, no
   accent, a neutral **"Coming soon"** chip in place of the version chip, and **no date,
   no version and no ETA** — nothing that reads as a promise. Rows are not links; the
-  section is a plain list (`aria-label="Coming soon"`). While feature ideas are on, each
-  row also carries the §38.3 **upvote button** and, once it has votes, the **voter list**,
-  and a community idea the §38.6 **"Proposed by"** line. Those are a row's only focusable
-  controls, and the pressed upvote is the section's only accent. While feature ideas are
-  off, rows are not focusable at all, and the section is hidden entirely when no entry
-  applies to the viewer. While they are on, it always shows, so **Propose a feature** can
-  be reached (§38.4), and an empty list reads *"Nothing planned yet. Propose the first
-  feature."*
+  section is a plain list (`aria-label="Coming soon"`). Each row also carries the §38.3
+  **upvote button** and, once it has votes, the **voter list**, and an entry someone
+  proposed carries the §38.6 **"Proposed by"** line. Those are a row's only focusable
+  controls, and the pressed upvote is the section's only accent. The section shows
+  whenever an entry applies to the viewer or the viewer may propose (§38.11); an empty
+  list then reads *"Nothing planned yet. Propose the first feature."* With no entry and
+  no way to propose, it is hidden entirely.
 - **Collapsed by default.** The section opens **collapsed** on every visit to the page:
   only its heading block shows — a compass glyph, **"Coming soon"** with the number of
   entries that apply to this viewer (*"Coming soon · 9"*; no count at zero), the
@@ -3869,9 +3821,9 @@ on (§38.11), people can also upvote any entry and propose new ones from here.
   so no entry outside the viewer's audience can flash up.
 - **Copy rules.** Titles and teasers follow the §21.9 rule (no `§`, no marker ids), name
   no person, item or namespace, and describe the feature in user terms — they are product
-  copy, written when the feature is specified or, for a community idea, by the admin who
-  approves it (§38.5). The only names in the section are the *"Proposed by"* line and the
-  voter lists, both governed by the person's own switch (§38.6).
+  copy, written by the platform admin who approves or edits the entry (§38.5). The only
+  names in the section are the *"Proposed by"* line and the voter lists, both governed
+  by the person's own switch (§38.6).
 - **Not in the notice.** The §13.9 update notice lists only shipped releases; teasers
   appear on the page alone.
 
@@ -3983,10 +3935,8 @@ on (§38.11), people can also upvote any entry and propose new ones from here.
   the link's `since` (newest unmissed version, `0.0.0` when all were missed); the page's
   boundary resolution order. Plus the changelog integrity test (`CHANGELOG[0].version ===
   APP_VERSION`; every version strict `x.y.z`, unique and strictly descending; every date a
-  valid `YYYY-MM-DD`), which the notice depends on. (The *Coming
-  soon* spec-sync test, both directions, and the `UPCOMING` audience filter per role
-  live in `packages/shared/src/upcoming.test.ts`; voting and proposing are tested under
-  §38.14.)
+  valid `YYYY-MM-DD`), which the notice depends on. (*Coming soon* — the audience
+  filter per role, the order, voting and proposing — is tested under §38.14.)
 - **Integration** (`*.dbtest.ts`): the stamp endpoint — null → set, lower → set, higher →
   unchanged with `previous == current`, invalid or future version → 400, unauthenticated
   → 401, `whats_new_since_date` cleared on stamp; Continue on Quick start sets the marker;
@@ -4621,11 +4571,9 @@ the existing brand link tokens; the separator is a `›` glyph.
 ### §14.1 Namespace triage queue (namespace admins; platform admins everywhere)
 
 A filterable queue of the namespace's challenges: columns number, title, author
-(masked when anonymous until revealed §9; a co-author team in its compact form,
-§27.7), status, impact area, **topics** (§34.6), assignee, hype (the
-§26 number, while hype is on), created.
-Filters: author name (matches non-anonymous items only, and any member of a co-author
-team, §27), **assignee — Any,
+(masked when anonymous until revealed §9), status, impact area, **topics** (§34.6),
+assignee, hype (the §26 number, while hype is on), created.
+Filters: author name (matches non-anonymous items only), **assignee — Any,
 "Unassigned", "Assigned to me", or a specific person (searchable)**, status, number,
 **topic — Any, "No topic", or a topic** (retired ones included and marked, §34.6).
 
@@ -4667,8 +4615,7 @@ Permanent
 delete (§10.3) is deliberately **not** a bulk action — it is one item at a time, from
 the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
-the export, and a co-author team fills the author cell with every member in order,
-separated by `; ` (§27.7); a **Topics** column carries the topic names joined by `; `
+the export; a **Topics** column carries the topic names joined by `; `
 (§34.6); every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
@@ -4686,8 +4633,7 @@ machine round-tripping, so that trade-off is accepted.
 described above. A second **Solutions** tab lists the namespace's **`proposed`**
 solutions — the state awaiting committee/assignee attention (§8.2) and counted by the
 §14.4 badge: columns number (`SOL-<n>`), parent challenge (`CH-<n>` + title), author
-(masked when anonymous until revealed §9; a team in its compact form, §27.7), impact
-area, namespace, proposed date;
+(masked when anonymous until revealed §9), impact area, namespace, proposed date;
 clicking anywhere on the row (the whole-row behavior above) opens the solution detail,
 where status changes live (§8.2 — no admin-only triage step for solutions, so the tab
 is navigational, not a transition surface). Solution rows have no checkbox or assignee
@@ -4789,7 +4735,8 @@ delegated per namespace.**
   monitoring page itself (`/admin/monitoring`, §14.12), not here; the settings page
   carries only a link. Audited as `settings.telemetry_changed`.
 - **Feature ideas** — the `feature_ideas_enabled` switch (**on** by default, §38.11):
-  upvotes and proposals on What's new's *Coming soon*. Edited in the action slot of the
+  whether people who are not platform admins can propose features on What's new's
+  *Coming soon*; the list and its upvotes are always on. Edited in the action slot of the
   console's **Feature ideas** card, not here; the settings page carries only a link.
   Audited as `settings.feature_ideas_enabled_changed`.
 
@@ -5733,9 +5680,7 @@ changes; visibility changes (`challenge.visibility_changed`, now also to and fro
 via: "editor" | "accept" | "assignment" | "binding" }`, where each side lists user ids
 and only a **count** of pending e-mails — an address never enters the append-only log;
 a switch away from `people` records the removed list on the `visibility_changed` row
-the same way); anonymity reveals (admin and self); co-author team changes
-(`challenge.author_added` / `challenge.author_removed` and the `solution.*` twins,
-§27.13); comment posted,
+the same way); anonymity reveals (admin and self); comment posted,
 edited, deleted (incl. moderator deletes); like/unlike; attachment uploaded, bound
 (staged → parent), draft-expired and **chunk-upload-aborted** (§11, with its reason —
 `stale`, `client_abort`, or `size_mismatch`), scan verdict (clean, infected, or
@@ -5785,7 +5730,7 @@ anomalies. Since v0.10 also:
   `like.*`); `feature_idea.approved`, `feature_idea.declined`, `feature_idea.merged`,
   `feature_idea.edited` and `feature_idea.deleted` under Admin; and
   `settings.feature_ideas_enabled_changed` (§38.14). **No row carries a proposal's
-  text.** The shipped-teaser sweep, the awards and events 19–20 are not audited.
+  text.** Migration 0055, the awards and events 19–20 are not audited.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6013,13 +5958,6 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   hard delete (§10.3): reason required in the body, cascading, irreversible, **404 (not
   403)** to anyone else; `challenges/:number/trash`, `solutions/:number/trash` and
   `…/restore` (`POST`) are the §10.4 trash, platform admin only on the same 404 terms
-- co-authors (§27.13): both creates accept `coAuthorIds` (≤ 4);
-  `challenges/:number/authors` and `solutions/:number/authors` — `POST { userId }` adds
-  a member, `DELETE …/:userId` removes one (the caller's own id leaves), members only;
-  `users?q=` accepts `coAuthorFor`, `canSee`, or `namespace` + `visibility` for the
-  eligible-people picker; challenge and solution payloads carry `authors`, the detail
-  payload `canManageTeam` and `canLeave`; the challenge and solution `PUT` edits
-  require `baseEditedAt` (409 on a stale copy, §27.5)
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -6103,10 +6041,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `coming-soon` (`GET` the §13.9 entries with their votes, voters and proposer, filtered
   by audience; `coming-soon/votes` `POST` the toggle), `feature-ideas` (`POST` a
   proposal, the `feature_idea` bucket), `me/feature-ideas` (`GET` the caller's own list;
-  `me/feature-ideas/:id` `DELETE` withdraws a pending one). While feature ideas are off,
-  the vote, proposal and own-list routes answer **404** and the `coming-soon` read returns
-  the specified teasers alone. `me` gains `featureIdeas` and `profile` the
-  `featureIdeasNamed` switch (§38.14)
+  `me/feature-ideas/:id` `DELETE` withdraws a pending one). While proposals are closed,
+  the proposal route answers **404** to everyone but platform admins; nothing else
+  changes (§38.11). `profile` gains the `featureIdeasNamed` switch (§38.14)
 - `public-submissions/link` (`GET` → `{ url | null }`, any authenticated user — the §6.1
   copy link to the §24 public form, `url` set only while that feature is live, §24.9)
 - `me/agents` (`GET` the server URL, the on/off state and the caller's connections;
@@ -6190,9 +6127,7 @@ error messages carry no `§` references (§21.9).
 ## §19 Non-goals (v1)
 
 No data migration from SharePoint; no Power Apps/old-link compatibility; no links to
-the legacy SharePoint site; no challenge deadlines (a §35 campaign has an end date of
-its own, but no challenge ever does — the former "no campaigns" non-goal is lifted by
-§35); for §26 hype: no
+the legacy SharePoint site; no campaigns/challenge deadlines; for §26 hype: no
 take-backs or refunds, no admin-tunable budget, weight or window, no paid or bonus
 hypes, no hype on comments, no hype through MCP, no "hypes received" leaderboard metric
 or author badge, no per-namespace board, no hypers list in any e-mail, and no weekly
@@ -6208,8 +6143,7 @@ level curve, no custom or manually granted or revoked badges, no point deduction
 per-namespace boards, and no e-mail for achievements; for comment replies (§10.2): no
 nesting deeper than one level, no @mentions that notify anyone other than the person
 replied to, and no rich text; for e-mail digests (§12.1): no per-user send time or time
-zone, and no digest of the admin attention or actionable events (the §31 weekly
-stuck-items e-mail is a summary of its own, not a digest of events); for the trash (§10.4):
+zone, and no digest of the admin attention or actionable events; for the trash (§10.4):
 no namespace-admin trash, no configurable retention window, and no trash for comments or
 attachments; for public submissions (§24): no accounts, sign-in or status page for
 outside submitters, no attachments on the public form, no public listing or search of
@@ -6219,12 +6153,7 @@ status changes other than the author's resubmit, assignment, triage, reveal, wit
 delete or administration through an agent, no attachment bytes or uploads, no
 client-credentials or other machine path, no confidential clients, no capability scopes,
 no server-sent stream, no organization-wide "revoke all", no per-namespace switch, and no
-notification when a new agent connects; for co-authors (§27): no invitations,
-acceptance or join requests, no lead or owner role, no co-authors on an anonymous item
-or on a challenge accepted from the public form, no team changes by admins, committee
-members or assignees, no split or weighted points, no per-member anonymity, no
-co-authored comments, no team changes through MCP, and no team-change notification to
-the other members; for topics (§34): no namespace-scoped topics, no
+notification when a new agent connects; for topics (§34): no namespace-scoped topics, no
 free-text or user-created tags, no topic hierarchy, no merge, no topics on solutions, no
 notice for anything in a topic but a challenge opening, no backfill on follow, no
 auto-follow of the challenges a notice is about, no topic follows or admin re-tagging
@@ -6926,8 +6855,7 @@ transitions, assigns, rejects or notifies (invariant 6).
   reason). Suggestions are advisory text: applying one is an ordinary **Edit topics**
   by an admin (§34.3).
 - **Who sees it.** Namespace admins and platform admins always; committee members and
-  the assignee once the challenge is past `awaiting_triage`. **Never the author** (no
-  member of a co-author team, §27.12) in v1 —
+  the assignee once the challenge is past `awaiting_triage`. **Never the author** in v1 —
   it is triage material, not feedback. A collapsible **"{name} triage notes"** panel on
   the challenge detail page and an indicator on the §14.1 queue row; *Pending* until it
   lands; **Re-run** for namespace and platform admins.
@@ -6979,8 +6907,7 @@ transitions, assigns, rejects or notifies (invariant 6).
   viewer who can see the item.
 - **Egress:** the item's title, and the comments' **text only**, in §10.2 thread order
   (each reply marked with the participant it answers), each labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
-  appearance — **never** marking which participant is the item's author (or any member
-  of its co-author team, §27.12), and never a
+  appearance — **never** marking which participant is the item's author, and never a
   name. Soft-deleted comments are excluded.
 - **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
   text, headed *"Summary by {name}"* with the time it was made and *"May be inaccurate."*
@@ -7035,7 +6962,7 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
 | `challenge_submitted` | **5** | challenge author | the challenge is created | `challenge_submitted:<challengeId>` |
 | `challenge_validated` | **20** | challenge author | its first entry into `valid` (`first_valid_at` is set) | `challenge_validated:<challengeId>` |
 | `challenge_solved` | **15** | challenge author | its first entry into `solved` | `challenge_solved:<challengeId>` |
-| `assignment_solved` | **15** | the challenge's assignee at that moment | its first entry into `solved`, when it has an assignee who is not also an author (a member of its co-author team, §27.9) | `assignment_solved:<challengeId>` |
+| `assignment_solved` | **15** | the challenge's assignee at that moment | its first entry into `solved`, when it has an assignee who is not also the author | `assignment_solved:<challengeId>` |
 | `solution_proposed` | **5** | solution author | the solution is created | `solution_proposed:<solutionId>` |
 | `solution_validated` | **20** | solution author | its first entry into `valid` | `solution_validated:<solutionId>` |
 | `solution_implemented` | **50** | solution author | its first entry into `implemented` | `solution_implemented:<solutionId>` |
@@ -7072,10 +6999,6 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   or the like's `created_at`). The daily caps apply per original UTC day. Badges and
   levels reached by the replay notify normally (§23.7).
 - **Restricted namespaces** count in full (decision 5).
-- **Co-authors (§27.9).** On a co-authored item, every row above that goes to the
-  *author* goes to **each member** of the team in full, under the same award key, and
-  a like by any member earns no member anything. A member who joins later gets the
-  milestones the item already reached, dated to the join; leaving deducts nothing.
 - **Agent access (§25.12)** adds one reason, `agent_connected` — **0 points**, once per
   user, written when they first approve an AI agent connection — and marks every award
   row whose item was created through an agent (`via_mcp`). Points themselves are
@@ -7136,8 +7059,7 @@ and count capped (0-point) rows too.
   (`ON CONFLICT DO NOTHING`). A jump across several tiers at once (a self-reveal, the
   backfill) inserts each tier reached.
 - **Full Circle** is checked when a `solution_implemented` award is written: the
-  solution's author also wrote the parent challenge and has an award row for it — for
-  co-authored items, each person who is a member of both teams (§27.9). While
+  solution's author also wrote the parent challenge and has an award row for it. While
   either item is anonymous no award exists, so the badge waits for both reveals; the
   replay of the second reveal earns it.
 - The four **agent badges** count ledger rows with `via_mcp = true` (and, for Plugged
@@ -7606,8 +7528,7 @@ How an external challenge appears:
   panel is the **only** place the name and e-mail appear. They are never in search,
   exports, webhooks, e-mails to employees, AI prompts (§22.7) or audit payloads.
 - **No author.** The author-only actions (edit, withdraw, resubmit, self-reveal, §10.1)
-  belong to nobody, and the author recipient route of every §12.1 event is empty. Nor
-  can it have co-authors: a team only grows from its members, and it has none (§27.4). An
+  belong to nobody, and the author recipient route of every §12.1 event is empty. An
   admin may still edit the challenge as on any other. **`needs_improvement` is
   refused** for an external challenge, for every role (**422**, *"An outside submission
   has no author who can improve it."*), because nobody could act on it. The enforced
@@ -7958,11 +7879,11 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | Tool | Behavior |
 |---|---|
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
-| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§27.10), assignee, dates (including `editedAt`), like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
-| `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§27.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked), assignee, dates, like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `get_solution` | One solution in full: description, cost vs benefits, status, author (masked), dates, attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
-| `list_my_items` | The caller's own challenges and solutions (every item they are a co-author of, §27.10) with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
+| `list_my_items` | The caller's own challenges and solutions with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
 | `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the active topics (id, name, description, §34.2), the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
 
@@ -7972,8 +7893,8 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 |---|---|
 | `submit_challenge` | §6.1: title, description, impact area, topics (optional, at most 3 active topic ids, §34.3), client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
 | `propose_solution` | §6.2: challenge number, description, cost vs benefits, `anonymous`. Only while the challenge is `valid`. Created `proposed`; event 2 fires. |
-| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§27.5). |
-| `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. Requires `baseEditedAt` from `get_solution`; a stale copy is refused (§27.5). |
+| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. |
+| `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
 | `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
 | `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
@@ -8255,8 +8176,7 @@ A person may hype an item when **all** of the following hold; the detail payload
    freezes hypes on its solutions exactly as it freezes likes (§8.3). `awaiting_triage`
    is not hypeable: it is visible only to the author (who cannot self-hype) and the
    namespace's admins, and a signal before triage would pre-empt it.
-4. **The viewer is not the item's author** (decision 9) — nor any member of its
-   co-author team (§27.9). This holds for an anonymous
+4. **The viewer is not the item's author** (decision 9). This holds for an anonymous
    item too: `canHype` is a per-viewer flag, so a `false` on your own anonymous item is
    seen by nobody else. The API refuses with the same generic message as any other
    ineligible item, so the refusal itself reveals nothing.
@@ -8349,8 +8269,7 @@ absent, and `/api/hypes` answers 404.
 
 A new row of the §12.1 matrix, **"Hyped"**: an item of yours received a hype.
 
-- **Recipient:** the item's author only (every member of a co-author team, §27.8) —
-  never the hyper (they are the actor), never
+- **Recipient:** the item's author only — never the hyper (they are the actor), never
   followers, admins or the assignee. The author of an **anonymous** item is a safe
   recipient: nobody else receives it, and the item's masking is unaffected.
 - **In-app:** coalesced per item while unread, exactly as event 6 (one row per
@@ -8511,550 +8430,6 @@ hype itself does not require gamification.
   appears in the hypers list), the item appears on Home's "Hyped this week", the author
   sees the inbox row, and after the solution is implemented the hyper's profile shows
   Talent Scout (Bronze).
-
----
-
-## §27 Co-authors
-
-> **⚠ GAP-81 · new feature:** co-authors do not exist; every challenge and solution has
-> exactly one author. Build: a migration (`challenge_authors` and `solution_authors`,
-> backfilled with one row per existing authored item; grants — the app role gets
-> SELECT/INSERT/DELETE on both); one membership helper replacing the `author_id`
-> comparison on every path listed in §27.12; the co-author field on both submit forms
-> and the **Team** panel on the detail page; the team endpoints and the eligible-people
-> searches; the `baseEditedAt` edit check on the web and in the two MCP edit tools;
-> event 17; the per-member awards and the join replay in the ledger; the team display
-> on every surface in §27.7; the leaderboard's per-member counting; and the tests in
-> §27.13. Ships as one minor release.
-
-A challenge or a solution can be written by a **team of up to five people**. Every
-member is a full author: each can edit the item inside its edit windows, resubmit it,
-withdraw it, change the team and receive the author's notifications, and each earns the
-author's full credit. There is no lead and no invitation: a member adds a colleague
-directly, the colleague is told, and anyone may leave at any time.
-
-Teams never meet anonymity: an anonymous item always has exactly one author (§27.3).
-
-### §27.1 Decisions
-
-| # | Decision | Why |
-|---|---|---|
-| 1 | **Challenges and solutions** both take co-authors. | A problem is often spotted together and a solution is usually team work; one rule for both entities. |
-| 2 | **Direct add, no invitation.** A member picks a colleague; the colleague is on the team at once and is told (event 17). | No pending state and no request queue. Leaving at any time (decision 7) is the way out for someone added against their wishes. |
-| 3 | **The team changes only while the item is open to joining:** a solution until it moves past `valid`, a challenge in any non-terminal status. | Authorship is frozen before the big awards (`implemented`, `solved`), so nobody is added just for the credit. |
-| 4 | **At most five members** — the creator plus four. | Fits the stacked bubbles on a card and bounds how many people one award multiplies to. |
-| 5 | **No co-authors on an anonymous item.** The author self-reveals first. | A direct add has to tell the added person who added them, and a named teammate on an "Anonymous" item narrows who wrote it (invariant 3). |
-| 6 | **Full parity.** Every member edits, resubmits, withdraws and changes the team. | No lead role to define, lose, hand over or erase. |
-| 7 | **Anyone leaves at any time; others are added or removed only while joining is open; the last member cannot leave.** | Nobody is stuck on a team, and the credit on a solved or implemented item cannot be rearranged afterwards. |
-| 8 | **A save made from a stale copy is refused** (409). | With several editors, nothing is silently overwritten. |
-| 9 | **Every member earns every author award in full.** | The ledger never deducts (§23 decision 3), so a split could not survive a later joiner; the cap of five bounds the inflation. |
-| 10 | **The leaderboard counts a co-authored item once for every member.** | The same rule as the points. |
-| 11 | **A late joiner gets the milestones the item already reached, dated to the join; likes and hypes count for them from the join on.** | Fair to the joiner, without backdating anyone's 30-day window. |
-| 12 | **Event 17 tells the person added or removed, by e-mail and in-app; nobody else is told.** Leaving notifies nobody. | They are put on an item without being asked, so they must hear of it; the team list and the audit log record the rest. |
-| 13 | **Agents act as a member through the existing tools; team changes are web-only.** Still 15 tools. | MCP has no people lookup, and resolving e-mails would reveal who exists and who can see what (§25.6). |
-| 14 | **An erased member stays on the team as "Deleted User".** | The same as a solo author today (§3, *authorship never moves*). |
-| 15 | **Cards and rows show the first member, "+N" and up to three stacked bubbles; the detail page lists everyone.** | Five names fit neither a card nor a row. |
-| 16 | **Author filters and search match any member.** | A co-author looking for their own work finds it. |
-
-### §27.2 Membership
-
-- **The team is a member table**, `challenge_authors` / `solution_authors` (§5,
-  §27.13), with one row per member. The creator's row is written in the create
-  transaction, so every authored item has at least one member.
-- **`author_id` stays, as the creator.** It never changes (§3, *authorship never
-  moves*) and keeps its check constraint against `public_submission_id` (§5). It is
-  provenance, not permission: every rule that asks *"is this person an author?"* reads
-  the member table (§27.12, which also lists the few creator-only uses).
-- **Order.** Members are listed by `added_at`, then user id, so the creator comes first
-  while they remain a member. If the creator leaves or is removed, the next-earliest
-  member is listed first; nothing else changes.
-- **Size.** One to five members. Every row counts, a "Deleted User" one included
-  (§27.11). A sixth add is refused (**409**, *"A team can have at most five people."*).
-- **Who can be added** — all of:
-  - an **active**, not-erased user who is **not already a member**;
-  - who can **see the item** under §4.3, judged without the state rule that hides an
-    `awaiting_triage` challenge or a `proposed` solution (being a member is what lets
-    them see those, §27.6). For a **challenge**: anyone when it is `org`; a member of
-    its namespace or a platform admin when it is `namespace`; when it is `people`,
-    someone on its access list, an admin or committee member of its namespace, its
-    assignee or a platform admin. For a **solution**: anyone who can see its parent
-    challenge under the full §4.3 predicate — the §6.2 rule for proposing.
-- **Members never widen visibility.** Unlike assignment (§7.3), adding someone to a
-  `people` challenge, or to a solution under one, never adds them to the access list.
-  Widening stays with the namespace and platform admins (§4.3).
-- **The picker** offers eligible people only, through `GET /api/users?q=` with one of:
-  - `coAuthorFor=<CH-n | SOL-n>` — the **Team** panel of an existing item; the item's
-    current members are left out;
-  - `canSee=<CH-n>` — the solution form: the people who can see that challenge under
-    the full §4.3 predicate (unlike the §7.3 `challenge=` search, which relaxes for a
-    `people` challenge);
-  - `namespace=<slug>&visibility=org|namespace` — the challenge form, where the item
-    does not exist yet; it follows the form's namespace and visibility fields, and
-    changing either drops any picked co-author who no longer qualifies, with a note.
-
-  Every variant leaves out the caller and uses the §7.3 result rows (bubble, name,
-  dimmed e-mail).
-- **One refusal for every reason.** An id that is unknown, inactive, erased or not
-  eligible is refused with the same **422**, *"This person can't be added to this
-  team."*, so the API reveals no more than the picker already shows.
-
-### §27.3 Anonymity
-
-- **An anonymous item has exactly one member**, its author. On both submit forms,
-  *Submit anonymously* and the co-author field exclude each other: while the box is
-  ticked the field is disabled, and while anyone is picked the box is disabled, each
-  with the hint *"Anonymous items can't have co-authors."* Nothing is cleared
-  silently.
-- The API refuses a create that carries both (**400**, the same message) and an add on
-  an anonymous item (**409**, *"Anonymous items can't have co-authors. Reveal yourself
-  as the author first."*).
-- **Self-reveal opens the door.** After the author's one-way self-reveal (§9) the item
-  is an ordinary named item, and a team can form while joining is open (§27.4).
-- **Nothing else in §9 changes.** The admin reveal still names one person; masking,
-  the anonymous bubble and the anonymous exclusions from leaderboards and gamification
-  apply exactly as before, because an anonymous item never has a co-author to mask.
-
-### §27.4 When the team can change
-
-- **Joining is open** while the item is in one of these statuses:
-  - a **solution**: `proposed`, `in_review`, `needs_improvement` or `valid`;
-  - a **challenge**: any non-terminal status — `awaiting_triage`, `in_review`,
-    `needs_improvement`, `meeting_scheduled` or `valid`.
-
-  An admin override, or the §10.3 revert, that moves an item back into one of these
-  statuses opens it again.
-- **Adding** — any member, while joining is open: on the submit form (up to four
-  co-authors, §6.1, §6.2) or later from the detail page's **Team** panel.
-- **Removing someone else** — any member, while joining is open. Any member can be
-  removed, the creator included: there is no lead (decision 6).
-- **Leaving** — any member, **at any time and in any status**, terminal ones and
-  `withdrawn` included, unless they are the **only** member (**409**, *"You're the only
-  author, so you can't leave."*). Leaving keeps the follow and every point earned
-  (§27.9).
-- **Outside the window**, adding and removing others are refused (**409**, *"This team
-  can no longer change."*); leaving still works.
-- **Serialized.** Every team change locks the item's row first, so two concurrent adds
-  cannot exceed five and two concurrent leaves cannot empty the team.
-- **Not an edit.** A team change stamps neither `edited_at` nor `updated_at` nor
-  `status_changed_at`, and fires no event but event 17 (§27.8).
-- **Nobody else changes a team.** Admins, committee members and assignees have no team
-  controls; an admin's tools stay the status override, comment deletion and, for
-  personal data, the §3 erasure. A challenge accepted from the public form has no
-  members (§24.6), so nobody can add to it.
-
-### §27.5 What members can do
-
-**Full parity.** Every author right in §10.1 and §11 belongs to **each** member: edit
-inside the edit windows, resubmit, withdraw, upload attachments, remove **any** of the
-item's attachments (not only their own upload) inside an edit window, and use the
-§22.10 drafting aid. The detail payload's `canEdit` / `canResubmit` / `canWithdraw`
-are true for every member alike, and the §6.4 lock covers each member's action bar.
-Each action is audited with the member who took it as the actor, as today.
-
-**A withdrawal is the team's.** One member's **Withdraw** withdraws the item for
-everyone; the other members hear of it through event 10 (§27.8).
-
-**Concurrent edits.** `PUT /api/challenges/:number` and `PUT /api/solutions/:number`
-require **`baseEditedAt`** — the item's `editedAt` as the editor loaded it (`null` for
-an item never edited). When it no longer matches the stored `edited_at`, the save is
-refused (**409**, *"Someone else edited this since you opened it. Reload to see their
-changes."*) and nothing is written; the check and the write are one statement
-(`… WHERE edited_at IS NOT DISTINCT FROM $baseEditedAt`). The form keeps the person's
-text so they can copy it before reloading. The check applies to every item, solo ones
-too (two open tabs). Resubmit and withdraw need no token: the state machine already
-refuses a stale move.
-
-### §27.6 Visibility
-
-- **Every state rule that names the author names every member** (§4.3): an
-  `awaiting_triage` or `withdrawn` challenge is visible to all its members and, as for
-  the author today, that rule replaces the namespace rule, so a member keeps seeing it
-  after leaving the namespace. A `proposed` solution is visible to all its members.
-- **Leaving or being removed** takes away exactly what membership gave, which is that
-  state-rule access. Anything the person can see on their own stays visible. Their
-  follow stays and, like any follow, delivers nothing they cannot see (§12.1).
-- **Losing visibility otherwise** works as for a solo author today: a member taken off
-  a `people` access list, or out of the namespace, loses the item (§4.3 *Removal*).
-  Their membership stays and grants nothing beyond the state rule above.
-- **The team list is part of the item** and appears only where the item does
-  (invariant 2): no count of a person's teams, and no "co-authored with" list on any
-  surface that does not already show the items.
-
-### §27.7 Display
-
-- **Compact form** — gallery cards and list rows (§13.1), the solution cards on the
-  detail page, triage rows on both tabs (§14.1), search results (§13.4), the Home
-  *Featured* and *Hyped this week* sections (§13.2, §26.5) and the profile's activity
-  (§13.5): the **first member's** bubble and name, then **"+N"** when there are more,
-  with up to **three** overlapping small bubbles (the first three members). Each is an
-  ordinary real-user bubble with its §13.8 hover card; the group's `aria-label` reads
-  *"Ana Petrova and 2 co-authors"*. The mobile meta line uses the same form.
-- **Full form** — the challenge detail header and each solution's header: every member
-  in order, bubble and name. For a member of the item, the **Team** panel adds
-  **Add co-author** (the picker, while joining is open and the team has fewer than
-  five), a **✕** on each other member (while joining is open) and **Leave** (unless
-  they are the only member). Removing someone asks for confirmation; leaving asks too,
-  and says that the person keeps their points.
-- **Anonymous** items are unchanged: one *"Anonymous"* with the anonymous bubble.
-  **"Deleted User"** members render the neutral bubble and **deactivated** ones the
-  greyed bubble (§13.6), each in its place in the order.
-- **Payloads.** Every payload that carries the masked-author shape gains **`authors`**
-  — the ordered members, each `{ id, displayName, active, scrubbed }`, or the single
-  anonymous shape for an anonymous item — and keeps `author` as its first entry, so
-  existing consumers keep working.
-- **Text surfaces.** E-mails and inbox copy that name an item's author name the first
-  member plus *"and N others"*. The §14.1 CSV's author column lists every member in
-  order, separated by `; ` (masked per §9, neutralized per §14.1).
-
-### §27.8 Notifications — event 17
-
-- **"Author" in the §12.1 matrix means every member.** The *item author* of events 3,
-  4, 5, 6 and 16, the *challenge author* of events 2 and 8, and the *authors of
-  `not_selected` siblings* of event 8 are each the item's whole team. The usual rules
-  hold: recipients are deduplicated, and a member who acts (commenting, resubmitting)
-  does not notify themselves.
-- **Event 10** (withdrawn) adds **the other members** of the item's team to its
-  recipients, delivered directly like the rest of event 10.
-- **Auto-follow.** Every member auto-follows the item when they join (§12.3) and may
-  unfollow. Leaving or being removed does not unfollow.
-- **Event 17 — "Co-author added" / "Co-author removed".** A new row of the §12.1
-  matrix:
-  - **Recipient:** the person **another** member added or removed. Never the actor, so
-    leaving notifies nobody; never the other members, followers, admins or the
-    assignee.
-  - **When:** after commit, one per person. A create with co-authors writes one per
-    co-author, with the creator as the actor.
-  - **In-app and e-mail.** *"Ana Petrova added you as a co-author of SOL-34"* / *"Ana
-    Petrova removed you as a co-author of SOL-34"*, linked to the item. The e-mail's
-    subject is the same line; the body carries the number, the title, the actor's name
-    and the link.
-  - **Actionable, like events 4, 5 and 7:** always immediate, never held for a digest,
-    and not mutable by the three per-event toggles. The e-mail switch applies, and a
-    deactivated or erased recipient is dropped (§12.1).
-  - **Visibility.** An add passes the visibility check by construction (§27.2). A
-    removal is delivered directly, like event 10: the person could see the item until
-    a moment ago, so it leaks nothing.
-- **Channel webhooks** (§12.4) are unchanged: they carry no person, and team changes
-  post nothing.
-
-### §27.9 Points, badges and the leaderboard
-
-- **Every member earns every author award in full** (decision 9): `challenge_submitted`,
-  `challenge_validated`, `challenge_solved`, `solution_proposed`, `solution_validated`,
-  `solution_implemented`, `like_received` and `hype_received`. The ledger is unique per
-  `(user, award key)`, so the existing award keys serve unchanged, with one row per
-  member.
-- **"Someone other than the author" means someone outside the team.** A like by a
-  member earns no member a `like_received`, and hyping is refused to every member
-  (§26.3). A like or hype a person gave **before** joining stays where it is: it earned
-  the members of that time their award and earns the joiner nothing, and a hype is not
-  refunded (§26).
-- **Joining** writes, in the add's transaction, the milestones the item has already
-  reached — for a challenge `challenge_submitted`, plus `challenge_validated` once
-  `first_valid_at` is set; for a solution `solution_proposed`, plus
-  `solution_validated` when it has entered `valid` before (found from its status audit
-  rows, as the §23.2 self-reveal replay finds it) — each with `occurred_at` set to
-  **the join**. Likes and hypes given before the join earn the joiner nothing; later
-  ones earn them the usual award, under the daily caps. Nobody can join after the
-  window closes, so no `*_solved` or `*_implemented` award is ever replayed.
-  Re-joining writes nothing new, because the award keys already exist. `via_mcp`
-  follows the item (§25.12).
-- **Leaving or being removed deducts nothing** (§23 decision 3).
-- **`assignment_solved`** goes to the assignee when the assignee is **not a member** of
-  the challenge's team.
-- **Full Circle** is earned by each person who is a member of the implemented solution
-  **and** of its parent challenge and holds an award row for each, checked when their
-  `solution_implemented` row is written.
-- **Badges** count ledger rows (§23.4), so co-authored items count toward every
-  member's tiers — Problem Spotter, Solution Architect, Implementer and Challenge
-  Closer — and toward the one-off Icebreaker and First Idea.
-- **Leaderboard (§13.3).** Every metric counts a co-authored item **once for each
-  current member**. Membership is read live, so a person who left no longer counts the
-  item (their points stay). A member's contribution time is the **later** of the
-  event's time and their `added_at`: a late joiner's *challenges submitted* or
-  *solutions proposed* counts from the join, and their *likes received* counts only
-  likes given after it. *Solutions implemented* keeps its `status_changed_at`, which
-  always follows the join. The org-visible test is unchanged, and the Points metric
-  reads the ledger as before.
-- **Anonymous** items have no team, so the §23 anonymity rules are unchanged.
-
-### §27.10 Agents (MCP)
-
-- **Members act through the existing tools.** `edit_challenge`, `edit_solution` and
-  `resubmit` work on any item the caller is a member of; `list_my_items` lists those
-  items; the `mine` filter of `search_challenges` means "a member of"; and
-  `get_challenge` and `get_solution` return **`authors`** (display names in order, or
-  *"Anonymous"*, §25.4), `editedAt`, and `isMine: true` for a member.
-- **The edit tools take `baseEditedAt`** (required, read from `get_challenge` /
-  `get_solution`); a stale one returns the §27.5 message as a tool error. This is
-  folded into the existing tools, so the count stays at **15**.
-- **No team changes through an agent**, and `submit_challenge` / `propose_solution`
-  take no co-authors (decision 13).
-
-### §27.11 Erasure, deactivation, delete and trash
-
-- **Erasure (§3).** The membership stays on the de-identified row and renders as
-  *"Deleted User"* with the neutral bubble. It still takes one of the five places
-  until another member removes it while joining is open. The erased user's ledger rows
-  are deleted as §3 says; nothing passes to the rest of the team.
-- **Deactivation.** A deactivated member stays listed with the greyed bubble, receives
-  nothing (§12.1) and, unable to sign in, acts on nothing. The rest of the team
-  carries on.
-- **Delete (§10.3)** cascades the member rows with the item. The `challenge.deleted` /
-  `solution.deleted` audit row adds `authorIds`, the members at deletion.
-- **Trash (§10.4)** hides the item from its members as from everyone else. Every team
-  endpoint answers as for an invisible item, and a restore brings the team back
-  unchanged.
-
-### §27.12 Where "author" now means every member
-
-Every rule below that says *the author* reads the member table, so it holds for each
-member alike:
-
-- §4.3 — the `awaiting_triage` / `withdrawn` challenge rule and the `proposed`
-  solution rule (§27.6).
-- §6.1, §6.2 — the co-author field; every member auto-follows.
-- §6.4 — the lock on the author action bar.
-- §10.1 — edit, resubmit, withdraw and their `can*` flags, plus `baseEditedAt`
-  (§27.5).
-- §11 — bound upload and removal; any member removes any of the item's attachments.
-- §12.1, §12.3 — the author recipients and the auto-follow (§27.8).
-- §13.1 — the **Mine** tab (items the viewer is a member of), the author filter (any
-  member) and the display (§27.7).
-- §13.2 — the state rule inside the KPI tiles and spotlights.
-- §13.3 — the leaderboard (§27.9).
-- §13.4 — the author filter.
-- §13.5 — a profile's own and public contributions include co-authored items, under
-  the same org-visible test.
-- §14.1 — the author column, the author-name filter and the CSV.
-- §22.10 — the drafting aid serves any member who edits; §22.11 — triage notes are
-  never shown to any member; §22.13 — the summary never marks any member.
-- §23 — points and badges (§27.9).
-- §25 — the MCP tools (§27.10).
-- §26.3, §26.6 — no member may hype the item, and event 16 goes to every member.
-
-**Unchanged, creator only (`author_id`):** the actor of `challenge.created` /
-`solution.created`; the §13.10 feature-use count for submitting and proposing; and the
-§25.8 *via agent* tag, which describes how the item was created.
-
-### §27.13 Data model, API, audit, tests
-
-- **Data model (migration).** `challenge_authors` — `challenge_id` (FK, `ON DELETE
-  CASCADE`), `user_id` (FK), `added_at` (timestamptz, not null), `added_by` (nullable
-  user FK — null on the creator's own row and on backfilled rows), primary key
-  `(challenge_id, user_id)`, and an index on `user_id`. `solution_authors` is the same
-  over `solution_id`. The migration backfills one row per existing challenge with a
-  non-null `author_id` and one per solution, with `added_at` = the item's
-  `created_at`. Grants: the app role gets SELECT, INSERT and DELETE — a member row is
-  working state (leaving deletes it), and the audit log keeps the history. No column
-  changes on `challenges` or `solutions`. The one-member rule for anonymous items and
-  the cap of five are enforced by the API inside the locked transaction (§27.4).
-- **API (§16).**
-  - `POST /api/challenges` and `POST /api/challenges/:number/solutions` accept
-    **`coAuthorIds`** (at most 4, distinct, never the caller): **400** together with
-    `anonymous: true` or over four; **422** for an ineligible id (§27.2).
-  - `POST /api/challenges/:number/authors { userId }` and
-    `DELETE /api/challenges/:number/authors/:userId` (the caller's own id is a leave),
-    and the `solutions/:number/authors` twins. Order of checks (§2.4): **404** when the
-    caller cannot see the item, the number is malformed or the item is trashed;
-    **403** for a caller who is not a member (*"Only the item's authors can change its
-    team."*); then **409** for an anonymous item, for a closed window (adding and
-    removing others only), at the cap and for the last member leaving; then **422**
-    for an ineligible person. Success returns `{ authors }`. `mutation` bucket,
-    `Origin`-checked.
-  - `GET /api/users` accepts `coAuthorFor`, `canSee`, or `namespace` + `visibility`
-    (§27.2).
-  - The detail payload carries `authors` on the challenge and on each solution, and
-    per viewer `canManageTeam` (a member, joining open, not anonymous) and `canLeave`
-    (a member who is not the only one). `PUT` edits require `baseEditedAt` (§27.5).
-- **Audit (§15).** `challenge.author_added` / `solution.author_added` — actor the
-  member who added, `after: { userId, via: "submit" | "team" }`;
-  `challenge.author_removed` / `solution.author_removed` — `after: { userId, trigger:
-  "removed" | "left" }`. A refused (409) edit writes nothing. Event 17 and the awards
-  are not audited (the inbox and the ledger are their own records, §23.12).
-- **Tests.** *Unit:* the eligibility matrix (each visibility against an
-  `awaiting_triage` and a `valid` challenge, and a solution under each); the joining
-  window for every status of both entities; the cap counting a "Deleted User" row;
-  the last-member rule; the anonymity refusals on create and add; the compact display
-  ("+N" and the `aria-label`); the join replay set for each status; the leaderboard's
-  contribution-time rule. *Integration:* a create with co-authors writes the members,
-  their awards and one event 17 per co-author in one transaction; the add / remove /
-  leave matrix in the 404 → 403 → 409 → 422 order; two concurrent adds cannot exceed
-  five, and the last two members leaving at once leave one; a stale `baseEditedAt` is
-  409 and writes nothing; every member receives events 2–6, 8, 10 and 16 and
-  auto-follows; event 17 reaches only the person added or removed, never on a leave,
-  and is never digested; full awards for each member, a member's like earns nothing,
-  the join replay is dated to the join, a re-join writes nothing, and leaving deducts
-  nothing; Full Circle for a member of both items; the leaderboard counts each current
-  member; a `proposed` solution and an `awaiting_triage` challenge are visible to every
-  member and stop being visible to a member who leaves; a team change never grows a
-  `people` challenge's access list; MCP lists co-authored items, refuses a stale edit
-  and still masks anonymous authors; erasure keeps the membership as "Deleted User".
-  *E2e:* a user proposes a solution with a co-author; the co-author receives the inbox
-  item, finds the solution under **Mine**, edits it and leaves it from the Team panel.
-
----
-
-## §28 Impact tracking
-
-> **⚠ GAP-82 · new feature:** impact tracking does not exist. This section is a
-> **stub**: it records the intent and the decisions known so far. Grill it and complete
-> it (decisions, data model, API, audit, tests) before building; it then ships as one
-> minor release.
-
-The process ends at `implemented`, and nothing records what an implemented solution
-actually delivered. Impact tracking closes that loop: the value a solution was expected
-to bring and the value it did bring, and a total that shows what the program is worth.
-
-**Known so far:**
-- A solution in `implemented` gets an **impact record**: one or more entries, each a
-  category — hours saved per month, cost avoided, revenue, or a qualitative quality /
-  risk note — with an **estimate** and, later, an **actual**.
-- A **check-in** about 90 days after implementation asks the recorder to confirm or
-  correct the actual value (a new §12.1 event).
-- Home gains a **"Value delivered"** tile (§13.2), summed per viewer under the full
-  §4.3 predicate (invariant 2), like the KPI tiles.
-- Every record and change is audited (§15); no surface names an anonymous author
-  (invariant 3).
-
-**To settle in the interview:** who records (the challenge's assignee, the solution's
-authors, namespace admins); currencies and units; whether an estimate can be captured
-at proposal time beside the free-text *cost vs benefits*; the check-in cadence and
-whether it repeats; whether impact feeds a leaderboard metric or §23 points; how
-restricted-namespace values add up for each viewer; export.
-
----
-
-## §29 "This affects me too"
-
-> **⚠ GAP-83 · new feature:** the "affects me too" signal does not exist. This section
-> is a **stub**: grill it and complete it before building; it then ships as one minor
-> release.
-
-A like says *"I agree"* and a hype says *"act on this first"*; neither says how big a
-problem is. **"This affects me too"** lets a person mark that a challenge affects them,
-optionally with how many people, so triage can weigh reach.
-
-**Known so far:**
-- On a challenge, a viewer marks **"This affects me"** and may add a headcount
-  (*"my team, about 12"*). The detail page shows the total reach; the triage queue
-  (§14.1) gains a sortable **Reach** column.
-- Counts follow the item's visibility (invariant 2) and never hint at hidden items.
-- It is a signal for triage, never a vote: nothing about status, assignment or the
-  single accepted solution (§8.3) is decided by it.
-
-**To settle in the interview:** challenges only or solutions too; a free number or
-bands; whether markers are named (like likes) or a count only; the statuses in which it
-can be given and whether it can be taken back; a cap per person; points or badges;
-notifications; MCP.
-
----
-
-## §30 Mark as duplicate and merge
-
-> **⚠ GAP-84 · new feature:** marking a duplicate does not exist. This section is a
-> **stub**: grill it and complete it before building; it then ships as one minor
-> release.
-
-The duplicate warning on submit (§6.1) is advisory, so duplicates still reach triage.
-**Mark as duplicate** closes one in a single step and sends its audience to the
-original.
-
-**Known so far:**
-- A triage action on a challenge: **"Duplicate of CH-x"**. It closes the duplicate,
-  moves its **followers** to the original, leaves a pointer on the duplicate, and
-  notifies its author(s).
-- The pointer never leaks a challenge the viewer cannot see (invariant 2): a viewer
-  who cannot see the original sees that the item was closed as a duplicate, not which
-  one.
-- The close goes through the state machine and the audit like any transition
-  (invariant 6); anonymity is untouched (invariant 3).
-
-**To settle in the interview:** a new `duplicate` status or `rejected` with a link;
-who may mark (namespace admins only, or the committee too); whether likes, hypes and
-comments move or stay; what happens to solutions already on the duplicate;
-cross-namespace duplicates; undoing a merge; gamification for the duplicate's author;
-whether the §6.1 similarity check suggests the target.
-
----
-
-## §31 Triage aging and stuck-item alerts
-
-> **⚠ GAP-85 · new feature:** aging indicators and stuck-item alerts do not exist. This
-> section is a **stub**: grill it and complete it before building; it then ships as one
-> minor release.
-
-The §14.4 badge counts what is waiting, but not for how long. Aging shows each item's
-time in its current status against a target, and a weekly summary names what is stuck.
-
-**Known so far:**
-- The triage queue (§14.1, both tabs) shows each row's **time in its current status**
-  (from `status_changed_at`), highlighted amber and then red against **per-namespace
-  targets**.
-- A **weekly "stuck items" e-mail** lists the items over target. It is its own weekly
-  summary, not a digest of §12.1 events (§19 is amended accordingly), and it follows the
-  §12.1 content-safety, visibility and anonymity rules.
-- Items are counted per viewer under §4.3; nothing reveals an item the recipient cannot
-  see.
-
-**To settle in the interview:** one target per namespace or one per status; the
-defaults; who sets targets (namespace or platform admins); the recipients (namespace
-admins, assignees, committee); whether the e-mail can be muted (the admin attention
-events are not, §12.1); the send slot; an in-app counterpart; whether the §14.4 badge
-changes.
-
----
-
-## §32 Implementation board
-
-> **⚠ GAP-86 · new feature:** the implementation board does not exist. This section is
-> a **stub**: grill it and complete it before building; it then ships as one minor
-> release.
-
-Once a solution is accepted, its progress is visible only one item at a time. The
-**implementation board** shows everything past `valid` as a roadmap.
-
-**Known so far:**
-- A per-namespace **kanban** of solutions past `valid`, with one column each for
-  *Accepted internally*, *Waiting for resources*, *In implementation*, *External
-  acceptance* and *Implemented*.
-- **Everyone** who can see the items sees the board, filtered per viewer under §4.3
-  (invariant 2) and anonymity-masked (invariant 3).
-- **Namespace admins and committee members** move cards; each drop is an ordinary
-  transition under §8.2 — enforced for the committee, override for admins
-  (invariant 6) — audited and notified exactly as today. An illegal drop is refused
-  and the card returns.
-- At most one solution per challenge is ever past `valid` (invariant 7), so a challenge
-  appears on the board at most once.
-
-**To settle in the interview:** where it lives (its own nav item, the Challenges page,
-the triage page); whether assignees move cards; how long implemented cards stay;
-filters; a keyboard and mobile alternative to dragging; cross-namespace views for
-platform admins.
-
----
-
-## §33 Invite a solver
-
-> **⚠ GAP-87 · new feature:** invitations to propose a solution do not exist. This
-> section is a **stub**: grill it and complete it before building; it then ships as one
-> minor release.
-
-People often know a colleague who could solve a challenge but have no way to bring
-them in short of e-mail. **Invite a solver** does it from the challenge.
-
-**Known so far:**
-- On a `valid` challenge, any viewer can **invite a colleague to propose a solution**.
-  The picker offers only people who can see the challenge (as the §27.2 picker does), so
-  an invitation never widens visibility or reveals an item (invariant 2).
-- The invitee receives a new §12.1 event naming the inviter and the challenge. An
-  invitation is never anonymous; it names the inviter, never the challenge's anonymous
-  author (invariant 3).
-- A **"Matchmaker"** badge (§23.4) rewards an inviter whose invitee goes on to propose.
-
-**To settle in the interview:** limits per person and per challenge; an optional note;
-declining an invitation; badge tiers and points; whether invitations show anywhere
-else; e-mail or in-app only; MCP.
 
 ---
 
@@ -9377,141 +8752,56 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
 
 ---
 
-## §35 Campaigns
-
-> **⚠ GAP-89 · new feature:** campaigns do not exist. This section is a **stub**: grill
-> it and complete it before building; it then ships as one minor release. It lifts the
-> former "no campaigns" non-goal (§19).
-
-A namespace often wants ideas on one theme at one time. A **campaign** is a time-boxed
-call for challenges around a theme.
-
-**Known so far:**
-- A **namespace admin** opens a campaign: a title, a short brief and an **end date**
-  (*"Cut cloud spend — until 30 Nov"*).
-- While it runs, Home shows a banner for it to the people who can see the namespace,
-  and the submit form lets a challenge join it.
-- When it ends, the namespace admins get a **report**: what came in, where each item
-  stands, the most liked and hyped.
-- A campaign's end date is the campaign's, never a challenge's: individual challenges
-  still have no deadlines (§19).
-- Banners, counts and reports follow visibility (invariant 2) and anonymity masking
-  (invariant 3).
-
-**To settle in the interview:** org-wide campaigns by platform admins; how many can run
-at once; whether submissions after the end can still join; a launch notification and
-its audience; how campaigns relate to topics (§34) and featured challenges (§13.2); a
-campaign badge or points; the report's format and export.
-
----
-
-## §36 Year in review
-
-> **⚠ GAP-90 · new feature:** the year in review does not exist. This section is a
-> **stub**: grill it and complete it before building; it then ships as one minor
-> release.
-
-A personal recap at the end of each year: what a person raised, solved and earned in
-InnoBox.
-
-**Known so far:**
-- A personal page, available around the turn of the year, summarizing the calendar
-  year: challenges and solutions (co-authored ones included, §27), those that reached
-  `valid`, `solved` or `implemented`, likes and hypes received, badges earned and level
-  progress (§23).
-- Anything that could be shown to others counts **org-visible items only** (the §13.5
-  test), so a shared recap never hints at restricted work (invariant 2). Anonymous items
-  count only after a self-reveal (invariant 3), and the §23.9 opt-out is honored.
-- All access stays sign-in-only: sharing means a downloadable image, never a public
-  link (invariant 2).
-
-**To settle in the interview:** the exact window; whether it is announced (in-app,
-e-mail); the share card's content; a platform switch; organization-wide figures for
-platform admins; how restricted work appears in the person's own private view.
-
----
-
-## §37 Namespace pulse
-
-> **⚠ GAP-91 · new feature:** the namespace pulse does not exist. This section is a
-> **stub**: grill it and complete it before building; it then ships as one minor
-> release.
-
-Namespace admins see items one at a time. The **pulse** is a weekly AI-written brief of
-their namespace: what is emerging, what is stuck, and what looks duplicated.
-
-**Known so far:**
-- A new §22 AI task: a weekly **brief for namespace admins** covering emerging themes,
-  items waiting longest, and clusters of likely duplicates, each item linked.
-- It is **advisory**, like every AI task (§22): it never changes a status, an
-  assignment or a visibility, and it obeys the §22.7 governance — no person data ever,
-  restricted content only behind the platform switch.
-- It is shown on a page (a card on the triage page), **not e-mailed**: §19 rules out
-  AI-driven notifications.
-- Its output inherits the visibility of its inputs (§22.1 decision 8); a platform admin
-  sees every namespace's pulse.
-
-**To settle in the interview:** the cadence (a weekly worker run or on demand); the
-inputs and their limits; how results are cached and kept; whether committee members see
-it; an organization-wide pulse for platform admins; how it relates to triage assist
-(§22.11).
-
----
-
 ## §38 Feature ideas (upvotes and proposals)
 
-The What's new page's **Coming soon** list (§13.9) becomes a two-way roadmap. Every
-signed-in person can **upvote** the entries they most want, and can **propose** a new
-feature in a few sentences. A platform admin reviews each proposal. An approved one is
-written up by the admin and joins *Coming soon* as **planned**, beside the features this
-specification already defines, credited to the person who proposed it unless they have
-opted out. The admin removes it by hand once it is implemented, and everyone who
-proposed or upvoted it hears that it has arrived. Votes are a signal for prioritising:
-nothing about a release, this specification or its build order is decided by them.
+The What's new page's **Coming soon** list (§13.9) is a two-way roadmap that lives
+entirely in the database. Every signed-in person can **upvote** the entries they most
+want, and the list reorders by votes as they do. Anyone can **propose** a new feature in
+a few sentences; a platform admin reviews each proposal. An approved one is written up
+by the admin and joins *Coming soon* as **planned**, credited to the person who proposed
+it unless they have opted out. Platform admins edit any entry and remove it by hand
+once it is implemented, and everyone who proposed or upvoted it hears that it has
+arrived. Votes are a signal for prioritising: nothing about a release, this
+specification or its build order is decided by them.
 
 ### §38.1 Decisions
 
 | # | Decision | Why |
 |---|---|---|
-| 1 | **Two kinds of entry, one list.** *Coming soon* holds the specified teasers (`UPCOMING`, §13.9) and the **community ideas** a platform admin approved. | An approved idea is planned. A reader should not need to know where a plan came from. |
+| 1 | **The database is the only home of *Coming soon*.** Every entry is a `planned` row; nothing is listed in code or tied to this specification. The ten features teased before were seeded as rows (§38.9). | Platform admins own the roadmap and can change it without a release. |
 | 2 | **Approval means planned.** There is no "under consideration" stage. | The admin decides what goes on the roadmap, and *Coming soon* is the roadmap. |
-| 3 | **One upvote per person per entry, toggled.** No budget, no downvote. Specified teasers and ideas are voted on alike. | A light preference signal, like a like. Scarcity is hype's job (§26). |
-| 4 | **One list ordered by votes.** Ties go to specified teasers in hand order, then to the oldest approval. | It shows what people want most, with a stable order between equals. |
+| 3 | **One upvote per person per entry, toggled.** No budget, no downvote. | A light preference signal, like a like. Scarcity is hype's job (§26). |
+| 4 | **One list ordered by votes, live.** Ties go to the oldest approval. A vote re-sorts the list at once, and an open list picks up other people's votes every 30 seconds. | It shows what people want most, and a voter sees their vote move the roadmap. |
 | 5 | **A proposal is one text box.** On approval the admin writes the published **title and teaser** and picks the **audience**. | Users describe. The admin turns it into product copy that follows the §13.9 copy rules: no item, namespace or person, nothing that reads as a promise. |
 | 6 | **The proposer is named on the entry**, unless they opt out with one profile switch, read live. | Credit for a good idea, with a way out for those who don't want it. |
 | 7 | **Voters are public, under the same switch.** Voters who opted out are counted but not named. | An upvote is a real-name endorsement, like a hype (§26 decision 8). |
-| 8 | **Platform admins review; nobody else does.** Approve, Decline (with an optional note), Merge as duplicate, Delete as spam. | The product is platform-wide. A namespace admin has no say over it. |
-| 9 | **A planned idea leaves the list only when an admin deletes it**, normally once it has shipped. No status machine. | The changelog announces what shipped. An idea needs no lifecycle beyond "planned". |
-| 10 | **The proposer hears every decision**, in-app and by e-mail. **The proposer and every voter hear "now available"** when a planned idea is deleted as shipped or a specified feature ships. | Closing the loop is what makes a vote worth casting. |
-| 11 | **At most 3 proposals pending per person**, plus 2 a minute and 5 a day. | Keeps the review queue readable. |
-| 12 | **10 points when an idea is approved, 25 when it ships, and a tiered Roadmapper badge.** Nothing for proposing alone or for voting. | Rewards ideas that make it, not volume (§23 decision 2). |
-| 13 | **Own platform switch, on by default.** | Like bug reports (§13.10): low risk, and a deployment can still turn it off. |
+| 8 | **Platform admins review and edit; nobody else does.** Approve, Decline (with an optional note), Merge as duplicate, Delete as spam; Edit and Delete on every planned entry. A platform admin adds an entry by proposing it like anyone else. | The product is platform-wide. A namespace admin has no say over it. |
+| 9 | **A planned entry leaves the list only when an admin deletes it**, normally once it has shipped. No status machine. | The changelog announces what shipped. An entry needs no lifecycle beyond "planned". |
+| 10 | **The proposer hears every decision**, in-app and by e-mail. **The proposer and every voter hear "now available"** when an entry is deleted as shipped. | Closing the loop is what makes a vote worth casting. |
+| 11 | **At most 3 proposals pending per person**, plus 2 a minute and 5 a day. Platform admins are exempt from both. | Keeps the review queue readable. A platform admin's proposal is how they add to the roadmap, and they review the queue themselves. |
+| 12 | **10 points when an idea is approved, 25 when it ships, and a tiered Roadmapper badge.** Nothing for proposing alone, for voting, or for an idea its own proposer approved. | Rewards ideas that make it, not volume (§23 decision 2). An award needs someone else's decision. |
+| 13 | **One platform switch, on by default, for proposals only.** Off, people who are not platform admins cannot propose. Everything else always works. | A deployment can close the inbox without hiding the roadmap or the votes. |
 | 14 | **Nothing through MCP** (§25 decision 8 extended). | A human signal that drives an order and points, like a like. |
 
 ### §38.2 The entries
 
-- **Entry ids.** A specified teaser is `spec:<key>`; a community idea is `idea:<uuid>`.
-  Ids are internal: the API carries them, and nothing renders them.
-- **Specified teasers** stay hand-maintained, but `UPCOMING` moves to the client-safe
-  shared module **`@innobox/shared/upcoming`** (`packages/shared/src/upcoming.ts`) so the
-  worker can read it (§38.9). Each entry gains a **`key`**: a permanent kebab-case slug,
-  unique, **never reused** once retired, internal and never rendered. Votes on a teaser
-  are stored against its key.
-- **`DROPPED_UPCOMING_KEYS`** (same module) lists the keys of teasers taken out of the
-  plan **without** shipping (a feature descoped from this specification). Their votes are
-  cleared silently. Every other key that leaves `UPCOMING` counts as shipped (§38.9).
-- **Community ideas** are the `feature_ideas` rows in `planned` status (§38.13). Their
-  title, teaser and audience are the admin's (§38.5).
-- **Audience.** Both kinds use the §13.9 `appliesTo` rule (`everyone`, `admins`,
-  `platform_admin`) against the viewer's resolved roles (invariant 1). It is now applied
-  **server-side**, because ideas come from the database: an entry outside the viewer's
-  audience is never returned, never counted, and is a 404 for every route that names it.
-- **Order.** Votes descending. Among equals, specified teasers come first in `UPCOMING`
-  order, then ideas by approval time, oldest first.
+- **One kind.** Every entry is a `feature_ideas` row in `planned` status (§38.13). Its
+  title, teaser and audience are the admin's (§38.5). An entry approved from a proposal
+  has a proposer. The ten seeded by migration 0055 have none (§38.9): they have no
+  *"Proposed by"* line and earn no one anything. (An entry whose proposer was erased
+  keeps the row's proposer but loses the line, §38.12.)
+- **Entry ids** are the row's uuid. They are internal: the API carries them, and nothing
+  renders them.
+- **Audience.** The §13.9 `appliesTo` rule (`everyone`, `admins`, `platform_admin`)
+  against the viewer's resolved roles (invariant 1), applied **server-side**: an entry
+  outside the viewer's audience is never returned, never counted, and is a 404 for every
+  route that names it.
+- **Order.** Votes descending; among equals, by approval time (`decided_at`), oldest
+  first; then by id, so the order is total and stable.
 - **The vote count** counts every vote on the entry, including those of voters who
   opted out, are deactivated or are erased, and of voters an audience change has since
   put out of sight (§38.12). The section's heading count (*"Coming soon · 9"*, §13.9)
-  counts the entries that apply to the viewer, ideas included.
+  counts the entries that apply to the viewer.
 
 ### §38.3 Upvoting
 
@@ -9526,18 +8816,33 @@ nothing about a release, this specification or its build order is decided by the
   revert, with a short inline error under the row, if the request fails. It asks for no
   confirmation. The proposer may vote for their own idea; their vote is added when the
   idea is approved (§38.5) and they can remove it like any other.
+- **The list re-sorts at once.** The optimistic toggle re-applies the §38.2 order on the
+  spot. Every row whose place changes **slides** to it (a ~200 ms transform transition;
+  no motion under `prefers-reduced-motion: reduce`), and slides back if the request
+  fails. Keyboard focus stays on the pressed button as its row moves. When the viewer's
+  own vote moves a row, a polite live region announces its new place, *"{title} is now
+  2nd of 9"*. The server's answer carries the entry's authoritative count, and the list
+  re-sorts again only if that count differs from the optimistic one.
+- **Live refresh.** While the section is **expanded** and the tab is **visible**, the
+  page re-reads `GET /api/coming-soon` every **30 seconds**, so other people's votes show
+  without a reload. Changed counts, voter lists and places are applied with the same
+  slide, silently (no live-region announcement). The refresh pauses while the section is
+  collapsed or the tab hidden, and reads at once when both are true again. It skips a
+  tick while one of the viewer's own votes is in flight, so a refresh can never undo a
+  click the server has not yet seen. An entry that has gone (deleted, or narrowed out of
+  the viewer's audience) leaves the list, and a new one fades in at its place.
 - **The voter list** sits under the teaser once an entry has at least one vote. It shows
   the **named** voters as small avatar bubbles with the §13.8 hover card, newest first:
   the first **12**, then *"+N"*, which expands to the full named list on click (as the
   §26.5 hypers list does). Voters who opted out (§38.6) or were erased follow as one muted
   line, *"and 3 others"*, which never expands. When the viewer is one of them, it reads
   *"and 3 others, including you"*. A deactivated voter shows the greyed bubble.
-- **Eligibility.** The feature is on, and the entry exists and applies to the viewer
-  (§38.2). Nothing else: there is no budget, and any entry in the list can be voted on.
+- **Eligibility.** The entry exists and applies to the viewer (§38.2). Nothing else:
+  there is no budget, any entry in the list can be voted on, and the §38.11 switch does
+  not touch voting.
 - **Concurrency.** The unique key on `(user, entry)` makes the toggle idempotent. A
-  retried "add" is a no-op, never a second row.
-- A vote on a teaser key that is no longer in `UPCOMING` is a 404, so no vote can land
-  on a shipped teaser between a deploy and the §38.9 sweep.
+  retried "add" is a no-op, never a second row. A vote on an entry deleted meanwhile is
+  a 404, and the row leaves the list.
 
 ### §38.4 Proposing
 
@@ -9545,7 +8850,8 @@ nothing about a release, this specification or its build order is decided by the
   `data-testid="propose-feature"`) sits on the *Coming soon* header row, to the right of
   the heading block's toggle button and **outside** it (a button cannot hold a button), so
   it is reachable while the section is collapsed. At ≤ 560 px it wraps under the heading
-  block. It shows while the feature is on.
+  block. It always shows to platform admins, and to everyone else while proposals are
+  open (§38.11).
 - **The dialog.** A modal `role="dialog"` (`aria-modal="true"`, labelled by its
   heading), on the §2.2 tokens. Focus moves to the text box on open and returns to the
   button on close. Escape, **Cancel** or a backdrop click closes it. If the box holds
@@ -9568,11 +8874,16 @@ nothing about a release, this specification or its build order is decided by the
   opens with the hint *"You have 3 ideas waiting for review. You can propose another once
   one of them is decided."* and **Send idea** disabled. The server re-checks the cap
   under a per-person advisory lock and answers **409 `too_many_pending`** with the same
-  message, so two tabs can never both slip under it.
+  message, so two tabs can never both slip under it. **Platform admins are exempt**
+  (decision 11): their dialog never shows the hint.
 - **Rate limit.** The new **`feature_idea`** bucket (§2.4): **2 per minute and 5 per
   day** per person, both enforced, tighter than bug reports because every proposal lands
   in a queue a person reviews. **429** with `Retry-After`. Unlike the survey buckets, its
-  warning carries the user id: a proposal is not anonymous.
+  warning carries the user id: a proposal is not anonymous. Platform admins are exempt.
+- **A platform admin's own proposal** lands in **Pending** like anyone's, and any
+  platform admin, its proposer included, may decide it. A proposer who approves their
+  own idea gets no event 19 (they are the actor, §12.1) and no award, then or when it
+  ships (§38.10).
 - **Who can see the raw text.** Only the proposer (§38.7) and platform admins (§38.5).
   It is never rendered on *Coming soon*: the published title and teaser are the
   admin's. It is always rendered as **plain text**.
@@ -9582,8 +8893,9 @@ nothing about a release, this specification or its build order is decided by the
 - **The card.** A **Feature ideas** card in the Administration console's platform-admin
   section, after **Public submissions**. It links to `/admin/feature-ideas`, carries a
   count bubble for `pending` proposals (`1`–`9`, then `9+`, hidden at zero, as §24.5),
-  and holds the **`feature_ideas_enabled`** switch (the §2.2 preference pill) in its
-  **action slot**, usable without opening the page (§38.11). **Platform admins only**:
+  and holds the **`feature_ideas_enabled`** switch, labelled **"Anyone can propose"**
+  (the §2.2 preference pill), in its **action slot**, usable without opening the page
+  (§38.11). **Platform admins only**:
   namespace admins never see the card, and every admin route answers **403** to anyone
   else.
 - **The page** carries the §14 breadcrumb (*Administration › Feature ideas*) and three
@@ -9591,11 +8903,11 @@ nothing about a release, this specification or its build order is decided by the
   - **Pending** (the default) — oldest first. Each row: when it was sent
     (`useDateFmt()`), the proposer (bubble and name, **always**, whatever their §38.6
     switch says: admins review people's ideas), and the first 160 characters of the text.
-  - **Planned** — the approved ideas in the §38.2 order: title, teaser, an audience chip
-    (*Everyone* / *Admins* / *Platform admins*), the vote count, the proposer (with a
-    muted *"name hidden on What's new"* tag when they opted out) and when it was
-    approved. Specified teasers are not listed here: they are managed in code, and their
-    votes show on What's new.
+  - **Planned** — every *Coming soon* entry, the seeded ones included, in the §38.2
+    order: title, teaser, an audience chip (*Everyone* / *Admins* / *Platform admins*),
+    the vote count, the proposer (with a muted *"name hidden on What's new"* tag when
+    they opted out, and a muted *"No proposer"* for an entry that has none, §38.2) and
+    when it was approved.
   - **Decided** — declined and merged proposals from the last **90 days**, newest
     first, with the decision, the note or the merge target, who decided and when.
     Older ones stay in the database and in the proposer's own list (§38.7).
@@ -9607,13 +8919,14 @@ nothing about a release, this specification or its build order is decided by the
     **Audience** (*Everyone*, the default, *Admins* or *Platform admins*). A note under
     the fields repeats the copy rules: *"This is shown to everyone in the audience. Don't
     name people, challenges or teams, and don't promise a date."* The server rejects a
-    title or teaser containing a `§` or a `GAP-<n>` marker (**422**), as the §13.9 test
-    does for `UPCOMING`. One transaction: the row becomes `planned`, the proposer's vote
-    is inserted, event 19 is written (§38.8) and the `idea_approved` award (§38.10).
+    title or teaser containing a `§` or a `GAP-<n>` marker (**422**, §21.9). One
+    transaction: the row becomes `planned`, the proposer's vote is inserted, event 19 is
+    written (§38.8) and the `idea_approved` award (§38.10), both skipped when the
+    approver is the proposer (§38.4).
   - **Decline** — an optional note to the proposer (≤ **1 000** characters, plain text),
     included in event 19. The row becomes `declined`.
-  - **Merge as duplicate** — a picker of the current *Coming soon* entries (specified
-    teasers and planned ideas, every audience). An entry whose audience does not include
+  - **Merge as duplicate** — a picker of the current *Coming soon* entries (every
+    planned row, every audience). An entry whose audience does not include
     the **proposer** is listed but disabled, with *"Not visible to the person who
     proposed this"*: the notification would otherwise name an entry they cannot see. The
     row becomes `merged` with `merged_into` set, the proposer's vote is added to the
@@ -9623,16 +8936,20 @@ nothing about a release, this specification or its build order is decided by the
 - **A decision on a row someone else has already decided** (or the proposer withdrew)
   is **409**, *"Another admin has already reviewed this idea."* Every decision is one
   guarded `UPDATE … WHERE status = 'pending'`.
-- **On the Planned tab**, each row has:
-  - **Edit** — the Approve dialog again, pre-filled with the current title, teaser and
-    audience. Votes are kept and nobody is notified. Narrowing the audience keeps the
-    votes of people who can no longer see the idea (§38.12).
-  - **Delete** — a dialog *"Delete this planned idea?"* with a checkbox **"Notify that
+- **On the Planned tab**, each row — every entry, with or without a proposer — has:
+  - **Edit** — the Approve dialog again, titled *"Edit entry"*, pre-filled with the
+    current title, teaser and audience, under the same limits and the same 422. Votes
+    are kept and nobody is notified. Narrowing the audience keeps the votes of people
+    who can no longer see the entry (§38.12). The new copy shows on What's new at the
+    next read, the §38.3 live refresh included.
+  - **Delete** — a dialog *"Delete this planned entry?"* with a checkbox **"Notify that
     it shipped"**, **ticked by default**, and the helper *"The person who proposed it and
-    the {N} people who upvoted it get a 'now available' notification."* Deleting
-    removes the row and its votes. Ticked, it also writes event 20 (§38.8) and the
-    `idea_shipped` award (§38.10) in the same transaction. Unticked, it is silent: the
-    path for an idea that was dropped.
+    the {N} people who upvoted it get a 'now available' notification."* (*"The {N}
+    people who upvoted it …"* for an entry without a proposer). Deleting removes the row
+    and its votes. Ticked, it also writes event 20 (§38.8) and, when the entry has a
+    proposer who did not approve it themselves, the `idea_shipped` award (§38.10), in
+    the same transaction. Unticked, it is silent: the path for an entry that was
+    dropped.
 
 ### §38.6 The name switch
 
@@ -9652,12 +8969,13 @@ nothing about a release, this specification or its build order is decided by the
 - **The "Proposed by" line.** Under an idea's teaser: *"Proposed by"*, the proposer's
   small bubble with the §13.8 hover card, and their display name. A deactivated proposer
   shows the greyed bubble and stays named. The line is **omitted** when the proposer has
-  opted out or has been erased. Specified teasers have no such line.
+  opted out or has been erased. An entry without a proposer (§38.2) has no such line.
 
 ### §38.7 The proposer's own list
 
-The own profile gains a **Feature ideas** section after **Feedback** (§13.5), shown while
-the feature is on. It holds the §38.6 switch, then **"Your ideas"**, newest first. Each
+The own profile gains a **Feature ideas** section after **Feedback** (§13.5), always
+shown: the §38.11 switch closes proposing, not the list. It holds the §38.6 switch, then
+**"Your ideas"**, newest first. Each
 row shows a status pill and the date sent:
 
 - **Waiting for review** — the text (clamped to two lines, expandable) and a
@@ -9692,11 +9010,11 @@ pass them through, as for achievements. Neither names the admin who acted: the c
   - *Merged* — inbox *"Your idea is already planned: {title}"*; e-mail subject *"Your
     feature idea is already planned"*, with the target's title and teaser and a line
     saying their upvote was added. Linked to `/whats-new#coming-soon`.
-- **Event 20 — "Feature now available".** Written when a planned idea is deleted with
-  **Notify that it shipped** ticked (§38.5), and when a specified teaser ships (§38.9).
-  Recipients: the idea's proposer and every voter, deduplicated, **to whom the entry
-  still applied** at that moment (§38.2 audience), so a person narrowed out of an
-  admin-only entry is not told about it. The deleting admin, as the actor, is not
+- **Event 20 — "Feature now available".** Written when a planned entry is deleted with
+  **Notify that it shipped** ticked (§38.5), and only then. Recipients: the entry's
+  proposer, when it has one, and every voter, deduplicated, **to whom the entry still
+  applied** at that moment (§38.2 audience), so a person narrowed out of an admin-only
+  entry is not told about it. The deleting admin, as the actor, is not
   notified (§12.1). Inbox *"{title} is now available"*; e-mail subject *"Now available:
   {title}"*, with the title, *"You proposed it"* or *"You upvoted it"*, and a link to
   `/whats-new`. A **follower-type** event for the digest (held on `daily` / `weekly`, one
@@ -9705,35 +9023,37 @@ pass them through, as for achievements. Neither names the admin who acted: the c
   are plain text, escaped, never linked.
 - **No admin notification.** A new proposal raises no event for platform admins: the
   card's count bubble (§38.5) is how they see the queue.
-- **Not written** while the feature is off (decisions are blocked then, §38.11), or to a
-  deactivated or erased person (the §12.1 drop).
+- **Not written** to a deactivated or erased person (the §12.1 drop), or to the admin
+  who acted: a proposer approving their own idea gets no event 19 (§38.4). The §38.11
+  switch never suppresses either event.
 
-### §38.9 Shipped teasers — the worker's sweep
+### §38.9 The move to the database (migration 0055)
 
-Specified teasers leave `UPCOMING` in the commit that ships them (§13.9). The worker
-notices on its next start, tells the voters, and clears the votes.
+Until v1.21.0 the features this specification defined but had not built were teased
+from a hand-maintained list in code, tied to the spec's new-feature markers by a test,
+and a worker sweep announced each one as it left the list. Migration 0055 moves them
+into the database, and the release that runs it removes the list, the test and the
+sweep.
 
-- **`coming_soon_teasers`** (§38.13) mirrors the keys, titles and audiences of `UPCOMING`. A
-  teaser's title and audience must be kept somewhere, because the shipping release no longer
-  has them, and event 20 goes only to the voters the teaser still applies to (§38.8).
-- **When.** Each time a worker replica **acquires leadership** (§2): after every deploy,
-  and after a failover. It runs once, before the leader's regular sweeps.
-- **What.**
-  1. Upsert every `UPCOMING` entry's key, current title and audience.
-  2. For each mirrored key that is no longer in `UPCOMING`, **in one transaction**:
-     - a key in `DROPPED_UPCOMING_KEYS` → delete its votes, silently;
-     - any other key → write event 20 to its voters (while the feature is on; while it
-       is off, nothing is written), then delete its votes;
-     - delete the mirror row.
-- **Idempotent.** A crash before a commit leaves the key for the next run. After the
-  commit nothing remains to repeat, so no voter is told twice.
-- **The first run** finds an empty mirror, seeds it, and announces nothing.
-- **A rollback** that brings a retired key back re-seeds it with no votes. The votes
-  cleared by the newer release are not restored. Accepted.
-- **Orphans.** A teaser added and removed again between two runs was never mirrored, so
-  nothing remembers its title: after the steps above, votes on any key that is not in
-  `UPCOMING` are cleared silently.
-- **Never audited**, like every scheduled sweep (§15).
+- **The ten entries.** 0055 inserts the ten teasers the list held at v1.21.0 as
+  `planned` rows, with the same title, teaser and audience: no proposer (`author_id`
+  null), no description, no `decided_by`. Each has a **fixed id**, and `decided_at` and
+  `created_at` one second apart from a fixed instant in the list's former order, so ties
+  keep that order (§38.2). The seed runs only on the migration's **first application**
+  (while the key column still exists), so a re-run never brings back an entry a platform
+  admin has deleted since. The copy lives in the migration only: this document no longer lists or
+  specifies those features (their sections, §27–§33 and §35–§37, are retired).
+- **Votes move with them.** Every vote on a former teaser key becomes a vote on the
+  matching row, keeping its `created_at`; a vote on any other key is dropped. Then the
+  key column goes (§38.13).
+- **Merge targets.** A `merged` proposal whose `merged_into` names a former teaser key
+  is rewritten to that row's id, and one that names an idea is rewritten to the bare id
+  (§38.2), so the proposer's own list (§38.7) still resolves it.
+- **The mirror goes.** 0055 drops `coming_soon_teasers`, the worker's record of the
+  teasers, in the same release that drops the sweep that read it. Nothing announces the
+  move: no event 20, no award, and no audit row (a migration is not an actor, §15).
+- **From then on** the seeded rows are ordinary entries: platform admins edit them, and
+  delete them, with or without **Notify that it shipped**, like any other (§38.5).
 
 ### §38.10 Gamification
 
@@ -9743,15 +9063,16 @@ deducted.
 
 - **`idea_approved` — 10 points to the proposer**, award key `idea_approved:<ideaId>`,
   `occurred_at` = the approval. Written by Approve only: never by a merge, a decline, a
-  withdrawal or a spam delete.
+  withdrawal or a spam delete, and never when the approver is the proposer (decision 12).
 - **`idea_shipped` — 25 points to the proposer**, award key `idea_shipped:<ideaId>`,
   `occurred_at` = the delete. Written only by a Planned-tab delete with **Notify that it
-  shipped** ticked. Specified teasers earn no one anything.
+  shipped** ticked, on an entry that has a proposer (§38.2) who is not the admin who
+  approved it (`decided_by`). The seeded entries earn no one anything.
 - **No daily cap**: each award needs an admin decision.
 - **Roadmapper** (`roadmapper`) — a **tiered** achievement badge: *ideas you proposed
   that shipped*, **1 / 3 / 10**, counting `idea_shipped` rows. Notified as any
-  achievement (§23.7, event 13). It appears among a profile's **locked** badges only
-  while feature ideas are on. An earned tier stays visible either way.
+  achievement (§23.7, event 13). It always appears among a profile's **locked** badges
+  until earned: the §38.11 switch does not hide it, since anyone's ideas can still ship.
 - **Item-less rows.** Both reasons are written with `item_type` and `item_id` null, like
   `agent_connected` (§25.12). An idea is not a challenge or a solution, and the row must
   survive the idea's delete. Item-less rows count in full toward the Points ranking
@@ -9760,25 +9081,26 @@ deducted.
   behind an award, and `gamification_public` (§23.9) governs who sees the badge.
 - **No points for voting**, or for proposing alone (§23's "never points for giving").
 
-### §38.11 Platform switch
+### §38.11 Proposals switch
 
-- **`feature_ideas_enabled`** (`platform_settings`, default **true**), written through
-  `PATCH /api/admin/settings` (key `featureIdeasEnabled`), platform admins only, and
-  audited as **`settings.feature_ideas_enabled_changed`** (`after: { enabled }`). The
-  pill lives in the action slot of the **Feature ideas** card (§38.5). The Platform
-  settings page carries only a line pointing to it (§14.3).
+- **`feature_ideas_enabled`** (`platform_settings`, default **true**) now governs one
+  thing: whether people who are **not platform admins** can propose. The key keeps its
+  name. It is written through `PATCH /api/admin/settings` (key `featureIdeasEnabled`),
+  platform admins only, and audited as **`settings.feature_ideas_enabled_changed`**
+  (`after: { enabled }`). The pill, **"Anyone can propose"**, lives in the action slot
+  of the **Feature ideas** card (§38.5), with the helper, on: *"Everyone can propose
+  features."*; off: *"Only platform admins can propose features."* The Platform settings
+  page carries only a line pointing to it (§14.3).
 - **Off:**
-  - *Coming soon* reverts exactly to its read-only §13.9 form: specified teasers only,
-    in hand order, with no upvote buttons, counts, voter lists, ideas, *"Proposed by"*
-    lines or **Propose a feature** button, and hidden when no teaser applies.
-  - The profile's **Feature ideas** section is hidden.
-  - The user routes (votes, proposing, the own list, withdrawing) answer **404**.
-  - The admin page stays readable under the note *"Feature ideas are off. Turn them on
-    to review."*, with every decision and Planned-tab action disabled. Their routes
-    answer **409 `feature_ideas_off`**.
-  - No event 19 or 18 is written. The §38.9 sweep still clears the votes of retired keys.
-- **On again:** pending proposals, planned ideas, votes and the switch states are as
-  they were. Nothing is backfilled.
+  - The **Propose a feature** button is hidden from everyone who is not a platform
+    admin, and `POST /api/feature-ideas` answers them **404**. Platform admins propose
+    as before.
+  - Proposals already pending stay in the queue: their proposers can still withdraw
+    them, and platform admins decide them as usual.
+- **Never affected by the switch:** *Coming soon* and its order, votes and voter lists,
+  the *"Proposed by"* line, the profile's **Feature ideas** section, the admin review
+  page and the Planned tab, events 19 and 20, the awards and the Roadmapper badge.
+- **On again:** nothing to restore; the button returns for everyone.
 
 ### §38.12 Visibility, anonymity and privacy
 
@@ -9807,67 +9129,74 @@ deducted.
 - **MCP (§25).** No tool reads, votes on or proposes feature ideas, and no tool result
   carries a vote count (decision 14).
 
-### §38.13 Data model (migration 0054)
+### §38.13 Data model (migrations 0054 and 0055)
 
-- **`feature_ideas`** — `id` (uuid, `gen_random_uuid()`), `author_id` (FK `users`, not
-  null), `description` (text, ≤ 1 000 characters; **null only** for a planned idea whose
-  author was erased, §38.12), `status` (CHECK `pending | planned | declined | merged`),
-  `title` (text, ≤ 60), `teaser` (text, ≤ 280), `audience` (CHECK `everyone | admins |
-  platform_admin`), `decision_note` (text, ≤ 1 000), `merged_into` (text: an entry id,
-  §38.2), `decided_by` (FK `users`, nullable), `decided_at` (timestamptz), `created_at`
-  (timestamptz, default `now()`), `updated_at` (timestamptz). Shape CHECKs: `planned` ⇒
-  title, teaser and audience not null; any status but `pending` ⇒ `decided_at` not
-  null; `merged` ⇒ `merged_into` not null; `description` is null only when `status =
-  'planned'`. Indexes on `(status, created_at)` and `(author_id, status)`. Grants to
-  `innobox_app`: SELECT, INSERT, UPDATE and DELETE (withdraw, spam, a Planned-tab delete,
-  erasure).
-- **`feature_idea_votes`** — `user_id` (FK `users`), `spec_key` (text, nullable),
-  `idea_id` (uuid, FK `feature_ideas` **`ON DELETE CASCADE`**, nullable), `created_at`
-  (timestamptz, default `now()`). CHECK: exactly one of `spec_key` and `idea_id` is set.
-  Partial unique indexes `(user_id, spec_key) WHERE spec_key IS NOT NULL` and `(user_id,
-  idea_id) WHERE idea_id IS NOT NULL`, plus indexes on `spec_key` and `idea_id`. Grants:
-  SELECT, INSERT and DELETE. **No UPDATE**: a vote is added or removed, never changed.
-- **`coming_soon_teasers`** — `key` (text PK), `title` (text), `audience` (text, CHECK `everyone
-  | admins | platform_admin`, default `everyone`), `seen_at` (timestamptz). Written by the
-  worker only (§38.9). Grants: SELECT, INSERT, UPDATE and DELETE.
+- **`feature_ideas`** — `id` (uuid, `gen_random_uuid()`), `author_id` (FK `users`;
+  **null only** for a `planned` entry seeded by 0055, §38.9), `description` (text, ≤
+  1 000 characters; **null only** for a planned entry, either seeded or one whose author
+  was erased, §38.12), `status` (CHECK `pending | planned | declined | merged`), `title`
+  (text, ≤ 60), `teaser` (text, ≤ 280), `audience` (CHECK `everyone | admins |
+  platform_admin`), `decision_note` (text, ≤ 1 000), `merged_into` (text: the target
+  entry's id, §38.2; no FK, since the target may be deleted later), `decided_by` (FK
+  `users`, nullable), `decided_at` (timestamptz), `created_at` (timestamptz, default
+  `now()`), `updated_at` (timestamptz). Shape CHECKs: `planned` ⇒ title, teaser and
+  audience not null; any status but `pending` ⇒ `decided_at` not null; `merged` ⇒
+  `merged_into` not null; `description` is null only when `status = 'planned'`;
+  `author_id` is null only when `status = 'planned'` (0055). Indexes on `(status,
+  created_at)` and `(author_id, status)`. Grants to `innobox_app`: SELECT, INSERT,
+  UPDATE and DELETE (withdraw, spam, a Planned-tab delete, erasure).
+- **`feature_idea_votes`** — `user_id` (FK `users`), `idea_id` (uuid, **not null**, FK
+  `feature_ideas` **`ON DELETE CASCADE`**), `created_at` (timestamptz, default `now()`).
+  Unique `(user_id, idea_id)`, plus an index on `idea_id`. Grants: SELECT, INSERT and
+  DELETE. **No UPDATE**: a vote is added or removed, never changed. 0055 moves the
+  votes on former teaser keys (§38.9), then drops `spec_key`, the one-target CHECK and
+  the `spec_key` indexes, and makes `idea_id` not null.
+- **`coming_soon_teasers`** — created by 0054, **dropped** by 0055 (§38.9).
 - **`users`** gains **`feature_ideas_named`** (boolean, not null, default true).
 - **`platform_settings`** gains **`feature_ideas_enabled`** (default **true**, seeded
-  `ON CONFLICT DO NOTHING`).
+  `ON CONFLICT DO NOTHING`); 0055 leaves its value alone, only its meaning narrows
+  (§38.11).
 - **`gamification_ledger.reason`** gains `idea_approved` and `idea_shipped`. `roadmapper`
   joins the fixed badge catalogue (`user_badges` needs no change).
 - **`notifications.type`** gains `feature_idea_reviewed` (event 19) and
   `feature_available` (event 20).
 
-Idempotent per the `db/migrations` README.
+Both idempotent per the `db/migrations` README: 0055 seeds, moves the votes and rewrites
+the merge targets only while `spec_key` still exists, and every DDL statement is `IF [NOT]
+EXISTS`, so a re-run is a no-op.
 
 ### §38.14 API, audit, tests
 
 - **API (§16).** All session-authenticated, `Origin`-checked mutations (§2.4), `mutation`
-  bucket unless stated.
-  - `GET /api/coming-soon` → `{ enabled, entries: [{ id, kind: 'spec' | 'idea', title,
-    teaser, votes, voted, voters: [{ id, displayName, deactivated }], othersCount,
-    othersIncludesYou, proposedBy: { id, displayName, deactivated } | null }],
-    myPendingCount, maxPending, named }`, in the §38.2 order and filtered by audience
-    (`named` is the viewer's own §38.6 switch, for the propose dialog's sub-line). While the
-    feature is off: `{ enabled: false, entries: [{ id, kind: 'spec', title, teaser }] }`
-    in hand order. The What's new page's only read for the section (§13.9).
+  bucket unless stated. An entry is named by its id (§38.2).
+  - `GET /api/coming-soon` → `{ entries: [{ id, title, teaser, approvedAt, votes, voted,
+    voters: [{ id, displayName, deactivated }], othersCount, othersIncludesYou,
+    proposedBy: { id, displayName, deactivated } | null }], canPropose, myPendingCount,
+    maxPending, named }`, in the §38.2 order and filtered by audience. `approvedAt` (UTC
+    ISO) lets the page re-apply that order after a vote (§38.3). `canPropose` is true for a
+    platform admin, and for anyone else while proposals are open (§38.11); `maxPending`
+    is null for a platform admin, who has no cap (§38.4); `named` is the viewer's own
+    §38.6 switch, for the propose dialog's sub-line. The What's new page's only read for
+    the section, on load and on every §38.3 live refresh.
   - `POST /api/coming-soon/votes { entry }` → `{ voted, votes, voters, othersCount,
-    othersIncludesYou }`: the toggle. **404** while off, or for an unknown, retired or
-    inapplicable entry.
+    othersIncludesYou }`: the toggle. **404** for an unknown, deleted or inapplicable
+    entry.
   - `POST /api/feature-ideas { description }` → **201** `{ id }`. **422** for empty or
-    over 1 000 characters, **409 `too_many_pending`**, **404** while off. The
-    `feature_idea` bucket (§2.4).
+    over 1 000 characters; **409 `too_many_pending`** and the `feature_idea` bucket
+    (§2.4) for everyone but platform admins; **404** for everyone but platform admins
+    while proposals are closed.
   - `GET /api/me/feature-ideas` → the §38.7 list. `DELETE /api/me/feature-ideas/:id` →
     withdraw a pending one, **409** once decided, **404** for someone else's.
   - Admin, platform admin only (**403** otherwise): `GET /api/admin/feature-ideas?tab=
     pending|planned|decided`, `GET /api/admin/feature-ideas/count` (the card bubble),
     `POST /api/admin/feature-ideas/:id/approve { title, teaser, audience }`, `…/:id/
     decline { note? }`, `…/:id/merge { entry }`, `PATCH /api/admin/feature-ideas/:id {
-    title, teaser, audience }` (planned only), and `DELETE /api/admin/feature-ideas/:id`
-    (a pending row: spam, no body; a planned row: `{ notifyShipped: boolean }`
-    required). **409** for a row already decided, or in the wrong status for the action,
-    and **409 `feature_ideas_off`** while off.
-  - `GET /api/me` gains **`featureIdeas: boolean`** (the switch). `GET|PATCH
+    title, teaser, audience }` (any planned entry, seeded ones included), and `DELETE
+    /api/admin/feature-ideas/:id` (a pending row: spam, no body; a planned row: `{
+    notifyShipped: boolean }` required). **409** for a row already decided, or in the
+    wrong status for the action. The §38.11 switch never blocks them.
+  - `GET /api/me` no longer carries `featureIdeas`: nothing it gated depends on the
+    switch any more, and What's new reads `canPropose` instead. `GET|PATCH
     /api/profile` carries **`featureIdeasNamed`**. `PATCH /api/admin/settings` accepts
     **`featureIdeasEnabled`**.
 - **Audit (§15).** **`feature_idea.proposed`** and **`feature_idea.withdrawn`** (actor
@@ -9880,40 +9209,47 @@ Idempotent per the `db/migrations` README.
   for a planned row), under **Admin**; and **`settings.feature_ideas_enabled_changed`**.
   **No audit row ever carries a proposal's text**: `audit_log` is immutable and exempt
   from erasure (invariant 5), and the text is personal data that the spam delete and the
-  erasure exist to remove. The §38.9 sweep, the awards and events 19–20 are not audited.
+  erasure exist to remove. Migration 0055, the awards and events 19–20 are not audited.
 - **Tests** (shipped with the change):
-  - **Unit** (`@innobox/shared/upcoming`, `@innobox/shared/feature-ideas`): the moved
-    spec-sync test (both directions, unchanged); every `UPCOMING` key is a unique
-    kebab-case slug and none is in `DROPPED_UPCOMING_KEYS`; the §38.2 ordering
-    comparator (votes, then spec hand order, then approval time); the audience filter
-    for both kinds; the proposal validation (required, trimmed, the 1 000 cap); the
-    approve-copy check (`§`, `GAP-<n>`, the 60 and 280 caps); the title and teaser
-    pre-fill (first sentence, word boundary); the voter-list split (named, *others*,
-    *including you*); the event 20 recipient set (dedupe, audience, actor excluded); the
-    sweep's plan (ship, drop, seed); the award keys, the Roadmapper tiers.
-  - **Integration (`*.dbtest.ts`):** a proposal is stored pending and audited without
-    its text; the fourth pending is 409, also for two concurrent requests; the rate
-    limit's 429; withdraw deletes a pending row and is 409 once decided. Approve writes
-    `planned`, the proposer's vote, event 19 and `idea_approved` in one transaction, and
-    rejects `§` and over-long copy with 422. Decline stores the note and notifies. Merge
-    moves the vote, refuses a target outside the proposer's audience, and awards
-    nothing. A second decision is 409. Spam delete sends nothing. Edit keeps votes. A
-    planned delete with `notifyShipped` writes event 20 to the proposer and voters (not
-    the actor, not a deactivated voter, not a voter outside the audience) and
-    `idea_shipped`; without it, nothing. The vote toggle is idempotent, 404s for a
-    retired key, an inapplicable entry or while off. `GET /api/coming-soon` never returns
-    an entry outside the viewer's audience, orders by votes, and honours the name switch
-    live. The sweep announces a shipped key once, clears a dropped key silently, writes
-    nothing while off, and survives a re-run. Erasure deletes pending, declined and
-    merged rows, clears a planned idea's text and keeps the votes. Switch off: user
-    routes 404, admin decisions 409, audited switch. The migration's CHECKs (a planned
-    row without a title, a vote with both or neither target) fail.
+  - **Unit** (`@innobox/shared/feature-ideas`): the §38.2 ordering comparator (votes,
+    then approval time, then id); the audience filter; the client's re-sort after an
+    optimistic toggle and its revert, and which rows move; the live refresh's skip while
+    a vote is in flight; the live-region text (*"2nd of 9"*); the proposal validation
+    (required, trimmed, the 1 000 cap); the approve-copy check (`§`, `GAP-<n>`, the 60
+    and 280 caps); the title and teaser pre-fill (first sentence, word boundary); the
+    voter-list split (named, *others*, *including you*); the event 20 recipient set
+    (dedupe, audience, actor excluded, no proposer); `canPropose` per role and switch;
+    the award rules (self-approval, no proposer); the award keys, the Roadmapper tiers.
+  - **Integration (`*.dbtest.ts`):** migration 0055 seeds the ten rows in their former
+    order, moves the votes on their keys and drops the rest, rewrites both kinds of
+    `merged_into`, drops `spec_key` and `coming_soon_teasers`, and a re-run changes
+    nothing, a deleted seeded entry included. A proposal is stored pending and audited without its text; the fourth
+    pending is 409, also for two concurrent requests; the rate limit's 429; a platform
+    admin is exempt from both; withdraw deletes a pending row and is 409 once decided.
+    Approve writes `planned`, the proposer's vote, event 19 and `idea_approved` in one
+    transaction, and rejects `§` and over-long copy with 422; a platform admin
+    approving their own proposal gets the vote but no event and no award. Decline
+    stores the note and notifies. Merge moves the vote, refuses a target outside the
+    proposer's audience, and awards nothing. A second decision is 409. Spam delete sends
+    nothing. Edit keeps votes, seeded entries included. A planned delete with
+    `notifyShipped` writes event 20 to the proposer and voters (not the actor, not a
+    deactivated voter, not a voter outside the audience) and `idea_shipped`; on a seeded
+    entry, to the voters only and with no award; without `notifyShipped`, nothing. The
+    vote toggle is idempotent and 404s for a deleted or inapplicable entry.
+    `GET /api/coming-soon` never returns an entry outside the viewer's audience, orders
+    by votes, and honours the name switch live. Erasure deletes pending, declined and
+    merged rows, clears a planned idea's text and keeps the votes. Proposals closed: a
+    non-admin's proposal is 404, a platform admin's is 201, and votes, decisions and
+    Planned-tab actions still work; the switch is audited. The migrations' CHECKs (a
+    planned row without a title, a pending row without an author) fail.
   - **e2e** (`e2e/feature-ideas.spec.ts`): a user opens What's new, proposes an idea
     (the thank-you shows, the profile lists it as *Waiting for review*); a platform
     admin sees the card's bubble, approves it with an edited title on
     `/admin/feature-ideas`; the idea appears in *Coming soon* with *"Proposed by"* and
-    one vote; a second user upvotes it (count 2, their bubble appears), toggles the vote
-    off and on; the proposer turns the name switch off and the line disappears; the
-    admin deletes it as shipped and the proposer's inbox shows *"… is now available"*.
-    With the switch off, the propose button and the vote buttons are gone and the profile
-    section is hidden.
+    one vote; a second user upvotes it (count 2, their bubble appears, and it moves
+    above the entries with fewer votes), toggles the vote off and on; the proposer turns
+    the name switch off and the line disappears; the admin edits another entry's title
+    and the new title shows on What's new; the admin deletes the idea as shipped and the
+    proposer's inbox shows *"… is now available"*. With proposals closed, a non-admin
+    sees no propose button but can still vote, and the platform admin can still
+    propose.

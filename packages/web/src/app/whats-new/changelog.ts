@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.22.0",
+    date: "2026-10-22",
+    summary:
+      "Coming soon is now a live roadmap: your upvote moves an entry up the list at once, and the order keeps up with other people's votes while the list is open. Platform admins can edit every entry, including the ones planned before, and can always propose new ones. The admin switch now only decides whether everyone else can propose; the list and voting always stay on.",
+  },
+  {
     version: "1.21.0",
     date: "2026-10-22",
     summary:

@@ -6,8 +6,7 @@
 // feedback-survey offer (§13.10, `openSurvey` — null whenever the platform switch is off), so the
 // account menu's "Take the survey" needs no extra request — and `selfSurvey` (null while the
 // switch is off, else `{ nextAt }`, null when an on-demand survey can start now) — and
-// `bugReports` (true while both the survey and the bug-report switches are on) — and `featureIdeas`
-// (§38.11, the feature-ideas switch).
+// `bugReports` (true while both the survey and the bug-report switches are on).
 import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
@@ -19,7 +18,6 @@ import { readBugReports, readOpenSurvey, readSelfSurvey } from "./survey/store";
 import { meGamification, newAchievements } from "@/lib/gamification-read";
 import { getMcpSettings, hasLiveConnection } from "@/lib/mcp/store";
 import { getHypeEnabled } from "@/lib/hype-settings";
-import { getFeatureIdeasEnabled } from "@innobox/shared";
 import { getRumSettings } from "@/lib/rum-settings";
 import { viewerHypeBudget } from "../hypes/store";
 import { readJsonObject } from "@/lib/http";
@@ -30,7 +28,7 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn, rum, featureIdeas] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn, rum] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
@@ -42,7 +40,6 @@ async function handleGET(): Promise<Response> {
     hasLiveConnection(pool, user.id),
     getHypeEnabled(pool),
     getRumSettings(pool),
-    getFeatureIdeasEnabled(pool),
   ]);
   // §26.11: the hype button's initial budget — null while hype is off.
   const hype = hypeOn ? { enabled: true, hypesLeft: (await viewerHypeBudget(pool, user.id)).hypesLeft } : null;
@@ -87,8 +84,6 @@ async function handleGET(): Promise<Response> {
     hype,
     // §14.12: whether a new tab starts the monitoring collector, and at what sample rate.
     rum,
-    // §38.11: the feature-ideas switch — the profile section and the propose button follow it.
-    featureIdeas,
   });
 }
 

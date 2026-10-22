@@ -213,8 +213,6 @@ export interface BadgeDef {
   agent?: boolean;
   /** §26.8: a hype badge — shown among the locked badges only while hype is on. */
   hype?: boolean;
-  /** §38.10: a feature-ideas badge — shown among the locked badges only while feature ideas are on. */
-  featureIdeas?: boolean;
 }
 
 export const BADGES: readonly BadgeDef[] = [
@@ -233,7 +231,7 @@ export const BADGES: readonly BadgeDef[] = [
   { key: "agent_of_change", name: "Agent of Change", criterion: "Your first solution proposed through an agent", counts: "solution_proposed_via_mcp", thresholds: [1], unit: "solutions proposed through an agent", agent: true },
   { key: "human_in_the_loop", name: "Human in the Loop", criterion: "A challenge or solution you submitted through an agent was validated", counts: "validated_via_mcp", thresholds: [1], unit: "agent submissions validated", agent: true },
   { key: "talent_scout", name: "Talent Scout", criterion: "Items you hyped that were later solved or implemented", counts: "hype_fulfilled", thresholds: [1, 5, 20], unit: "hyped items solved or implemented", hype: true },
-  { key: "roadmapper", name: "Roadmapper", criterion: "Feature ideas you proposed that shipped", counts: "idea_shipped", thresholds: [1, 3, 10], unit: "feature ideas shipped", featureIdeas: true },
+  { key: "roadmapper", name: "Roadmapper", criterion: "Feature ideas you proposed that shipped", counts: "idea_shipped", thresholds: [1, 3, 10], unit: "feature ideas shipped" },
 ];
 
 export function badgeDef(key: string): BadgeDef | undefined {
