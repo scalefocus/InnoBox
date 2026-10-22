@@ -104,6 +104,16 @@ test("pre-fill: the title is the first sentence, both cut at a word boundary wit
   assert.equal(cutAtWord("abcdefghij", 5), "abcd…", "a single long word is cut hard");
 });
 
+test("pre-fill stays linear on long punctuation runs — whatever a person typed", () => {
+  const bang = "!".repeat(50_000);
+  const started = Date.now();
+  assert.equal(titlePrefill(`Ship it${bang}`), "Ship it");
+  assert.equal(titlePrefill(`${bang}x`).length <= FEATURE_IDEA_TITLE_MAX, true);
+  assert.ok(teaserPrefill(`word ${bang} word`).length <= FEATURE_IDEA_TEASER_MAX);
+  assert.equal(titlePrefill("Wait... what? Yes."), "Wait", "an ellipsis before a space ends the sentence, as before");
+  assert.ok(Date.now() - started < 1000, "no backtracking blow-up");
+});
+
 test("compareEntries: votes first; among equals specified teasers in hand order, then the oldest approval", () => {
   const entries: (OrderableEntry & { name: string })[] = [
     { name: "idea-new", kind: "idea", votes: 2, approvedAt: "2026-10-20T10:00:00Z" },

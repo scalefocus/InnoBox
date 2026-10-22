@@ -29,10 +29,6 @@ export function ProposeFeatureDialog({
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const lock = useFormLock();
-  const textRef = useRef(text);
-  textRef.current = text;
-  const sentRef = useRef(sent);
-  sentRef.current = sent;
 
   useEffect(() => {
     const dialog = ref.current;
@@ -45,8 +41,9 @@ export function ProposeFeatureDialog({
     return () => window.clearTimeout(timer);
   }, [sent]);
 
-  /** True when it may close: nothing typed, already sent, or the person agreed to discard. */
-  const mayClose = (): boolean => sentRef.current || textRef.current.trim() === "" || window.confirm("Discard your idea?");
+  /** True when it may close: nothing typed, already sent, or the person agreed to discard. React
+   *  re-binds the dialog's handlers on every render, so they read the current state. */
+  const mayClose = (): boolean => sent || text.trim() === "" || window.confirm("Discard your idea?");
 
   const tryClose = () => {
     if (mayClose()) ref.current?.close();

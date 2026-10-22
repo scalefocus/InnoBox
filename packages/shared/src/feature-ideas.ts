@@ -153,16 +153,32 @@ export function cutAtWord(text: string, max: number): string {
   if (flat.length <= max) return flat;
   const room = flat.slice(0, max - 1);
   const space = room.lastIndexOf(" ");
-  const cut = (space > max / 3 ? room.slice(0, space) : room).replace(/[\s,;:.!?-]+$/, "");
+  const cut = trimTrailing(space > max / 3 ? room.slice(0, space) : room, (ch) => /[\s,;:.!?-]/.test(ch));
   return `${cut}…`;
 }
 
-/** The text's first sentence (up to the first `.`, `!`, `?` or line break), cut at a word boundary. */
+/** `text` without the trailing characters `drop` matches — a linear scan, never a backtracking
+ *  regex, since the text is whatever a person typed. */
+function trimTrailing(text: string, drop: (ch: string) => boolean): string {
+  let end = text.length;
+  while (end > 0 && drop(text[end - 1]!)) end -= 1;
+  return text.slice(0, end);
+}
+
+const isSentenceEnd = (ch: string): boolean => ch === "." || ch === "!" || ch === "?";
+
+/** The text's first sentence (up to the first `.`, `!` or `?` followed by a space, or the first
+ *  line break), cut at a word boundary. */
 export function titlePrefill(text: string): string {
   const firstLine = text.trim().split(/\r?\n/)[0] ?? "";
-  const match = /^(.*?[.!?])(\s|$)/.exec(firstLine);
-  const sentence = (match ? match[1]! : firstLine).replace(/[.!?]+$/, "");
-  return cutAtWord(sentence, FEATURE_IDEA_TITLE_MAX);
+  let sentence = firstLine;
+  for (let i = 0; i < firstLine.length; i += 1) {
+    if (isSentenceEnd(firstLine[i]!) && (i + 1 === firstLine.length || /\s/.test(firstLine[i + 1]!))) {
+      sentence = firstLine.slice(0, i + 1);
+      break;
+    }
+  }
+  return cutAtWord(trimTrailing(sentence, isSentenceEnd), FEATURE_IDEA_TITLE_MAX);
 }
 
 export function teaserPrefill(text: string): string {
