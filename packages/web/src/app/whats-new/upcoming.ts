@@ -26,6 +26,79 @@ export interface UpcomingViewer {
 }
 
 export const UPCOMING: UpcomingEntry[] = [
+  {
+    ids: ["GAP-81"],
+    title: "Co-authors",
+    teaser:
+      "Write a challenge or a solution together with up to four colleagues. Everyone on the team can edit it, and everyone earns the credit when it succeeds.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-82"],
+    title: "Impact tracking",
+    teaser:
+      "Record what an implemented solution actually delivered, such as hours saved, costs avoided or revenue won, and see the value delivered so far on Home.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-83"],
+    title: "This affects me too",
+    teaser: "Tell reviewers a challenge affects you, and how many people, so the problems with the widest reach stand out in triage.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-84"],
+    title: "Mark as duplicate",
+    teaser:
+      "Close a duplicate challenge in one step: its followers move to the original, and its author is told where the discussion continues.",
+    audience: "admins",
+  },
+  {
+    ids: ["GAP-85"],
+    title: "Stuck-item alerts",
+    teaser:
+      "See how long each item has waited in its status, highlighted against your targets, plus a weekly e-mail listing what is stuck.",
+    audience: "admins",
+  },
+  {
+    ids: ["GAP-86"],
+    title: "Implementation board",
+    teaser:
+      "Follow accepted solutions on a board, from acceptance to implementation. Reviewers move the cards along; everyone else sees the roadmap.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-87"],
+    title: "Invite a solver",
+    teaser: "Know someone who could crack a challenge? Invite them to propose a solution, and earn a badge when they do.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-88"],
+    title: "Topics",
+    teaser: "Follow the topics you care about and hear when a new challenge in one of them opens for solutions.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-89"],
+    title: "Campaigns",
+    teaser:
+      "Time-boxed calls for challenges on one theme, such as cutting cloud costs, with a banner on Home while they run and a report when they close.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-90"],
+    title: "Your year in review",
+    teaser: "A personal recap of your year in InnoBox: what you raised, what you solved, and the badges you earned along the way.",
+    audience: "everyone",
+  },
+  {
+    ids: ["GAP-91"],
+    title: "Namespace pulse",
+    teaser:
+      "A weekly AI-written brief of your namespace: emerging themes, items that have waited longest, and challenges that look like duplicates.",
+    audience: "admins",
+  },
 ];
 
 /** True when an entry applies to a viewer with these roles. */
