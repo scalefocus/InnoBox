@@ -106,7 +106,10 @@ pipeline {
       // Only the tsc packages: every later stage resolves @innobox/shared through its dist/, and
       // the worker build must not race the worker unit tests (both write worker/dist). pnpm runs
       // the filtered builds in topological order, so shared builds before worker. The slow Next
-      // build of web runs later, in parallel with the tests.
+      // build of web runs later, in parallel with the tests. Each `build` clears its dist/ (and
+      // shared's tsbuildinfo) first: the workspace persists, tsc never deletes the output of a
+      // removed source, and `node --test` would otherwise run a deleted module's stale test.
+      // Only here, never in `test`, which runs beside branches that read shared/dist.
       steps {
         sh '. "${HOME}/.asdf/asdf.sh" && pnpm --filter @innobox/shared --filter @innobox/worker build'
       }
