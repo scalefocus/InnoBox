@@ -1,13 +1,15 @@
 // Feature ideas e2e (INNOBOX_SPEC.md §38.14): a member proposes an idea from What's new (the thank-you
 // shows, the profile lists it as waiting for review); a platform admin sees the console card's
 // bubble and approves it with an edited title; the idea appears in Coming soon with "Proposed by" and
-// one vote; a second member upvotes it (count 2, their bubble appears), toggles the vote off and on;
-// the proposer turns the name switch off and the line disappears; the admin deletes it as shipped and
-// the proposer's bell carries "… is now available". With the switch off, the propose button and the
-// vote buttons are gone and the profile section is hidden. The switch is global, so the spec turns
-// it back on whatever happens.
+// one vote; a second member upvotes it (count 2, their bubble appears, and it moves above an entry
+// with fewer votes), toggles the vote off and on; the proposer turns the name switch off and the line
+// disappears; the admin edits another entry's title and What's new shows it; the admin deletes the
+// idea as shipped and the proposer's bell carries "… is now available". With proposals closed, a
+// member sees no propose button but can still vote, and a platform admin can still propose. The
+// switch is global, so the spec turns it back on whatever happens.
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
+import { plantComingSoonEntryViaApi, removeComingSoonEntryViaApi } from "./helpers/api";
 import { uniqueStamp } from "./helpers/stamp";
 
 const base = () => process.env.E2E_BASE_URL || "http://localhost:3000";
@@ -19,7 +21,12 @@ async function soonRow(page: Page, title: string) {
   return page.getByTestId("soon-item").filter({ hasText: title });
 }
 
-test("feature ideas: propose, approve, upvote, hide the name, ship — and the switch", async ({ browser }) => {
+/** The Coming soon titles in the order the page shows them. */
+async function soonTitles(page: Page): Promise<string[]> {
+  return page.getByTestId("soon-item").locator(".soon-name").allTextContents();
+}
+
+test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and the switch", async ({ browser }) => {
   const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   const proposerCtx = await browser.newContext();
@@ -34,8 +41,13 @@ test("feature ideas: propose, approve, upvote, hide the name, ship — and the s
       headers: { "content-type": "application/json" },
     });
 
+  const planted: string[] = [];
   try {
     expect((await setSwitch(true)).status()).toBe(200);
+    // An entry approved before the idea, with one vote (the planting admin's own): the idea, once it
+    // has two, must climb above it.
+    const rival = `Rival entry ${stamp}`;
+    planted.push(await plantComingSoonEntryViaApi(adminCtx.request, { title: rival }));
 
     // ── The member proposes from What's new. ──
     const page = await proposerCtx.newPage();
@@ -75,11 +87,19 @@ test("feature ideas: propose, approve, upvote, hide the name, ship — and the s
     await expect(vote).toHaveAttribute("aria-pressed", "false");
     await expect(vote).toContainText("1");
 
-    // ── A second member upvotes, takes it back, and upvotes again. ──
+    // Tied at one vote, the older approval (the rival) comes first.
+    let titles = await soonTitles(fanPage);
+    expect(titles.indexOf(rival)).toBeLessThan(titles.indexOf(title));
+
+    // ── A second member upvotes — the idea climbs at once — takes it back, and upvotes again. ──
     await vote.click();
     await expect(vote).toHaveAttribute("aria-pressed", "true");
     await expect(vote).toContainText("2");
     await expect(row.getByTestId("soon-voters")).toBeVisible();
+    await expect.poll(async () => {
+      titles = await soonTitles(fanPage);
+      return titles.indexOf(title) < titles.indexOf(rival);
+    }).toBe(true);
     await vote.click();
     await expect(vote).toHaveAttribute("aria-pressed", "false");
     await expect(vote).toContainText("1");
@@ -96,29 +116,41 @@ test("feature ideas: propose, approve, upvote, hide the name, ship — and the s
     await expect(row).toBeVisible();
     await expect(row.getByTestId("soon-proposed-by")).toHaveCount(0);
 
-    // ── The admin deletes it as shipped: the proposer hears it is available. ──
+    // ── The admin edits another entry's title on the Planned tab; What's new shows it. ──
     await adminPage.goto("/admin/feature-ideas");
     await adminPage.getByRole("tab", { name: "Planned" }).click();
+    await adminPage.getByRole("button", { name: new RegExp(rival) }).click();
+    await adminPage.getByRole("button", { name: "Edit…" }).click();
+    const renamed = `Renamed rival ${stamp}`;
+    await adminPage.getByLabel("Title").fill(renamed);
+    await adminPage.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(adminPage.locator(".toast")).toContainText("Entry saved");
+    await soonRow(fanPage, renamed);
+    await expect(fanPage.getByTestId("soon-item").filter({ hasText: renamed })).toBeVisible();
+
+    // ── The admin deletes the idea as shipped: the proposer hears it is available. ──
     await adminPage.getByRole("button", { name: new RegExp(title) }).click();
     await adminPage.getByRole("button", { name: "Delete…" }).click();
     await expect(adminPage.getByTestId("idea-notify-shipped")).toBeChecked();
     await adminPage.getByRole("button", { name: "Delete", exact: true }).click();
-    await expect(adminPage.locator(".toast")).toContainText("Idea deleted");
+    await expect(adminPage.locator(".toast")).toContainText("Entry deleted");
     await page.goto("/");
     await page.getByRole("button", { name: "Notifications" }).click();
     await expect(page.locator(".msg-panel")).toContainText(`${title} is now available`);
 
-    // ── Off: no propose button, no votes, no profile section. ──
+    // ── Proposals closed: a member can no longer propose, but still votes; a platform admin proposes. ──
     expect((await setSwitch(false)).status()).toBe(200);
-    await fanPage.goto("/whats-new");
+    const closedRow = await soonRow(fanPage, renamed);
     await expect(fanPage.getByRole("heading", { name: "What's new" })).toBeVisible();
     await expect(fanPage.getByTestId("propose-feature")).toHaveCount(0);
-    await expect(fanPage.getByTestId("soon-vote")).toHaveCount(0);
+    await expect(closedRow.getByTestId("soon-vote")).toBeVisible();
     await fanPage.goto("/profile");
-    await expect(fanPage.getByTestId("profile-feedback")).toBeVisible();
-    await expect(fanPage.getByTestId("profile-feature-ideas")).toHaveCount(0);
+    await expect(fanPage.getByTestId("profile-feature-ideas")).toBeVisible();
+    await adminPage.goto("/whats-new");
+    await expect(adminPage.getByTestId("propose-feature")).toBeVisible();
   } finally {
     await setSwitch(true);
+    for (const id of planted) await removeComingSoonEntryViaApi(adminCtx.request, id);
     await adminCtx.close();
     await proposerCtx.close();
     await fanCtx.close();

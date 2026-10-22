@@ -3,8 +3,7 @@
 // public), and the search results page. All driven through stable buttons/links/inputs.
 import { test, expect } from "@playwright/test";
 import { signIn } from "./helpers/auth";
-import { createChallengeViaApi } from "./helpers/api";
-import { UPCOMING } from "@innobox/shared/upcoming";
+import { createChallengeViaApi, plantComingSoonEntryViaApi, removeComingSoonEntryViaApi } from "./helpers/api";
 import { uniqueStamp } from "./helpers/stamp";
 
 test("dashboard: a signed-in member sees KPIs, quick links, and the account menu", async ({ browser }) => {
@@ -71,42 +70,43 @@ test("what's new: the changelog lists released versions newest-first", async ({ 
   await ctx.close();
 });
 
-test("what's new: Coming soon starts collapsed, expands on click, and hides admin-only teasers from members", async ({ browser }) => {
+test("what's new: Coming soon starts collapsed, expands on click, and hides admin-only entries from members", async ({ browser }) => {
   const stamp = uniqueStamp();
+  const adminCtx = await browser.newContext();
   const ctx = await browser.newContext();
+  await signIn(adminCtx, { name: `E2E Soon Admin ${stamp}`, admin: true });
   await signIn(ctx, { name: `E2E Soon Member ${stamp}` });
-  const page = await ctx.newPage();
-  await page.goto("/whats-new");
+  // Coming soon lives in the database (§38.1): plant one entry for everyone and one for admins.
+  const forMembers = `E2E soon for everyone ${stamp}`;
+  const forAdmins = `E2E soon for admins ${stamp}`;
+  const planted = [
+    await plantComingSoonEntryViaApi(adminCtx.request, { title: forMembers }),
+    await plantComingSoonEntryViaApi(adminCtx.request, { title: forAdmins, audience: "admins" }),
+  ];
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/whats-new");
 
-  // Driven by the live teaser list, never by named features — those ship and leave the list. With
-  // no member teaser the section shows only while feature ideas are on (§38.11), a platform-wide
-  // switch another spec may be flipping right now, so there is nothing stable to assert about it.
-  const toggle = page.locator(".soon-head");
-  const forMembers = UPCOMING.filter((e) => e.audience === "everyone");
-  if (forMembers.length === 0) {
-    await expect(page.getByRole("heading", { name: "What's new" })).toBeVisible();
+    const toggle = page.locator(".soon-head");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const list = page.getByRole("list", { name: "Coming soon" });
+    await expect(list).toBeVisible();
+    await expect(list.getByText(forMembers, { exact: true })).toBeVisible();
+    // Admin-only entries are hidden from members.
+    await expect(list.getByText(forAdmins, { exact: true })).toHaveCount(0);
+
+    await toggle.click();
+    await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
+  } finally {
+    for (const id of planted) await removeComingSoonEntryViaApi(adminCtx.request, id);
+    await adminCtx.close();
     await ctx.close();
-    return;
   }
-
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  const list = page.getByRole("list", { name: "Coming soon" });
-  await expect(list).toBeVisible();
-  await expect(list.getByText(forMembers[0]!.title, { exact: true })).toBeVisible();
-  // Admin-only teasers are hidden from members.
-  for (const entry of UPCOMING.filter((e) => e.audience !== "everyone")) {
-    await expect(list.getByText(entry.title, { exact: true })).toHaveCount(0);
-  }
-
-  await toggle.click();
-  await expect(page.getByRole("list", { name: "Coming soon" })).toHaveCount(0);
-
-  await ctx.close();
 });
 
 test("profile: the e-mail-notifications toggle round-trips, and the public profile loads", async ({ browser }) => {

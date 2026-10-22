@@ -4,7 +4,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { CHANGELOG } from "../src/app/whats-new/changelog";
-import { UPCOMING } from "@innobox/shared/upcoming";
+import { plantComingSoonEntryViaApi, removeComingSoonEntryViaApi } from "./helpers/api";
 import { uniqueStamp } from "./helpers/stamp";
 
 const CURRENT = CHANGELOG[0]!;
@@ -179,16 +179,22 @@ test("Quick start's Continue leaves no notice behind", async ({ browser }) => {
 });
 
 test("the page opens with Coming soon greyed out above the releases, filtered by role", async ({ browser }) => {
+  const stamp = uniqueStamp();
+  const adminCtx = await browser.newContext();
   const ctx = await browser.newContext();
-  await signIn(ctx, { name: `E2E Soon Member ${uniqueStamp()}` });
-  const page = await ctx.newPage();
-  await page.goto("/whats-new");
-
-  // With no member teaser, whether the section shows depends on the platform-wide feature-ideas
-  // switch (§38.11), which another spec may be flipping — so only the teasers are asserted.
-  const soon = page.locator("section.soon");
-  const everyone = UPCOMING.filter((e) => e.audience === "everyone");
-  if (everyone.length > 0) {
+  await signIn(adminCtx, { name: `E2E Soon Admin ${stamp}`, admin: true });
+  await signIn(ctx, { name: `E2E Soon Member ${stamp}` });
+  // Coming soon lives in the database (§38.1): plant an entry for everyone and one for platform admins.
+  const forEveryone = `E2E notice soon ${stamp}`;
+  const forPlatform = `E2E notice platform soon ${stamp}`;
+  const planted = [
+    await plantComingSoonEntryViaApi(adminCtx.request, { title: forEveryone }),
+    await plantComingSoonEntryViaApi(adminCtx.request, { title: forPlatform, audience: "platform_admin" }),
+  ];
+  try {
+    const page = await ctx.newPage();
+    await page.goto("/whats-new");
+    const soon = page.locator("section.soon");
     await expect(soon).toBeVisible();
     // Above the releases.
     const above = await page.evaluate(() => {
@@ -198,13 +204,12 @@ test("the page opens with Coming soon greyed out above the releases, filtered by
     });
     expect(above).toBe(true);
     await soon.locator(".soon-head").click();
-    // Specified teasers only: approved community ideas share the list, and votes set the order (§38.2).
-    const titles = await soon.locator('[data-kind="spec"] .soon-name').allTextContents();
-    expect([...titles].sort()).toEqual(everyone.map((e) => e.title).sort());
-    for (const entry of UPCOMING.filter((e) => e.audience === "platform_admin")) {
-      expect(titles).not.toContain(entry.title);
-    }
+    const titles = await soon.locator(".soon-name").allTextContents();
+    expect(titles).toContain(forEveryone);
+    expect(titles).not.toContain(forPlatform);
+  } finally {
+    for (const id of planted) await removeComingSoonEntryViaApi(adminCtx.request, id);
+    await adminCtx.close();
+    await ctx.close();
   }
-
-  await ctx.close();
 });

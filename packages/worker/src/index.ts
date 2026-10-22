@@ -47,7 +47,6 @@ import { runSystemLogAlertSweep } from "./system-log/alert.js";
 import { startWebhookSweeps } from "./webhooks/deliver.js";
 import { startTriageAssistSweeps } from "./ai/triage.js";
 import { runGamificationBackfill } from "./gamification/backfill.js";
-import { runShippedTeaserSweep } from "./feature-ideas/sweep.js";
 import { TRASH_PURGE_INTERVAL_MS, runTrashPurgeSweep } from "./trash/purge.js";
 import { runPublicIntakeRetention } from "./public-intake/retention.js";
 
@@ -194,14 +193,6 @@ const leaderElection = startLeaderElection(dbUrl, {
         if (summary.ran) console.log(JSON.stringify({ level: "info", msg: "gamification backfill", ...summary }));
       })
       .catch((err) => console.error(JSON.stringify({ level: "error", msg: "gamification backfill failed", error: String(err) })));
-
-    // §38.9: the shipped-teaser sweep — once per leadership, so after every deploy. Pure DB work;
-    // idempotent, so a crash mid-run is finished by the next start.
-    runShippedTeaserSweep(pool, { bootstrapAdminGroup: process.env.INNOBOX_BOOTSTRAP_ADMIN_GROUP })
-      .then((summary) => {
-        if (summary.seeded || summary.shipped || summary.dropped) console.log(JSON.stringify({ level: "info", msg: "shipped-teaser sweep", ...summary }));
-      })
-      .catch((err) => console.error(JSON.stringify({ level: "error", msg: "shipped-teaser sweep failed", error: String(err) })));
 
     // §2 hourly housekeeping sweep: §14.5 presence rollup + retention purge, §14.12 monitoring
     // rollup + trims, §14.7 system-log

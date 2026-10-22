@@ -2,8 +2,8 @@
 // The own profile's Feature ideas section (INNOBOX_SPEC.md §38.6, §38.7): the "Show my name on
 // feature ideas" switch — optimistic flip, inline-error revert, like every profile switch — and
 // "Your ideas", newest first: waiting for review (with Withdraw), planned (its votes, linked to
-// What's new), declined (the admin's note) and merged. Hidden entirely while feature ideas are off,
-// which GET /api/me/feature-ideas answers with a 404.
+// What's new), declined (the admin's note) and merged. Always shown: the proposals switch (§38.11)
+// closes proposing, not this list.
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { FEATURE_IDEA_STATUS_LABEL, type FeatureIdeaStatus } from "@innobox/shared/feature-ideas";
@@ -27,7 +27,6 @@ export function FeatureIdeasSection() {
   const fmt = useDateFmt();
   const [named, setNamed] = useState<boolean | null>(null);
   const [ideas, setIdeas] = useState<OwnIdea[] | null>(null);
-  const [hidden, setHidden] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -35,13 +34,8 @@ export function FeatureIdeasSection() {
   const load = useCallback(() => {
     fetch("/api/me/feature-ideas", { headers: { accept: "application/json" } })
       .then(async (res) => {
-        if (res.status === 404) {
-          setHidden(true);
-          return;
-        }
         const json = await readJson(res);
         if (!res.ok) throw new Error();
-        setHidden(false);
         setNamed(json.named !== false);
         setIdeas((json.ideas as OwnIdea[]) ?? []);
       })
@@ -82,7 +76,7 @@ export function FeatureIdeasSection() {
     load();
   };
 
-  if (hidden || named === null) return null;
+  if (named === null) return null;
 
   return (
     <div className="card card-pad reveal" style={{ marginBottom: 18 }} data-testid="profile-feature-ideas">

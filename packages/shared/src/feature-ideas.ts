@@ -1,9 +1,35 @@
 // Feature ideas (INNOBOX_SPEC.md §38) — pure and CLIENT-SAFE (also at `@innobox/shared/feature-ideas`):
-// the limits, the Coming soon entry ids, proposal and published-copy validation, the Approve
-// dialog's pre-fill, the §38.2 order, the §38.3 voter-list split, the §38.8 notification copy and
-// the §38.9 sweep plan. Every DB read and write lives in the callers (web stores, the worker sweep,
-// and the server-only ./feature-ideas-db.ts).
-import { UPCOMING_KEY_PATTERN, isUpcomingAudience, type UpcomingAudience, type UpcomingEntry, type UpcomingViewer } from "./upcoming.js";
+// the entry audiences, the limits, the Coming soon entry ids, proposal and published-copy validation,
+// the Approve dialog's pre-fill, the §38.2 order and the §38.3 re-sort, the §38.3 voter-list split,
+// the §38.4 proposing and §38.10 award rules, and the §38.8 notification copy. Every DB read and write
+// lives in the callers (the web stores and the server-only ./feature-ideas-db.ts).
+//
+// Coming soon lives only in the database (§38.1 decision 1): every entry is a `planned` feature_ideas
+// row, so nothing here lists entries.
+
+// ── Audiences (§13.9) ────────────────────────────────────────────────────────────────────
+
+/** Who is shown an entry: everyone, platform or namespace admins, or platform admins only. */
+export type EntryAudience = "everyone" | "admins" | "platform_admin";
+
+export const ENTRY_AUDIENCES: readonly EntryAudience[] = ["everyone", "admins", "platform_admin"];
+
+/** The viewer's resolved roles, as far as an audience needs them. */
+export interface AudienceViewer {
+  platformAdmin: boolean;
+  namespaceAdmin: readonly string[];
+}
+
+export function isEntryAudience(v: unknown): v is EntryAudience {
+  return typeof v === "string" && (ENTRY_AUDIENCES as readonly string[]).includes(v);
+}
+
+/** True when an entry with this audience applies to a viewer with these roles. */
+export function appliesTo(audience: EntryAudience, viewer: AudienceViewer): boolean {
+  if (audience === "everyone") return true;
+  if (audience === "platform_admin") return viewer.platformAdmin;
+  return viewer.platformAdmin || viewer.namespaceAdmin.length > 0;
+}
 
 // ── Limits ───────────────────────────────────────────────────────────────────────────────
 
@@ -14,7 +40,7 @@ export const FEATURE_IDEA_TITLE_MAX = 60;
 export const FEATURE_IDEA_TEASER_MAX = 280;
 /** §38.5: the optional note sent with a decline. */
 export const FEATURE_IDEA_NOTE_MAX = 1000;
-/** §38.4: proposals a person may have waiting for review at once. */
+/** §38.4: proposals a person who is not a platform admin may have waiting for review at once. */
 export const MAX_PENDING_IDEAS = 3;
 /** §38.3: named voters shown before "+N". */
 export const VOTERS_SHOWN = 12;
@@ -22,6 +48,8 @@ export const VOTERS_SHOWN = 12;
 export const DECLINED_EXCERPT_MAX = 200;
 /** §38.5: how much of a pending proposal its row shows. */
 export const PENDING_ROW_EXCERPT_MAX = 160;
+/** §38.3: how often an open Coming soon list re-reads the votes. */
+export const COMING_SOON_REFRESH_MS = 30_000;
 
 export const FEATURE_IDEA_STATUSES = ["pending", "planned", "declined", "merged"] as const;
 export type FeatureIdeaStatus = (typeof FEATURE_IDEA_STATUSES)[number];
@@ -33,7 +61,7 @@ export const FEATURE_IDEA_STATUS_LABEL: Record<FeatureIdeaStatus, string> = {
   merged: "Merged",
 };
 
-export const AUDIENCE_LABEL: Record<UpcomingAudience, string> = {
+export const AUDIENCE_LABEL: Record<EntryAudience, string> = {
   everyone: "Everyone",
   admins: "Admins",
   platform_admin: "Platform admins",
@@ -44,51 +72,37 @@ export const FEATURE_IDEA_MESSAGES = {
   tooManyPending: `You have ${MAX_PENDING_IDEAS} ideas waiting for review. You can propose another once one of them is decided.`,
   alreadyDecided: "Another admin has already reviewed this idea.",
   alreadyDecidedOwn: "This idea has already been reviewed.",
-  off: "Feature ideas are off. Turn them on to review.",
   notVisibleToProposer: "Not visible to the person who proposed this",
   notFound: "idea not found",
 } as const;
 
 // ── Coming soon entry ids (§38.2) ────────────────────────────────────────────────────────
 
-export type EntryRef = { kind: "spec"; key: string } | { kind: "idea"; id: string };
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function specEntryId(key: string): string {
-  return `spec:${key}`;
+/** An entry id is its row's uuid: the lower-cased uuid, or null for anything else. */
+export function parseEntryId(value: unknown): string | null {
+  return typeof value === "string" && UUID_RE.test(value) ? value.toLowerCase() : null;
 }
 
-export function ideaEntryId(id: string): string {
-  return `idea:${id}`;
-}
+// ── Viewers and rules ────────────────────────────────────────────────────────────────────
 
-/** `spec:<key>` or `idea:<uuid>` → the entry it names; anything else → null. */
-export function parseEntryId(value: unknown): EntryRef | null {
-  if (typeof value !== "string") return null;
-  if (value.startsWith("spec:")) {
-    const key = value.slice("spec:".length);
-    return UPCOMING_KEY_PATTERN.test(key) ? { kind: "spec", key } : null;
-  }
-  if (value.startsWith("idea:")) {
-    const id = value.slice("idea:".length);
-    return UUID_RE.test(id) ? { kind: "idea", id: id.toLowerCase() } : null;
-  }
-  return null;
-}
-
-export function entryIdOf(ref: EntryRef): string {
-  return ref.kind === "spec" ? specEntryId(ref.key) : ideaEntryId(ref.id);
-}
-
-// ── Viewers ──────────────────────────────────────────────────────────────────────────────
-
-/** The §13.9 audience view of a resolved role set (invariant 1: SCIM groups + role mappings). */
-export function upcomingViewerOf(roles: { isPlatformAdmin: boolean; grants: readonly { role: string; namespaceId: string | null }[] }): UpcomingViewer {
+/** The audience view of a resolved role set (invariant 1: SCIM groups + role mappings). */
+export function audienceViewerOf(roles: { isPlatformAdmin: boolean; grants: readonly { role: string; namespaceId: string | null }[] }): AudienceViewer {
   return {
     platformAdmin: roles.isPlatformAdmin,
     namespaceAdmin: [...new Set(roles.grants.filter((g) => g.role === "namespace_admin" && g.namespaceId !== null).map((g) => g.namespaceId as string))],
   };
+}
+
+/** §38.11: platform admins may always propose; everyone else while proposals are open. */
+export function canProposeFeature(platformAdmin: boolean, proposalsOpen: boolean): boolean {
+  return platformAdmin || proposalsOpen;
+}
+
+/** §38.10: an entry earns its proposer points only when it has one and someone else approved it. */
+export function ideaEarnsAwards(authorId: string | null, approverId: string | null): boolean {
+  return authorId !== null && authorId !== approverId;
 }
 
 // ── Validation ───────────────────────────────────────────────────────────────────────────
@@ -106,7 +120,7 @@ export function validateIdeaText(value: unknown): IdeaResult<string> {
 export interface PublishedCopy {
   title: string;
   teaser: string;
-  audience: UpcomingAudience;
+  audience: EntryAudience;
 }
 
 const GAP_MARKER_RE = /GAP-\d+/;
@@ -130,7 +144,7 @@ export function validatePublishedCopy(body: unknown): IdeaResult<PublishedCopy> 
   if (hasInternalReference(title) || hasInternalReference(teaser)) {
     return { ok: false, error: "The title and teaser can't contain internal references such as section marks or gap markers." };
   }
-  if (!isUpcomingAudience(rec.audience)) return { ok: false, error: "audience must be one of: everyone, admins, platform_admin" };
+  if (!isEntryAudience(rec.audience)) return { ok: false, error: "audience must be one of: everyone, admins, platform_admin" };
   return { ok: true, value: { title, teaser, audience: rec.audience } };
 }
 
@@ -190,23 +204,49 @@ export function ideaExcerpt(text: string, max: number): string {
   return cutAtWord(text, max);
 }
 
-// ── The order (§38.2) ────────────────────────────────────────────────────────────────────
+// ── The order (§38.2) and the live re-sort (§38.3) ───────────────────────────────────────
 
 export interface OrderableEntry {
-  kind: "spec" | "idea";
+  id: string;
   votes: number;
-  /** A specified teaser's position in UPCOMING. */
-  specIndex?: number;
-  /** A planned idea's approval time (ISO). */
-  approvedAt?: string;
+  /** The approval time (ISO). */
+  approvedAt: string;
 }
 
-/** Votes descending; among equals specified teasers first in hand order, then ideas oldest approval first. */
+/** Votes descending; among equals the oldest approval first; then by id, so the order is total. */
 export function compareEntries(a: OrderableEntry, b: OrderableEntry): number {
   if (a.votes !== b.votes) return b.votes - a.votes;
-  if (a.kind !== b.kind) return a.kind === "spec" ? -1 : 1;
-  if (a.kind === "spec") return (a.specIndex ?? 0) - (b.specIndex ?? 0);
-  return (a.approvedAt ?? "").localeCompare(b.approvedAt ?? "");
+  if (a.approvedAt !== b.approvedAt) return a.approvedAt < b.approvedAt ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+export function sortEntries<T extends OrderableEntry>(entries: readonly T[]): T[] {
+  return [...entries].sort(compareEntries);
+}
+
+/** The list after one toggle of the viewer's own vote on `id`, flipped and re-sorted — the
+ *  optimistic state the page shows before the server answers. */
+export function applyOwnVote<T extends OrderableEntry & { voted: boolean }>(entries: readonly T[], id: string, voted: boolean): T[] {
+  return sortEntries(
+    entries.map((e) => (e.id === id && e.voted !== voted ? { ...e, voted, votes: Math.max(0, e.votes + (voted ? 1 : -1)) } : e)),
+  );
+}
+
+/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st, 22nd. */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  const suffix = n % 10 === 1 ? "st" : n % 10 === 2 ? "nd" : n % 10 === 3 ? "rd" : "th";
+  return `${n}${suffix}`;
+}
+
+/** §38.3: the live-region line when the viewer's own vote moves a row — "{title} is now 2nd of 9".
+ *  Null when the row stayed where it was. */
+export function moveAnnouncement(before: readonly { id: string }[], after: readonly { id: string; title: string }[], id: string): string | null {
+  const from = before.findIndex((e) => e.id === id);
+  const to = after.findIndex((e) => e.id === id);
+  if (to < 0 || from === to) return null;
+  return `${after[to]!.title} is now ${ordinal(to + 1)} of ${after.length}`;
 }
 
 // ── The voter list (§38.3) ───────────────────────────────────────────────────────────────
@@ -313,34 +353,6 @@ export function featureAvailableNotification(title: string, relation: "proposed"
     subject: `Now available: ${name}`,
     emailText: `${name} is now available in InnoBox. ${yours} See What's new for the details.`,
     link: "/whats-new",
-  };
-}
-
-// ── The shipped-teaser sweep (§38.9) ─────────────────────────────────────────────────────
-
-export interface MirroredTeaser {
-  key: string;
-  title: string;
-  audience: UpcomingAudience;
-}
-
-export interface TeaserSweepPlan {
-  /** Every live teaser, to upsert into the mirror with its current title. */
-  upserts: MirroredTeaser[];
-  /** Mirrored keys no longer live and not dropped: announce to their voters, then clear. */
-  shipped: MirroredTeaser[];
-  /** Mirrored keys no longer live and on the dropped list: clear silently. */
-  dropped: MirroredTeaser[];
-}
-
-export function planTeaserSweep(mirror: readonly MirroredTeaser[], live: readonly UpcomingEntry[], droppedKeys: readonly string[]): TeaserSweepPlan {
-  const liveKeys = new Set(live.map((e) => e.key));
-  const dropped = new Set(droppedKeys);
-  const gone = mirror.filter((m) => !liveKeys.has(m.key));
-  return {
-    upserts: live.map((e) => ({ key: e.key, title: e.title, audience: e.audience })),
-    shipped: gone.filter((m) => !dropped.has(m.key)),
-    dropped: gone.filter((m) => dropped.has(m.key)),
   };
 }
 

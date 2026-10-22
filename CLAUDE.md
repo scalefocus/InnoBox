@@ -169,10 +169,11 @@ It is a soft guideline, not enforced; every release's entry also drives the in-a
 notice (§13.9). No bump → no entry.
 
 **Specified but not built.** A feature specified ahead of its implementation carries a
-`⚠ GAP-nn · new feature` marker in the spec. Each such marker also needs an entry in the
-*Coming soon* list (§13.9), `packages/shared/src/upcoming.ts` (a test enforces it; give the
-entry a permanent `key`, §38.2), and the commit that
-ships the feature deletes the marker, removes the teaser and adds the changelog entry.
+`⚠ GAP-nn · new feature` marker in the spec, and the commit that ships the feature deletes
+the marker and adds the changelog entry. The *Coming soon* list on What's new (§13.9) is
+**not** tied to the spec or to code: it lives only in the database (`feature_ideas` rows in
+`planned` status), and platform admins add to it (by proposing and approving), edit it and
+delete from it on `/admin/feature-ideas` (§38). Never reintroduce a hard-coded teaser list.
 
 **`changelog.ts` is itself the source of truth for past versions.** The history was
 squashed to a single commit for the open-source release (§21.4), so `git log` no longer

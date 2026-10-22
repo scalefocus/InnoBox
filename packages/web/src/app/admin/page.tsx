@@ -217,9 +217,10 @@ function PublicSubmissionsLinkCard() {
 }
 
 /** The §38.5 console card: links to the feature-ideas review page, with a 1–9+ bubble of proposals
- *  waiting for review (hidden at zero), and holds the §38.11 switch in its action slot — beside the
- *  link, never inside it, so it works without opening the page. The card is not itself a link: it
- *  holds a second control. */
+ *  waiting for review (hidden at zero), and holds the §38.11 "Anyone can propose" switch in its
+ *  action slot — beside the link, never inside it, so it works without opening the page. The switch
+ *  only decides whether people who are not platform admins can propose; the roadmap, votes and review
+ *  always work. The card is not itself a link: it holds a second control. */
 function FeatureIdeasLinkCard() {
   const [pending, setPending] = useState(0);
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -287,7 +288,8 @@ function FeatureIdeasLinkCard() {
             className="toggle toggle-pref"
             role="switch"
             aria-checked={on}
-            aria-label="Feature ideas"
+            aria-label="Anyone can propose"
+            title="Anyone can propose"
             data-testid="feature-ideas-switch"
             disabled={enabled === null || busy}
             onClick={toggle}
@@ -298,7 +300,10 @@ function FeatureIdeasLinkCard() {
           </button>
         </div>
       </div>
-      <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Upvotes on what&apos;s coming, and the features people propose for it.</p>
+      <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>The roadmap on What&apos;s new, ordered by upvotes, and the features people propose for it.</p>
+      <p className="sub" style={{ margin: "6px 0 0" }} data-testid="feature-ideas-switch-help">
+        Anyone can propose: {on ? "Everyone can propose features." : "Only platform admins can propose features."}
+      </p>
       {error && (
         <p className="sub" style={{ color: "var(--danger)", margin: "6px 0 0" }} role="status">
           {error}

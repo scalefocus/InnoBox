@@ -1,8 +1,8 @@
 // POST /api/admin/feature-ideas/:id/merge { entry } (INNOBOX_SPEC.md §38.5, §38.14): the pending
-// idea is a duplicate of a live Coming soon entry (`spec:<key>` or `idea:<uuid>`); the proposer's
-// vote moves to it and event 19 says it is already planned. 409 `not_visible` when the entry's
-// audience does not include the proposer, 400 for an entry that is not live, 409 when another admin
-// decided first or while feature ideas are off. Platform admin only.
+// idea is a duplicate of a Coming soon entry (a planned row's uuid); the proposer's vote moves to it
+// and event 19 says it is already planned. 409 `not_visible` when the entry's audience does not
+// include the proposer, 400 for an entry that is not planned, 409 when another admin decided first.
+// Platform admin only.
 import { parseEntryId } from "@innobox/shared";
 import { pool } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";

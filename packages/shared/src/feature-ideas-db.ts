@@ -1,8 +1,7 @@
-// The database half of feature ideas (INNOBOX_SPEC.md §38) that the web tier and the worker share:
-// the platform switch, the audience test against resolved roles, and the two notifications —
-// event 19 (a proposal was reviewed) and event 20 (a planned feature is now available, §38.8). The
-// web tier writes event 20 when an admin deletes a planned idea as shipped; the worker writes it
-// when a specified teaser leaves UPCOMING (§38.9). Server-only. Authorization is the caller's job.
+// The database half of feature ideas (INNOBOX_SPEC.md §38) that the web stores share: the proposals
+// switch, the audience test against resolved roles, and the two notifications — event 19 (a proposal
+// was reviewed) and event 20 (a planned entry is now available, §38.8), which the web tier writes when
+// an admin deletes a planned entry as shipped. Server-only. Authorization is the caller's job.
 //
 // Neither event names a challenge or a solution: the payload carries no parentType/parentId and its
 // link points at What's new or the profile, so the 0051 trigger leaves both item columns null and
@@ -13,16 +12,18 @@ import {
   featureAvailableCandidates,
   featureAvailableNotification,
   ideaReviewedNotification,
+  type EntryAudience,
   type IdeaNotification,
   type ReviewOutcome,
 } from "./feature-ideas.js";
-import type { UpcomingAudience } from "./upcoming.js";
 
 export const FEATURE_IDEAS_ENABLED_KEY = "feature_ideas_enabled";
 export const FEATURE_IDEA_REVIEWED_TYPE = "feature_idea_reviewed";
 export const FEATURE_AVAILABLE_TYPE = "feature_available";
 
-/** §38.11: on unless the stored value is exactly `false` — the migration seeds `true`. */
+/** §38.11: whether people who are not platform admins may propose — on unless the stored value is
+ *  exactly `false` (the migration seeds `true`). Nothing else reads it: the list, votes and review
+ *  always work. */
 export async function getFeatureIdeasEnabled(db: DbClient): Promise<boolean> {
   const { rows } = await db.query<{ value: unknown }>(`select value from platform_settings where key = $1`, [FEATURE_IDEAS_ENABLED_KEY]);
   return rows[0]?.value !== false;
@@ -33,7 +34,7 @@ export async function getFeatureIdeasEnabled(db: DbClient): Promise<boolean> {
  * way roles ever are (invariant 1): SCIM-synced group membership + role_mappings, plus the
  * bootstrap group while it is configured.
  */
-export async function audienceMembers(db: DbClient, userIds: readonly string[], audience: UpcomingAudience, bootstrapAdminGroup: string | undefined): Promise<Set<string>> {
+export async function audienceMembers(db: DbClient, userIds: readonly string[], audience: EntryAudience, bootstrapAdminGroup: string | undefined): Promise<Set<string>> {
   if (userIds.length === 0) return new Set();
   if (audience === "everyone") return new Set(userIds);
   const roles = audience === "platform_admin" ? ["platform_admin"] : ["platform_admin", "namespace_admin"];
@@ -93,10 +94,10 @@ export async function deliverIdeaReviewed(db: DbClient, input: IdeaReviewedInput
 
 export interface FeatureAvailableInput {
   title: string;
-  /** A planned idea's proposer; null for a specified teaser. */
+  /** The entry's proposer; null for an entry without one (§38.2). */
   proposerId: string | null;
   voterIds: readonly string[];
-  audience: UpcomingAudience;
+  audience: EntryAudience;
   actorId: string | null;
   bootstrapAdminGroup: string | undefined;
 }

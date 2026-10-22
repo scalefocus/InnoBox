@@ -23,7 +23,6 @@ import {
 import { getCachedLeaderboard } from "../app/api/leaderboards/store";
 import { getMcpSettings } from "./mcp/store";
 import { getHypeEnabled } from "./hype-settings";
-import { getFeatureIdeasEnabled } from "@innobox/shared";
 
 export async function isGamificationOn(pool: Pool): Promise<boolean> {
   return (await getGamificationSettings(pool)).enabled;
@@ -143,14 +142,13 @@ async function earnedBadges(pool: Pool, userId: string): Promise<EarnedBadge[]> 
 /** The owner's full block: level, leading, earned (with progress) and locked badges. */
 export async function ownGamification(pool: Pool, userId: string): Promise<OwnGamification | null> {
   if (!(await isGamificationOn(pool))) return null;
-  const [level, leading, earned, counts, mcp, hypeOn, ideasOn] = await Promise.all([
+  const [level, leading, earned, counts, mcp, hypeOn] = await Promise.all([
     levelBlock(pool, userId),
     leadingFor(pool, userId),
     earnedBadges(pool, userId),
     reasonCounts(pool, userId),
     getMcpSettings(pool),
     getHypeEnabled(pool),
-    getFeatureIdeasEnabled(pool),
   ]);
   const earnedKeys = new Set(earned.map((b) => b.badgeKey));
   for (const badge of earned) {
@@ -159,8 +157,9 @@ export async function ownGamification(pool: Pool, userId: string): Promise<OwnGa
   }
   // §25.12: the four agent badges appear among the locked ones only while agent access is on;
   // earned ones always show.
-  // §26.8: likewise Talent Scout only while hype is on, and §38.10 Roadmapper while feature ideas are.
-  const locked = BADGES.filter((b) => !earnedKeys.has(b.key) && (!b.agent || mcp.enabled) && (!b.hype || hypeOn) && (!b.featureIdeas || ideasOn)).map((b) => ({
+  // §26.8: likewise Talent Scout only while hype is on. §38.10 Roadmapper always shows: the
+  // proposals switch never stops an idea from shipping.
+  const locked = BADGES.filter((b) => !earnedKeys.has(b.key) && (!b.agent || mcp.enabled) && (!b.hype || hypeOn)).map((b) => ({
     badgeKey: b.key,
     name: b.name,
     criterion: b.criterion,
