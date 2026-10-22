@@ -6,7 +6,8 @@
 // Before rendering it drops a row when the recipient has already READ its inbox row (the digest
 // is not a second copy), when the item is gone (its inbox row went with it, §10.3), or when the
 // item is no longer visible to the recipient — the visibility check runs again at send time
-// (invariant 2). Nothing left → no e-mail. With the e-mail switch off the held rows are discarded
+// (invariant 2). A §38.8 "feature now available" row names no item, so only the read and gone rules
+// apply to it. Nothing left → no e-mail. With the e-mail switch off the held rows are discarded
 // at the slot, as an immediate row would be. Dropped and discarded rows are marked sent, like the
 // per-event sweep's opt-out skip, so they are never picked up again.
 //
@@ -65,6 +66,11 @@ export function heldRowDropReason(row: HeldRow, visible: boolean): DropReason | 
   if (row.inbox_read_at) return "read";
   if (!visible) return "invisible";
   return null;
+}
+
+/** §38.8: a "feature now available" row names no item — there is no visibility to re-check. */
+export function namesNoItem(row: HeldRow): boolean {
+  return row.payload.digest?.kind === "feature";
 }
 
 /** A kept row as a digest update. A coalesced comment row counts every comment its inbox row
@@ -214,7 +220,11 @@ export async function runDigestSweep(
       const kept: HeldRow[] = [];
       const dropped: string[] = [];
       for (const row of held) {
-        const visible = row.payload.digest && row.inbox_id && !row.inbox_read_at ? await isVisibleTo(pool, viewer, row.payload.parentType, row.payload.parentId) : false;
+        // §38.8 event 20 names no item: there is nothing to re-check, only the read and gone rules.
+        const visible =
+          row.payload.digest && row.inbox_id && !row.inbox_read_at
+            ? namesNoItem(row) || (await isVisibleTo(pool, viewer, row.payload.parentType, row.payload.parentId))
+            : false;
         if (heldRowDropReason(row, visible) === null) kept.push(row);
         else dropped.push(row.id);
       }

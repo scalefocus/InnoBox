@@ -30,6 +30,7 @@ const PLATFORM_STATE_SPECS = [
   "ai-similar.spec.ts",
   "ai-summary.spec.ts",
   "ai-triage.spec.ts",
+  "feature-ideas.spec.ts",
   "featured.spec.ts",
   "gamification.spec.ts",
   "hype.spec.ts",

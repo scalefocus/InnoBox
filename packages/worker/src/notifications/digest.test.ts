@@ -4,7 +4,7 @@
 // selects a held row, the digest job only due held rows. Live-DB behaviour is in digest.dbtest.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { heldRowDropReason, runDigestSweep, toDigestUpdate, type HeldRow } from "./digest.js";
+import { heldRowDropReason, namesNoItem, runDigestSweep, toDigestUpdate, type HeldRow } from "./digest.js";
 import { runNotificationSweep } from "./dispatch.js";
 
 const row = (over: Partial<HeldRow> = {}): HeldRow => ({
@@ -85,4 +85,23 @@ test("the digest job selects only held rows whose slot has come", async () => {
   const summary = await runDigestSweep(pool as never, { graphEnv: null, smtpEnv: null, baseUrl: "https://x" });
   assert.deepEqual(summary, { sent: 0, rowsSent: 0, dropped: 0, discarded: 0, failed: 0 });
   assert.match(selects[0]!, /o\.digest_due_at <= now\(\)/);
+});
+
+test("a feature-now-available row names no item: kept unless read or gone, one update (§38.8)", () => {
+  const feature = row({
+    payload: {
+      message: "Dark mode is now available. You upvoted it.",
+      link: "/whats-new",
+      notificationId: "n1",
+      digest: { kind: "feature", challengeNumber: "", challengeTitle: "", featureTitle: "Dark mode" },
+    },
+  });
+  assert.equal(namesNoItem(feature), true);
+  assert.equal(namesNoItem(row()), false, "a challenge row is checked against its item");
+  assert.equal(heldRowDropReason(feature, true), null);
+  assert.equal(heldRowDropReason({ ...feature, inbox_read_at: new Date() }, true), "read");
+  const update = toDigestUpdate(feature);
+  assert.equal(update.kind, "feature");
+  assert.equal(update.featureTitle, "Dark mode");
+  assert.equal(update.count, 1);
 });

@@ -4,7 +4,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { signIn } from "./helpers/auth";
 import { CHANGELOG } from "../src/app/whats-new/changelog";
-import { UPCOMING } from "../src/app/whats-new/upcoming";
+import { UPCOMING } from "@innobox/shared/upcoming";
 import { uniqueStamp } from "./helpers/stamp";
 
 const CURRENT = CHANGELOG[0]!;
@@ -184,11 +184,11 @@ test("the page opens with Coming soon greyed out above the releases, filtered by
   const page = await ctx.newPage();
   await page.goto("/whats-new");
 
+  // With no member teaser, whether the section shows depends on the platform-wide feature-ideas
+  // switch (§38.11), which another spec may be flipping — so only the teasers are asserted.
   const soon = page.locator("section.soon");
   const everyone = UPCOMING.filter((e) => e.audience === "everyone");
-  if (everyone.length === 0) {
-    await expect(soon).toHaveCount(0);
-  } else {
+  if (everyone.length > 0) {
     await expect(soon).toBeVisible();
     // Above the releases.
     const above = await page.evaluate(() => {
@@ -197,9 +197,10 @@ test("the page opens with Coming soon greyed out above the releases, filtered by
       return Boolean(s.compareDocumentPosition(firstRelease) & Node.DOCUMENT_POSITION_FOLLOWING);
     });
     expect(above).toBe(true);
-    await soon.getByRole("button").click();
-    const titles = await soon.locator(".soon-name").allTextContents();
-    expect(titles).toEqual(everyone.map((e) => e.title));
+    await soon.locator(".soon-head").click();
+    // Specified teasers only: approved community ideas share the list, and votes set the order (§38.2).
+    const titles = await soon.locator('[data-kind="spec"] .soon-name').allTextContents();
+    expect([...titles].sort()).toEqual(everyone.map((e) => e.title).sort());
     for (const entry of UPCOMING.filter((e) => e.audience === "platform_admin")) {
       expect(titles).not.toContain(entry.title);
     }

@@ -4,16 +4,17 @@
 // INNOBOX_SPEC.md and ENTRA_AUTH_SPEC.md, in both directions: every teased id must still be an
 // open new-feature marker, and every open new-feature marker must be teased by exactly one entry.
 // Specifying a feature therefore forces a teaser in; shipping it (which deletes its markers)
-// forces the teaser out. Code-fix markers are never teased.
+// forces the teaser out. Code-fix markers are never teased. The key half keeps every teaser's
+// permanent `key` (§38.2) well formed and unique, and off the dropped list.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { UPCOMING, appliesTo, upcomingFor, type UpcomingEntry } from "./upcoming";
+import { DROPPED_UPCOMING_KEYS, UPCOMING, UPCOMING_KEY_PATTERN, appliesTo, upcomingByKey, upcomingFor, type UpcomingEntry } from "./upcoming.js";
 
-// packages/web/src/app/whats-new → repo root.
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
+// packages/shared/src (or dist, where the compiled test runs) → repo root.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SPECS = ["INNOBOX_SPEC.md", "ENTRA_AUTH_SPEC.md"];
 
 function openMarkers(kind: "new feature" | "code fix"): Set<string> {
@@ -58,9 +59,9 @@ test("every entry has ids, a title and a teaser, and its copy leaks no internal 
   }
 });
 
-const everyone: UpcomingEntry = { ids: ["GAP-1"], title: "A", teaser: "a", audience: "everyone" };
-const admins: UpcomingEntry = { ids: ["GAP-2"], title: "B", teaser: "b", audience: "admins" };
-const platform: UpcomingEntry = { ids: ["GAP-3"], title: "C", teaser: "c", audience: "platform_admin" };
+const everyone: UpcomingEntry = { key: "entry-a", ids: ["GAP-1"], title: "A", teaser: "a", audience: "everyone" };
+const admins: UpcomingEntry = { key: "entry-b", ids: ["GAP-2"], title: "B", teaser: "b", audience: "admins" };
+const platform: UpcomingEntry = { key: "entry-c", ids: ["GAP-3"], title: "C", teaser: "c", audience: "platform_admin" };
 const all = [everyone, admins, platform];
 
 test("a member sees only everyone-entries", () => {
@@ -74,4 +75,23 @@ test("a namespace admin also sees admin entries, but not platform-admin ones", (
 test("a platform admin sees every entry, in list order", () => {
   assert.deepEqual(upcomingFor({ platformAdmin: true, namespaceAdmin: [] }, all), all);
   assert.equal(appliesTo("admins", { platformAdmin: true, namespaceAdmin: [] }), true);
+});
+
+test("every teaser key is a unique kebab-case slug, and no live key is on the dropped list", () => {
+  const keys = UPCOMING.map((entry) => entry.key);
+  for (const key of keys) assert.match(key, UPCOMING_KEY_PATTERN, `malformed teaser key: ${key}`);
+  assert.equal(new Set(keys).size, keys.length, "duplicate teaser keys");
+  const revived = keys.filter((key) => DROPPED_UPCOMING_KEYS.includes(key));
+  assert.deepEqual(revived, [], `a live teaser reuses a dropped key: ${revived.join(", ")}`);
+  for (const key of DROPPED_UPCOMING_KEYS) assert.match(key, UPCOMING_KEY_PATTERN, `malformed dropped key: ${key}`);
+});
+
+test("the key pattern accepts slugs and refuses anything else", () => {
+  for (const ok of ["feedback-survey", "a", "ai-2", "x-y-z"]) assert.match(ok, UPCOMING_KEY_PATTERN);
+  for (const bad of ["", "Feedback", "a--b", "-a", "a-", "a b", "spec:a", "a_b"]) assert.doesNotMatch(bad, UPCOMING_KEY_PATTERN);
+});
+
+test("upcomingByKey finds a live teaser and nothing else", () => {
+  assert.equal(upcomingByKey("entry-b", all), admins);
+  assert.equal(upcomingByKey("entry-z", all), undefined);
 });

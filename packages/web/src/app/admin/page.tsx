@@ -139,6 +139,7 @@ export default function AdminPage() {
             </Link>
           )}
           {gate === "platform_admin" && <PublicSubmissionsLinkCard />}
+          {gate === "platform_admin" && <FeatureIdeasLinkCard />}
           {gate === "platform_admin" && (
             <Link href="/admin/trash" className="card card-pad">
               <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6 }}>Trash →</h3>
@@ -212,6 +213,98 @@ function PublicSubmissionsLinkCard() {
       </h3>
       <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Challenges sent from outside the organization, waiting for review.</p>
     </Link>
+  );
+}
+
+/** The §38.5 console card: links to the feature-ideas review page, with a 1–9+ bubble of proposals
+ *  waiting for review (hidden at zero), and holds the §38.11 switch in its action slot — beside the
+ *  link, never inside it, so it works without opening the page. The card is not itself a link: it
+ *  holds a second control. */
+function FeatureIdeasLinkCard() {
+  const [pending, setPending] = useState(0);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/admin/feature-ideas/count", { headers: { accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (live && json) {
+          setPending(json.pending ?? 0);
+          setEnabled(json.enabled !== false);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const toggle = async () => {
+    if (enabled === null || busy) return;
+    const previous = enabled;
+    setBusy(true);
+    setError(null);
+    setEnabled(!previous);
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ featureIdeasEnabled: !previous }),
+      });
+      if (!res.ok) throw new Error();
+      const json = (await res.json()) as { featureIdeasEnabled?: boolean };
+      setEnabled(json.featureIdeasEnabled !== false);
+    } catch {
+      setEnabled(previous);
+      setError("Could not change the switch");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const on = enabled ?? true;
+  return (
+    <div className="card card-pad feature-ideas-card" data-testid="feature-ideas-card">
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <Link href="/admin/feature-ideas" className="feature-ideas-card-link">
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 17, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+            Feature ideas →
+            {pending > 0 && (
+              <span className="nav-badge" style={{ marginLeft: 0 }} aria-label={`${pending} waiting for review`}>
+                {pending > 9 ? "9+" : pending}
+              </span>
+            )}
+          </h3>
+        </Link>
+        <div className="toggle-field">
+          <span className={`toggle-state${on ? " is-on" : ""}`} aria-hidden="true">
+            {on ? "On" : "Off"}
+          </span>
+          <button
+            type="button"
+            className="toggle toggle-pref"
+            role="switch"
+            aria-checked={on}
+            aria-label="Feature ideas"
+            data-testid="feature-ideas-switch"
+            disabled={enabled === null || busy}
+            onClick={toggle}
+          >
+            <span className="toggle-knob" aria-hidden="true">
+              {on ? "💡" : "🔕"}
+            </span>
+          </button>
+        </div>
+      </div>
+      <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>Upvotes on what&apos;s coming, and the features people propose for it.</p>
+      {error && (
+        <p className="sub" style={{ color: "var(--danger)", margin: "6px 0 0" }} role="status">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

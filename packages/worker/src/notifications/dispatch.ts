@@ -35,7 +35,7 @@ interface OutboxRow {
   user_id: string | null;
   recipient_email: string | null;
   type: string;
-  payload: { message: string; link: string; subject?: string; [key: string]: unknown };
+  payload: { message: string; link: string; subject?: string; emailText?: string; [key: string]: unknown };
   attempts: number;
   email: string | null;
   email_notifications_enabled: boolean | null;
@@ -47,21 +47,23 @@ interface OutboxRow {
 const SUBMITTER_CONFIRM_TYPE = "public_submission_confirm";
 
 /** Subject and plain-text body of one outbox row. A user's row reads "innobox: <message>" — or its
- *  own fixed subject when it carries one (§12.1 event 15) — and links into the app; a §24.7
- *  submitter row carries its own fixed subject and links nowhere but, for the confirmation only,
- *  the public confirm page. A row may add a second line under the message (`emailDetail`) and a
- *  closing note with its own app link (`footnote`) — §34.5's namespace-and-author line and its
- *  "Manage your topics" note. */
+ *  own fixed subject when it carries one (§12.1 events 15, 19, 20) — and links into the app; its
+ *  body is the inbox line, or `emailText` when the e-mail says more than the bell does (§38.8). A
+ *  §24.7 submitter row carries its own fixed subject and links nowhere but, for the confirmation
+ *  only, the public confirm page. A row may add a second line under the message (`emailDetail`)
+ *  and a closing note with its own app link (`footnote`) — §34.5's namespace-and-author line and
+ *  its "Manage your topics" note. */
 export function composeOutboxEmail(row: Pick<OutboxRow, "recipient_email" | "payload">, baseUrl: string): { subject: string; body: string } {
   if (typeof row.recipient_email === "string") {
     const link = typeof row.payload.link === "string" && row.payload.link ? `\n\n${baseUrl}${row.payload.link}` : "";
     return { subject: String(row.payload.subject ?? "").slice(0, 200), body: `${row.payload.message}${link}` };
   }
   const subject = typeof row.payload.subject === "string" && row.payload.subject ? row.payload.subject : `innobox: ${row.payload.message}`;
+  const text = typeof row.payload.emailText === "string" && row.payload.emailText ? row.payload.emailText : row.payload.message;
   const detail = typeof row.payload.emailDetail === "string" && row.payload.emailDetail ? `\n${row.payload.emailDetail}` : "";
   const footnote = footnoteOf(row.payload.footnote);
   const note = footnote ? `\n\n${footnote.text} ${baseUrl}${footnote.link}` : "";
-  return { subject: subject.slice(0, 200), body: `${row.payload.message}${detail}\n\n${baseUrl}${row.payload.link}${note}` };
+  return { subject: subject.slice(0, 200), body: `${text}${detail}\n\n${baseUrl}${row.payload.link}${note}` };
 }
 
 /** A well-formed `footnote` — an app-relative link only, so the note can never point elsewhere. */

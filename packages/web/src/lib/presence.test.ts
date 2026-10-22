@@ -109,6 +109,18 @@ test("location-less user actions stamp the time but keep the last known location
   assert.equal(presenceTouchFor("/api/attachments/abc", "GET"), null);
 });
 
+test("feature ideas: upvoting, proposing and withdrawing stamp the time; reading Coming soon does not (§38.12)", () => {
+  assert.deepEqual(presenceTouchFor("/api/coming-soon/votes", "POST"), { tier: "touch" });
+  assert.deepEqual(presenceTouchFor("/api/feature-ideas", "POST"), { tier: "touch" });
+  assert.deepEqual(presenceTouchFor("/api/me/feature-ideas/abc", "DELETE"), { tier: "touch" });
+  assert.equal(presenceTouchFor("/api/coming-soon", "GET"), null, "the page navigation already stamped");
+  assert.equal(presenceTouchFor("/api/me/feature-ideas", "GET"), null);
+  assert.equal(presenceTouchFor("/api/me", "GET"), null, "the rest of `me` stays silent");
+  assert.equal(presenceTouchFor("/api/me/pulse", "GET"), null);
+  // The review page is the console.
+  assert.deepEqual(presenceTouchFor("/api/admin/feature-ideas", "GET"), { tier: "locate", route: ROUTE_ADMIN });
+});
+
 test("entity tokens round-trip; category tokens have labels and no entity", () => {
   assert.deepEqual(parseEntityRoute("challenge:412"), { kind: "challenge", number: 412 });
   assert.deepEqual(parseEntityRoute("solution:87"), { kind: "solution", number: 87 });

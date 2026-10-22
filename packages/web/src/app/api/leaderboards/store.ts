@@ -90,6 +90,7 @@ export async function getLeaderboard(
     case "points":
       // §23.9: rows whose item no longer exists, or is no longer org-visible, drop out of the
       // ranking (not out of the person's total); users who hide their gamification are excluded.
+      // Item-less rows (agent_connected, the §38.10 idea awards) name no item and count in full.
       sql = `
         select gl.user_id, sum(gl.points)::int as cnt, min(gl.occurred_at) filter (where gl.points > 0) as first_at
           from gamification_ledger gl
@@ -99,7 +100,8 @@ export async function getLeaderboard(
           left join challenges sc on sc.id = s.challenge_id
          where ($1::timestamptz is null or gl.occurred_at >= $1)
            and (
-             (gl.item_type = 'challenge' and ${CHALLENGE_ORG_VISIBLE})
+             gl.item_type is null
+             or (gl.item_type = 'challenge' and ${CHALLENGE_ORG_VISIBLE})
              or (gl.item_type = 'solution' and ${SOLUTION_ORG_VISIBLE}
                  and sc.visibility = 'org' and sc.status not in ('awaiting_triage', 'withdrawn') and sc.trashed_at is null)
            )

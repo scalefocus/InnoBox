@@ -232,6 +232,8 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               gamification_public = default,
               notify_achievements = default,
               achievements_seen_at = null,
+              -- §38.12: the feature-ideas name switch back to its default.
+              feature_ideas_named = default,
               active = false,
               deactivated_at = coalesce(deactivated_at, now()),
               -- §3 Sign out everywhere: every live session token of the erased user is refused
@@ -254,6 +256,11 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §22.3: AI usage telemetry keeps its counts but loses the person it ran for.
     await client.query(`update ai_usage set user_id = null where user_id = $1`, [userId]);
     await client.query(`update ai_results set requested_by = null where requested_by = $1`, [userId]);
+    // §38.12: the person's pending, declined and merged proposals go — their text is personal and
+    // serves no one else. Planned ideas are admin-written product copy now: they stay, with the raw
+    // text cleared and no proposer shown (the scrubbed row is never named). Votes stay, unnamed.
+    await client.query(`delete from feature_ideas where author_id = $1 and status <> 'planned'`, [userId]);
+    await client.query(`update feature_ideas set description = null, updated_at = now() where author_id = $1 and status = 'planned'`, [userId]);
     // §23.9: the user's points ledger and badges go — the only DELETE the app role holds on them.
     await client.query(`delete from gamification_ledger where user_id = $1`, [userId]);
     await client.query(`delete from user_badges where user_id = $1`, [userId]);

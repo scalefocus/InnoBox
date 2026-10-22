@@ -1,6 +1,6 @@
 // GET/PATCH /api/admin/settings (INNOBOX_SPEC.md §14.3): attachment limits, impact areas,
 // the platform date-display format, the feedback-survey switch (§14.11, `surveyEnabled`), the bug-report
-// switch (§13.10, `bugReportsEnabled`), and the
+// switch (§13.10, `bugReportsEnabled`), the feature-ideas switch (§38.11, `featureIdeasEnabled`), and the
 // public submissions card (§24.2, `publicSubmissions`), plus the §2.3 bootstrap-admin notice flag
 // (`bootstrapAdminGroupActive`, GET only). Platform-admin only; every change audited.
 import { requirePlatformAdmin } from "@/lib/auth";
@@ -16,6 +16,8 @@ import {
   setGamificationEnabled,
   getHypeEnabled,
   setHypeEnabled,
+  getFeatureIdeasEnabled,
+  setFeatureIdeasEnabled,
   setPublicSubmissionSettings,
 } from "./store";
 import { bootstrapAdminGroupActive } from "./bootstrap-admin";
@@ -35,7 +37,7 @@ async function handleGET(): Promise<Response> {
   const gate = await requirePlatformAdmin();
   if (!gate.ok) return gate.response;
 
-  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions, platformAdminMappings] =
+  const [dateFormat, attachmentLimits, impactAreas, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, featureIdeasEnabled, publicSubmissions, platformAdminMappings] =
     await Promise.all([
       getDateFormat(pool),
       getAttachmentLimits(pool),
@@ -45,6 +47,7 @@ async function handleGET(): Promise<Response> {
       getBugReportsEnabled(pool),
       getGamificationEnabled(pool),
       getHypeEnabled(pool),
+      getFeatureIdeasEnabled(pool),
       publicSubmissionsCard(),
       countPlatformAdminMappings(pool),
     ]);
@@ -59,6 +62,7 @@ async function handleGET(): Promise<Response> {
     bugReportsEnabled,
     gamificationEnabled,
     hypeEnabled,
+    featureIdeasEnabled,
     publicSubmissions,
     bootstrapAdminGroupActive: bootstrapActive,
   });
@@ -83,6 +87,7 @@ async function handlePATCH(req: Request): Promise<Response> {
   if (parsed.value.bugReportsEnabled !== undefined) await setBugReportsEnabled(pool, parsed.value.bugReportsEnabled, gate.user.id);
   if (parsed.value.gamificationEnabled !== undefined) await setGamificationEnabled(pool, parsed.value.gamificationEnabled, gate.user.id);
   if (parsed.value.hypeEnabled !== undefined) await setHypeEnabled(pool, parsed.value.hypeEnabled, gate.user.id);
+  if (parsed.value.featureIdeasEnabled !== undefined) await setFeatureIdeasEnabled(pool, parsed.value.featureIdeasEnabled, gate.user.id);
   if (parsed.value.publicSubmissions) {
     const result = await setPublicSubmissionSettings(pool, parsed.value.publicSubmissions, gate.user.id, {
       keyValid: publicIntakeKey() !== null,
@@ -95,17 +100,19 @@ async function handlePATCH(req: Request): Promise<Response> {
     invalidatePublicIntakeState();
   }
 
-  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions] = await Promise.all([
-    getDateFormat(pool),
-    getAttachmentLimits(pool),
-    getFeaturedLimit(pool),
-    getSurveyEnabled(pool),
-    getBugReportsEnabled(pool),
-    getGamificationEnabled(pool),
-    getHypeEnabled(pool),
-    publicSubmissionsCard(),
-  ]);
-  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, publicSubmissions });
+  const [dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, featureIdeasEnabled, publicSubmissions] =
+    await Promise.all([
+      getDateFormat(pool),
+      getAttachmentLimits(pool),
+      getFeaturedLimit(pool),
+      getSurveyEnabled(pool),
+      getBugReportsEnabled(pool),
+      getGamificationEnabled(pool),
+      getHypeEnabled(pool),
+      getFeatureIdeasEnabled(pool),
+      publicSubmissionsCard(),
+    ]);
+  return Response.json({ dateFormat, attachmentLimits, featuredLimit, surveyEnabled, bugReportsEnabled, gamificationEnabled, hypeEnabled, featureIdeasEnabled, publicSubmissions });
 }
 
 // §14.7: every handler is wrapped so refused requests and failures are recorded in the system log.

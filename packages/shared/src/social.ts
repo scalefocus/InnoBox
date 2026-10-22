@@ -76,6 +76,12 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 18 / §34.5: a challenge in a topic the recipient follows opened for solutions —
   // at most once per person per challenge, never coalesced, e-mailed (digestable).
   "topic_challenge",
+  // §12.1 event 19 / §38.8: a platform admin approved, declined or merged your feature idea — the
+  // proposer only, immediate. Written by the shared feature-ideas-db helper.
+  "feature_idea_reviewed",
+  // §12.1 event 20 / §38.8: a feature you proposed or upvoted is now available — written by the web
+  // tier (a planned idea deleted as shipped) and the worker (a specified teaser shipped); digestable.
+  "feature_available",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

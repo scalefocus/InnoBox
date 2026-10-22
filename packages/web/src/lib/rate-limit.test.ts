@@ -102,6 +102,19 @@ test("bug reports: 3 a minute and 20 a day, apart from the survey bucket (§13.1
   assert.equal(takeToken("u2", "bug_report_day", t0 + 60 * 60_000, 1).ok, false);
 });
 
+test("feature-idea proposals: 2 a minute and 5 a day, and the warning names the user (§38.4)", () => {
+  resetRateLimits();
+  const t0 = 1_800_000_000_000;
+  assert.deepEqual(RATE_LIMITS.feature_idea, { limit: 2, windowMs: 60_000 });
+  assert.deepEqual(RATE_LIMITS.feature_idea_day, { limit: 5, windowMs: 86_400_000 });
+  for (let i = 0; i < 2; i++) assert.equal(takeToken("u1", "feature_idea", t0, 1).ok, true);
+  assert.equal(takeToken("u1", "feature_idea", t0, 1).ok, false, "the 3rd in a minute is refused");
+  assert.equal(takeToken("u1", "mutation", t0, 1).ok, true, "proposing does not drain the mutation bucket");
+  for (let i = 0; i < 5; i++) assert.equal(takeToken("u2", "feature_idea_day", t0, 1).ok, true);
+  assert.equal(takeToken("u2", "feature_idea_day", t0 + 60 * 60_000, 1).ok, false, "the 6th in a day is refused");
+  assert.equal(rateLimitWarning("u1", "feature_idea").userId, "u1");
+});
+
 test("the survey routes' rate-limit warning omits the user id (§13.10)", () => {
   assert.deepEqual(rateLimitWarning("u1", "survey", true), { level: "warn", msg: "rate limit exceeded", bucket: "survey" });
   assert.equal(rateLimitWarning("u1", "mutation").userId, "u1", "every other route still names the user");

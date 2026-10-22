@@ -23,6 +23,10 @@ export const GAMIFICATION_REASONS = [
   // for each hyper when an item they hyped first reaches solved/implemented (Talent Scout).
   "hype_received",
   "hype_fulfilled",
+  // §38.10: to a feature idea's proposer — when a platform admin approves it, and when it ships
+  // (the Planned-tab delete with "Notify that it shipped"). Item-less, like agent_connected.
+  "idea_approved",
+  "idea_shipped",
 ] as const;
 export type GamificationReason = (typeof GAMIFICATION_REASONS)[number];
 
@@ -39,6 +43,8 @@ export const POINTS: Record<GamificationReason, number> = {
   agent_connected: 0,
   hype_received: 3,
   hype_fulfilled: 0,
+  idea_approved: 10,
+  idea_shipped: 25,
 };
 
 /** Per recipient, per UTC day of the event: only the first N awards of the reason earn points.
@@ -82,7 +88,14 @@ export const awardKey = {
   /** §26.7: once per (item, hyper). */
   hypeReceived: (parentType: AwardItemType, parentId: string, hyperId: string) => `hype_received:${parentType}:${parentId}:${hyperId}`,
   hypeFulfilled: (parentType: AwardItemType, parentId: string, hyperId: string) => `hype_fulfilled:${parentType}:${parentId}:${hyperId}`,
+  /** §38.10: once per idea. */
+  ideaApproved: (ideaId: string) => `idea_approved:${ideaId}`,
+  ideaShipped: (ideaId: string) => `idea_shipped:${ideaId}`,
 };
+
+/** §38.10: the reasons written with no item (§25.12, §38.10) — the ledger CHECK and the Points
+ *  ranking treat these alike. */
+export const ITEMLESS_REASONS: readonly GamificationReason[] = ["agent_connected", "idea_approved", "idea_shipped"];
 
 // ── Levels (§23.3) ───────────────────────────────────────────────────────────────────────
 
@@ -156,7 +169,8 @@ export type BadgeKey =
   | "co_pilot"
   | "agent_of_change"
   | "human_in_the_loop"
-  | "talent_scout";
+  | "talent_scout"
+  | "roadmapper";
 
 /** What a count-based badge counts: a ledger reason, or one of the §25.12 agent counters — rows
  *  of the given reasons whose item was created through an AI agent (`via_mcp`). */
@@ -176,6 +190,8 @@ export const BADGE_COUNTERS: Record<BadgeCounter, { reasons: readonly Gamificati
   agent_connected: { reasons: ["agent_connected"], viaMcp: null },
   hype_received: { reasons: ["hype_received"], viaMcp: null },
   hype_fulfilled: { reasons: ["hype_fulfilled"], viaMcp: null },
+  idea_approved: { reasons: ["idea_approved"], viaMcp: null },
+  idea_shipped: { reasons: ["idea_shipped"], viaMcp: null },
   challenge_submitted_via_mcp: { reasons: ["challenge_submitted"], viaMcp: true },
   solution_proposed_via_mcp: { reasons: ["solution_proposed"], viaMcp: true },
   validated_via_mcp: { reasons: ["challenge_validated", "solution_validated"], viaMcp: true },
@@ -197,6 +213,8 @@ export interface BadgeDef {
   agent?: boolean;
   /** §26.8: a hype badge — shown among the locked badges only while hype is on. */
   hype?: boolean;
+  /** §38.10: a feature-ideas badge — shown among the locked badges only while feature ideas are on. */
+  featureIdeas?: boolean;
 }
 
 export const BADGES: readonly BadgeDef[] = [
@@ -215,6 +233,7 @@ export const BADGES: readonly BadgeDef[] = [
   { key: "agent_of_change", name: "Agent of Change", criterion: "Your first solution proposed through an agent", counts: "solution_proposed_via_mcp", thresholds: [1], unit: "solutions proposed through an agent", agent: true },
   { key: "human_in_the_loop", name: "Human in the Loop", criterion: "A challenge or solution you submitted through an agent was validated", counts: "validated_via_mcp", thresholds: [1], unit: "agent submissions validated", agent: true },
   { key: "talent_scout", name: "Talent Scout", criterion: "Items you hyped that were later solved or implemented", counts: "hype_fulfilled", thresholds: [1, 5, 20], unit: "hyped items solved or implemented", hype: true },
+  { key: "roadmapper", name: "Roadmapper", criterion: "Feature ideas you proposed that shipped", counts: "idea_shipped", thresholds: [1, 3, 10], unit: "feature ideas shipped", featureIdeas: true },
 ];
 
 export function badgeDef(key: string): BadgeDef | undefined {

@@ -168,6 +168,18 @@ export async function awardAgentConnected(client: PoolClient, userId: string): P
   await write(client, [{ userId, reason: "agent_connected", itemType: null, itemId: null, awardKey: awardKey.agentConnected(), viaMcp: true }]);
 }
 
+/** §38.10 `idea_approved` — 10 points to a feature idea's proposer when a platform admin approves
+ *  it (never a merge, a decline or a spam delete). Item-less: an idea is not a challenge or solution,
+ *  and the row must outlive the idea's delete. */
+export async function awardIdeaApproved(client: PoolClient, proposerId: string, ideaId: string): Promise<void> {
+  await write(client, [{ userId: proposerId, reason: "idea_approved", itemType: null, itemId: null, awardKey: awardKey.ideaApproved(ideaId) }]);
+}
+
+/** §38.10 `idea_shipped` — 25 points when the planned idea is deleted as shipped; drives Roadmapper. */
+export async function awardIdeaShipped(client: PoolClient, proposerId: string, ideaId: string): Promise<void> {
+  await write(client, [{ userId: proposerId, reason: "idea_shipped", itemType: null, itemId: null, awardKey: awardKey.ideaShipped(ideaId) }]);
+}
+
 /** §9 self-reveal: replays every award the item already earned for its author, backdated to the
  *  original event times — written only now, in the reveal's transaction. */
 export async function replayOnSelfReveal(client: PoolClient, itemType: AwardItemType, itemId: string): Promise<void> {

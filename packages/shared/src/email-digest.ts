@@ -23,18 +23,20 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
- *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable) and 18 (a new
- *  challenge in a topic the recipient follows, §34.5). */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18]);
+ *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable), 18 (a new
+ *  challenge in a topic the recipient follows, §34.5) and 20 (a feature you proposed or upvoted is
+ *  now available, §38.8). Event 19, a review of your own proposal, is actionable and always
+ *  immediate. */
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
  * recipient on the ADMIN route (namespace admins and the committee on a new solution) is an
  * attention event and always immediate, as are the actionable author/assignee events (4, 5, 7,
- * 11, 12), the admin events (1, 9, 10, 14) and event 13, which has no e-mail at all.
+ * 11, 12, 19), the admin events (1, 9, 10, 14) and event 13, which has no e-mail at all.
  */
 export function isDigestableEvent(event: NotificationEventNumber, onAdminRoute = false): boolean {
   return DIGESTABLE_EVENTS.has(event) && !onAdminRoute;
@@ -62,14 +64,17 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic";
+export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
   kind: DigestKind;
-  /** The challenge the update is grouped under — digits only. */
+  /** The challenge the update is grouped under — digits only. Empty for a `feature` update, which
+   *  is about no challenge (§38.8) and goes in a block of its own. */
   challengeNumber: string;
   challengeTitle: string;
+  /** A `feature` update: the feature that is now available. */
+  featureTitle?: string | null;
   /** A status change on a solution, or the implemented solution — digits only. */
   solutionNumber?: string | null;
   /** The new status's label, for a status change. */
@@ -150,8 +155,15 @@ function itemLines(updates: readonly DigestUpdate[]): string[] {
  */
 export function renderDigest(updates: readonly DigestUpdate[], cadence: DigestCadence | null, baseUrl: string): RenderedDigest | null {
   if (updates.length === 0) return null;
+  const base = baseUrl.replace(/\/$/, "");
+  // §38.8 event 20: features now available are about no challenge — one block of their own, one
+  // line per feature, ahead of the items.
+  const features = [...new Set(updates.filter((u) => u.kind === "feature").map((u) => oneLine(u.featureTitle ?? "")).filter(Boolean))];
+  const featureBlock = features.length > 0 ? [["Now available in InnoBox", `${base}/whats-new`, ...features.map((t) => `- ${t}`)].join("\n")] : [];
+
   const byItem = new Map<string, DigestUpdate[]>();
   for (const u of updates) {
+    if (u.kind === "feature") continue;
     const key = digitsOf(u.challengeNumber);
     byItem.set(key, [...(byItem.get(key) ?? []), u]);
   }
@@ -159,12 +171,14 @@ export function renderDigest(updates: readonly DigestUpdate[], cadence: DigestCa
   const items = [...byItem.entries()].sort(([, a], [, b]) => lastActive(b) - lastActive(a));
 
   const updateCount = updates.reduce((n, u) => n + u.count, 0);
-  const base = baseUrl.replace(/\/$/, "");
-  const blocks = items.slice(0, DIGEST_MAX_ITEMS).map(([number, group]) => {
-    const newest = group.reduce((a, b) => (b.at.getTime() >= a.at.getTime() ? b : a));
-    const heading = `CH-${number} — ${oneLine(newest.challengeTitle)}`;
-    return [heading, `${base}/challenges/${number}`, ...itemLines(group).map((l) => `- ${l}`)].join("\n");
-  });
+  const blocks = [
+    ...featureBlock,
+    ...items.slice(0, DIGEST_MAX_ITEMS).map(([number, group]) => {
+      const newest = group.reduce((a, b) => (b.at.getTime() >= a.at.getTime() ? b : a));
+      const heading = `CH-${number} — ${oneLine(newest.challengeTitle)}`;
+      return [heading, `${base}/challenges/${number}`, ...itemLines(group).map((l) => `- ${l}`)].join("\n");
+    }),
+  ];
   const more = items.length - DIGEST_MAX_ITEMS;
   if (more > 0) blocks.push(`and ${more} more — open InnoBox to see everything\n${base}/`);
 

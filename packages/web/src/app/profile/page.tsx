@@ -3,7 +3,8 @@
 // awaiting triage — the author can always see their own), likes received, items followed,
 // recent activity (newest first, any status), the e-mail notification opt-out switch, the §12.1
 // e-mail delivery choice (immediately, or a daily or weekly digest), and the
-// Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open.
+// Feedback section (§13.10): the random-survey opt-out and "Take the survey" while an offer is open,
+// then the Feature ideas section (§38.7) while that feature is on.
 // While gamification is on (§23.6): the Achievements section, the level ring on the bubble, and the
 // two gamification switches (the Achievements notification and "Show my level and badges to others").
 // The Topics section (§34.6): a switch per active topic to follow or unfollow it.
@@ -24,6 +25,7 @@ import {
   type NotificationPreferences,
 } from "@innobox/shared/notification-preferences";
 import { EMAIL_DELIVERY_LABEL, EMAIL_DELIVERY_MODES, nextDigestSlot, type EmailDelivery } from "@innobox/shared/email-digest";
+import { FeatureIdeasSection } from "./FeatureIdeasSection";
 
 interface OwnProfile {
   user: {
@@ -514,6 +516,8 @@ export default function ProfilePage() {
           )
         )}
       </div>
+
+      <FeatureIdeasSection />
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontSize: 16, marginBottom: 12 }}>My challenges</h3>

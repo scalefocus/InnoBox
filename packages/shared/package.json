@@ -129,6 +129,14 @@
     "./rum-sql": {
       "types": "./dist/rum-sql.d.ts",
       "default": "./dist/rum-sql.js"
+    },
+    "./upcoming": {
+      "types": "./dist/upcoming.d.ts",
+      "default": "./dist/upcoming.js"
+    },
+    "./feature-ideas": {
+      "types": "./dist/feature-ideas.d.ts",
+      "default": "./dist/feature-ideas.js"
     }
   },
   "scripts": {

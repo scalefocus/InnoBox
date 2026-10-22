@@ -8,6 +8,7 @@ import { GAMIFICATION_ENABLED_AT_KEY, GAMIFICATION_ENABLED_KEY, getGamificationS
 import { appendAudit } from "../../../../lib/audit";
 import { inTransaction } from "../../../../lib/db";
 import { HYPE_ENABLED_KEY } from "../../../../lib/hype-settings";
+import { FEATURE_IDEAS_ENABLED_KEY } from "@innobox/shared";
 import {
   PUBLIC_PRIVACY_NOTICE_KEY,
   PUBLIC_SUBMISSIONS_ENABLED_KEY,
@@ -108,6 +109,30 @@ export async function setHypeEnabled(pool: Pool, enabled: boolean, actorUserId: 
       action: "settings.hype_enabled_changed",
       targetType: "platform_settings",
       targetId: HYPE_ENABLED_KEY,
+      after: { enabled },
+    });
+  });
+}
+
+// ── Feature ideas switch (§38.11) ────────────────────────────────────────────────────────
+
+export { getFeatureIdeasEnabled } from "@innobox/shared";
+
+/** One switch, on by default. Off hides voting, proposing and every community idea, and blocks the
+ *  review decisions; proposals, ideas and votes are kept, so turning it back on restores them. */
+export async function setFeatureIdeasEnabled(pool: Pool, enabled: boolean, actorUserId: string): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    await client.query(
+      `insert into platform_settings (key, value, updated_by, updated_at)
+       values ($1, $2::jsonb, $3, now())
+       on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+      [FEATURE_IDEAS_ENABLED_KEY, JSON.stringify(enabled), actorUserId],
+    );
+    await appendAudit(client, {
+      actorUserId,
+      action: "settings.feature_ideas_enabled_changed",
+      targetType: "platform_settings",
+      targetId: FEATURE_IDEAS_ENABLED_KEY,
       after: { enabled },
     });
   });
