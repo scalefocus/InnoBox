@@ -109,6 +109,9 @@ export * from "./gamification-awards.js";
 // §26 hype: the week, the budget, the early-hype weight, the eligibility matrix and the copy
 // (client-safe, also at `@innobox/shared/hype`).
 export * from "./hype.js";
+// §34 topics: the field limits, the tagging rules, the bulk outcomes and the event-18 copy
+// (client-safe, also at `@innobox/shared/topics`).
+export * from "./topics.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the

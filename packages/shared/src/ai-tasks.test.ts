@@ -129,13 +129,23 @@ test("triage prompt: the subject's own fields and candidate titles only", () => 
     description: "Finance matches invoices by hand.",
     impactArea: "Internal",
     impactAreaNames: ["Internal", "Accelerator"],
+    topicNames: ["AI", "Sustainability"],
     candidates: [{ number: 12, title: "Invoice OCR" }, { number: 40, title: "Expense reports" }],
   };
   const leaky = { ...input, authorName: "Jane Roe", isAnonymous: true, clientName: "ACME" } as typeof input;
   const text = promptText(buildTriagePrompt(leaky));
   for (const leaked of ["Jane", "ACME", "anonym"]) assert.ok(!text.includes(leaked), leaked);
   assert.ok(text.includes("<<<CANDIDATES\n#12 Invoice OCR\n#40 Expense reports\n>>>"));
+  assert.ok(text.includes("<<<TOPICS\nAI\nSustainability\n>>>"), "the active topic names go along for the suggestion (§34.6)");
   assert.ok(text.includes("TRIAGE"));
+});
+
+test("triage output: suggested topics map to active topics — unknown dropped, deduplicated, at most three", () => {
+  const TOPICS = [{ name: "AI" }, { name: "Automation" }, { name: "Sustainability" }, { name: "Onboarding" }];
+  const notes = processTriageNotes({ summary: "ok", suggestedTopics: ["ai", "Invented", "AI", " automation ", 7, "Sustainability", "Onboarding"] }, [], AREAS, TOPICS);
+  assert.deepEqual(notes?.suggestedTopics, ["AI", "Automation", "Sustainability"]);
+  assert.deepEqual(processTriageNotes({ summary: "ok", suggestedTopics: "AI" }, [], AREAS, TOPICS)?.suggestedTopics, []);
+  assert.deepEqual(processTriageNotes({ summary: "ok", suggestedTopics: ["AI"] }, [], AREAS)?.suggestedTopics, [], "no topics, no suggestions");
 });
 
 test("triage output: duplicates only from the candidate set; capped plain text; area mapped", () => {

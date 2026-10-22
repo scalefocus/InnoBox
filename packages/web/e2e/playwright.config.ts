@@ -35,6 +35,7 @@ const PLATFORM_STATE_SPECS = [
   "hype.spec.ts",
   "public-submissions.spec.ts",
   "survey.spec.ts",
+  "topics.spec.ts",
 ];
 
 const PLATFORM_STATE_GLOBS = PLATFORM_STATE_SPECS.map((f) => `**/${f}`);

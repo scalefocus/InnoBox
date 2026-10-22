@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.21 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
+> Status: **v0.22 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -67,7 +67,10 @@
 > built: impact tracking (§28), "this affects me too" (§29), mark as duplicate (§30),
 > triage aging and stuck-item alerts (§31), the implementation board (§32), invite a
 > solver (§33), topics (§34), campaigns (§35), the year in review (§36) and the namespace
-> pulse (§37), lifting the "no campaigns" non-goal and narrowing the digest one (§19)).
+> pulse (§37), lifting the "no campaigns" non-goal and narrowing the digest one (§19); v0.22
+> (2026-10-22) specified **topics** — curated tags, up to three per challenge, that anyone
+> can follow to hear when a new challenge in them opens for solutions — completing the §34
+> stub).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -296,7 +299,7 @@ including theme-aware scrollbars and form controls. Pinned values:
   notice** (a floating card, bottom-right, after a new release); fully responsive. The shell renders in
   three states keyed on the session:
   - **Authenticated** — unchanged from the signed-in experience: full nav (Home,
-    **Submit a Challenge**, Challenges, Leaderboard, plus **Triage** and
+    **Submit a Challenge**, Challenges, **Topics** (§34.6), Leaderboard, plus **Triage** and
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
@@ -959,7 +962,8 @@ Entra runbook); on conflict this document wins.
   `surveys_enabled` back to its default) — survey responses reference no one and are
   untouched — nulls `ai_usage.user_id` (§22.3), deletes the user's §23
   `gamification_ledger` and `user_badges` rows (resetting `gamification_public` and
-  `notify_achievements` to their defaults and nulling `achievements_seen_at`), and resets the notification preferences
+  `notify_achievements` to their defaults and nulling `achievements_seen_at`), deletes the
+  user's §34 `topic_follows` and `topic_notices` rows, and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
   `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
@@ -1086,8 +1090,8 @@ shown (§13.6).
 
 | Role | Scope | Powers |
 |---|---|---|
-| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area management; **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); real user monitoring (§14.12); audit integrity verification (§15) |
-| **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; bulk actions; CSV export |
+| **Platform Admin** | global | Everything below in every namespace + platform settings (§14.3), namespace CRUD, role mappings, impact-area and **topic** management (§34.2); **feature/unfeature challenges on Home** (§13.2); **channel webhooks** (§12.4); GDPR erasure with assignment hand-over (§3); identity-sync diagnostics (§14.10); real user monitoring (§14.12); audit integrity verification (§15) |
+| **Namespace Admin** | per-namespace | Triage queue; assign/unassign; **free any→any status set** (audited override); anonymity reveal (audited); comment deletion; **re-tagging topics** (§34.3); bulk actions; CSV export |
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
@@ -1252,6 +1256,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   be **deleted** (§14.3) — either when no challenge references it, or by reassigning
   its challenges to another active area as part of the delete. Deletion is the only
   path that removes a row.
+- **`topics`**, **`challenge_topics`**, **`topic_follows`** and **`topic_notices`** —
+  the §34 curated topics (id, name, description, active; platform-admin managed, no
+  seed), the up-to-three topics of each challenge, who follows which topic, and the
+  one-notice-per-person-per-challenge marker behind §12.1 event 18 (§34.8).
 - **`challenges`** — id (uuid), **number** (global sequence, displayed `CH-<n>`),
   namespace_id, visibility (`org | namespace | people`, §4.3), title (≤ 120 chars), description (plain text, ≤ 10 000
   chars), impact_area_id, client_name (**required iff impact area = Client**, hidden
@@ -1420,7 +1428,8 @@ Dropped from the legacy model (never used by any screen): `Portfolio`,
 
 Validation is enforced server-side (shared package), mirrored client-side for UX:
 title required ≤ 120; description required ≤ 10 000; client_name required iff
-impact = Client; impact area required and must be active at submission time.
+impact = Client; impact area required and must be active at submission time; topics
+optional, at most 3, each active when added (§34.3).
 
 ---
 
@@ -1442,7 +1451,8 @@ authenticated user. The page learns the state from `GET /api/public-submissions/
 (§24.9); while that is pending, fails, or returns `url: null`, the link is simply absent
 — no placeholder, no layout shift above the form. It never affects the form itself.
 
-Form: title, description, impact area (active areas), client name (only when
+Form: title, description, impact area (active areas), **topics** (optional, at most 3
+active topics, §34.3 — absent while there are none), client name (only when
 impact = Client; at most 200 characters, §2.4), namespace (memberships, archived ones excluded; default `global`), visibility (default
 `org`), attachments (**staged inline via a `draftKey`**, §11 — picked, **dropped
 anywhere on the page, or pasted**, §11 *Drop and paste*), **"Submit
@@ -1816,8 +1826,9 @@ check, which refuses a save made from a stale copy (§27.5).
   re-unlocks editing for the author on either entity. Editing is **author-only** —
   admins moderate via status override + comment deletion, not content edits.
   - **Editable fields** — challenge: title, description, impact area (the §5
-    Client↔client-name pairing is re-validated); solution: description, cost vs
-    benefits. **Not** editable here: `visibility` (namespace/platform-admin only,
+    Client↔client-name pairing is re-validated), topics (§34.3); solution: description,
+    cost vs benefits. (Namespace and platform admins may also change a challenge's
+    topics at any time; that is curation, not a content edit, §34.3.) **Not** editable here: `visibility` (namespace/platform-admin only,
     §4.3), anonymity (removed only via one-way self-reveal, §9), and namespace.
   - Every edit stamps `edited_at` and writes an audit row carrying a **field-level
     diff** (only the changed fields, before → after). Edits fire no notification.
@@ -1940,8 +1951,9 @@ row; **all** of its solutions regardless of status; every comment, like, and fol
 the challenge and on those solutions; every `attachments` row of the challenge and of
 those solutions — tombstones included; and every `notifications` inbox row and unsent
 `notification_outbox` row targeting any of them; every `webhook_deliveries` row
-(§12.4) targeting any of them; and every §22 `ai_results` row (triage notes, discussion
-summaries) of any of them. Before the row goes, if the challenge was featured, the
+(§12.4) targeting any of them; every §22 `ai_results` row (triage notes, discussion
+summaries) of any of them; and the challenge's §34 `challenge_topics` and
+`topic_notices` rows. Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
 a **solution** removes the same subtree rooted at that solution and leaves the parent
 challenge standing. Any
@@ -2540,6 +2552,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
 | 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
 | 17 | Co-author added / removed (§27.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable |
+| 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
 
 **Authors are teams (§27).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2552,6 +2565,8 @@ in-app only, by design (§23.1).
 Event 15's subject is *"A challenge has been shared with you"*; the body carries the
 number, the title and the author (masked per §9, or *"External submission"*, §24.6),
 and the link. It names neither the admin who shared it nor anyone else on the list.
+Writing it also writes the person's §34.5 topic-notice marker for the challenge, so
+event 18 never tells them about it a second time.
 
 "Assignee" in events 3 and 9 means the **challenge's** assignee, including for an
 event on one of its solutions. "Challenge author" in event 8 is a recipient in its own
@@ -2602,8 +2617,8 @@ a day or a week.
   set on the profile (§13.5) and is silent (not audited), like the other preferences.
 - **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
   challenge author and followers, not the admin and committee route), 3 (status
-  changed), 6 (comments, including replies), 8 (solution implemented) and 16 (hyped,
-  §26.6). Everything
+  changed), 6 (comments, including replies), 8 (solution implemented), 16 (hyped,
+  §26.6) and 18 (new challenge in a topic you follow, §34.5). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
   12, 17). Event 13 has no e-mail at all.
@@ -2630,7 +2645,8 @@ a day or a week.
   body groups the updates **by item**, most recently active first. Each item gets a
   heading with its number and title, linked, and one line per kind of update:
   *"2 status changes — now In review"*, *"5 new comments, 1 reply to you"*, *"1 new
-  solution"*, *"Solution SOL-17 was implemented"*. It shows at most **25 items**, then
+  solution"*, *"Solution SOL-17 was implemented"*, *"New in a topic you follow — AI"*.
+  It shows at most **25 items**, then
   *"and K more — open InnoBox to see everything"*. It never quotes comment bodies or
   descriptions. Authors are masked per §9, and the §12.1 e-mail content-safety rules
   apply.
@@ -2683,6 +2699,7 @@ row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
 author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
 **or opening the item's detail page** all mark that item's row read. **Only events 6
 and 16 (hyped, §26.6) coalesce**; every other event remains one row per occurrence.
+Opening a challenge's detail page also reads its event-18 row (§34.5).
 
 **Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
 (§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
@@ -2782,6 +2799,11 @@ Any user may follow/unfollow any challenge or solution they can see. Authors (ev
 member of a co-author team, including one who joins later, §27.8) and
 assignees are auto-followed to their items (can unfollow). Followers receive events
 3, 6, 8 (and 2 for challenge followers).
+
+A user may also follow a **topic** (§34.4): any active one, from `/topics`, the filtered
+gallery or their profile. A topic follow is not a follow of any item. It delivers only
+event 18 — one notice when a challenge in the topic opens for solutions (§34.5) — and
+never subscribes the person to that challenge's comments or status changes.
 
 ### §12.4 Channel webhooks
 
@@ -3062,12 +3084,14 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
   **Mine** (own items incl. `awaiting_triage` — every item the viewer is a co-author
   of, §27), **Completed** (`solved` +
-  `rejected`). Filters: status, impact area, namespace, author name (matching any
+  `rejected`). Filters: status, impact area, **topic** (§34.6 — with its filtered
+  header and Follow button), namespace, author name (matching any
   member of a co-author team, §27); sort: newest
   (default), most liked, most solutions, and — while hype is on — most hyped (§26.5).
 - Cards show number (`CH-<n>`), title, author (masked if anonymous, §9; a co-author
   team in its compact form, §27.7), created
-  date, impact area, status, like count, the hype number while hype is on (§26.5), and
+  date, impact area, **topic chips** (each a link that filters by the topic, §34.6),
+  status, like count, the hype number while hype is on (§26.5), and
   a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
 - **Cards / List view toggle.** A two-option segmented control (**Cards** | **List**,
   the existing `.sort-toggle` look, each option `aria-pressed`, §2.2) at the end of the
@@ -3087,8 +3111,8 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
     **"Anonymous"** with the neutral bubble — masked exactly as on the card, invariant 3,
     §9; real-user bubbles carry the §13.8 card, anonymous ones never do) · **likes**
     (count only — no like toggle) · **solutions** (the same filtered count as the card)
-    · **date** (created, date only, via the shared formatter). Impact area stays a filter and a card chip but is
-    not a list column.
+    · **date** (created, date only, via the shared formatter). Impact area and topics
+    stay filters and card chips but are not list columns.
   - **Rows** reuse the §14.1 list pattern: a `.rows` table with a mono uppercase header
     row. The **whole row opens the challenge** in place (text selection never
     navigates), and the title stays the keyboard/screen-reader target.
@@ -3122,7 +3146,9 @@ surface** — `/challenges` and its `/challenges/:number` detail pages share it 
 whole visit, and the next visit flags only genuinely newer items.
 
 **Detail page (`/challenges/:number`):**
-- Full fields: number, title, description, impact area, client name (if
+- Full fields: number, title, description, impact area, **topics** (chips linking to
+  the filtered gallery, plus **Edit topics** for the challenge's namespace admins and
+  platform admins, §34.3), client name (if
   applicable), namespace, visibility, author (masked/anonymous per §9; every member of
   a co-author team, with the **Team** panel for members, §27.7), status,
   assignee (if any), created/updated/edited dates.
@@ -3315,7 +3341,7 @@ Postgres `tsvector` full-text search over challenge
 title/description/client name and solution description/cost-vs-benefits, plus exact
 lookup by number (`CH-123`, `SOL-456`). Strictly visibility-filtered including
 autocomplete and result counts (invariant 2). §13.1's gallery filters
-(status/impact area/namespace/author — the author filter matching any member of a
+(status/impact area/topic/namespace/author — the author filter matching any member of a
 co-author team, §27) narrow the list alongside it: the `/search`
 results page shows the same filter controls as the gallery, and `GET /api/search`
 accepts them as query parameters beside `q`. Autocomplete stays query-only. Visibility
@@ -3392,7 +3418,8 @@ in the viewer's local time, through `useDateFmt()`), disabled while the e-mail s
 — followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
 follow* — rendered as the same pill switch with the same on-left travel, optimistic
-flip and inline-error revert), followed by the §13.10 **Feedback** section (*Ask me for
+flip and inline-error revert), then the §34.6 **Topics** section (a pill switch of the
+same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
 feedback* switch and *Give feedback now*). While gamification is on (§23), the own
 profile also shows the **Achievements** section (level, points, progress, *Currently
 leading*, earned and locked badges, §23.6) and two more switches of the same kind:
@@ -3501,7 +3528,8 @@ photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
 A dedicated **`/quick-start`** page: one generic walkthrough for every
 authenticated user regardless of role, covering the common flows — submitting a
 challenge, proposing a solution on a `valid` challenge, commenting/liking/
-following, and where to find the dashboard, leaderboard, and search — each
+following, following topics (§34.6, with a link to `/topics`), and where to find the
+dashboard, leaderboard, and search — each
 illustrated with a theme-aware SVG mockup of the relevant screen (drawn on the §2.2
 tokens, so it follows light/dark and never goes stale the way a screenshot does).
 Always reachable afterward
@@ -4549,11 +4577,12 @@ the existing brand link tokens; the separator is a `›` glyph.
 
 A filterable queue of the namespace's challenges: columns number, title, author
 (masked when anonymous until revealed §9; a co-author team in its compact form,
-§27.7), status, impact area, assignee, hype (the
+§27.7), status, impact area, **topics** (§34.6), assignee, hype (the
 §26 number, while hype is on), created.
 Filters: author name (matches non-anonymous items only, and any member of a co-author
 team, §27), **assignee — Any,
-"Unassigned", "Assigned to me", or a specific person (searchable)**, status, number.
+"Unassigned", "Assigned to me", or a specific person (searchable)**, status, number,
+**topic — Any, "No topic", or a topic** (retired ones included and marked, §34.6).
 
 **Row interaction — the whole row opens the item.** Clicking anywhere on a row
 navigates to the item exactly as its title link does (a challenge's detail page here;
@@ -4584,14 +4613,18 @@ results are never clipped by, nor pushed under the edge of, the surrounding list
 **Bulk actions** over a selection: bulk assign,
 bulk status set (admin override semantics, each item audited individually, and each
 item firing exactly the §12.1 notifications its single-item equivalent fires — events
-3–5 for a status change, event 7 for an assignment — one per item, after commit).
+3–5 for a status change, event 7 for an assignment, event 18 for a first entry into
+`valid` — one per item, after commit), and **Add topic** / **Remove topic** (§34.6 —
+per-item outcomes `ok`, `unchanged` or `topic_limit`, each changed item audited on its
+own and firing event 18 as its single-item equivalent would).
 
 Permanent
 delete (§10.3) is deliberately **not** a bulk action — it is one item at a time, from
 the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
 the export, and a co-author team fills the author cell with every member in order,
-separated by `; ` (§27.7); every export is audited (who, filter, row count).
+separated by `; ` (§27.7); a **Topics** column carries the topic names joined by `; `
+(§34.6); every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
 (titles, names, impact areas), and spreadsheet applications run a cell that begins with
@@ -4671,6 +4704,10 @@ delegated per namespace.**
     count when challenges were transferred); each reassigned challenge additionally
     gets its own `challenge.edited` diff (`impactAreaId`, and `clientName` when it is
     cleared).
+- **Topics** — the §34.2 card, directly below Impact areas: add / edit (name and
+  description) / retire / reactivate / **delete** (retired topics only), at most 100
+  active, each row with its challenge and follower counts. No seed. Audited as
+  `topic.*`.
 - Date display format: EU (dd/mm/yyyy, 24-hour) or US (mm/dd/yyyy, AM/PM).
 - Namespace management: create / rename / archive; role mappings (Entra group →
   namespace role / platform admin).
@@ -5688,7 +5725,12 @@ anomalies. Since v0.10 also:
   Talent Scout badge and event 16 are not audited, as no award is;
 - **real user monitoring** — `settings.telemetry_changed` (`after: { enabled,
   sampleRate }`, §14.12). Beacons and the page's reads are not audited: the data holds
-  no user ids, so a read discloses nothing about anyone.
+  no user ids, so a read discloses nothing about anyone;
+- **topics** — `topic.created`, `topic.updated`, `topic.retired`, `topic.reactivated`
+  and `topic.deleted` (§34.2), and `challenge.topics_changed` for an admin's re-tagging
+  (`added`, `removed`, `via: "detail" | "bulk"`, or `trigger: "topic_deleted"`; §34.3).
+  An author's change of topics is part of `challenge.edited`. Topic follows and event 18
+  are not audited.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -5858,7 +5900,7 @@ optional and composable (each an additional `AND`):
 - **Category chips** by action prefix — All / Challenges (`challenge.*`) / Solutions
   (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
   (`user.*`, `scim.*`, `role_mapping.*`, `recon.*`) / Admin (`settings.*`,
-  `namespace.*`, `impact_area.*`, `system_banner.*`, `presence.*`, `email.*`,
+  `namespace.*`, `impact_area.*`, `topic.*`, `system_banner.*`, `presence.*`, `email.*`,
   `audit.*`, `webhook.*`, `survey.*`, `ai.*`, `public_submission.*`, every
   `*.exported`) / **Anonymity** (`anonymity.*` — admin
   reveals and self-reveals, the most sensitive reads to review). The curation events (`challenge.featured` /
@@ -5931,6 +5973,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   item, a repeat, or an exhausted weekly budget; challenge and solution payloads carry
   `hype`, `hyped`, `canHype`, `hypeReason` and `hypers`, the detail payload and `me` the
   viewer's `hypesLeft`; `challenges` accepts `sort=most_hyped`, §26.11)
+- `topics` (`GET` the active topics with the viewer's `following` and per-viewer
+  `openCount`; `topics/:id` `GET` one topic, a retired one included; `topics/:id/follow`
+  `POST { following }` sets the wanted state — 404 for an unknown topic, 409 for
+  following a retired one), `challenges/:number/topics` (`PUT { topicIds }` — the
+  challenge's namespace admins and platform admins; 404 when the item is invisible, 409
+  on a trashed one, 403 for other viewers, 422 for the §34.3 rules); challenge create
+  and edit accept `topicIds`; `challenges`, `search` and the triage queue accept `topic`
+  (the queue also `topic=none`); challenge payloads and search hits carry `topics` and
+  the detail `canEditTopics` (§34.9)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
 - `notifications` (inbox list with its `unreadCount`, fetched when the bell opens; mark
   read, mark all read), `me/pulse` (`GET` the §12.2 pulse — `unreadCount`,
@@ -5957,7 +6008,7 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `leaderboards` (incl. `metric=points` and each row's level, §23.12), `dashboard` (KPIs, spotlights, **featured** — visibility-filtered
   pins, §13.2 — and **`hyped`**, the per-viewer "Hyped this week" board with the
   viewer's budget, `null` while hype is off, §26.5)
-- `admin/*` (queue incl. proposed-solutions tab, bulk, export, settings, namespaces, role-mappings, audit; **triage mark-seen**, §14.4 — the attention count rides on `me/pulse`;
+- `admin/*` (queue incl. proposed-solutions tab, bulk — including the §34.6 `triage/bulk-topic` — export, settings, namespaces, role-mappings, audit; **triage mark-seen**, §14.4 — the attention count rides on `me/pulse`;
   **`admin/presence?window=5m|1h|8h|24h|30d` → `{ asOf, dau, wau, mau, total, users[] }`
   and `admin/presence/history?range=7d|30d|90d|all` → `{ range, enoughHistory,
   points[{ day, activeUsers, wau, mau }] }`** (one point per UTC day, contiguous;
@@ -5987,7 +6038,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   **`admin/trash`** (`GET`, §10.4); **`admin/public-submissions`** with its `:id`,
   `accept`, `decline`, `discard`, `erase-contact` and `count` routes (§24.9);
   **`admin/mcp`** (`GET`/`PATCH`), **`admin/mcp/clients`** (`GET`) and
-  **`admin/mcp/clients/:id/block`** / **`…/unblock`** (`POST`) (§25.13)
+  **`admin/mcp/clients/:id/block`** / **`…/unblock`** (`POST`) (§25.13);
+  **`admin/topics`** (`GET`/`POST`) and **`admin/topics/:id`** (`PATCH`/`DELETE`)
+  (§34.9)
   — all platform admin only)
 - `public-submissions/link` (`GET` → `{ url | null }`, any authenticated user — the §6.1
   copy link to the §24 public form, `url` set only while that feature is live, §24.9)
@@ -6100,7 +6153,12 @@ acceptance or join requests, no lead or owner role, no co-authors on an anonymou
 or on a challenge accepted from the public form, no team changes by admins, committee
 members or assignees, no split or weighted points, no per-member anonymity, no
 co-authored comments, no team changes through MCP, and no team-change notification to
-the other members; no i18n;
+the other members; for topics (§34): no namespace-scoped topics, no
+free-text or user-created tags, no topic hierarchy, no merge, no topics on solutions, no
+notice for anything in a topic but a challenge opening, no backfill on follow, no
+auto-follow of the challenges a notice is about, no topic follows or admin re-tagging
+through MCP, no list of a topic's followers for anyone, and no topic-level webhooks;
+no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
 audit chain (timestamping service, transparency log — recording the reported head
@@ -6783,14 +6841,19 @@ transitions, assigns, rejects or notifies (invariant 6).
   current result a run; one run per distinct input (**cached by a hash** of the inputs),
   so an unchanged item is never re-sent. An edit makes a new hash and a new run. A
   namespace-visible challenge is skipped while the restricted-content switch is off.
-- **Egress:** the challenge's **title, description and impact area**, and — for
+- **Egress:** the challenge's **title, description and impact area**, the **names of the
+  active topics** (§34.2 — platform-curated, never restricted), and — for
   duplicate hints — the **titles** of up to 20 other challenges in the **same namespace**
   that are `org`-visible (or restricted, when the switch allows) and not
   `awaiting_triage` or `withdrawn` (the set visible to every viewer of the note).
 - **Output** (JSON, rendered as plain text): a **summary** (≤ 400 characters), **missing
   information** (a short list — problem, impact, workaround, measurable outcome), a
-  **suggested impact area**, **questions to ask the author**, and **possible
-  duplicates** (numbers from the candidate set only, each with a one-line reason).
+  **suggested impact area**, up to 3 **suggested topics** (§34.6 — names mapped to
+  active topics; a name that maps to none is dropped, and a suggestion whose topic has
+  since been retired or deleted is not shown), **questions to ask the author**, and
+  **possible duplicates** (numbers from the candidate set only, each with a one-line
+  reason). Suggestions are advisory text: applying one is an ordinary **Edit topics**
+  by an admin (§34.3).
 - **Who sees it.** Namespace admins and platform admins always; committee members and
   the assignee once the challenge is past `awaiting_triage`. **Never the author** (no
   member of a co-author team, §27.12) in v1 —
@@ -6801,8 +6864,9 @@ transitions, assigns, rejects or notifies (invariant 6).
   results for items that left the subject statuses are kept read-only for the record
   until the item is deleted.
 - **Run details.** The input hash covers the subject's **own** egress fields (title,
-  description, impact area) — not the candidate titles, so a new challenge elsewhere in the
-  namespace never re-sends every open subject. One result row per challenge (migration
+  description, impact area) — not the candidate titles or the topic names, so a new
+  challenge elsewhere in the namespace, or a change to the topic list, never re-sends
+  every open subject. One result row per challenge (migration
   `0039_ai_results.sql`); while a new run is pending the previous note stays readable,
   labelled *"From an earlier version"*. A failed run is retried after an hour (or at once
   by **Re-run**). With the switch off, existing notes stay readable and nothing is pending;
@@ -7815,22 +7879,22 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 
 | Tool | Behavior |
 |---|---|
-| `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, author (masked), like and solution counts, `url`. |
-| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, client name, author (masked) and `authors` (§27.10), assignee, dates (including `editedAt`), like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§27.10), assignee, dates (including `editedAt`), like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§27.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
 | `list_my_items` | The caller's own challenges and solutions (every item they are a co-author of, §27.10) with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
-| `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
+| `get_reference_data` | What a submission needs: the namespaces the caller can submit to, active impact areas, the active topics (id, name, description, §34.2), the statuses, field length limits, whether anonymous submission is available, and whether restricted content is available over MCP. |
 
 **Contribute (7)**
 
 | Tool | Behavior |
 |---|---|
-| `submit_challenge` | §6.1: title, description, impact area, client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
+| `submit_challenge` | §6.1: title, description, impact area, topics (optional, at most 3 active topic ids, §34.3), client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
 | `propose_solution` | §6.2: challenge number, description, cost vs benefits, `anonymous`. Only while the challenge is `valid`. Created `proposed`; event 2 fires. |
-| `edit_challenge` | §10.1 author edit — title, description, impact area — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§27.5). |
+| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§27.5). |
 | `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. Requires `baseEditedAt` from `get_solution`; a stale copy is refused (§27.5). |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
 | `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
@@ -7847,6 +7911,8 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
   committee member or assignee, admin overrides, and **withdraw**.
 - **Assignment, triage, the triage queue, bulk actions and CSV exports.**
 - **Reveal and self-reveal** (§9), **visibility changes**, **featuring**.
+- **Following a topic and an admin's re-tagging** (§34). Topics are read, and set by the
+  author on submit and edit, only.
 - **Delete, trash and restore** (§10.3, §10.4); comment edit and delete.
 - **Attachment bytes and uploads** (§25.7).
 - **Everything under `/api/admin/*`** — settings, namespaces, role mappings, the audit
@@ -8914,26 +8980,322 @@ else; e-mail or in-app only; MCP.
 
 ---
 
-## §34 Topics you can follow
+## §34 Topics
 
-> **⚠ GAP-88 · new feature:** topics do not exist. This section is a **stub**: grill it
-> and complete it before building; it then ships as one minor release.
+A **topic** is a curated tag that cuts across namespaces and impact areas: *AI*,
+*Sustainability*, *Customer onboarding*. A challenge carries **up to three**, where it
+has exactly one impact area, and anyone can **follow** a topic to hear when a new
+challenge in it **opens for solutions**. Until now a person could follow only
+individual challenges and solutions (§12.3), which exist already; a topic follow is how
+to hear about challenges that do not exist yet. Topics are a discovery and notification
+aid. They decide nothing about triage, transitions, assignment or visibility.
 
-Today a person can follow a single item but not a subject. **Topics** are curated tags
-that challenges carry and people follow.
+### §34.1 Decisions
 
-**Known so far:**
-- A **curated list of topics**, managed like impact areas (§14.3). Unlike the single
-  impact area, a challenge can carry **several** topics.
-- **Following a topic** sends a notification when a challenge in it **opens for
-  solutions** (enters `valid`). The gallery and search filter by topic.
-- Notifications, filters and any topic count follow the item's visibility
-  (invariant 2); an anonymous author stays masked (invariant 3).
+| # | Decision | Why |
+|---|---|---|
+| 1 | **One global list, curated by platform admins** on Platform settings, beside impact areas. | One vocabulary for the whole organization: following a topic covers every namespace. Same home, powers and audit as impact areas (§14.3). |
+| 2 | **Challenges only; optional; at most 3.** Solutions inherit their challenge's topics, as they inherit its impact area. | Three keeps a tag meaningful and bounds the fan-out to followers. Zero is fine, because the list need not cover every subject. |
+| 3 | **The author tags at submission and in the edit window; namespace and platform admins re-tag at any time, as curation.** | The author knows the subject; admins correct the tagging at triage without making a content edit (no `edited_at`, as featuring). |
+| 4 | **A follower is told when the challenge opens** — its **first** entry into `valid`. | That is when a follower can act on it: propose a solution. |
+| 5 | **A still-`valid` challenge that gains a topic, or becomes visible to more people, tells the followers who have not been told yet.** | A follower hears about every open challenge in their topics that they can see, however the tag or the access arrived. |
+| 6 | **At most one notice per person per challenge, ever.** Being told through *"shared with you"* (event 15) counts. | A marker per (challenge, person) makes every trigger safe to repeat. |
+| 7 | **Event 18 is an ordinary follower-type event:** e-mail and inbox, digestable, **no toggle** of its own. | Following is the opt-in and unfollowing the off switch; the e-mail switch and the digest choice still apply. |
+| 8 | **No backfill.** Following a topic affects only challenges that open afterwards. | `/topics` and the filtered gallery show what is open already; a burst of old notices on follow is noise. |
+| 9 | **No auto-follow** of the challenge a notice is about. | Following a busy topic must not subscribe a person to every comment on every challenge in it. |
+| 10 | **Retire, reactivate and delete as impact areas;** delete only once retired, no merge. | A known model: retiring keeps history, deleting is deliberate. |
+| 11 | **Follow from `/topics` (a sidebar item), the filtered gallery and the own profile;** Quick start introduces it. | Where a person discovers a topic, they can follow it. |
+| 12 | **Topics reach the triage queue (with bulk tagging), search, the CSV export, MCP and AI triage assist.** No new MCP tool. | The tags are only as useful as their reach; the MCP surface stays at 15 tools. |
+| 13 | **Topic follows are private.** Nobody sees who follows a topic; platform admins see a bare count. | A follow is a personal preference, like the notification toggles. |
 
-**To settle in the interview:** who curates (platform or namespace admins) and whether
-topics are per namespace; who tags (the author at submit and edit, admins in triage);
-the maximum topics per challenge; solutions; the exact events and their digest
-behavior; topic pages; MCP and AI-suggested topics.
+### §34.2 The topic list (platform admin)
+
+- **Fields.** A **name** — 1–40 characters after trimming, plain text, unique
+  case-insensitively across **all** topics, retired ones included — an optional
+  **description** (plain text, at most 200 characters) and an **active** flag.
+- **The card.** A **Topics** card on `/admin/settings` (§14.3), directly below Impact
+  areas: one row per topic, active ones first, each group alphabetical. A row shows the
+  name, the description, *Active* or *Retired*, the number of challenges carrying it and
+  the number of people following it — bare counts, never who. Actions: **Add** (name
+  and description), **Edit** (name and description), **Retire** / **Reactivate**, and
+  **Delete** on a retired row.
+- **Cap.** At most **100 active** topics, so the pickers and `/topics` stay usable. An
+  add or a reactivation past it is refused (**409**, *"There are already 100 active
+  topics. Retire one first."*). Retired topics do not count.
+- **No seed.** A deployment starts with no topics. While none is active, the topic field
+  is absent from the submit and edit forms and the topic filters are absent; the nav item
+  and `/topics` stay, with the empty state of §34.6.
+- **Rename** changes the name everywhere at once — chips, filters, pickers and the next
+  notices — and breaks no link, since every link carries the topic's id. Inbox rows and
+  e-mails already written keep the name they were written with, as they keep a title.
+- **Retire** is a soft flip of `active`. A retired topic stays on the challenges that
+  carry it (its chip renders muted, with the tooltip *"Retired topic"*); it leaves every
+  picker (submit, edit, the admin control, bulk), `/topics`, the profile's Topics
+  section and the gallery and search filters (the triage filter keeps it, so admins can
+  find what carries it); it can no longer be added to a challenge or followed; and it
+  **never triggers event 18** (§34.5). Its follows are kept, dormant. **Reactivate**
+  makes it live again and sends nothing: a reactivation is not an opening.
+- **Delete** is offered only on a retired row; the API refuses an active topic (**409**).
+  The confirm dialog reads *"Permanently delete <Topic>? It is removed from N challenges,
+  and N people stop following it."* One transaction removes the topic's
+  `challenge_topics` rows, its `topic_follows` rows and the topic row. Nothing is
+  reassigned, because topics are optional. No notification is sent. Each challenge that
+  lost the topic gets its own `challenge.topics_changed` audit row (`removed`,
+  `trigger: "topic_deleted"`), as the impact-area delete writes a diff per challenge.
+- **Audit (§15).** `topic.created`, `topic.updated` (a field diff of name and
+  description), `topic.retired`, `topic.reactivated` and `topic.deleted` (`before: {
+  name, description, active }`, `challengeCount`, `followerCount`).
+
+### §34.3 Tagging a challenge
+
+- **The picker.** A tag field with the look of the §4.3 access-list editor. Focusing it
+  lists the active topics alphabetically; typing narrows the list (case-insensitive
+  substring of the name); picking adds a tag; each tag has a **✕**, and Backspace in an
+  empty field removes the last. There is no free text: only listed topics can be
+  picked. At three tags the list closes and the field reads *"Up to 3 topics"*. A
+  retired topic already on the challenge shows as a muted tag that can be removed but not
+  added back.
+- **The author, at submission (§6.1).** An optional **Topics** field directly after
+  impact area. `submit_challenge` takes the same through MCP (§25.6).
+- **The author, in the edit window (§10.1).** The edit form carries the same field.
+  Topics are an editable field like impact area: a change stamps `edited_at` and lands in
+  the `challenge.edited` diff as `topicIds`. The edit window is `awaiting_triage` or
+  `needs_improvement`, never `valid`, so an author edit never triggers event 18.
+- **Admins, at any time.** A namespace admin of the challenge's namespace or a platform
+  admin sees an **Edit topics** control beside the detail page's topic chips
+  (`canEditTopics`), in every status; the read-only trashed view (§10.4) has none.
+  Saving replaces the set. This is **curation, not a content edit** (§10.1 stays
+  author-only for content): it bumps neither `updated_at` nor `edited_at`, as featuring
+  does not (§13.2). Committee members and the assignee cannot change topics.
+- **Admins, in bulk (§14.1).** *Add topic* and *Remove topic* over a selection (§34.6).
+- **Rules** (server-side, in the shared package, mirrored in the form): at most **3**
+  topics per challenge, no duplicates, unknown ids refused (**422**). A topic may be
+  **added** only while it is active (**422**, *"That topic is no longer available."*);
+  removing is always allowed; a retired topic still on the challenge counts toward the
+  three.
+- **Audit (§15).** An admin change writes `challenge.topics_changed` (`added` and
+  `removed`, each a list of `{ id, name }`, and `via: "detail" | "bulk"`). An author
+  change is part of `challenge.edited`.
+- **Public submissions (§24.6).** The Accept dialog sets no topics. The accepting admin
+  tags the new challenge from its detail page afterwards.
+
+### §34.4 Following
+
+- **Who.** Any authenticated user may follow any **active** topic: a topic is
+  platform-curated and names no item, so it is not restricted content. Anyone may
+  unfollow at any time, a retired topic included. Following and unfollowing are
+  **silent** — not audited, no notification, no points (§23.2).
+- **Where.** `/topics` and the header of the filtered gallery carry a **Follow** button
+  (`aria-pressed`; it reads *Follow*, or *Following* while followed, and *Unfollow* on
+  hover or focus); the own profile carries a pill switch per topic (§13.5). All three
+  write the same row, so they always agree.
+- **Private.** No surface lists who follows a topic. The §34.2 card shows platform
+  admins a count only.
+- **No backfill** (decision 8): a new follow sends nothing about challenges already
+  open; it applies from the next trigger of §34.5 on.
+- **Deactivation** keeps a person's follows (the §12.1 drop stops delivery, and
+  reactivation resumes it); **erasure** deletes them (§3).
+
+### §34.5 Notifications — event 18
+
+A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
+
+- **The marker.** `topic_notices (challenge_id, user_id)` holds one row per person ever
+  told about a challenge. It is written in the same transaction as the event's inbox
+  row, and also with every **event 15** row (§12.1, *"shared with you"*), which counts as
+  being told. A person with a marker never receives event 18 for that challenge again.
+- **Triggers — exactly three,** each evaluated in the transaction that causes it, with
+  dispatch after commit as for every event:
+  1. **Opening.** The challenge's **first** entry into `valid` — the transition that
+     stamps `first_valid_at` (§5) — by any path: an enforced move, an admin override or a
+     bulk status set. Relevant topics: every **active** topic on the challenge. A later
+     return to `valid` (an override round trip, the §10.3 revert) is not an opening and
+     sends nothing.
+  2. **Topic added.** An admin adds a topic to a challenge whose status is `valid`, on
+     the detail page or in bulk. Relevant topics: the **added** ones only.
+  3. **Widened.** A visibility change (§4.3) on a `valid` challenge. Relevant topics:
+     every active topic on it. Recipients are further limited to the people who could
+     **not** see the challenge before the change. Additions to a `people` access list
+     are not this trigger: event 15 tells those people, and marks them.
+- **Recipients** of a trigger are the followers of its relevant topics who, at that
+  moment, all of:
+  - can see the challenge under the full §4.3 predicate (which also hides a trashed
+    challenge, §10.4);
+  - are active and not erased (§12.1);
+  - hold no marker for it;
+  - are not its **author** — anonymous or not; event 3 already tells them it is valid;
+  - are not the person whose action caused the trigger.
+
+  A person following two relevant topics gets **one** notice naming both. Nobody left
+  out — unable to see it, or the actor — is marked, so a later trigger can still reach
+  them.
+- **Never written** for a challenge whose namespace is **archived** (§4.1 — it accepts no
+  solutions, so it is not open to anyone), for a retired topic, on a topic's
+  reactivation, on a new follow, on a restore from the trash (§10.4 notifies no one), on a
+  namespace-membership change by SCIM (nobody watches those), or for a solution.
+- **Content.** In-app: *"New in AI: CH-412 Reduce invoice matching time is open for
+  solutions"*, linked to the challenge; with several matching topics, *"New in AI,
+  Automation: …"*, naming only the topics the recipient follows, alphabetically. E-mail:
+  subject *"New in AI: CH-412 is open for solutions"*; the body carries the number, the
+  title, the namespace, the author masked per §9 (or *"External submission"*, §24.6),
+  the matching topic names and the link, and ends with *"You get this because you follow
+  AI. Manage your topics: <PUBLIC_BASE_URL>/topics"* above the standard footer. It never
+  quotes the description. The §12.1 e-mail content-safety rules apply.
+- **Delivery.** A standard outbox row that honors the e-mail switch and the **digest**
+  choice: event 18 is a follower-type event (§12.1), and its digest line reads *"New in a
+  topic you follow — AI"*. One inbox row per challenge and recipient, **never coalesced**
+  across challenges: the §12.1 read-time gate keys every row to one challenge. Opening the
+  challenge's detail page marks its event-18 row read, as for events 6 and 16; the
+  read-time gate hides it if the challenge is narrowed later.
+- **No per-event preference.** The three §12.1 toggles are unchanged; unfollowing is the
+  control. No channel webhook (§12.4 is unchanged).
+
+### §34.6 Surfaces
+
+- **Sidebar (§2.2).** A **Topics** nav item for every signed-in user, between
+  Challenges and Leaderboard. No count bubble.
+- **`/topics`.** Heading *Topics*, subtitle *"Follow a topic to hear when a new
+  challenge in it opens for solutions."* One row per **active** topic, alphabetical: the
+  name (a link to the filtered gallery), the description, *"N open"* and the Follow
+  button. *N* counts the challenges carrying the topic that the viewer would see on the
+  gallery's **Open** tab (§13.1) — computed per viewer under the full §4.3 predicate,
+  never a global count. With no active topics the page reads *"No topics yet."*, and for
+  a platform admin adds a link to Platform settings.
+- **Challenges gallery (§13.1).**
+  - A **Topic** filter (a select: *All topics*, then the active topics alphabetically) beside
+    impact area, carried in the URL as `topic=<id>`. An unknown or deleted id is dropped
+    and the gallery renders unfiltered. A retired id still filters (a muted chip links to
+    it) but is not offered in the select.
+  - **Cards** show the challenge's topics as small chips after the impact-area chip. A
+    chip is a link to `/challenges?topic=<id>`; clicking it filters the gallery and does
+    not open the card. Topics are **not** a list-view column, as impact area is not.
+  - **The filtered header.** While `topic` is set, a strip above the tabs shows the
+    topic's name and description, the Follow button (or, for a retired topic, *"This
+    topic is retired"* instead) and a **✕** that clears the filter. Tabs, sort, the other
+    filters and the view toggle work as usual.
+- **Detail page (§13.1).** A **Topics** row under the impact area: one chip per topic,
+  each linking to the filtered gallery, then **Edit topics** for those who may (§34.3).
+  Absent when the challenge has no topics and the viewer may not edit them.
+- **Search (§13.4).** The same Topic filter beside the others; `GET /api/search`
+  accepts `topic`.
+- **Own profile (§13.5).** A **Topics** section after the notification preferences: a
+  pill switch per active topic — the name, the description muted below — with the same
+  optimistic flip and inline-error revert as the preference switches. Other users'
+  profiles show nothing about topics.
+- **Quick start (§13.7).** A **Follow topics** section after the one on
+  commenting, liking and following, with a theme-aware SVG mockup of a `/topics` row and
+  a link to `/topics`. Static content, like the rest of the page.
+- **Triage queue (§14.1).** On the Challenges tab: a **Topics** column (names,
+  comma-separated, ellipsized, the full list as the cell's `title`); a **Topic** filter
+  — *Any topic*, *No topic*, then every topic, retired ones marked; and two bulk actions, **Add
+  topic** and **Remove topic**, each picking one topic. Per item the outcome is `ok`,
+  `unchanged` (it already had, or lacked, the topic) or `topic_limit` (already at three);
+  each changed item is audited on its own (`via: "bulk"`) and fires event 18 exactly as
+  its single-item equivalent would. The **CSV export** gains a **Topics** column (names
+  joined by `; `), under the §14.1 formula neutralization. The Solutions tab is
+  unchanged.
+- **AI triage assist (§22.11).** The note gains **suggested topics**.
+- **MCP (§25.6).** Topics in the reference data, on submit and edit, in search and on
+  the challenge detail.
+- **Nowhere else.** Not on Home, the leaderboards, other people's profiles, the hover
+  card, channel webhooks or gamification.
+
+### §34.7 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** A topic's name and description are platform-curated and name no item,
+  so they are readable by every signed-in user. Everything derived from items is per
+  viewer: the open count, the filtered gallery, search and the recipients of event 18.
+  The §34.2 card's challenge count covers every challenge and is shown to platform admins
+  only, who can see every challenge anyway.
+- **Invariant 3.** A notice masks the author like every other event. Leaving the author
+  out of the recipients happens inside the dispatch and shows nowhere. No surface reads
+  `topic_notices`.
+- **Trash (§10.4).** A trashed challenge keeps its topics and markers, hidden through the
+  item; it drops out of the open counts and the filters; a restore sends nothing.
+- **Delete (§10.3).** The cascade removes the challenge's `challenge_topics` and
+  `topic_notices` rows.
+- **Withdrawn, rejected, solved.** The topics stay as history; such a challenge is not
+  counted as open.
+- **Erasure (§3)** deletes the person's `topic_follows` and `topic_notices` rows (a
+  follow is a preference, like the toggles erasure resets); the `added_by` of the topics
+  they tagged keeps pointing at the de-identified row. **Deactivation** keeps everything.
+
+### §34.8 Data model (migration 0053)
+
+- **`topics`** — id (uuid), name (text, 1–40 characters; unique index on `lower(name)`),
+  description (text, at most 200, nullable), active (boolean, not null, default true),
+  created_by (user FK), created_at. Grants: SELECT, INSERT, UPDATE, and DELETE for the
+  §34.2 delete.
+- **`challenge_topics`** — challenge_id (FK `challenges`), topic_id (FK `topics`),
+  added_by (user FK), added_at; primary key `(challenge_id, topic_id)`, index on
+  `(topic_id)`. Grants: SELECT, INSERT, DELETE (a topic is removed by deleting its row).
+  The cap of three is enforced by the API, as the access list's cap is.
+- **`topic_follows`** — user_id (FK `users`), topic_id (FK `topics`), created_at;
+  primary key `(user_id, topic_id)`, index on `(topic_id)`. Grants: SELECT, INSERT,
+  DELETE.
+- **`topic_notices`** — challenge_id (FK `challenges`), user_id (FK `users`),
+  notified_at, via (`opening | topic_added | widened | shared`); primary key
+  `(challenge_id, user_id)`. Grants: SELECT, INSERT, and DELETE for the §10.3 cascade
+  and the §3 erasure only.
+- **`notifications.type`** gains **`topic_challenge`** (payload `{ challengeId, number,
+  title, topics: [names], link }`); the §5 trigger sets `challenge_id` from it as for
+  every row. No coalescing index.
+- No column on `challenges`: the topics are read from `challenge_topics`, in the query
+  that reads the impact area.
+
+### §34.9 API, audit, tests
+
+- **API (§16).**
+  - `GET /api/topics` — any signed-in user: the active topics, `[{ id, name,
+    description, active, following, openCount }]`, `openCount` per viewer (§34.6).
+    `?include=retired` adds the retired topics after them for a namespace or platform
+    admin — the triage filter's list — and is ignored for anyone else.
+  - `GET /api/topics/:id` — one topic for the filtered gallery's header, `{ id, name,
+    description, active, following }`, a retired one included; **404** for an unknown id.
+  - `POST /api/topics/:id/follow { following: true | false }` — sets the wanted state, so
+    a repeated click is harmless; returns `{ following }`. **404** for an unknown id;
+    **409** for following a retired topic (unfollowing one is allowed).
+  - `PUT /api/challenges/:number/topics { topicIds }` — a namespace admin of the
+    challenge's namespace or a platform admin; replaces the set. **404** when the caller
+    cannot see the challenge, the shared **409** on a trashed one (§10.4), **403** for
+    anyone else who can see it, **422** for the §34.3 rules. Returns `{ topics }`.
+  - Challenge create and author edit accept `topicIds` (absent on an edit leaves the
+    topics as they are). `GET /api/challenges` and `GET /api/search` accept `topic=<id>`;
+    the triage queue and its CSV export accept `topic=<id> | none`.
+    `POST /api/admin/triage/bulk-topic { numbers, action: "add" | "remove", topicId }`
+    is the bulk action, answering `{ outcomes: [{ number, status }] }` (**422** for an
+    unknown topic, or for adding a retired one).
+  - Gallery rows, search hits, triage rows and the detail payload carry `topics: [{ id,
+    name, active }]`; the detail payload also carries `canEditTopics`.
+  - `GET` and `POST /api/admin/topics`, `PATCH /api/admin/topics/:id` (name,
+    description, active) and `DELETE /api/admin/topics/:id` — platform admin only
+    (**403** otherwise); each row carries `challengeCount` and `followerCount`.
+- **Audit (§15).** `topic.*` (§34.2) under the Admin chip; `challenge.topics_changed`
+  (§34.3) under Challenges by prefix. Follows and event 18 are not audited, as item
+  follows and notifications are not.
+- **Tests.**
+  - *Unit:* the name rules (trim, length, case-insensitive uniqueness); the tagging
+    rules (the cap, duplicates, adding a retired topic refused, removing one allowed, a
+    retired topic counted toward three); recipient selection for each trigger — the
+    marker, the author and the actor left out, the visibility drop, retired topics
+    ignored, an archived namespace skipped, two topics giving one notice, "widened"
+    limited to people who could not see the challenge before; the copy with one and
+    several topics; event 18 classed as digestable.
+  - *Integration:* the first move into `valid` notifies the followers and writes their
+    markers; a second entry into `valid` sends nothing; a topic added while `valid`
+    reaches only the added topic's untold followers; a namespace → org widening reaches
+    the newly able and no one twice; a person told through event 15 gets no event 18; a
+    restricted challenge reaches only its namespace members and a later widening reaches
+    the rest; nothing for deactivated or erased people; the e-mail switch and digest hold
+    apply; opening the challenge reads the row; the read-time gate hides it after a
+    narrowing; admin re-tagging — RBAC, no `edited_at`, audited; the author's edit within
+    the window, diffed; retire, reactivate and delete, with the cascade, the 100 cap, the
+    per-challenge audit and no notification; the §10.3 cascade and the §3 erasure remove
+    the rows; `openCount` never counts an item the viewer cannot see; the bulk outcomes;
+    the CSV column; the MCP tools carry and accept topics.
+  - *E2e:* a platform admin adds a topic; a user follows it on `/topics`; a challenge
+    tagged with it is moved to `valid`; the follower's bell shows *"New in …"*, and the
+    chip on the challenge's card filters the gallery to that topic.
 
 ---
 

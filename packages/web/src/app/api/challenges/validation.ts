@@ -33,12 +33,14 @@ export type ChallengeTab = (typeof CHALLENGE_TABS)[number];
 export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions", "most_hyped"] as const;
 export type ChallengeSort = (typeof CHALLENGE_SORTS)[number];
 
-/** The §13.1 gallery filters (status / impact area / namespace / author name). Shared by the
- *  gallery (`/api/challenges`) and search (`/api/search`, §13.4), which narrows its results by
- *  the same four filters. */
+/** The §13.1 gallery filters (status / impact area / topic / namespace / author name). Shared by
+ *  the gallery (`/api/challenges`) and search (`/api/search`, §13.4), which narrows its results
+ *  by the same filters. */
 export interface GalleryFilters {
   status?: ChallengeStatus;
   impactAreaId?: string;
+  /** §34.6: `?topic=<id>`. */
+  topicId?: string;
   namespaceId?: string;
   authorName?: string;
 }
@@ -65,7 +67,7 @@ export function parseChallengeListFilters(params: URLSearchParams): Parsed<Chall
   return { ok: true, value: { tab: tabRaw as ChallengeTab, sort: sortRaw as ChallengeSort, ...gallery.value } };
 }
 
-/** Parses just the four §13.1 gallery filters, failing closed exactly like the gallery does. */
+/** Parses just the §13.1 gallery filters, failing closed exactly like the gallery does. */
 export function parseGalleryFilters(params: URLSearchParams): Parsed<GalleryFilters> {
   const value: GalleryFilters = {};
 
@@ -81,6 +83,12 @@ export function parseGalleryFilters(params: URLSearchParams): Parsed<GalleryFilt
   if (impactAreaId !== null) {
     if (!isUuid(impactAreaId)) return fail("impactAreaId must be a uuid");
     value.impactAreaId = impactAreaId;
+  }
+
+  const topicId = params.get("topic");
+  if (topicId !== null) {
+    if (!isUuid(topicId)) return fail("topic must be a topic id");
+    value.topicId = topicId.toLowerCase();
   }
 
   const namespaceId = params.get("namespaceId");

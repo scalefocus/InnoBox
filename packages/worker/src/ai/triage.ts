@@ -91,6 +91,9 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
 
   const { rows: areas } = await pool.query<{ id: string; name: string; active: boolean }>(`select id, name, active from impact_areas where active`);
   const impactAreaNames = promptImpactAreaNames(areas);
+  // §34.6: the active topic names, for the suggested topics. Platform-curated, never restricted.
+  const { rows: topics } = await pool.query<{ name: string }>(`select name from topics where active order by lower(name)`);
+  const topicNames = topics.map((t) => t.name);
 
   for (const s of subjects) {
     try {
@@ -125,7 +128,7 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
         [s.namespace_id, s.title, s.description, s.id, restrictedOk],
       );
       const candidateList = candidates.map((c) => ({ number: Number(c.number), title: c.title }));
-      const prompt = buildTriagePrompt({ title: s.title, description: s.description, impactArea: s.impact_area, impactAreaNames, candidates: candidateList });
+      const prompt = buildTriagePrompt({ title: s.title, description: s.description, impactArea: s.impact_area, impactAreaNames, topicNames, candidates: candidateList });
 
       let payload: ReturnType<typeof processTriageNotes> = null;
       let errorCode: string | null = null;
@@ -142,7 +145,7 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
           restrictedContent: s.visibility !== "org" || candidates.some((c) => c.visibility !== "org"),
         });
         model = result.model;
-        payload = processTriageNotes(result.json, candidateList.map((c) => c.number), areas);
+        payload = processTriageNotes(result.json, candidateList.map((c) => c.number), areas, topics);
         if (!payload) errorCode = "ai_invalid_output";
       } catch (err) {
         errorCode = isAiError(err) ? err.code : "ai_provider_error";

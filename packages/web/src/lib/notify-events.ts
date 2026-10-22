@@ -5,13 +5,14 @@
 // mute) live in ./notify; this module only decides WHO the candidates are and WHAT the message
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
-import { formatChallengeNumber, formatSolutionNumber, type NotificationEventNumber } from "@innobox/shared";
+import { formatChallengeNumber, formatSolutionNumber, maskAuthor, type ChallengeVisibility, type NotificationEventNumber } from "@innobox/shared";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
 import {
   dispatchCoalescedComment,
   dispatchCoalescedHype,
   dispatchEvent,
+  dispatchTopicNotices,
   dispatchToUser,
   getFollowerUserIds,
   getNamespaceAdminUserIds,
@@ -415,6 +416,83 @@ export async function notifyHyped(ctx: NotifyContext, parentType: "challenge" | 
     challengeNumber,
     challengeTitle: item.challenge_title,
     solutionNumber: item.solution_number,
+  });
+}
+
+/** What caused an event-18 evaluation (§34.5): the challenge's opening (its first entry into
+ *  `valid`), topics added while it is `valid`, or its visibility changing while it is `valid`. */
+export type TopicTrigger =
+  | { via: "opening" }
+  | { via: "topic_added"; topicIds: readonly string[] }
+  | { via: "widened"; previousVisibility: ChallengeVisibility };
+
+/**
+ * §12.1 event 18 (§34.5): tell the followers of a challenge's relevant topics — every active topic
+ * on it, or only the added ones — that it is open for solutions. Called after the triggering change
+ * committed, by every path that can cause one: a status change (detail page and bulk), an admin's
+ * re-tag (detail page and bulk) and a visibility change. Sends nothing unless the challenge is
+ * `valid`, not trashed, and its namespace is not archived (it then accepts no solutions, §4.1);
+ * followers who were already told about it (`topic_notices`) are left out up front.
+ */
+export async function notifyTopicFollowers(ctx: NotifyContext, challengeId: string, trigger: TopicTrigger): Promise<void> {
+  const { rows } = await ctx.pool.query<{
+    number: string;
+    title: string;
+    status: string;
+    trashed: boolean;
+    archived: boolean;
+    slug: string;
+    author_id: string | null;
+    is_anonymous: boolean;
+    author_display_name: string | null;
+    company: string | null;
+  }>(
+    `select c.number::text, c.title, c.status, c.trashed_at is not null as trashed, ns.archived_at is not null as archived, ns.slug,
+            c.author_id, c.is_anonymous, u.display_name as author_display_name, ps.company
+       from challenges c
+       join namespaces ns on ns.id = c.namespace_id
+       left join users u on u.id = c.author_id
+       left join public_submissions ps on ps.id = c.public_submission_id
+      where c.id = $1`,
+    [challengeId],
+  );
+  const challenge = rows[0];
+  if (!challenge || challenge.status !== "valid" || challenge.trashed || challenge.archived) return;
+
+  const onlyTopics = trigger.via === "topic_added" ? [...trigger.topicIds] : null;
+  if (onlyTopics !== null && onlyTopics.length === 0) return;
+  // Each follower of a relevant ACTIVE topic, with the names of the relevant topics they follow;
+  // a retired topic never triggers (§34.2).
+  const { rows: follows } = await ctx.pool.query<{ user_id: string; names: string[] }>(
+    `select f.user_id, array_agg(t.name order by lower(t.name)) as names
+       from challenge_topics ct
+       join topics t on t.id = ct.topic_id and t.active
+       join topic_follows f on f.topic_id = t.id
+      where ct.challenge_id = $1
+        and ($2::uuid[] is null or t.id = any($2::uuid[]))
+        and not exists (select 1 from topic_notices n where n.challenge_id = $1 and n.user_id = f.user_id)
+      group by f.user_id`,
+    [challengeId, onlyTopics],
+  );
+  if (follows.length === 0) return;
+
+  await dispatchTopicNotices(ctx, {
+    challenge: {
+      id: challengeId,
+      number: challenge.number,
+      title: challenge.title,
+      namespaceSlug: challenge.slug,
+      author: maskAuthor({
+        isAnonymous: challenge.is_anonymous,
+        authorId: challenge.author_id,
+        authorDisplayName: challenge.author_display_name,
+        externalCompany: challenge.company,
+      }).displayName,
+    },
+    followers: new Map(follows.map((r) => [r.user_id, r.names])),
+    authorId: challenge.author_id,
+    via: trigger.via,
+    ...(trigger.via === "widened" ? { previousVisibility: trigger.previousVisibility } : {}),
   });
 }
 

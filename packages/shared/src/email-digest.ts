@@ -3,6 +3,7 @@
 // per-event e-mails about what they follow for one summary e-mail a day or a week. This module
 // owns the choice, which events a digest may hold, the fixed send slots, and the digest's copy;
 // the hold at insert time lives in the web tier (lib/notify.ts) and the send in the worker.
+import { topicDigestLine } from "./topics.js";
 
 export const EMAIL_DELIVERY_MODES = ["immediate", "daily", "weekly"] as const;
 export type EmailDelivery = (typeof EMAIL_DELIVERY_MODES)[number];
@@ -22,11 +23,12 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
- *  and 16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable). */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16]);
+ *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable) and 18 (a new
+ *  challenge in a topic the recipient follows, §34.5). */
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
@@ -60,7 +62,7 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype";
+export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
@@ -72,6 +74,8 @@ export interface DigestFacts {
   solutionNumber?: string | null;
   /** The new status's label, for a status change. */
   statusLabel?: string | null;
+  /** §34.5 event 18: the followed topics the challenge opened in. */
+  topics?: string[] | null;
 }
 
 /** One held row, as the digest job hands it to the renderer. */
@@ -98,6 +102,9 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  *  challenge's, then each solution's), comments. Status lines name the latest status. */
 function itemLines(updates: readonly DigestUpdate[]): string[] {
   const lines: string[] = [];
+  // §34.5: a challenge new in a followed topic leads its block — it is why the item is there.
+  const topics = new Set(updates.filter((u) => u.kind === "topic").flatMap((u) => u.topics ?? []));
+  if (topics.size > 0) lines.push(topicDigestLine([...topics]));
   const implemented = updates.filter((u) => u.kind === "implemented");
   for (const u of implemented) {
     lines.push(u.solutionNumber ? `Solution SOL-${digitsOf(u.solutionNumber)} was implemented` : "A solution was implemented");

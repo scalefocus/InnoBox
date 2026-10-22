@@ -101,6 +101,8 @@ export async function createChallengeViaApi(
     visibility?: "org" | "namespace";
     isAnonymous?: boolean;
     clientName?: string;
+    /** §34.3: up to three topic ids. */
+    topicIds?: string[];
   },
 ): Promise<CreatedChallenge> {
   const impactAreaId = input.impactAreaId ?? (await getImpactAreaId(request));
@@ -115,6 +117,7 @@ export async function createChallengeViaApi(
         visibility: input.visibility ?? "org",
         isAnonymous: input.isAnonymous ?? false,
         clientName: input.clientName,
+        ...(input.topicIds ? { topicIds: input.topicIds } : {}),
       },
       headers: JSON_HEADERS,
     }),

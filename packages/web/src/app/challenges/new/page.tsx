@@ -23,6 +23,9 @@
 //
 // Drop and paste (§11): the whole page is the drop zone for the form's attachments, and a file
 // paste attaches to them too — <AttachmentDropZone> owns the window listeners.
+//
+// Topics (§34.3): an optional picker of up to three active topics, absent while there are none.
+// A topic change is a form edit like any other — it re-arms the duplicate check.
 import Link from "next/link";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useRouter } from "next/navigation";
@@ -35,6 +38,7 @@ import { FormLockOverlay, PrimaryButtonLabel, useFormLock } from "@/components/F
 import { ImproveWithAiBar, useImproveWithAi } from "@/components/ImproveWithAi";
 import { afterSimilarityCheck, primaryButtonState } from "@/lib/form-lock";
 import { CHALLENGE_STATUS_LABEL } from "../status";
+import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicPicker";
 
 interface ImpactArea {
   id: string;
@@ -79,13 +83,15 @@ export default function NewChallengePage() {
   const [namespaceId, setNamespaceId] = useState("");
   const [visibility, setVisibility] = useState<"org" | "namespace">("org");
   const [isAnonymous, setIsAnonymous] = useState(false);
+  const [topics, setTopics] = useState<TopicTag[]>([]);
+  const topicOptions = useActiveTopics();
   const [draftKey] = useState(() => crypto.randomUUID());
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
   // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
   // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
-  const formSignature = JSON.stringify([title, description, impactAreaId, clientName, namespaceId, visibility, isAnonymous]);
+  const formSignature = JSON.stringify([title, description, impactAreaId, topics.map((t) => t.id), clientName, namespaceId, visibility, isAnonymous]);
   const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[]; explainedBy: string | null } | null>(null);
   const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -175,6 +181,7 @@ export default function NewChallengePage() {
           visibility,
           isAnonymous,
           draftKey,
+          topicIds: topics.map((t) => t.id),
           similarAcknowledged: similar?.map((m) => m.number) ?? [],
         }),
       });
@@ -265,6 +272,15 @@ export default function NewChallengePage() {
               ))}
             </select>
           </div>
+
+          {topicOptions && topicOptions.length > 0 && (
+            <div>
+              <label style={labelStyle} htmlFor="topics">
+                Topics <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional)</span>
+              </label>
+              <TopicPicker id="topics" value={topics} onChange={setTopics} options={topicOptions} disabled={lock.locked} />
+            </div>
+          )}
 
           {isClient && (
             <div>

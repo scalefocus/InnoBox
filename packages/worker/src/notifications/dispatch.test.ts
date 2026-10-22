@@ -222,6 +222,36 @@ test("composeOutboxEmail: a user row with its own subject (event 15) keeps it", 
   assert.equal(shared.body, 'CH-7 "Faster onboarding" (submitted by Anonymous) has been shared with you.\n\nhttps://innobox.example.com/challenges/7');
 });
 
+// §34.5 event 18: the subject, a namespace-and-author line under the message, the link, then the
+// "Manage your topics" note with its own app link. A footnote link that is not app-relative is
+// dropped, so a note can never point outside the app.
+test("composeOutboxEmail: an event-18 row carries its detail line and topics footnote", () => {
+  const base = "https://innobox.example.com";
+  const mail = composeOutboxEmail(
+    {
+      recipient_email: null,
+      payload: {
+        subject: "New in AI: CH-412 is open for solutions",
+        message: 'New in AI: CH-412 "Faster onboarding" is open for solutions.',
+        emailDetail: "In /global · submitted by Anonymous",
+        footnote: { text: "You get this because you follow AI. Manage your topics:", link: "/topics" },
+        link: "/challenges/412",
+      },
+    },
+    base,
+  );
+  assert.equal(mail.subject, "New in AI: CH-412 is open for solutions");
+  assert.equal(
+    mail.body,
+    'New in AI: CH-412 "Faster onboarding" is open for solutions.\nIn /global · submitted by Anonymous\n\nhttps://innobox.example.com/challenges/412\n\nYou get this because you follow AI. Manage your topics: https://innobox.example.com/topics',
+  );
+  const offsite = composeOutboxEmail(
+    { recipient_email: null, payload: { message: "M", link: "/challenges/1", footnote: { text: "Elsewhere:", link: "//evil.example" } } },
+    base,
+  );
+  assert.equal(offsite.body, "M\n\nhttps://innobox.example.com/challenges/1");
+});
+
 // §24.7: an outside submitter has no account, so no submitter mail carries the "Manage email
 // notifications" footer — in either part, with or without the admin wrapper. A user's mail does.
 test("renderOutboxEmail: submitter mails carry no manage-notifications footer; user mails do", () => {

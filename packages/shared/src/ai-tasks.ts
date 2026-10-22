@@ -8,6 +8,7 @@
 //   - Untrusted text goes inside a delimited data block the system prompt tells the model to treat
 //     as content, never instructions (dataBlock below neutralizes a forged closing delimiter).
 //   - Output is validated, length-capped and returned as plain text (rendered escaped).
+import { TOPICS_PER_CHALLENGE_MAX } from "./topics.js";
 
 // ── Shared helpers ───────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,21 @@ export function mapImpactAreaHint(raw: unknown, areas: readonly ImpactAreaOption
   if (!wanted) return null;
   const hit = areas.find((a) => a.active && a.name !== "Client" && a.name.trim().toLowerCase() === wanted);
   return hit ? { id: hit.id, name: hit.name } : null;
+}
+
+/** §34.6: the topic names the model suggested → ACTIVE topics, matched case-insensitively and
+ *  returned under their own spelling; unknown names dropped, duplicates removed, at most three. */
+export function mapTopicHints(raw: unknown, topics: readonly { name: string }[]): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const wanted = item.trim().toLowerCase();
+    const hit = topics.find((t) => t.name.trim().toLowerCase() === wanted);
+    if (hit && !out.includes(hit.name)) out.push(hit.name);
+    if (out.length >= TOPICS_PER_CHALLENGE_MAX) break;
+  }
+  return out;
 }
 
 /** The impact-area names a prompt may list: active, never *Client*. */
@@ -219,12 +235,14 @@ export interface TriageCandidate {
 }
 
 /** Exactly the §22.11 egress: the subject's title, description and impact area, the active
- *  impact-area names (for the suggestion) and the candidates' titles. */
+ *  impact-area names and the active topic names (for the suggestions, §34.6) and the candidates'
+ *  titles. */
 export interface TriageInput {
   title: string;
   description: string;
   impactArea: string;
   impactAreaNames: string[];
+  topicNames: string[];
   candidates: TriageCandidate[];
 }
 
@@ -235,6 +253,7 @@ export function buildTriagePrompt(input: TriageInput): AiPrompt {
     `"summary": the challenge in at most ${TRIAGE_SUMMARY_MAX} characters;`,
     '"missingInformation": a short list of what the text does not say — from: the problem, the impact, the current workaround, a measurable outcome; empty when nothing is missing;',
     '"suggestedImpactArea": the best impact area from the list, copied exactly, or null;',
+    `"suggestedTopics": up to ${TOPICS_PER_CHALLENGE_MAX} topics from the topic list that the challenge is about, each copied exactly; empty when none fits or the list is empty;`,
     '"questions": up to 5 short questions a reviewer could ask the author;',
     '"duplicates": up to 5 entries {"number": <a number from the candidate list>, "reason": "<one line>"} for candidates that describe the same problem; empty when none do.',
     "Only use numbers from the candidate list. The candidate list may be empty.",
@@ -246,6 +265,7 @@ export function buildTriagePrompt(input: TriageInput): AiPrompt {
     dataBlock("DESCRIPTION", input.description),
     dataBlock("IMPACT_AREA", input.impactArea),
     dataBlock("IMPACT_AREAS", input.impactAreaNames.join("\n")),
+    dataBlock("TOPICS", input.topicNames.join("\n")),
     dataBlock("CANDIDATES", candidates),
   ].join("\n\n");
   return { system, messages: [{ role: "user", content: user }] };
@@ -256,13 +276,21 @@ export interface TriageNotes {
   summary: string;
   missingInformation: string[];
   suggestedImpactArea: string | null;
+  /** §34.6: active topic names, at most three. Absent on a note written before topics existed. */
+  suggestedTopics?: string[];
   questions: string[];
   duplicates: { number: number; reason: string }[];
 }
 
 /** Validates the model's note: capped plain text; the impact area must be an active, non-Client
- *  area; duplicates only from the candidate set (deduplicated, at most 5). Null when unusable. */
-export function processTriageNotes(json: unknown, candidateNumbers: readonly number[], areas: readonly ImpactAreaOption[]): TriageNotes | null {
+ *  area; the topics active ones; duplicates only from the candidate set (deduplicated, at most
+ *  5). Null when unusable. */
+export function processTriageNotes(
+  json: unknown,
+  candidateNumbers: readonly number[],
+  areas: readonly ImpactAreaOption[],
+  topics: readonly { name: string }[] = [],
+): TriageNotes | null {
   if (!json || typeof json !== "object" || Array.isArray(json)) return null;
   const o = json as Record<string, unknown>;
   const summary = aiOneLine(o.summary, TRIAGE_SUMMARY_MAX);
@@ -283,6 +311,7 @@ export function processTriageNotes(json: unknown, candidateNumbers: readonly num
     summary,
     missingInformation: aiStringList(o.missingInformation, 6, 120),
     suggestedImpactArea: mapImpactAreaHint(o.suggestedImpactArea, areas)?.name ?? null,
+    suggestedTopics: mapTopicHints(o.suggestedTopics, topics),
     questions: aiStringList(o.questions, 5, 200),
     duplicates,
   };

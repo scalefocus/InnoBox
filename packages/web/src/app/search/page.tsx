@@ -47,6 +47,7 @@ function SearchPageInner() {
   const [filters, setFilters] = useState<GalleryFilterValues>(() => ({
     status: params.get("status") ?? "",
     impactAreaId: params.get("impactAreaId") ?? "",
+    topicId: params.get("topic") ?? "",
     namespaceId: params.get("namespaceId") ?? "",
     authorName: params.get("authorName") ?? "",
   }));

@@ -3,13 +3,13 @@
 // status (override), while a committee member or the assignee traverses the enforced graph — the
 // store derives the mode from the caller's role. An illegal enforced transition is a 422. A real
 // transition fires notification event 3/4/5 (§12.1) to author/assignee/followers.
-import { isChallengeStatus, validateDeleteReason } from "@innobox/shared";
+import { isChallengeStatus, parseTopicIds, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
 import { getHypeEnabled } from "@/lib/hype-settings";
 import { decorateDetailWithHype } from "../../hypes/store";
-import { logNotifyFailure, notifyChallengeStatusChanged } from "@/lib/notify-events";
+import { logNotifyFailure, notifyChallengeStatusChanged, notifyTopicFollowers } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
 import { deleteChallenge } from "../delete";
@@ -56,12 +56,13 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
   const result = await setChallengeStatus(pool, { userId: gate.user.id, roles: gate.user.roles }, number, parsed.value);
   switch (result.status) {
     case "ok": {
+      const notify = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
       if (result.changed) {
-        await notifyChallengeStatusChanged(
-          { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-          { id: result.challenge.id },
-          parsed.value,
-        ).catch(logNotifyFailure("challenge status notification failed"));
+        await notifyChallengeStatusChanged(notify, { id: result.challenge.id }, parsed.value).catch(logNotifyFailure("challenge status notification failed"));
+      }
+      // §34.5 event 18: the first entry into `valid` tells the followers of its topics.
+      if (result.opened) {
+        await notifyTopicFollowers(notify, result.challenge.id, { via: "opening" }).catch(logNotifyFailure("topic notification failed"));
       }
       return Response.json({ challenge: result.challenge });
     }
@@ -94,12 +95,16 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
   if (typeof body.impactAreaId !== "string" || !isUuid(body.impactAreaId)) {
     return Response.json({ error: "impactAreaId must be a uuid" }, { status: 400 });
   }
+  // §34.3: present replaces the challenge's topics; absent leaves them as they are.
+  const topicIds = body.topicIds === undefined ? null : parseTopicIds(body.topicIds);
+  if (topicIds && !topicIds.ok) return Response.json({ error: topicIds.error }, { status: 422 });
 
   const result = await editChallenge(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     title: body.title,
     description: body.description,
     clientName: body.clientName,
     impactAreaId: body.impactAreaId,
+    ...(topicIds ? { topicIds: topicIds.value } : {}),
   });
   switch (result.status) {
     case "ok":
@@ -116,6 +121,8 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
       return Response.json({ error: "unknown impact area" }, { status: 400 });
     case "inactive_impact_area":
       return Response.json({ error: "that impact area is retired" }, { status: 400 });
+    case "invalid_topics":
+      return Response.json({ error: TOPIC_SET_ERROR[result.problem] }, { status: 422 });
     case "invalid":
       return Response.json({ error: result.error }, { status: 400 });
   }

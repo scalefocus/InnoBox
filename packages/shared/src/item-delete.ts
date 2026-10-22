@@ -42,6 +42,10 @@ export interface CascadeCounts {
   webhookDeliveries: number;
   /** §22.11/§22.13 cached AI results (triage notes, discussion summaries) of the subtree. */
   aiResults: number;
+  /** §34.8: the challenge's topic tags (`challenge_topics`) — none for a solution purge. */
+  topics: number;
+  /** §34.8: the challenge's event-18 markers (`topic_notices`) — none for a solution purge. */
+  topicNotices: number;
 }
 
 /** Who asked for the purge and why (§10.3 audit). `manual` is Delete permanently — from the
@@ -202,6 +206,10 @@ async function deleteChildren(
   // §22.7: cached AI output shares its item's lifecycle (polymorphic parent, no FK).
   const aiResults = await deleteAiResults(client, subtree.challengeIds, subtree.solutionIds);
 
+  // §34.8: a challenge's topic tags and event-18 markers (their FKs carry no ON DELETE action).
+  const topics = await client.query(`delete from challenge_topics where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
+  const topicNotices = await client.query(`delete from topic_notices where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
+
   // §12.1: no inbox item may survive pointing at an entity that no longer exists; unsent e-mail
   // about it never goes out.
   // Inbox rows carry what they are about as columns (§5, migration 0051 — a solution row carries its
@@ -226,6 +234,8 @@ async function deleteChildren(
       uploadSessions: sessions.length,
       webhookDeliveries: webhookDeliveries.rowCount ?? 0,
       aiResults,
+      topics: topics.rowCount ?? 0,
+      topicNotices: topicNotices.rowCount ?? 0,
       notifications: inbox.rowCount ?? 0,
       outbox: outbox.rowCount ?? 0,
     },

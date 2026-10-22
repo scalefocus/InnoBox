@@ -8,10 +8,10 @@
 // same §12.1 notifications (events 3/4/5 on a real transition, event 7 on an assignment change)
 // through the shared builders in lib/notify-events.
 import type { Pool } from "pg";
-import { canAssignAtStatus, escapeLike, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type ViaAgent } from "@innobox/shared";
+import { canAssignAtStatus, escapeLike, formatChallengeNumber, formatSolutionNumber, maskAuthor, viaAgentOf, type ChallengeStatus, type RoleSet, type TopicRef, type ViaAgent } from "@innobox/shared";
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
-import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged } from "../../../../lib/notify-events";
+import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged, notifyTopicFollowers } from "../../../../lib/notify-events";
 import { setChallengeAssigneeLean, setChallengeStatusLean, type Viewer } from "../../challenges/store";
 import { isEntityNumber } from "../../challenges/validation";
 
@@ -30,6 +30,8 @@ export interface TriageRow {
   authorExternal?: true;
   status: ChallengeStatus;
   impactAreaName: string;
+  /** §34.6: the challenge's topics, alphabetical — retired ones included (`active: false`). */
+  topics: TopicRef[];
   namespaceSlug: string;
   assigneeDisplayName: string | null;
   assigneeId: string | null;
@@ -50,6 +52,8 @@ export interface TriageFilters {
   authorName?: string;
   assigneeId?: string | "unassigned";
   number?: string;
+  /** §34.6: a topic's id, or "none" for challenges with no topic. */
+  topicId?: string | "none";
 }
 
 /** Namespace ids the viewer may administer, or "all" for platform admins. Empty array means
@@ -95,6 +99,11 @@ function buildTriageQuery(viewer: Viewer, filters: TriageFilters): { whereClause
   } else if (filters.assigneeId) {
     conditions.push(`c.assignee_id = ${push(filters.assigneeId)}`);
   }
+  if (filters.topicId === "none") {
+    conditions.push(`not exists (select 1 from challenge_topics ct where ct.challenge_id = c.id)`);
+  } else if (filters.topicId) {
+    conditions.push(`exists (select 1 from challenge_topics ct where ct.challenge_id = c.id and ct.topic_id = ${push(filters.topicId)})`);
+  }
 
   return { whereClause: conditions.length ? `where ${conditions.join(" and ")}` : "", params };
 }
@@ -110,6 +119,7 @@ interface TriageQueryRow {
   is_anonymous: boolean;
   status: ChallengeStatus;
   impact_area_name: string;
+  topics: TopicRef[];
   namespace_slug: string;
   assignee_id: string | null;
   assignee_display_name: string | null;
@@ -142,6 +152,7 @@ function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
     ...(author.external ? { authorExternal: true as const } : {}),
     status: row.status,
     impactAreaName: row.impact_area_name,
+    topics: row.topics ?? [],
     namespaceSlug: row.namespace_slug,
     assigneeDisplayName: row.assignee_display_name,
     assigneeId: row.assignee_id,
@@ -159,6 +170,8 @@ const TRIAGE_SELECT = `
          ia.name as impact_area_name, ns.slug as namespace_slug, c.assignee_id, au.display_name as assignee_display_name,
          au.active as assignee_active, au.scrubbed_at is not null as assignee_scrubbed,
          c.created_at, c.mcp_client_name,
+         (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
+            from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics,
          (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) as hype_points
     from challenges c
     left join users u on u.id = c.author_id
@@ -257,6 +270,10 @@ export async function bulkSetStatus(
     // path included. A no-op (already at that status) is not a transition and fires nothing.
     if (result.status === "ok" && result.changed) {
       await notifyChallengeStatusChanged(notify, { number }, newStatus).catch(logNotifyFailure("bulk status notification failed"));
+    }
+    // §34.5 event 18: a first entry into `valid` tells the followers of the challenge's topics.
+    if (result.status === "ok" && result.opened) {
+      await notifyTopicFollowers(notify, result.challengeId, { via: "opening" }).catch(logNotifyFailure("bulk topic notification failed"));
     }
     // Bulk actions are admin-only, so `illegal_transition` can't occur (admins free-set) — it's
     // folded into "invalid" alongside invalid_status purely to keep the outcome union closed.

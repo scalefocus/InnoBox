@@ -89,6 +89,8 @@ const BASE_NAV: NavItem[] = [
   { href: "/", label: "Home", icon: <HomeIcon /> },
   { href: "/challenges/new", label: "Submit a Challenge", icon: <SubmitChallengeIcon /> },
   { href: "/challenges", label: "Challenges", icon: <ChallengesIcon /> },
+  // §34.6: every signed-in user; no count bubble.
+  { href: "/topics", label: "Topics", icon: <TopicsIcon /> },
   { href: "/leaderboard", label: "Leaderboard", icon: <TrophyIcon /> },
 ];
 
@@ -855,6 +857,16 @@ function ChallengesIcon() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3a6 6 0 0 0-3.5 10.9c.6.44 1 1.16 1 1.95V17h5v-1.15c0-.79.4-1.51 1-1.95A6 6 0 0 0 12 3Z" />
       <path d="M9.5 20h5M10.5 21.5h3" />
+    </svg>
+  );
+}
+
+function TopicsIcon() {
+  // A tag — "curated topics you can follow" (§34). Outline, rounded, monochrome (SF icon rule).
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.5 12.6V5a1.5 1.5 0 0 1 1.5-1.5h7.6a1.5 1.5 0 0 1 1.06.44l7.4 7.4a1.5 1.5 0 0 1 0 2.12l-7.6 7.6a1.5 1.5 0 0 1-2.12 0l-7.4-7.4a1.5 1.5 0 0 1-.44-1.06Z" />
+      <circle cx="8.5" cy="8.5" r="1.4" />
     </svg>
   );
 }

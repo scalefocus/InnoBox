@@ -285,6 +285,11 @@ export async function deliverShareNotifications(db: DbClient, challengeId: strin
       `insert into follows (user_id, parent_type, parent_id) values ($1, 'challenge', $2) on conflict do nothing`,
       [row.user_id, challengeId],
     );
+    // §34.5: being told through event 15 counts — event 18 never tells them about it again.
+    await db.query(
+      `insert into topic_notices (challenge_id, user_id, via) values ($1, $2, 'shared') on conflict do nothing`,
+      [challengeId, row.user_id],
+    );
     sent += 1;
   }
   return sent;

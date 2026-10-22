@@ -2,6 +2,7 @@
 // submission (§6.1). Auth-required (any authenticated user may submit and browse per
 // their visibility); every list is visibility-filtered and anonymity-masked server-side.
 // Submission auto-follows the author (§12.3) and notifies namespace admins (§12.1 event 1).
+import { parseTopicIds, TOPIC_SET_ERROR } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyChallengeSubmitted } from "@/lib/notify-events";
@@ -43,6 +44,9 @@ async function handlePOST(req: Request): Promise<Response> {
 
   const ids = parseChallengeCreateIds(body);
   if (!ids.ok) return Response.json({ error: ids.error }, { status: 400 });
+  // §34.3: optional — absent means no topics.
+  const topicIds = body.topicIds === undefined ? { ok: true as const, value: [] } : parseTopicIds(body.topicIds);
+  if (!topicIds.ok) return Response.json({ error: topicIds.error }, { status: 422 });
 
   const result = await createChallenge(
     pool,
@@ -57,6 +61,7 @@ async function handlePOST(req: Request): Promise<Response> {
       isAnonymous: body.isAnonymous,
       draftKey: body.draftKey,
       similarAcknowledged: parseSimilarAcknowledged(body.similarAcknowledged),
+      topicIds: topicIds.value,
     },
   );
 
@@ -79,6 +84,8 @@ async function handlePOST(req: Request): Promise<Response> {
       return Response.json({ error: "impact area not found" }, { status: 400 });
     case "inactive_impact_area":
       return Response.json({ error: "impact area is retired" }, { status: 400 });
+    case "invalid_topics":
+      return Response.json({ error: TOPIC_SET_ERROR[result.problem] }, { status: 422 });
     case "attachments_not_clean":
       return Response.json(
         { error: "wait for all attachments to finish scanning (or remove any that failed) before submitting", code: "attachments_not_clean" },

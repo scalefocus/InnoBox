@@ -3,7 +3,8 @@
 // challenges, row-level assign, bulk assign/status-set, and CSV export. Namespace admins see
 // their own namespace(s); platform admins see everywhere. Gated in-page against /api/me,
 // same pattern as /admin's namespaces/mappings console. Rows created through an AI agent carry
-// the §25.8 "via agent" tag beside the author.
+// the §25.8 "via agent" tag beside the author. Each row shows its §34 topics; the queue filters by
+// topic (or "No topic") and re-tags a selection in bulk (Add topic / Remove topic).
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +38,8 @@ interface TriageRow {
   authorExternal?: boolean;
   status: string;
   impactAreaName: string;
+  /** §34.6: the challenge's topics, alphabetical — retired ones included (`active: false`). */
+  topics: { id: string; name: string; active: boolean }[];
   namespaceSlug: string;
   assigneeDisplayName: string | null;
   assigneeId: string | null;
@@ -52,6 +55,30 @@ interface TriageRow {
 }
 
 type Tab = "challenges" | "solutions";
+
+/** A topic as the filter and the bulk pickers offer it (§34.6). */
+interface TopicOption {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+// §34.6: what each bulk-topic outcome means, for the result toast.
+const BULK_TOPIC_OUTCOME_LABEL: Record<string, string> = {
+  unchanged: "unchanged",
+  topic_limit: "already has 3 topics",
+  not_found: "not found",
+  forbidden: "not yours to change",
+};
+
+/** The topic list for the filter and the bulk pickers: every topic, retired ones included (§34.6 —
+ *  admins need to find what still carries a retired topic). `include=retired` is honoured for
+ *  namespace and platform admins, who are the only people on this page. */
+async function loadTopicOptions(): Promise<TopicOption[]> {
+  const res = await fetch("/api/topics?include=retired", { headers: { accept: "application/json" } });
+  if (!res.ok) return [];
+  return (((await res.json()).topics ?? []) as TopicOption[]).map((t) => ({ id: t.id, name: t.name, active: t.active }));
+}
 
 export default function AdminTriagePage() {
   const [gate, setGate] = useState<"loading" | "forbidden" | "ok">("loading");
@@ -135,6 +162,9 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
   const [numberDraft, setNumberDraft] = useState("");
   const [number, setNumber] = useState("");
   const [assignee, setAssignee] = useState("");
+  // §34.6: "" (any), "none" (no topic) or a topic id.
+  const [topic, setTopic] = useState("");
+  const [topicOptions, setTopicOptions] = useState<TopicOption[]>([]);
   // A picked specific person for the assignee filter (overrides the preset select above).
   const [specificAssignee, setSpecificAssignee] = useState<{ id: string; displayName: string } | null>(null);
   const [filterAssignQuery, setFilterAssignQuery] = useState("");
@@ -151,6 +181,18 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
   };
 
   useEffect(() => {
+    let live = true;
+    loadTopicOptions()
+      .then((list) => {
+        if (live) setTopicOptions(list);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const t = window.setTimeout(() => setAuthorName(authorNameDraft), 300);
     return () => window.clearTimeout(t);
   }, [authorNameDraft]);
@@ -164,7 +206,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
   // could otherwise land past the end of a broader one's result set.
   useEffect(() => {
     setPage(1);
-  }, [status, authorName, number, assignee, specificAssignee]);
+  }, [status, authorName, number, assignee, specificAssignee, topic]);
 
   // The effective assignee filter: a picked specific person wins; otherwise the preset select
   // ("unassigned", or "me" → my own id). "" means Any assignee.
@@ -182,10 +224,11 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
     if (authorName.trim()) params.set("authorName", authorName.trim());
     if (number.trim()) params.set("number", number.trim());
     if (effectiveAssigneeId) params.set("assigneeId", effectiveAssigneeId);
+    if (topic) params.set("topic", topic);
     params.set("page", String(page));
     params.set("pageSize", String(PAGE_SIZE));
     return params.toString();
-  }, [status, authorName, number, effectiveAssigneeId, page]);
+  }, [status, authorName, number, effectiveAssigneeId, topic, page]);
 
   // silent refresh (used after an inline row assign) keeps the current rows visible instead of
   // flashing the whole table to "Loading…", while still re-applying the active filters.
@@ -240,6 +283,35 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
       refresh();
     } catch (err) {
       notify(err instanceof Error ? err.message : "Bulk status update failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // §34.6 bulk Add topic / Remove topic: one topic over the selection; each challenge is re-tagged
+  // (and audited) on its own, and the toast sums up the per-item outcomes.
+  const bulkTopic = async (action: "add" | "remove", topicId: string) => {
+    if (selected.size === 0 || !topicId) return;
+    const topicName = topicOptions.find((t) => t.id === topicId)?.name ?? "the topic";
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/triage/bulk-topic", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ numbers: [...selected], action, topicId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Bulk topic change failed");
+      const outcomes = (json.outcomes ?? []) as { number: string; status: string }[];
+      const changed = outcomes.filter((o) => o.status === "ok").length;
+      const counts = new Map<string, number>();
+      for (const o of outcomes) if (o.status !== "ok") counts.set(o.status, (counts.get(o.status) ?? 0) + 1);
+      const others = [...counts].map(([outcome, n]) => `${n} ${BULK_TOPIC_OUTCOME_LABEL[outcome] ?? outcome}`);
+      const verb = action === "add" ? `Added ${topicName} to` : `Removed ${topicName} from`;
+      notify(`${verb} ${changed} of ${selected.size} item(s)${others.length ? ` — ${others.join(", ")}` : ""}.`);
+      refresh();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Bulk topic change failed");
     } finally {
       setBusy(false);
     }
@@ -354,6 +426,16 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
               </div>
             </>
           )}
+          {/* §34.6: any topic, the challenges with none, or one topic — retired ones marked. */}
+          <select className="field" value={topic} onChange={(e) => setTopic(e.target.value)} aria-label="Filter by topic">
+            <option value="">Any topic</option>
+            <option value="none">No topic</option>
+            {topicOptions.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.active ? t.name : `${t.name} (retired)`}
+              </option>
+            ))}
+          </select>
           <input className="field" placeholder="Filter by author name" value={authorNameDraft} onChange={(e) => setAuthorNameDraft(e.target.value)} />
           <input className="field" placeholder="CH-123" value={numberDraft} onChange={(e) => setNumberDraft(e.target.value)} />
           <button type="button" className="btn btn-sm btn-ghost" onClick={exportCsv}>
@@ -379,6 +461,47 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
               {Object.keys(CHALLENGE_STATUS_LABEL).map((s) => (
                 <option key={s} value={s}>
                   {CHALLENGE_STATUS_LABEL[s]}
+                </option>
+              ))}
+            </select>
+            {/* §34.6: Add offers active topics only; Remove offers every topic, retired ones too. */}
+            <select
+              className="field"
+              disabled={busy || topicOptions.length === 0}
+              defaultValue=""
+              aria-label="Bulk add a topic"
+              onChange={(e) => {
+                if (e.target.value) bulkTopic("add", e.target.value);
+                e.target.value = "";
+              }}
+            >
+              <option value="" disabled>
+                Add topic…
+              </option>
+              {topicOptions
+                .filter((t) => t.active)
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+            </select>
+            <select
+              className="field"
+              disabled={busy || topicOptions.length === 0}
+              defaultValue=""
+              aria-label="Bulk remove a topic"
+              onChange={(e) => {
+                if (e.target.value) bulkTopic("remove", e.target.value);
+                e.target.value = "";
+              }}
+            >
+              <option value="" disabled>
+                Remove topic…
+              </option>
+              {topicOptions.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.active ? t.name : `${t.name} (retired)`}
                 </option>
               ))}
             </select>
@@ -419,6 +542,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
           <div className="row row-head" style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--faint)" }}>
             <input type="checkbox" checked={selected.size === rows.length} onChange={toggleSelectAll} aria-label="Select all" />
             <span style={{ flex: 1 }}>Title</span>
+            <span className="triage-topics">Topics</span>
             <span>Author</span>
             <span>Status</span>
             <span>Assignee</span>
@@ -454,6 +578,15 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                   )}
                 </div>
               </div>
+              {/* §34.6: the topics after the impact area — ellipsized, the full list as the tooltip. */}
+              <span className="sub triage-topics" title={(r.topics ?? []).map((t) => (t.active ? t.name : `${t.name} (retired)`)).join(", ") || undefined}>
+                {(r.topics ?? []).map((t, i) => (
+                  <span key={t.id} className={t.active ? undefined : "topic-retired"}>
+                    {i > 0 && ", "}
+                    {t.name}
+                  </span>
+                ))}
+              </span>
               <span className="sub" style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <AvatarBubble
                   size="sm"

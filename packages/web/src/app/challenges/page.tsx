@@ -1,10 +1,13 @@
 "use client";
 // Challenges gallery (INNOBOX_SPEC.md §13.1): tabs (Open/Mine/Completed), filters
-// (status/impact area/namespace/author), sort (newest/most liked/most solutions), cards.
+// (status/impact area/topic/namespace/author), sort (newest/most liked/most solutions), cards.
 // Strictly visibility-filtered and anonymity-masked server-side — this page only renders
-// what the API already decided the viewer may see.
+// what the API already decided the viewer may see. The topic filter (§34.6) lives in the URL
+// (`?topic=<id>`), so a topic chip anywhere links to the filtered gallery, which then shows the
+// topic's header with its Follow button.
 import Link from "next/link";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
@@ -13,6 +16,8 @@ import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
 import { ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
 import { HypeCount } from "@/components/Hype";
+import { TopicChips, type TopicChipData } from "@/components/TopicChips";
+import { TopicFollowButton } from "@/components/TopicFollowButton";
 import { cachedGet } from "@/lib/ui";
 
 interface ChallengeListItem {
@@ -22,6 +27,8 @@ interface ChallengeListItem {
   author: { userId: string | null; displayName: string; anonymous: boolean; active?: boolean; scrubbed?: boolean; external?: boolean };
   namespaceSlug: string;
   impactAreaName: string;
+  /** §34.6: alphabetical; a retired one is muted but still filters. */
+  topics: TopicChipData[];
   status: string;
   createdAt: string;
   likeCount: number;
@@ -49,7 +56,64 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: "most_hyped", label: "Most hyped" },
 ];
 
+/** §34.6: the filtered gallery's header — what GET /api/topics/:id returns. */
+interface TopicHeader {
+  id: string;
+  name: string;
+  description: string | null;
+  active: boolean;
+  following: boolean;
+}
+
 export default function ChallengesPage() {
+  // useSearchParams needs a Suspense boundary (the `topic` filter is read from the URL).
+  return (
+    <Suspense fallback={<p className="muted">Loading challenges…</p>}>
+      <ChallengesGallery />
+    </Suspense>
+  );
+}
+
+function ChallengesGallery() {
+  const router = useRouter();
+  const params = useSearchParams();
+  // §34.6: the topic filter is the URL's, so a chip on a card (or anywhere) re-filters in place.
+  const topicId = params.get("topic") ?? "";
+  const setTopic = (id: string) => {
+    const next = new URLSearchParams(params.toString());
+    if (id) next.set("topic", id);
+    else next.delete("topic");
+    const qs = next.toString();
+    router.replace(qs ? `/challenges?${qs}` : "/challenges", { scroll: false });
+  };
+  const [topic, setTopicHeader] = useState<TopicHeader | null>(null);
+  useEffect(() => {
+    if (!topicId) {
+      setTopicHeader(null);
+      return;
+    }
+    let live = true;
+    fetch(`/api/topics/${encodeURIComponent(topicId)}`, { headers: { accept: "application/json" } })
+      .then(async (res) => {
+        if (!live) return;
+        // An unknown or deleted topic is dropped, and the gallery shows unfiltered.
+        if (res.status === 404 || res.status === 400) {
+          const next = new URLSearchParams(window.location.search);
+          next.delete("topic");
+          const qs = next.toString();
+          router.replace(qs ? `/challenges?${qs}` : "/challenges", { scroll: false });
+          return;
+        }
+        if (!res.ok) return;
+        const json = (await res.json()) as { topic: TopicHeader };
+        if (live) setTopicHeader(json.topic);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [topicId, router]);
+
   const [tab, setTab] = useState<Tab>("open");
   const [sort, setSort] = useState<Sort>("newest");
   // §26.8: the "most hyped" sort and the hype numbers exist only while hype is on.
@@ -74,7 +138,12 @@ export default function ChallengesPage() {
     writeChallengesView(v);
   };
 
-  const queryString = useMemo(() => applyGalleryFilters(new URLSearchParams({ tab, sort }), filters).toString(), [tab, sort, filters]);
+  const allFilters = useMemo(() => ({ ...filters, topicId }), [filters, topicId]);
+  const onFiltersChange = (next: GalleryFilterValues) => {
+    if (next.topicId !== topicId) setTopic(next.topicId);
+    setFilters({ ...next, topicId: "" });
+  };
+  const queryString = useMemo(() => applyGalleryFilters(new URLSearchParams({ tab, sort }), allFilters).toString(), [tab, sort, allFilters]);
 
   useEffect(() => {
     let live = true;
@@ -107,6 +176,26 @@ export default function ChallengesPage() {
         </Link>
       </div>
 
+      {topicId && topic && topic.id === topicId.toLowerCase() && (
+        <div className="card card-pad topic-head reveal">
+          <div className="topic-head-text">
+            <div className="eyebrow">Topic</div>
+            <h2 className="topic-head-name">{topic.name}</h2>
+            {topic.description && <p className="topic-head-desc">{topic.description}</p>}
+          </div>
+          <div className="topic-head-actions">
+            {topic.active ? (
+              <TopicFollowButton topicId={topic.id} following={topic.following} onChange={(following) => setTopicHeader({ ...topic, following })} />
+            ) : (
+              <span className="muted topic-head-retired">This topic is retired</span>
+            )}
+            <button type="button" className="topic-head-clear" aria-label="Clear the topic filter" title="Clear the topic filter" onClick={() => setTopic("")}>
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="srctabs" style={{ marginBottom: 18 }}>
         {TABS.map((t) => (
           <button
@@ -121,7 +210,7 @@ export default function ChallengesPage() {
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 22 }}>
-        <GalleryFilterFields value={filters} onChange={setFilters} />
+        <GalleryFilterFields value={allFilters} onChange={onFiltersChange} />
         <div className="sort-toggle">
           {SORTS.filter((s) => s.key !== "most_hyped" || hypeOn).map((s) => (
             <button
@@ -180,6 +269,8 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
         <span className="chip mono">{challenge.number}</span>
         <span className={statusPillClass(challenge.status)}>{CHALLENGE_STATUS_LABEL[challenge.status] ?? challenge.status}</span>
         <span className="chip">{challenge.impactAreaName}</span>
+        {/* §34.6: inside the card's own link, so the chips navigate themselves. */}
+        <TopicChips topics={challenge.topics ?? []} insideLink />
         <ChallengeStateBadges challenge={challenge} />
       </div>
       <h3>{challenge.title}</h3>

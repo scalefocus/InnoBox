@@ -30,6 +30,8 @@ import { VisibilityControl } from "@/components/VisibilityControl";
 import { PEOPLE_VISIBILITY_LABEL, type AccessEntryView } from "@innobox/shared/challenge-access";
 import { HypeButton, HypeCount, HypersList, type HypeFields } from "@/components/Hype";
 import { invalidateApi } from "@/lib/ui";
+import { TopicChips } from "@/components/TopicChips";
+import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicPicker";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -102,6 +104,10 @@ interface ChallengeDetail extends Partial<HypeFields> {
   namespaceSlug: string;
   namespaceId: string;
   impactAreaName: string;
+  /** §34.6: alphabetical; a retired one is muted (`active: false`). */
+  topics: TopicTag[];
+  /** §34.3: the challenge's namespace admins and platform admins — curation, any status. */
+  canEditTopics: boolean;
   clientName: string | null;
   visibility: "org" | "namespace" | "people";
   /** §4.3: the access list of a `people` challenge — sent to its admins only, null otherwise. */
@@ -713,6 +719,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             {challenge.visibility === "org" ? "Organization-wide" : challenge.visibility === "namespace" ? "Namespace-only" : PEOPLE_VISIBILITY_LABEL}
           </span>
         </div>
+        {/* §34.6: keyed on the server's topics, so a re-read resets any local edit state. */}
+        <ChallengeTopicsRow key={(challenge.topics ?? []).map((t) => t.id).join(",")} challenge={challenge} onSaved={onChanged} />
       </div>
 
       <div className="card card-pad reveal" data-attach-scope style={{ marginBottom: 18 }}>
@@ -1303,7 +1311,90 @@ const EDIT_LABEL: React.CSSProperties = {
   color: "var(--faint)",
 };
 
-// §10.1 author edit of a challenge's content (title/description/impact area/client name). Loads
+// §34.3/§34.6: the detail page's Topics row — chips that lead to the filtered gallery and, for the
+// challenge's namespace admins and platform admins, Edit topics: an inline picker saved through
+// PUT /api/challenges/:number/topics (curation, not a content edit). Absent when the challenge has
+// no topics and the viewer may not edit them.
+function ChallengeTopicsRow({ challenge, onSaved }: { challenge: ChallengeDetail; onSaved: () => Promise<void> }) {
+  const [topics, setTopics] = useState<TopicTag[]>(challenge.topics ?? []);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<TopicTag[]>(topics);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (topics.length === 0 && !challenge.canEditTopics) return null;
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}/topics`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ topicIds: draft.map((t) => t.id) }),
+      });
+      const json = await readJson(res);
+      if (!res.ok) throw new Error(json.error ?? "Could not save the topics");
+      setTopics((json.topics as TopicTag[]) ?? draft);
+      setEditing(false);
+      await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the topics");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ch-topics">
+      <span className="ch-topics-label">Topics</span>
+      {!editing && (
+        <>
+          {topics.length > 0 ? <TopicChips topics={topics} /> : <span className="muted ch-topics-none">No topics</span>}
+          {challenge.canEditTopics && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setDraft(topics);
+                setError(null);
+                setEditing(true);
+              }}
+            >
+              Edit topics
+            </button>
+          )}
+        </>
+      )}
+      {editing && (
+        <div className="ch-topics-edit">
+          <ActiveTopicPicker id="challenge-topics-edit" value={draft} onChange={setDraft} disabled={saving} />
+          {error && (
+            <div className="tag-error" role="alert">
+              {error}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={save}>
+              {saving ? "Saving…" : "Save topics"}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The picker with the active topics loaded — mounted only while editing, so a reader who never
+ *  edits never fetches the list. */
+function ActiveTopicPicker(props: { id: string; value: TopicTag[]; onChange: (next: TopicTag[]) => void; disabled: boolean }) {
+  const options = useActiveTopics();
+  return <TopicPicker {...props} options={options} />;
+}
+
+// §10.1 author edit of a challenge's content (title/description/impact area/client name/topics). Loads
 // the impact-area list to pre-select; visibility/anonymity/namespace are intentionally not
 // editable here.
 function ChallengeEditForm({
@@ -1322,6 +1413,9 @@ function ChallengeEditForm({
   const [description, setDescription] = useState(challenge.description);
   const [impactAreaId, setImpactAreaId] = useState(challenge.impactAreaId);
   const [clientName, setClientName] = useState(challenge.clientName ?? "");
+  // §34.3: topics are an editable field like impact area; the same picker as on submit.
+  const [topics, setTopics] = useState<TopicTag[]>(challenge.topics ?? []);
+  const topicOptions = useActiveTopics();
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -1340,7 +1434,7 @@ function ChallengeEditForm({
       const res = await fetch(`/api/challenges/${challenge.number.replace("CH-", "")}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, description, impactAreaId, clientName: isClient ? clientName : null }),
+        body: JSON.stringify({ title, description, impactAreaId, clientName: isClient ? clientName : null, topicIds: topics.map((t) => t.id) }),
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not save changes");
@@ -1367,6 +1461,14 @@ function ChallengeEditForm({
           </option>
         ))}
       </select>
+      {((topicOptions?.length ?? 0) > 0 || topics.length > 0) && (
+        <>
+          <label style={EDIT_LABEL} htmlFor="challenge-edit-topics">
+            Topics
+          </label>
+          <TopicPicker id="challenge-edit-topics" value={topics} onChange={setTopics} options={topicOptions} disabled={submitting} />
+        </>
+      )}
       {isClient && (
         <>
           <label style={EDIT_LABEL}>Client name</label>

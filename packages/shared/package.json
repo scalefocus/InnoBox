@@ -118,6 +118,10 @@
       "types": "./dist/hype.d.ts",
       "default": "./dist/hype.js"
     },
+    "./topics": {
+      "types": "./dist/topics.d.ts",
+      "default": "./dist/topics.js"
+    },
     "./rum": {
       "types": "./dist/rum.d.ts",
       "default": "./dist/rum.js"

@@ -48,9 +48,12 @@ import {
   type MaskedAuthor,
   type RoleSet,
   type SolutionStatus,
+  type TopicRef,
+  type TopicSetProblem,
   type TransitionMode,
   type ViaAgent,
 } from "@innobox/shared";
+import { challengeTopicIds, checkChallengeTopics, writeChallengeTopics } from "../topics/tagging";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { isScanAvailable } from "../../../lib/clamav";
@@ -112,6 +115,8 @@ export interface ChallengeListItem {
   author: MaskedAuthor;
   namespaceSlug: string;
   impactAreaName: string;
+  /** §34.6: the challenge's topics, alphabetical — retired ones included (`active: false`). */
+  topics: TopicRef[];
   status: ChallengeStatus;
   createdAt: string;
   likeCount: number;
@@ -222,6 +227,9 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   attachments: AttachmentView[];
   /** §25.8 "via agent": null for the browser; the client name is masked on an anonymous item. */
   viaAgent: ViaAgent;
+  /** §34.3 Edit topics — the challenge's namespace admins and platform admins, in every status
+   *  but the read-only trashed view. Curation, not a content edit. */
+  canEditTopics: boolean;
 }
 
 /** §24.6 "Submitted from outside": name and e-mail are null once erased (§24.8). */
@@ -246,6 +254,8 @@ export interface ChallengeRow {
   namespace_archived: boolean;
   impact_area_id: string;
   impact_area_name: string;
+  /** §34.6: `json_agg` of the challenge's topics, alphabetical. */
+  topics: TopicRef[];
   client_name: string | null;
   /** Null for a challenge accepted from the public form (§24.6); the author columns are then null. */
   author_id: string | null;
@@ -312,6 +322,8 @@ export const CHALLENGE_SELECT = `
   select c.id, c.number::text, c.title, c.description, c.status, c.visibility,
          c.namespace_id, ns.slug as namespace_slug, ns.archived_at is not null as namespace_archived,
          c.impact_area_id, ia.name as impact_area_name,
+         (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
+            from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics,
          c.client_name, c.author_id, u.display_name as author_display_name, u.active as author_active, u.scrubbed_at is not null as author_scrubbed, c.is_anonymous,
          c.public_submission_id, ps.company as external_company, ps.submitter_name as external_name, ps.submitter_email as external_email,
          ps.confirmed_at as external_confirmed_at, ps.contact_erased_at as external_erased_at,
@@ -349,6 +361,7 @@ export function toListItem(row: ChallengeRow): ChallengeListItem {
     }),
     namespaceSlug: row.namespace_slug,
     impactAreaName: row.impact_area_name,
+    topics: row.topics ?? [],
     status: row.status as ChallengeStatus,
     createdAt: row.created_at.toISOString(),
     likeCount: Number(row.like_count),
@@ -520,6 +533,8 @@ function toDetail(
     solutions,
     attachments,
     viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
+    // §34.3: curation by the item's admins; `isAdmin` is already false on a trashed challenge.
+    canEditTopics: isAdmin,
     ...featuredDetailFields({
       isPlatformAdmin: isPlatformAdmin && live,
       status: row.status,
@@ -686,6 +701,13 @@ export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unkn
                 OR c.id = ANY(${push(viewer.roles.accessListChallenges())}::uuid[])
            ELSE c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
   );
+}
+
+/** §34.6: the topic filter the gallery and search share — the challenges carrying the topic. An
+ *  id that names no topic (a deleted one) simply matches nothing. */
+export function pushTopicFilter(filters: { topicId?: string }, push: (v: unknown) => string, conditions: string[]): void {
+  if (!filters.topicId) return;
+  conditions.push(`exists (select 1 from challenge_topics ct where ct.challenge_id = c.id and ct.topic_id = ${push(filters.topicId)})`);
 }
 
 /** The SQL twin of `canSeeSolution` over `solutions s join challenges c` (§4.3): a `proposed`
@@ -867,6 +889,7 @@ export async function listChallenges(
 
   if (filters.status) conditions.push(`c.status = ${push(filters.status)}`);
   if (filters.impactAreaId) conditions.push(`c.impact_area_id = ${push(filters.impactAreaId)}`);
+  pushTopicFilter(filters, push, conditions);
   if (filters.namespaceId) conditions.push(`c.namespace_id = ${push(filters.namespaceId)}`);
   if (filters.authorName) {
     // Anonymity-safety: a name filter must never distinguish "not a match" from "hidden
@@ -927,6 +950,8 @@ export type CreateChallengeResult =
   | { status: "forbidden_namespace" }
   | { status: "unknown_impact_area" }
   | { status: "inactive_impact_area" }
+  /** §34.3: the chosen topics break a tagging rule (→ 422). */
+  | { status: "invalid_topics"; problem: TopicSetProblem }
   | { status: "attachments_not_clean" }
   | { status: "attachments_over_limit" }
   | { status: "invalid"; error: string };
@@ -945,6 +970,8 @@ export async function createChallenge(
     draftKey?: unknown;
     /** §6.1: the similar challenges the submitter saw and submitted past (already parsed). */
     similarAcknowledged?: string[];
+    /** §34.3: the optional topics, already shape-checked (`parseTopicIds`). */
+    topicIds?: string[];
   },
   via?: AgentSource,
 ): Promise<CreateChallengeResult> {
@@ -977,6 +1004,11 @@ export async function createChallenge(
   });
   if (!validated.ok) return { status: "invalid", error: validated.error };
 
+  // §34.3: optional topics, at most three, each active now.
+  const topicIds = input.topicIds ?? [];
+  const topicCheck = topicIds.length > 0 ? await checkChallengeTopics(pool, topicIds, []) : null;
+  if (topicCheck?.problem) return { status: "invalid_topics", problem: topicCheck.problem };
+
   // §11 staging: bind any files staged during the form to this challenge (in-transaction).
   const draftKey = typeof input.draftKey === "string" && isUuid(input.draftKey) ? input.draftKey : null;
   // §11 scan gate: when a scanner is available, refuse to submit while any staged file is still
@@ -1007,6 +1039,7 @@ export async function createChallenge(
       ],
     );
     const id = rows[0]!.id;
+    if (topicCheck) await writeChallengeTopics(client, id, [], topicIds, topicCheck.topics, author.userId);
     await appendAudit(client, {
       actorUserId: author.userId,
       action: "challenge.created",
@@ -1017,6 +1050,7 @@ export async function createChallenge(
         namespaceId: input.namespaceId,
         visibility: validated.value.visibility,
         isAnonymous: validated.value.isAnonymous,
+        ...(topicIds.length > 0 ? { topicIds } : {}),
         // §6.1: present only when the author submitted past a duplicate warning.
         ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
         ...agentAuditFields(via),
@@ -1105,7 +1139,8 @@ export async function createSolution(
 // ── Status transitions: admin override + committee/assignee enforced (§7.2/§8.2, invariant 6) ─
 
 export type SetChallengeStatusResult =
-  | { status: "ok"; challenge: ChallengeDetail; changed: boolean; previousStatus: string }
+  /** `opened`: the challenge's first entry into `valid` — its §34.5 opening (event 18). */
+  | { status: "ok"; challenge: ChallengeDetail; changed: boolean; previousStatus: string; opened: boolean }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
@@ -1116,15 +1151,16 @@ export type SetChallengeStatusResult =
 /** The actual mutation + audit, shared by the full (`setChallengeStatus`) and lean
  *  (`setChallengeStatusLean`, used by bulk actions) variants — a no-op when the status is
  *  unchanged. `mode` records whether this was an admin free-set (`override: true`) or a
- *  committee/assignee enforced transition (`override: false`) in the audit trail (§7.2). */
+ *  committee/assignee enforced transition (`override: false`) in the audit trail (§7.2). Returns
+ *  true when the transition was the challenge's first entry into `valid` (§34.5 opening). */
 async function applyChallengeStatusChange(
   client: PoolClient,
   actor: Viewer,
   current: { id: string; status: string },
   newStatus: string,
   mode: TransitionMode,
-): Promise<void> {
-  if (current.status === newStatus) return;
+): Promise<boolean> {
+  if (current.status === newStatus) return false;
   // §13.2: a move out of valid/solved clears any Home pin first (same transaction, audited).
   await unpinOnStatusChange(client, actor.userId, current.id, newStatus);
   // §7.2: entering `solved` sets resolved_at; any transition out of `solved` clears it.
@@ -1135,7 +1171,7 @@ async function applyChallengeStatusChange(
     newStatus,
   ]);
   // §12.4: stamp first_valid_at on the first `valid`, enqueue channel-webhook milestones.
-  await onChallengeStatusChanged(client, current.id, newStatus);
+  const opened = await onChallengeStatusChanged(client, current.id, newStatus);
   // §24.7/§24.8: an external challenge's first close queues the outcome mail and the erasure date.
   await onExternalChallengeClosed(client, current.id, newStatus);
   await appendAudit(client, {
@@ -1152,6 +1188,7 @@ async function applyChallengeStatusChange(
   // §12.1 event 15: a `people` challenge leaving triage (or withdrawal) tells everyone on its list
   // who has not been told yet. A no-op for any other visibility or a status that still hides it.
   if (newStatus !== "awaiting_triage" && newStatus !== "withdrawn") await deliverShareNotifications(client, current.id, actor.userId);
+  return opened;
 }
 
 async function loadChallengeForStatusChange(
@@ -1202,7 +1239,7 @@ export async function setChallengeStatus(
   const { current, mode } = loaded;
 
   return inTransaction(pool, async (client) => {
-    await applyChallengeStatusChange(client, actor, current, newStatus, mode);
+    const opened = await applyChallengeStatusChange(client, actor, current, newStatus, mode);
     const { rows: full } = await client.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [
       current.id,
       actor.userId,
@@ -1216,12 +1253,13 @@ export async function setChallengeStatus(
       challenge: toDetail(row, actor, solutions),
       changed: current.status !== newStatus,
       previousStatus: current.status,
+      opened,
     };
   });
 }
 
 export type SetChallengeStatusLeanResult =
-  | { status: "ok"; changed: boolean; previousStatus: string }
+  | { status: "ok"; changed: boolean; previousStatus: string; challengeId: string; opened: boolean }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
@@ -1238,8 +1276,8 @@ export async function setChallengeStatusLean(pool: Pool, actor: Viewer, number: 
   const { current, mode } = loaded;
 
   return inTransaction(pool, async (client) => {
-    await applyChallengeStatusChange(client, actor, current, newStatus, mode);
-    return { status: "ok", changed: current.status !== newStatus, previousStatus: current.status };
+    const opened = await applyChallengeStatusChange(client, actor, current, newStatus, mode);
+    return { status: "ok", changed: current.status !== newStatus, previousStatus: current.status, challengeId: current.id, opened };
   });
 }
 
@@ -1782,7 +1820,9 @@ export async function setChallengeAssigneeLean(
 // ── Visibility change (§4.3, §14.2 moderation) ────────────────────────────────────────────
 
 export type SetVisibilityResult =
-  | { status: "ok"; challenge: ChallengeDetail }
+  /** `previousVisibility`: set when the visibility actually changed — the §34.5 "widened" trigger
+   *  compares who could see the challenge before with who can now. */
+  | { status: "ok"; challenge: ChallengeDetail; previousVisibility?: ChallengeVisibility }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
@@ -1836,7 +1876,8 @@ export async function setChallengeVisibility(
     }
     // §12.1 event 15 for whoever is newly on the list, if the challenge is past triage.
     if (visibility === "people") await deliverShareNotifications(client, cur.id, admin.userId);
-    return { status: "ok", challenge: await reloadChallengeDetail(client, admin, cur.id) };
+    const challenge = await reloadChallengeDetail(client, admin, cur.id);
+    return cur.visibility !== visibility ? { status: "ok", challenge, previousVisibility: cur.visibility } : { status: "ok", challenge };
   });
 }
 
@@ -1871,16 +1912,19 @@ export type EditChallengeResult =
   | { status: "not_editable" }
   | { status: "unknown_impact_area" }
   | { status: "inactive_impact_area" }
+  /** §34.3: the chosen topics break a tagging rule (→ 422). */
+  | { status: "invalid_topics"; problem: TopicSetProblem }
   | { status: "invalid"; error: string };
 
 /** Author content edit of a challenge (§10.1): allowed only by the author within the edit
  *  window (awaiting_triage / needs_improvement). Visibility, anonymity, and namespace are NOT
- *  editable here (§4.3/§9). Stamps `edited_at` and audits a field-level diff. */
+ *  editable here (§4.3/§9). Stamps `edited_at` and audits a field-level diff. `topicIds` (§34.3)
+ *  replaces the challenge's topics when present; absent leaves them as they are. */
 export async function editChallenge(
   pool: Pool,
   author: Viewer,
   number: string,
-  input: { title: unknown; description: unknown; clientName: unknown; impactAreaId: string },
+  input: { title: unknown; description: unknown; clientName: unknown; impactAreaId: string; topicIds?: string[] },
   via?: AgentSource,
 ): Promise<EditChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -1931,12 +1975,24 @@ export async function editChallenge(
     { key: "impactAreaId", before: cur.impact_area_id, after: input.impactAreaId },
   ]);
 
+  // §34.3: topics are an editable field like impact area — the same rules as the admin's control.
+  const currentTopics = input.topicIds ? await challengeTopicIds(pool, cur.id) : [];
+  const topicCheck = input.topicIds ? await checkChallengeTopics(pool, input.topicIds, currentTopics) : null;
+  if (topicCheck?.problem) return { status: "invalid_topics", problem: topicCheck.problem };
+  const nextTopics = input.topicIds ?? currentTopics;
+  const topicsChanged = input.topicIds !== undefined && !sameTopicSet(currentTopics, nextTopics);
+  if (topicsChanged) {
+    diff.before.topicIds = [...currentTopics].sort();
+    diff.after.topicIds = [...nextTopics].sort();
+  }
+
   return inTransaction(pool, async (client) => {
-    if (diff.changed) {
+    if (diff.changed || topicsChanged) {
       await client.query(
         `update challenges set title = $2, description = $3, client_name = $4, impact_area_id = $5, edited_at = now(), updated_at = now() where id = $1`,
         [cur.id, validated.value.title, validated.value.description, validated.value.clientName, input.impactAreaId],
       );
+      if (topicsChanged && topicCheck) await writeChallengeTopics(client, cur.id, currentTopics, nextTopics, topicCheck.topics, author.userId);
       await appendAudit(client, {
         actorUserId: author.userId,
         action: "challenge.edited",
@@ -1948,6 +2004,11 @@ export async function editChallenge(
     }
     return { status: "ok", challenge: await reloadChallengeDetail(client, author, cur.id) };
   });
+}
+
+/** True when two topic-id sets hold the same ids, in any order. */
+function sameTopicSet(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
 }
 
 export type EditSolutionResult =

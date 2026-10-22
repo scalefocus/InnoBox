@@ -21,6 +21,12 @@ import {
   hypeNotificationMessage,
   isDigestableEvent,
   nextDigestSlot,
+  sortTopicNames,
+  TOPICS_PATH,
+  topicNoticeFootnote,
+  topicNoticeMessage,
+  topicNoticeSubject,
+  type ChallengeVisibility,
   type DigestCadence,
   type DigestFacts,
   type NotificationEventNumber,
@@ -28,8 +34,10 @@ import {
   type NotificationPreference,
   type NotificationTarget,
   type NotificationType,
+  type TopicNoticeVia,
 } from "@innobox/shared";
-import { loadParentVisibility, parentAccessFor, type Viewer } from "../app/api/challenges/store";
+import { loadParentVisibility, parentAccessFor, type ParentVisibility, type Viewer } from "../app/api/challenges/store";
+import { inTransaction } from "./db";
 
 type Db = Pool | PoolClient;
 
@@ -348,15 +356,95 @@ export async function dispatchCoalescedComment(
 }
 
 /** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
- *  since §26.6, their unread "hyped" rows — for the challenge itself AND its solutions (the page
- *  shows both). A solution row carries its challenge in `challenge_id` (§5, migration 0051), so one
- *  probe of the (user_id, challenge_id) unread index covers both. */
+ *  since §26.6, their unread "hyped" rows, and since §34.5 their event-18 row — for the challenge
+ *  itself AND its solutions (the page shows both). A solution row carries its challenge in
+ *  `challenge_id` (§5, migration 0051), so one probe of the (user_id, challenge_id) unread index
+ *  covers both. */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type in ('comment_posted', 'hyped') and read_at is null and challenge_id = $2::uuid`,
+      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge') and read_at is null and challenge_id = $2::uuid`,
     [userId, challengeId],
   );
+}
+
+// ── §12.1 event 18 / §34.5: a new challenge in a followed topic ──────────────────────────
+
+/** One event-18 trigger, as the dispatch needs it. */
+export interface TopicNotice {
+  challenge: { id: string; number: string; title: string; namespaceSlug: string; /** Masked per §9. */ author: string };
+  /** Each candidate follower → the names of the relevant topics they follow. */
+  followers: ReadonlyMap<string, readonly string[]>;
+  /** The challenge's author — never a recipient: event 3 already told them it is valid. */
+  authorId: string | null;
+  via: Exclude<TopicNoticeVia, "shared">;
+  /** "widened" only: the visibility before the change — whoever could already see it is skipped. */
+  previousVisibility?: ChallengeVisibility;
+}
+
+/**
+ * Event 18 delivery. Of the candidate followers, the actor and the author are dropped, then the
+ * deactivated and erased (§12.1), then everyone who cannot see the challenge now (invariant 2) —
+ * and, for a widening, everyone who could see it before. The survivors' `topic_notices` markers
+ * are written in the same transaction as their inbox and outbox rows, and only a person whose
+ * marker is NEW gets a row: at most one notice per person per challenge, ever, however triggers
+ * race. Nobody dropped is marked, so a later trigger can still reach them. Returns how many people
+ * were told.
+ */
+export async function dispatchTopicNotices(ctx: NotifyContext, notice: TopicNotice): Promise<number> {
+  const candidates = finalizeRecipients([...notice.followers.keys()], ctx.actorId).filter((id) => id !== notice.authorId);
+  const active = await activeRecipients(ctx.pool, candidates);
+  if (active.length === 0) return 0;
+  const parent = await loadParentVisibility(ctx.pool, "challenge", notice.challenge.id);
+  if (!parent || parent.parentType !== "challenge") return 0;
+  const before: ParentVisibility | null = notice.previousVisibility
+    ? { parentType: "challenge", row: { ...parent.row, visibility: notice.previousVisibility } }
+    : null;
+  const roles = await resolveAllRoles(ctx.resolveRoles, active);
+  const recipients = active.filter((userId) => {
+    const viewer = { userId, roles: roles.get(userId)! };
+    if (parentAccessFor(viewer, parent) !== "live") return false;
+    return before === null || parentAccessFor(viewer, before) !== "live";
+  });
+  if (recipients.length === 0) return 0;
+
+  const { id, number, title } = notice.challenge;
+  return inTransaction(ctx.pool, async (client) => {
+    const { rows } = await client.query<{ user_id: string }>(
+      `insert into topic_notices (challenge_id, user_id, via)
+       select $1, u, $3 from unnest($2::uuid[]) as u
+       on conflict do nothing
+       returning user_id`,
+      [id, recipients, notice.via],
+    );
+    // One message per distinct set of followed topics, so each group is one multi-row write.
+    const groups = new Map<string, { topics: string[]; userIds: string[] }>();
+    for (const { user_id } of rows) {
+      const topics = sortTopicNames(notice.followers.get(user_id) ?? []);
+      const key = topics.join("\u0000");
+      const group = groups.get(key) ?? { topics, userIds: [] };
+      group.userIds.push(user_id);
+      groups.set(key, group);
+    }
+    for (const { topics, userIds } of groups.values()) {
+      const payload: NotificationPayload = {
+        message: topicNoticeMessage({ topics, number, title }),
+        subject: topicNoticeSubject(topics, number),
+        // The e-mail's second line and closing note (the worker's composeOutboxEmail).
+        emailDetail: `In /${notice.challenge.namespaceSlug} · submitted by ${notice.challenge.author}`,
+        footnote: { text: topicNoticeFootnote(topics), link: TOPICS_PATH },
+        link: `/challenges/${number}`,
+        parentType: "challenge",
+        parentId: id,
+        topics,
+      };
+      await writeNotifications(client, userIds, "topic_challenge", payload, {
+        event: 18,
+        facts: { kind: "topic", challengeNumber: number, challengeTitle: title, topics },
+      });
+    }
+    return rows.length;
+  });
 }
 
 // ── §12.1 event 16 / §26.6: coalesced "hyped" notifications ─────────────────────────────

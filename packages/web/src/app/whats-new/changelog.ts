@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.20.0",
+    date: "2026-10-22",
+    summary:
+      "New: topics you can follow. A challenge can carry up to three topics, and following one tells you once when a new challenge in it opens for solutions. Browse and follow them on the new Topics page, from a topic's chip, or on your profile. Platform admins curate the list in Platform settings, and admins can re-tag challenges, also in bulk from triage.",
+  },
+  {
     version: "1.19.1",
     date: "2026-10-22",
     summary:

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isChallengeStatus } from "@innobox/shared";
-import { parseBulkAssignBody, parseBulkStatusBody, parseTriageFilters, parseTriagePagination } from "./validation.js";
+import { parseBulkAssignBody, parseBulkStatusBody, parseBulkTopicBody, parseTriageFilters, parseTriagePagination } from "./validation.js";
 
 test("parseTriageFilters: empty query yields no filters", () => {
   const parsed = parseTriageFilters(new URLSearchParams());
@@ -23,6 +23,24 @@ test("parseTriageFilters: accepts status/authorName/assigneeId=unassigned/number
 test("parseTriageFilters: rejects a malformed namespaceId or unknown status", () => {
   assert.equal(parseTriageFilters(new URLSearchParams("namespaceId=not-a-uuid")).ok, false);
   assert.equal(parseTriageFilters(new URLSearchParams("status=bogus")).ok, false);
+});
+
+test("parseTriageFilters: the §34.6 topic filter — a topic id or 'none'", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+  assert.deepEqual(parseTriageFilters(new URLSearchParams(`topic=${id}`)), { ok: true, value: { topicId: id } });
+  assert.deepEqual(parseTriageFilters(new URLSearchParams("topic=none")), { ok: true, value: { topicId: "none" } });
+  assert.equal(parseTriageFilters(new URLSearchParams("topic=ai")).ok, false);
+});
+
+test("parseBulkTopicBody: numbers, add or remove, and a topic id", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+  assert.deepEqual(parseBulkTopicBody({ numbers: ["CH-12", "13"], action: "add", topicId: id.toUpperCase() }), {
+    ok: true,
+    value: { numbers: ["12", "13"], action: "add", topicId: id },
+  });
+  assert.equal(parseBulkTopicBody({ numbers: [], action: "add", topicId: id }).ok, false);
+  assert.equal(parseBulkTopicBody({ numbers: ["12"], action: "toggle", topicId: id }).ok, false);
+  assert.equal(parseBulkTopicBody({ numbers: ["12"], action: "remove", topicId: "ai" }).ok, false);
 });
 
 test("parseTriageFilters: rejects a number that doesn't look like CH-123", () => {

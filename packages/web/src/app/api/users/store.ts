@@ -257,6 +257,10 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §23.9: the user's points ledger and badges go — the only DELETE the app role holds on them.
     await client.query(`delete from gamification_ledger where user_id = $1`, [userId]);
     await client.query(`delete from user_badges where user_id = $1`, [userId]);
+    // §34.7: a topic follow is a preference, like the toggles reset above; the event-18 markers go
+    // with it. The topics they tagged keep `added_by` pointing at the de-identified row.
+    await client.query(`delete from topic_follows where user_id = $1`, [userId]);
+    await client.query(`delete from topic_notices where user_id = $1`, [userId]);
     // §25.13: the person's AI agent grants are revoked (audited, reason "erased") and deleted —
     // their tokens and pending authorizations cascade. mcp_client_name is not personal data.
     await eraseUserGrants(client, userId, adminUserId);
