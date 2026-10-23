@@ -1,12 +1,13 @@
 "use client";
 // "Propose a feature" (INNOBOX_SPEC.md §38.4): a native modal <dialog> — showModal gives the focus
-// trap, Escape and the inert page behind it — with one required text box, a live counter, and the
-// §6.4 submission lock on Send. Closing with text in the box asks first. The person's §38.6 name
+// trap, Escape and the inert page behind it — with a required one-line title and a required text box,
+// each with a live counter, and the §6.4 submission lock on Send. Closing with anything typed asks
+// first. The person's §38.6 name
 // switch decides whether the sub-line promises their name. With MAX_PENDING_IDEAS proposals already
 // waiting, the dialog says so and Send stays disabled; the server re-checks the cap either way. A
 // platform admin has no cap (§38.4), so for them `atCap` is never true.
 import { useEffect, useRef, useState } from "react";
-import { FEATURE_IDEA_MESSAGES, FEATURE_IDEA_TEXT_MAX } from "@innobox/shared/feature-ideas";
+import { FEATURE_IDEA_MESSAGES, FEATURE_IDEA_TEXT_MAX, FEATURE_IDEA_TITLE_MAX } from "@innobox/shared/feature-ideas";
 import { PrimaryButtonLabel, useFormLock } from "@/components/FormLock";
 import { primaryButtonState } from "@/lib/form-lock";
 import { readJson } from "@/lib/api-client";
@@ -26,6 +27,7 @@ export function ProposeFeatureDialog({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -44,21 +46,23 @@ export function ProposeFeatureDialog({
 
   /** True when it may close: nothing typed, already sent, or the person agreed to discard. React
    *  re-binds the dialog's handlers on every render, so they read the current state. */
-  const mayClose = (): boolean => sent || text.trim() === "" || window.confirm("Discard your idea?");
+  const mayClose = (): boolean => sent || (title.trim() === "" && text.trim() === "") || window.confirm("Discard your idea?");
 
   const tryClose = () => {
     if (mayClose()) ref.current?.close();
   };
 
+  const ready = title.trim() !== "" && text.trim() !== "";
+
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (atCap || text.trim() === "" || !lock.lock()) return;
+    if (atCap || !ready || !lock.lock()) return;
     setError(null);
     try {
       const res = await fetch("/api/feature-ideas", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description: text }),
+        body: JSON.stringify({ title, description: text }),
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Your idea wasn't sent. Try again.");
@@ -109,6 +113,23 @@ export function ProposeFeatureDialog({
               </p>
             )}
             <div className="form-lock-host" aria-busy={lock.locked}>
+              <label className="propose-label" htmlFor="propose-name">
+                Title
+              </label>
+              <input
+                id="propose-name"
+                className="field"
+                autoFocus
+                value={title}
+                maxLength={FEATURE_IDEA_TITLE_MAX}
+                placeholder="A short name for your idea"
+                inert={lock.locked}
+                data-testid="propose-title-field"
+                onChange={(e) => setTitle(e.target.value.slice(0, FEATURE_IDEA_TITLE_MAX))}
+              />
+              <div className="propose-counter sub mono" aria-live="polite">
+                {title.length} / {FEATURE_IDEA_TITLE_MAX}
+              </div>
               <label className="propose-label" htmlFor="propose-text">
                 Your idea
               </label>
@@ -116,7 +137,6 @@ export function ProposeFeatureDialog({
                 id="propose-text"
                 className="field"
                 rows={6}
-                autoFocus
                 value={text}
                 maxLength={FEATURE_IDEA_TEXT_MAX}
                 placeholder="What should InnoBox do, and what would it help you with?"
@@ -144,7 +164,7 @@ export function ProposeFeatureDialog({
               <button type="button" className="btn btn-sm btn-ghost" disabled={lock.locked} onClick={tryClose}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-sm btn-primary" disabled={button.disabled || atCap || text.trim() === ""} data-testid="propose-send">
+              <button type="submit" className="btn btn-sm btn-primary" disabled={button.disabled || atCap || !ready} data-testid="propose-send">
                 <PrimaryButtonLabel state={button} />
               </button>
             </>

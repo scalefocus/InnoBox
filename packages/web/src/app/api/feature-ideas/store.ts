@@ -10,7 +10,8 @@
 //
 // Visibility (invariant 2): ideas carry no namespace, and every entry is filtered by its audience
 // against the viewer's resolved roles before anything about it — a count, a voter, a proposer — is
-// returned. The raw proposal text is returned only to its author and to platform admins.
+// returned. The proposal's own title and text are returned only to its author and to platform
+// admins; Coming soon carries only the published title and teaser.
 // Names (§38.6): a proposer or voter is named only while their name switch is on and they are not
 // erased — read live, never copied onto a row.
 // Relative imports only (no `@/`) so the gated dbtests can load it.
@@ -206,14 +207,24 @@ export async function toggleVote(pool: Pool, viewer: IdeaViewer, id: string): Pr
 
 export type ProposeResult = { status: "ok"; id: string } | { status: "too_many_pending" };
 
+/** A proposal as the route validated it: the proposer's own title and text (§38.4). */
+export interface Proposal {
+  title: string;
+  text: string;
+}
+
 /** A new pending proposal. The pending cap is re-checked under a per-person advisory lock, so two
  *  tabs can never both slip under it; `uncapped` (a platform admin, §38.4) skips it. Audited without
- *  its text (§38.14). */
-export async function proposeIdea(pool: Pool, userId: string, text: string, opts: { uncapped?: boolean } = {}): Promise<ProposeResult> {
+ *  its title or text (§38.14). */
+export async function proposeIdea(pool: Pool, userId: string, proposal: Proposal, opts: { uncapped?: boolean } = {}): Promise<ProposeResult> {
   return inTransaction(pool, async (client) => {
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`feature-idea:${userId}`]);
     if (!opts.uncapped && (await pendingCount(client, userId)) >= MAX_PENDING_IDEAS) return { status: "too_many_pending" } as const;
-    const { rows } = await client.query<{ id: string }>(`insert into feature_ideas (author_id, description) values ($1, $2) returning id`, [userId, text]);
+    const { rows } = await client.query<{ id: string }>(`insert into feature_ideas (author_id, proposal_title, description) values ($1, $2, $3) returning id`, [
+      userId,
+      proposal.title,
+      proposal.text,
+    ]);
     const id = rows[0]!.id;
     await appendAudit(client, { actorUserId: userId, action: "feature_idea.proposed", targetType: "feature_idea", targetId: id });
     return { status: "ok", id } as const;
@@ -226,6 +237,8 @@ export interface OwnIdea {
   id: string;
   status: FeatureIdeaStatus;
   createdAt: string;
+  /** The proposer's own title, as they sent it. */
+  proposalTitle: string | null;
   description: string | null;
   /** Planned: the published title and its votes. */
   title: string | null;
@@ -254,13 +267,14 @@ export async function listOwnIdeas(db: Db, userId: string): Promise<OwnIdea[]> {
     id: string;
     status: FeatureIdeaStatus;
     created_at: Date;
+    proposal_title: string | null;
     description: string | null;
     title: string | null;
     decision_note: string | null;
     merged_into: string | null;
     votes: number;
   }>(
-    `select f.id, f.status, f.created_at, f.description, f.title, f.decision_note, f.merged_into,
+    `select f.id, f.status, f.created_at, f.proposal_title, f.description, f.title, f.decision_note, f.merged_into,
             (select count(*)::int from feature_idea_votes v where v.idea_id = f.id) as votes
        from feature_ideas f
       where f.author_id = $1
@@ -273,6 +287,7 @@ export async function listOwnIdeas(db: Db, userId: string): Promise<OwnIdea[]> {
       id: r.id,
       status: r.status,
       createdAt: r.created_at.toISOString(),
+      proposalTitle: r.proposal_title,
       description: r.description,
       title: r.status === "planned" ? r.title : null,
       votes: r.status === "planned" ? r.votes : null,
@@ -315,6 +330,8 @@ export interface AdminIdeaRow {
   id: string;
   status: FeatureIdeaStatus;
   createdAt: string;
+  /** The proposer's own title; null for an entry without one (§38.13). `title` is the published one. */
+  proposalTitle: string | null;
   description: string | null;
   excerpt: string;
   /** Null for an entry without a proposer — the ones migration 0055 seeded (§38.2). */
@@ -373,6 +390,7 @@ export async function listAdminIdeas(db: Db, tab: AdminTab): Promise<AdminIdeaLi
     id: string;
     status: FeatureIdeaStatus;
     created_at: Date;
+    proposal_title: string | null;
     description: string | null;
     author_id: string | null;
     display_name: string | null;
@@ -388,7 +406,7 @@ export async function listAdminIdeas(db: Db, tab: AdminTab): Promise<AdminIdeaLi
     decided_at: Date | null;
     votes: number;
   }>(
-    `select f.id, f.status, f.created_at, f.description, f.author_id, u.display_name, not u.active as deactivated,
+    `select f.id, f.status, f.created_at, f.proposal_title, f.description, f.author_id, u.display_name, not u.active as deactivated,
             u.scrubbed_at is not null as scrubbed, u.feature_ideas_named as named,
             f.title, f.teaser, f.audience, f.decision_note, f.merged_into, d.display_name as decided_by_name, f.decided_at,
             (select count(*)::int from feature_idea_votes v where v.idea_id = f.id) as votes
@@ -406,6 +424,7 @@ export async function listAdminIdeas(db: Db, tab: AdminTab): Promise<AdminIdeaLi
       id: r.id,
       status: r.status,
       createdAt: r.created_at.toISOString(),
+      proposalTitle: r.proposal_title,
       description: r.description,
       excerpt: r.description ? ideaExcerpt(r.description, PENDING_ROW_EXCERPT_MAX) : "",
       proposer: r.author_id
@@ -472,18 +491,19 @@ export async function approveIdea(pool: Pool, actorId: string, id: string, copy:
   });
 }
 
-/** Decline with an optional note, which event 19 carries to the proposer. */
+/** Decline with an optional note, which event 19 carries to the proposer — naming the idea by the
+ *  proposal's own title, since it never got a published one (§38.8). */
 export async function declineIdea(pool: Pool, actorId: string, id: string, note: string | null): Promise<DecisionResult> {
   return inTransaction(pool, async (client) => {
-    const { rows } = await client.query<{ author_id: string; description: string }>(
+    const { rows } = await client.query<{ author_id: string; proposal_title: string; description: string }>(
       `update feature_ideas set status = 'declined', decision_note = $2, decided_by = $3, decided_at = now(), updated_at = now()
-        where id = $1 and status = 'pending' returning author_id, description`,
+        where id = $1 and status = 'pending' returning author_id, proposal_title, description`,
       [id, note, actorId],
     );
     const idea = rows[0];
     if (!idea) return missOrConflict(client, id);
     await appendAudit(client, { actorUserId: actorId, action: "feature_idea.declined", targetType: "feature_idea", targetId: id, after: { note } });
-    await deliverIdeaReviewed(client, { proposerId: idea.author_id, actorId, outcome: "declined", text: idea.description, note });
+    await deliverIdeaReviewed(client, { proposerId: idea.author_id, actorId, outcome: "declined", title: idea.proposal_title, text: idea.description, note });
     return { status: "ok" } as const;
   });
 }
