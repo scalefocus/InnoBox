@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.24.0",
+    date: "2026-10-23",
+    summary:
+      "Feature ideas now have a title. When you propose a feature, give it a short name of up to 60 characters along with your description. Your ideas list and the decline notice use it, and platform admins see it in the review queue, where it starts off the published title. Ideas you sent earlier were named from their first sentence.",
+  },
+  {
     version: "1.23.0",
     date: "2026-10-22",
     summary:

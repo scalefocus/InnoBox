@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.25 — draft for review** (2026-10-22; v0.2 added the UI and CI/CD
+> Status: **v0.26 — draft for review** (2026-10-23; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -85,7 +85,10 @@
 > hardened against takeover and churn — nobody else can remove the creator, a leave is
 > final, and team-change e-mails are capped at one per person per item a day — and
 > barred a committee member from moving an item they are an author of, solo or team
-> (§39, §4.2, §7.2, §8.2)).
+> (§39, §4.2, §7.2, §8.2); v0.26 (2026-10-23) gave every feature-idea proposal a
+> **title** of the proposer's own — required, at most 60 characters, seen only by the
+> proposer and platform admins — that names the idea in the review queue, the proposer's
+> own list and the decline notice, and pre-fills the published title on approval (§38)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -982,8 +985,9 @@ Entra runbook); on conflict this document wins.
   `gamification_ledger` and `user_badges` rows (resetting `gamification_public` and
   `notify_achievements` to their defaults and nulling `achievements_seen_at`), deletes the
   user's §34 `topic_follows` and `topic_notices` rows, deletes the user's §38 `pending`,
-  `declined` and `merged` feature ideas, clears the text of their `planned` ones (kept,
-  unnamed; the row keeps `author_id`, so the entry still counts as proposed, §38.12)
+  `declined` and `merged` feature ideas, clears the text and own title of their
+  `planned` ones (kept, unnamed, under the published title; the row keeps `author_id`,
+  so the entry still counts as proposed, §38.12)
   and resets `feature_ideas_named` to its default — their votes stay and are counted
   unnamed (§38.12) — and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
@@ -5799,7 +5803,7 @@ anomalies. Since v0.10 also:
   `like.*`); `feature_idea.approved`, `feature_idea.declined`, `feature_idea.merged`,
   `feature_idea.edited` and `feature_idea.deleted` under Admin; and
   `settings.feature_ideas_enabled_changed` (§38.14). **No row carries a proposal's
-  text.** Migration 0055, the awards and events 19–20 are not audited.
+  text or title.** Migrations 0055 and 0057, the awards and events 19–20 are not audited.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6118,8 +6122,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   — all platform admin only)
 - `coming-soon` (`GET` the §13.9 entries with their votes, voters and proposer, filtered
   by audience; `coming-soon/votes` `POST` the toggle), `feature-ideas` (`POST` a
-  proposal, the `feature_idea` bucket), `me/feature-ideas` (`GET` the caller's own list;
-  `me/feature-ideas/:id` `DELETE` withdraws a pending one). While proposals are closed,
+  proposal's title and text, the `feature_idea` bucket), `me/feature-ideas` (`GET` the
+  caller's own list; `me/feature-ideas/:id` `DELETE` withdraws a pending one). While proposals are closed,
   the proposal route answers **404** to everyone but platform admins; nothing else
   changes (§38.11). `profile` gains the `featureIdeasNamed` switch (§38.14)
 - `public-submissions/link` (`GET` → `{ url | null }`, any authenticated user — the §6.1
@@ -8850,9 +8854,9 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
 
 The What's new page's **Coming soon** list (§13.9) is a two-way roadmap that lives
 entirely in the database. Every signed-in person can **upvote** the entries they most
-want, and the list reorders by votes as they do. Anyone can **propose** a new feature in
-a few sentences; a platform admin reviews each proposal. An approved one is written up
-by the admin and joins *Coming soon* as **planned**, credited to the person who proposed
+want, and the list reorders by votes as they do. Anyone can **propose** a new feature
+with a short title and a few sentences; a platform admin reviews each proposal. An
+approved one is written up by the admin and joins *Coming soon* as **planned**, credited to the person who proposed
 it unless they have opted out. Platform admins edit any entry and remove it by hand
 once it is implemented, and everyone who proposed or upvoted it hears that it has
 arrived. Votes are a signal for prioritising: nothing about a release, this
@@ -8866,7 +8870,7 @@ specification or its build order is decided by them.
 | 2 | **Approval means planned.** There is no "under consideration" stage. | The admin decides what goes on the roadmap, and *Coming soon* is the roadmap. |
 | 3 | **One upvote per person per entry, toggled.** No budget, no downvote. | A light preference signal, like a like. Scarcity is hype's job (§26). |
 | 4 | **One list ordered by votes, live.** Ties go to the oldest approval. A vote re-sorts the list at once, and an open list picks up other people's votes every 30 seconds. | It shows what people want most, and a voter sees their vote move the roadmap. |
-| 5 | **A proposal is one text box.** On approval the admin writes the published **title and teaser** and picks the **audience**. | Users describe. The admin turns it into product copy that follows the §13.9 copy rules: no item, namespace or person, nothing that reads as a promise. |
+| 5 | **A proposal is a title and one text box**, both the proposer's and both required. On approval the admin writes the published **title and teaser** and picks the **audience**; the proposer's title pre-fills the published one. | Users name and describe: a title tells ideas apart at a glance, in the queue and in the proposer's own list. The admin turns it into product copy that follows the §13.9 copy rules: no item, namespace or person, nothing that reads as a promise. |
 | 6 | **The proposer is named on the entry**, unless they opt out with one profile switch, read live. | Credit for a good idea, with a way out for those who don't want it. |
 | 7 | **Voters are public, under the same switch.** Voters who opted out are counted but not named. | An upvote is a real-name endorsement, like a hype (§26 decision 8). |
 | 8 | **Platform admins review and edit; nobody else does.** Approve, Decline (with an optional note), Merge as duplicate, Delete as spam; Edit and Delete on every planned entry. A platform admin adds an entry by proposing it like anyone else. | The product is platform-wide. A namespace admin has no say over it. |
@@ -8947,22 +8951,34 @@ specification or its build order is decided by them.
   block. It always shows to platform admins, and to everyone else while proposals are
   open (§38.11).
 - **The dialog.** A modal `role="dialog"` (`aria-modal="true"`, labelled by its
-  heading), on the §2.2 tokens. Focus moves to the text box on open and returns to the
-  button on close. Escape, **Cancel** or a backdrop click closes it. If the box holds
-  text, closing first asks *"Discard your idea?"* through the browser's confirm dialog.
+  heading), on the §2.2 tokens. Focus moves to the **Title** field on open and returns to
+  the button on close. Escape, **Cancel** or a backdrop click closes it. If either field
+  holds text, closing first asks *"Discard your idea?"* through the browser's confirm
+  dialog.
   - Heading ***"Propose a feature"***, and the sub-line *"Describe what you'd like
     InnoBox to do and why. A platform admin reviews every idea. If it's planned, it
     appears here with your name."* When the viewer has opted out (§38.6), the last
     sentence reads *"If it's planned, it appears here."*
-  - One text box labelled ***"Your idea"***, placeholder *"What should InnoBox do, and
-    what would it help you with?"*. It is **required**, at most **1 000** characters,
-    with a live `N / 1000` counter, and input beyond the cap is blocked. No title, no
-    attachment, no audience choice: those are the admin's (decision 5).
-  - **Send idea** (disabled until the box holds non-whitespace) and **Cancel**. Send
-    locks the dialog while in flight (§6.4 submission lock).
+  - A single-line field labelled ***"Title"***, placeholder *"A short name for your
+    idea"*. It is **required**, at most **60** characters (the published title's cap,
+    §38.5), with a live `N / 60` counter, and input beyond the cap is blocked.
+  - Under it, one text box labelled ***"Your idea"***, placeholder *"What should InnoBox
+    do, and what would it help you with?"*. It is **required**, at most **1 000**
+    characters, with a live `N / 1000` counter, and input beyond the cap is blocked. No
+    attachment and no audience choice: the audience, like the published title and
+    teaser, is the admin's (decision 5).
+  - **Send idea** (disabled until both the title and the box hold non-whitespace) and
+    **Cancel**. Send locks the dialog while in flight (§6.4 submission lock).
   - **Success** replaces the body with *"Thanks, a platform admin will review your idea.
     You'll hear back either way."*, and the dialog closes itself after ~4 s (or on
-    Close). Any failure keeps the text and shows an inline error with a retry.
+    Close). Any failure keeps the title and the text and shows an inline error with a
+    retry.
+- **Validation.** The server trims both fields and answers **422** for an empty title or
+  text, a title over 60 characters or holding a line break, or text over 1 000
+  characters. The title takes no `§` / `GAP-<n>` check: it reaches *Coming soon* only
+  through the Approve dialog, which applies that check (§38.5).
+- **No editing.** A pending proposal's title and text are fixed once sent. To change
+  them, the proposer withdraws it (§38.7) and proposes again.
 - **The pending cap.** A person may have at most **3** proposals in `pending` at once
   (`MAX_PENDING_IDEAS` in `@innobox/shared/feature-ideas`). With 3 pending, the dialog
   opens with the hint *"You have 3 ideas waiting for review. You can propose another once
@@ -8978,9 +8994,11 @@ specification or its build order is decided by them.
   platform admin, its proposer included, may decide it. A proposer who approves their
   own idea gets no event 19 (they are the actor, §12.1) and no award, then or when it
   ships (§38.10).
-- **Who can see the raw text.** Only the proposer (§38.7) and platform admins (§38.5).
-  It is never rendered on *Coming soon*: the published title and teaser are the
-  admin's. It is always rendered as **plain text**.
+- **Who can see the proposal.** Its title and text are the proposer's raw words. Only
+  the proposer (§38.7) and platform admins (§38.5) see them. Neither is ever rendered on
+  *Coming soon*, which shows only the title and teaser the admin published, even when
+  the published title repeats the proposer's word for word. Both are always rendered as
+  **plain text**.
 
 ### §38.5 Review — `/admin/feature-ideas` (platform admin)
 
@@ -8996,24 +9014,28 @@ specification or its build order is decided by them.
   tabs:
   - **Pending** (the default) — oldest first. Each row: when it was sent
     (`useDateFmt()`), the proposer (bubble and name, **always**, whatever their §38.6
-    switch says: admins review people's ideas), and the first 160 characters of the text.
+    switch says: admins review people's ideas), the proposal's **title** in bold, and
+    under it the first 160 characters of the text, muted.
   - **Planned** — every *Coming soon* entry, the seeded ones included, in the §38.2
     order: title, teaser, an audience chip (*Everyone* / *Admins* / *Platform admins*),
     the vote count, the proposer (with a muted *"name hidden on What's new"* tag when
     they opted out, and a muted *"No proposer"* for an entry that has none, §38.2) and
     when it was approved.
   - **Decided** — declined and merged proposals from the last **90 days**, newest
-    first, with the decision, the note or the merge target, who decided and when.
+    first, each led by the proposal's title, with the decision, the note or the merge
+    target, who decided and when.
     Older ones stay in the database and in the proposer's own list (§38.7).
-- **Selecting a pending row** opens a review panel with the full text, the proposer and
-  the date, and four actions:
+- **Selecting a pending row** opens a review panel headed by the proposal's title, with
+  the full text, the proposer and the date, and four actions:
   - **Approve** — a dialog with **Title** (required, ≤ **60** characters, pre-filled
-    with the text's first sentence cut at a word boundary), **Teaser** (required, ≤
+    with the proposer's title, which always fits), **Teaser** (required, ≤
     **280** characters, pre-filled with the text cut at a word boundary) and
     **Audience** (*Everyone*, the default, *Admins* or *Platform admins*). A note under
     the fields repeats the copy rules: *"This is shown to everyone in the audience. Don't
     name people, challenges or teams, and don't promise a date."* The server rejects a
-    title or teaser containing a `§` or a `GAP-<n>` marker (**422**, §21.9). One
+    title or teaser containing a `§` or a `GAP-<n>` marker (**422**, §21.9), so a
+    proposer's title holding one must be rewritten before it is published. Whatever the
+    admin publishes, the proposer's own title is kept as they wrote it (§38.13). One
     transaction: the row becomes `planned`, the proposer's vote is inserted, event 19 is
     written (§38.8) and the `idea_approved` award (§38.10), both skipped when the
     approver is the proposer (§38.4).
@@ -9069,17 +9091,19 @@ specification or its build order is decided by them.
 
 The own profile gains a **Feature ideas** section after **Feedback** (§13.5), always
 shown: the §38.11 switch closes proposing, not the list. It holds the §38.6 switch, then
-**"Your ideas"**, newest first. Each
-row shows a status pill and the date sent:
+**"Your ideas"**, newest first. Each row shows a status pill and the date sent, and is
+headed by the proposal's own title, except a planned one:
 
-- **Waiting for review** — the text (clamped to two lines, expandable) and a
+- **Waiting for review** — the title, the text (clamped to two lines, expandable) and a
   **Withdraw** button. Withdrawing asks for a browser confirm, then deletes the row
   (**409** if it was decided meanwhile).
-- **Planned** — the published title and its vote count, linked to
-  `/whats-new#coming-soon` (§13.9), and the original text, collapsed.
-- **Declined** — the text and the admin's note, if any.
-- **Merged** — *"Already planned as {title}"*, linked like Planned. When the target has
-  since been deleted or has shipped, *"Already planned"* alone.
+- **Planned** — headed by the **published** title and its vote count, linked to
+  `/whats-new#coming-soon` (§13.9), with the original title and text collapsed under
+  *"Your original idea"*.
+- **Declined** — the title, the text and the admin's note, if any.
+- **Merged** — the title, then *"Already planned as {title}"* naming the target, linked
+  like Planned. When the target has since been deleted or has shipped, *"Already
+  planned"* alone.
 
 An idea deleted from the Planned tab leaves the list: its notification (event 20) is the
 record. With no ideas the list reads *"You haven't proposed any features yet."* Other
@@ -9098,9 +9122,12 @@ pass them through, as for achievements. Neither names the admin who acted: the c
   - *Approved* — inbox *"Your idea is planned: {title}"*; e-mail subject *"Your feature
     idea is planned"*, with the published title and teaser. Linked to
     `/whats-new#coming-soon`.
-  - *Declined* — inbox *"Your feature idea wasn't taken forward"*; e-mail subject *"Your
-    feature idea was reviewed"*, with the first 200 characters of their text and the
-    admin's note when there is one. Linked to `/profile` (the §38.7 list).
+  - *Declined* — inbox *"Your feature idea wasn't taken forward: {title}"*, naming the
+    idea by the proposal's own title; e-mail subject *"Your feature idea was reviewed"*
+    (no title in the subject), with that title, the first 200 characters of their text
+    and the admin's note when there is one. Linked to `/profile` (the §38.7 list).
+    Approved and merged ideas are named by the published title above, as they appear
+    on *Coming soon*.
   - *Merged* — inbox *"Your idea is already planned: {title}"*; e-mail subject *"Your
     feature idea is already planned"*, with the target's title and teaser and a line
     saying their upvote was added. Linked to `/whats-new#coming-soon`.
@@ -9113,8 +9140,8 @@ pass them through, as for achievements. Neither names the admin who acted: the c
   {title}"*, with the title, *"You proposed it"* or *"You upvoted it"*, and a link to
   `/whats-new`. A **follower-type** event for the digest (held on `daily` / `weekly`, one
   line per feature), not coalesced.
-- **E-mail content safety (§12.1)** applies: titles, teasers, notes and the excerpt
-  are plain text, escaped, never linked.
+- **E-mail content safety (§12.1)** applies: titles (the proposal's own included),
+  teasers, notes and the excerpt are plain text, escaped, never linked.
 - **No admin notification.** A new proposal raises no event for platform admins: the
   card's count bubble (§38.5) is how they see the queue.
 - **Not written** to a deactivated or erased person (the §12.1 drop), or to the admin
@@ -9200,18 +9227,19 @@ deducted.
 
 - **Invariant 2.** Ideas are product feedback, not namespace content. The published
   copy is admin-written under the copy rules, which the Approve dialog states and the
-  server partly enforces (§38.5). The raw text, which may name anything, reaches only its
-  author and platform admins, who see every item anyway. Audience filtering is
-  server-side (§38.2): an entry outside the viewer's audience is never returned, counted
-  or acted on. Narrowing an idea's audience keeps the votes already cast. Those voters
+  server partly enforces (§38.5). The proposal's own title and text, which may name
+  anything, reach only their author and platform admins, who see every item anyway.
+  Audience filtering is server-side (§38.2): an entry outside the viewer's audience is
+  never returned, counted or acted on. Narrowing an idea's audience keeps the votes already cast. Those voters
   stop seeing the idea, and event 20 skips them (§38.8).
 - **Invariant 3** is untouched. Ideas are never anonymous in the §9 sense: the name
   switch (§38.6) is a display preference, not masking. The person is stored, shown to
   platform admins, and recorded in the audit log.
 - **Erasure (§3)** deletes the person's `pending`, `declined` and `merged` proposals:
-  their text is personal and serves no one else. It keeps their **planned** ideas, which
-  are now admin-written product copy: the raw text is cleared (`description` set to
-  null) and the *"Proposed by"* line is omitted. Their votes are kept and counted among
+  their title and text are personal and serve no one else. It keeps their **planned** ideas, which
+  are now admin-written product copy: the proposal's own words are cleared
+  (`description` and `proposal_title` set to null; the published `title` stays) and the
+  *"Proposed by"* line is omitted. Their votes are kept and counted among
   *"others"*, and `feature_ideas_named` returns to its default. Their award rows go with
   the §23 erasure.
 - **Deactivation** keeps everything. A deactivated person is never a notification
@@ -9223,20 +9251,23 @@ deducted.
 - **MCP (§25).** No tool reads, votes on or proposes feature ideas, and no tool result
   carries a vote count (decision 14).
 
-### §38.13 Data model (migrations 0054 and 0055)
+### §38.13 Data model (migrations 0054, 0055 and 0057)
 
 - **`feature_ideas`** — `id` (uuid, `gen_random_uuid()`), `author_id` (FK `users`;
   **null only** for a `planned` entry seeded by 0055, §38.9), `description` (text, ≤
   1 000 characters; **null only** for a planned entry, either seeded or one whose author
-  was erased, §38.12), `status` (CHECK `pending | planned | declined | merged`), `title`
-  (text, ≤ 60), `teaser` (text, ≤ 280), `audience` (CHECK `everyone | admins |
+  was erased, §38.12), `proposal_title` (text, ≤ 60: the proposer's own title, §38.4,
+  never changed once sent; 0057), `status` (CHECK `pending | planned | declined |
+  merged`), `title` (text, ≤ 60: the **published** title, §38.5), `teaser` (text, ≤ 280), `audience` (CHECK `everyone | admins |
   platform_admin`), `decision_note` (text, ≤ 1 000), `merged_into` (text: the target
   entry's id, §38.2; no FK, since the target may be deleted later), `decided_by` (FK
   `users`, nullable), `decided_at` (timestamptz), `created_at` (timestamptz, default
   `now()`), `updated_at` (timestamptz). Shape CHECKs: `planned` ⇒ title, teaser and
   audience not null; any status but `pending` ⇒ `decided_at` not null; `merged` ⇒
   `merged_into` not null; `description` is null only when `status = 'planned'`;
-  `author_id` is null only when `status = 'planned'` (0055). Indexes on `(status,
+  `author_id` is null only when `status = 'planned'` (0055); `proposal_title` is null
+  exactly when `description` is (0057), so the proposer's own words are both present or
+  both gone. Indexes on `(status,
   created_at)` and `(author_id, status)`. Grants to `innobox_app`: SELECT, INSERT,
   UPDATE and DELETE (withdraw, spam, a Planned-tab delete, erasure).
 - **`feature_idea_votes`** — `user_id` (FK `users`), `idea_id` (uuid, **not null**, FK
@@ -9254,10 +9285,20 @@ deducted.
   joins the fixed badge catalogue (`user_badges` needs no change).
 - **`notifications.type`** gains `feature_idea_reviewed` (event 19) and
   `feature_available` (event 20).
+- **Migration 0057 — proposal titles.** Adds `proposal_title`, then gives every
+  existing row that has a `description` a title derived from it: the text's first
+  sentence (up to the first `.`, `!` or `?` followed by whitespace or the end, or the
+  first line break), without its closing mark, cut at a word boundary to 60 characters
+  with an ellipsis (or, when that leaves nothing, the text's start, cut the same way) —
+  the rule the Approve dialog pre-filled its Title with before proposals had titles.
+  Rows without a description (the seeded entries and erased
+  authors' planned ideas) stay null. Then it adds the both-or-neither CHECK. Nothing is
+  notified or audited, and the published `title` of a planned row is left alone.
 
-Both idempotent per the `db/migrations` README: 0055 seeds, moves the votes and rewrites
-the merge targets only while `spec_key` still exists, and every DDL statement is `IF [NOT]
-EXISTS`, so a re-run is a no-op.
+All idempotent per the `db/migrations` README: 0055 seeds, moves the votes and rewrites
+the merge targets only while `spec_key` still exists; 0057 backfills only rows whose
+`proposal_title` is null and `description` is not; and every DDL statement is `IF [NOT]
+EXISTS` (0057's CHECK is added only when missing), so a re-run is a no-op.
 
 ### §38.14 API, audit, tests
 
@@ -9275,12 +9316,17 @@ EXISTS`, so a re-run is a no-op.
   - `POST /api/coming-soon/votes { entry }` → `{ voted, votes, voters, othersCount,
     othersIncludesYou }`: the toggle. **404** for an unknown, deleted or inapplicable
     entry.
-  - `POST /api/feature-ideas { description }` → **201** `{ id }`. **422** for empty or
-    over 1 000 characters; **409 `too_many_pending`** and the `feature_idea` bucket
+  - `POST /api/feature-ideas { title, description }` → **201** `{ id }`. **422** for an
+    empty title or text, a title over 60 characters or holding a line break, or text
+    over 1 000 characters (§38.4); **409 `too_many_pending`** and the `feature_idea` bucket
     (§2.4) for everyone but platform admins; **404** for everyone but platform admins
     while proposals are closed.
   - `GET /api/me/feature-ideas` → the §38.7 list. `DELETE /api/me/feature-ideas/:id` →
     withdraw a pending one, **409** once decided, **404** for someone else's.
+  - The proposer's own title travels as **`proposalTitle`**, on the rows of `GET
+    /api/me/feature-ideas` and of every admin tab (`null` for an entry without one,
+    §38.13). The published title keeps the name `title` everywhere, and `GET
+    /api/coming-soon` never carries `proposalTitle` (§38.4).
   - Admin, platform admin only (**403** otherwise): `GET /api/admin/feature-ideas?tab=
     pending|planned|decided`, `GET /api/admin/feature-ideas/count` (the card bubble),
     `POST /api/admin/feature-ideas/:id/approve { title, teaser, audience }`, `…/:id/
@@ -9301,29 +9347,38 @@ EXISTS`, so a re-run is a no-op.
   entry }`), **`feature_idea.edited`** (a before/after diff) and
   **`feature_idea.deleted`** (`before: { status, title }`, `after: { notifyShipped }`
   for a planned row), under **Admin**; and **`settings.feature_ideas_enabled_changed`**.
-  **No audit row ever carries a proposal's text**: `audit_log` is immutable and exempt
-  from erasure (invariant 5), and the text is personal data that the spam delete and the
-  erasure exist to remove. Migration 0055, the awards and events 19–20 are not audited.
+  **No audit row ever carries a proposal's text or its own title**: `audit_log` is
+  immutable and exempt from erasure (invariant 5), and both are personal data that the
+  spam delete and the erasure exist to remove. (The published `title` an admin wrote is
+  product copy, and stays in the admin rows above.) Migrations 0055 and 0057, the awards
+  and events 19–20 are not audited.
 - **Tests** (shipped with the change):
   - **Unit** (`@innobox/shared/feature-ideas`): the §38.2 ordering comparator (votes,
     then approval time, then id); the audience filter; the client's re-sort after an
     optimistic toggle and its revert, and which rows move; the live refresh's skip while
     a vote is in flight; the live-region text (*"2nd of 9"*); the proposal validation
-    (required, trimmed, the 1 000 cap); the approve-copy check (`§`, `GAP-<n>`, the 60
-    and 280 caps); the title and teaser pre-fill (first sentence, word boundary); the
+    (title and text both required and trimmed, the title's 60 cap and its line-break
+    rejection, the text's 1 000 cap); the approve-copy check (`§`, `GAP-<n>`, the 60
+    and 280 caps); the teaser pre-fill (word boundary) and the first-sentence title rule
+    0057 backfills with; the declined event 19 naming the proposal's own title; the
     voter-list split (named, *others*, *including you*); the event 20 recipient set
     (dedupe, audience, actor excluded, no proposer); `canPropose` per role and switch;
     the award rules (self-approval, no proposer); the award keys, the Roadmapper tiers.
   - **Integration (`*.dbtest.ts`):** migration 0055 seeds the ten rows in their former
     order, moves the votes on their keys and drops the rest, rewrites both kinds of
     `merged_into`, drops `spec_key` and `coming_soon_teasers`, and a re-run changes
-    nothing, a deleted seeded entry included. A proposal is stored pending and audited without its text; the fourth
-    pending is 409, also for two concurrent requests; the rate limit's 429; a platform
+    nothing, a deleted seeded entry included. Migration 0057 backfills every row with a
+    description by the first-sentence rule (matching the unit-tested function on the
+    same texts), leaves rows without one null and published titles untouched, and a
+    re-run changes nothing. A proposal is stored pending with its title and audited
+    without its title or text; a missing, over-long or multi-line title is 422; the
+    fourth pending is 409, also for two concurrent requests; the rate limit's 429; a platform
     admin is exempt from both; withdraw deletes a pending row and is 409 once decided.
     Approve writes `planned`, the proposer's vote, event 19 and `idea_approved` in one
     transaction, and rejects `§` and over-long copy with 422; a platform admin
-    approving their own proposal gets the vote but no event and no award. Decline
-    stores the note and notifies. Merge moves the vote, refuses a target outside the
+    approving their own proposal gets the vote but no event and no award; the
+    proposer's own title survives an approval under a different published title.
+    Decline stores the note and notifies, naming the proposal's own title. Merge moves the vote, refuses a target outside the
     proposer's audience, and awards nothing. A second decision is 409. Spam delete sends
     nothing. Edit keeps votes, seeded entries included. A planned delete with
     `notifyShipped` writes event 20 to the proposer and voters (not the actor, not a
@@ -9332,14 +9387,17 @@ EXISTS`, so a re-run is a no-op.
     vote toggle is idempotent and 404s for a deleted or inapplicable entry.
     `GET /api/coming-soon` never returns an entry outside the viewer's audience, orders
     by votes, and honours the name switch live. Erasure deletes pending, declined and
-    merged rows, clears a planned idea's text and keeps the votes. Proposals closed: a
+    merged rows, clears a planned idea's text and own title (keeping its published
+    title) and keeps the votes. Proposals closed: a
     non-admin's proposal is 404, a platform admin's is 201, and votes, decisions and
     Planned-tab actions still work; the switch is audited. The migrations' CHECKs (a
-    planned row without a title, a pending row without an author) fail.
+    planned row without a title, a pending row without an author, a row with a
+    description but no proposal title) fail.
   - **e2e** (`e2e/feature-ideas.spec.ts`): a user opens What's new, proposes an idea
-    (the thank-you shows, the profile lists it as *Waiting for review*); a platform
-    admin sees the card's bubble, approves it with an edited title on
-    `/admin/feature-ideas`; the idea appears in *Coming soon* with *"Proposed by"* and
+    with a title (the thank-you shows, the profile lists it under that title as
+    *Waiting for review*); a platform admin sees the card's bubble and the title on the
+    pending row, opens Approve with its Title pre-filled from it, and approves it with an
+    edited title on `/admin/feature-ideas`; the idea appears in *Coming soon* with *"Proposed by"* and
     one vote; a second user upvotes it (count 2, their bubble appears, and it moves
     above the entries with fewer votes), toggles the vote off and on; the proposer turns
     the name switch off and the line disappears; the admin edits another entry's title

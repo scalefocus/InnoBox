@@ -1,6 +1,7 @@
-// Feature ideas e2e (INNOBOX_SPEC.md §38.14): a member proposes an idea from What's new (the thank-you
-// shows, the profile lists it as waiting for review); a platform admin sees the console card's
-// bubble and approves it with an edited title; the idea appears in Coming soon with "Proposed by" and
+// Feature ideas e2e (INNOBOX_SPEC.md §38.14): a member proposes an idea with a title from What's new
+// (the thank-you shows, the profile lists it under that title as waiting for review); a platform
+// admin sees the console card's bubble and the title on the pending row, finds the Approve dialog's
+// Title pre-filled with it, and approves it with an edited title; the idea appears in Coming soon with "Proposed by" and
 // one vote; a second member upvotes it (count 2, their bubble appears, and it moves above an entry
 // with fewer votes), toggles the vote off and on; the proposer turns the name switch off and the line
 // disappears; the admin edits another entry's title and What's new shows it; the admin deletes the
@@ -56,7 +57,10 @@ test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and
     const dialog = page.getByTestId("propose-dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId("propose-send")).toBeDisabled();
+    const ownTitle = `Spreadsheet export ${stamp}`;
     await dialog.getByLabel("Your idea").fill(`Idea ${stamp}: let me export the leaderboard as a spreadsheet for the monthly review.`);
+    await expect(dialog.getByTestId("propose-send")).toBeDisabled();
+    await dialog.getByTestId("propose-title-field").fill(ownTitle);
     await dialog.getByTestId("propose-send").click();
     await expect(dialog).toContainText("Thanks, a platform admin will review your idea.");
     await dialog.getByRole("button", { name: "Close" }).click();
@@ -64,15 +68,16 @@ test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and
     await page.goto("/profile");
     const mine = page.getByTestId("profile-idea-list");
     await expect(mine).toContainText("Waiting for review");
-    await expect(mine).toContainText(`Idea ${stamp}`);
+    await expect(mine.locator(".idea-row-title")).toContainText(ownTitle);
 
-    // ── The admin approves it with an edited title. ──
+    // ── The admin sees the title, finds Approve pre-filled with it, and approves with an edit. ──
     const adminPage = await adminCtx.newPage();
     await adminPage.goto("/admin");
     await expect(adminPage.getByTestId("feature-ideas-card").locator(".nav-badge")).toBeVisible();
     await adminPage.goto("/admin/feature-ideas");
-    await adminPage.getByRole("button", { name: new RegExp(`Idea ${stamp}`) }).click();
+    await adminPage.getByRole("button", { name: new RegExp(ownTitle) }).click();
     await adminPage.getByRole("button", { name: "Approve…" }).click();
+    await expect(adminPage.getByLabel("Title")).toHaveValue(ownTitle);
     const title = `Leaderboard export ${stamp}`;
     await adminPage.getByLabel("Title").fill(title);
     await adminPage.getByRole("button", { name: "Approve", exact: true }).click();

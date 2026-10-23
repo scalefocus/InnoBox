@@ -32,6 +32,7 @@ import {
   titlePrefill,
   validateDecisionNote,
   validateIdeaText,
+  validateIdeaTitle,
   validatePublishedCopy,
   type OrderableEntry,
 } from "./feature-ideas.js";
@@ -95,6 +96,20 @@ test("validateIdeaText: required, trimmed, capped at 1 000 characters", () => {
   assert.equal(validateIdeaText("x".repeat(FEATURE_IDEA_TEXT_MAX + 1)).ok, false);
 });
 
+test("validateIdeaTitle: required, trimmed, one line, capped at the published title's 60 characters", () => {
+  assert.deepEqual(validateIdeaTitle("  Dark mode  "), { ok: true, value: "Dark mode" });
+  assert.equal(validateIdeaTitle("   ").ok, false);
+  assert.equal(validateIdeaTitle(undefined).ok, false);
+  assert.equal(validateIdeaTitle(7).ok, false);
+  assert.equal(validateIdeaTitle("x".repeat(FEATURE_IDEA_TITLE_MAX)).ok, true);
+  assert.equal(validateIdeaTitle("x".repeat(FEATURE_IDEA_TITLE_MAX + 1)).ok, false);
+  assert.equal(validateIdeaTitle("Dark\nmode").ok, false, "a line break is refused");
+  assert.equal(validateIdeaTitle("Dark\r\nmode").ok, false);
+  assert.deepEqual(validateIdeaTitle("Dark mode\n"), { ok: true, value: "Dark mode" }, "a trailing break is trimmed away");
+  // Never published as is, so a section mark is the Approve dialog's business, not the proposer's.
+  assert.equal(validateIdeaTitle(`See ${String.fromCharCode(0xa7)}38`).ok, true);
+});
+
 test("validatePublishedCopy: required title and teaser within their caps, a known audience, no internal references", () => {
   const ok = validatePublishedCopy({ title: " Dark mode ", teaser: " Easier on the eyes. ", audience: "everyone" });
   assert.deepEqual(ok, { ok: true, value: { title: "Dark mode", teaser: "Easier on the eyes.", audience: "everyone" } });
@@ -132,6 +147,13 @@ test("pre-fill: the title is the first sentence, both cut at a word boundary wit
   assert.ok(teaser.length <= FEATURE_IDEA_TEASER_MAX);
   assert.equal(teaserPrefill("Short and\n\nsweet."), "Short and sweet.");
   assert.equal(cutAtWord("abcdefghij", 5), "abcd…", "a single long word is cut hard");
+});
+
+test("titlePrefill never leaves a proposal untitled: a first sentence of marks alone falls back to the text", () => {
+  assert.equal(titlePrefill("?! Then the rest."), "?! Then the rest.", "the text's start, cut like the teaser");
+  assert.equal(titlePrefill("..."), "...");
+  assert.equal(titlePrefill("!".repeat(80)), "…");
+  for (const text of ["?", "...\nmore", "Add a dark mode.", "x"]) assert.notEqual(titlePrefill(text), "", text);
 });
 
 test("pre-fill stays linear on long punctuation runs — whatever a person typed", () => {
@@ -214,7 +236,7 @@ test("othersLine: 'and N others', 'including you', and a bare count when nobody 
   assert.equal(othersLine(1, false, false), "1 person");
 });
 
-test("event 19 copy: approved and merged name the published entry; declined quotes the idea and the note; none names an admin", () => {
+test("event 19 copy: approved and merged name the published entry; declined names the idea by its own title, quotes it and the note; none names an admin", () => {
   const approved = ideaReviewedNotification("approved", { title: "Dark mode", teaser: "Easier at night.", text: "x" });
   assert.equal(approved.message, "Your idea is planned: Dark mode.");
   assert.equal(approved.subject, "Your feature idea is planned");
@@ -225,13 +247,15 @@ test("event 19 copy: approved and merged name the published entry; declined quot
   assert.equal(merged.message, "Your idea is already planned: Dark mode.");
   assert.match(merged.emailText, /upvote was added/);
 
-  const declined = ideaReviewedNotification("declined", { text: "word ".repeat(80), note: "Out of scope." });
-  assert.equal(declined.message, "Your feature idea wasn't taken forward.");
-  assert.equal(declined.subject, "Your feature idea was reviewed");
+  const declined = ideaReviewedNotification("declined", { title: "Bigger logo", text: "word ".repeat(80), note: "Out of scope." });
+  assert.equal(declined.message, "Your feature idea wasn't taken forward: Bigger logo.");
+  assert.equal(declined.subject, "Your feature idea was reviewed", "the subject carries no title");
+  assert.match(declined.emailText, /your feature idea "Bigger logo" and isn't taking it forward/);
   assert.match(declined.emailText, /Note from the reviewer: Out of scope\./);
-  assert.ok(declined.emailText.length < 400, "the idea is quoted as an excerpt");
+  assert.ok(declined.emailText.length < 450, "the idea is quoted as an excerpt");
   assert.equal(declined.link, "/profile");
-  assert.doesNotMatch(ideaReviewedNotification("declined", { text: "x" }).emailText, /Note/);
+  assert.doesNotMatch(ideaReviewedNotification("declined", { title: "t", text: "x" }).emailText, /Note/);
+  assert.equal(ideaReviewedNotification("declined", { text: "x" }).message, "Your feature idea wasn't taken forward.", "no title, no colon");
 
   for (const n of [approved, merged, declined]) assert.equal(hasInternalReference(n.message + n.subject + n.emailText), false);
 });
