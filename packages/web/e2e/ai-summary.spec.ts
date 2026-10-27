@@ -9,6 +9,9 @@ import { aiKeyPresent, disableAiStub, enableAiStub, startAiStub } from "./helper
 import { uniqueStamp } from "./helpers/stamp";
 
 test("discussion summary: summarize a long thread, then it goes stale", async ({ browser }) => {
+  // Two sign-ins, the provider setup and ten comment posts before the summary is even asked for: on
+  // the shared e2e dev server under four workers that alone can outrun the default 120 s.
+  test.slow();
   const stamp = uniqueStamp();
   const base = process.env.E2E_BASE_URL || "http://localhost:3000";
 

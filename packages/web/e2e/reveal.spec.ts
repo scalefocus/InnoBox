@@ -121,9 +121,11 @@ test("a solution's anonymous author: admin reveal in the dialog, and one-way sel
   await expect(ownRow.getByRole("button", { name: "Reveal author", exact: true })).toHaveCount(0);
   proposer.on("dialog", (d) => d.accept());
   await ownRow.getByRole("button", { name: "Reveal myself (permanent)" }).click();
-  await expect(ownRow.getByText(proposerName)).toBeVisible();
+  // The byline (.team-full), not the row: once revealed, the row also shows the proposer's Team
+  // panel (§39.7), which carries the same name.
+  await expect(ownRow.locator(".team-full", { hasText: proposerName })).toBeVisible();
   await proposer.reload();
-  await expect(proposer.locator(`[id="${solution.number}"]`).getByText(proposerName)).toBeVisible();
+  await expect(proposer.locator(`[id="${solution.number}"] .team-full`, { hasText: proposerName })).toBeVisible();
 
   await adminCtx.close();
   await proposerCtx.close();
