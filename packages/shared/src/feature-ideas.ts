@@ -1,6 +1,7 @@
 // Feature ideas (INNOBOX_SPEC.md §38) — pure and CLIENT-SAFE (also at `@innobox/shared/feature-ideas`):
 // the entry audiences, the limits, the Coming soon entry ids, proposal and published-copy validation,
-// the Approve dialog's pre-fill, the §38.2 order and the §38.3 re-sort, the §38.3 voter-list split,
+// the Approve dialog's teaser pre-fill and the first-sentence title rule migration 0057 backfilled
+// proposals with, the §38.2 order and the §38.3 re-sort, the §38.3 voter-list split,
 // the §38.4 proposing and §38.10 award rules, and the §38.8 notification copy. Every DB read and write
 // lives in the callers (the web stores and the server-only ./feature-ideas-db.ts).
 //
@@ -35,7 +36,8 @@ export function appliesTo(audience: EntryAudience, viewer: AudienceViewer): bool
 
 /** §38.4: the proposal text. */
 export const FEATURE_IDEA_TEXT_MAX = 1000;
-/** §38.5: the admin's published copy. */
+/** §38.5: the admin's published copy. The proposer's own title (§38.4) shares the title's cap, so
+ *  it always fits the Approve dialog's Title as it is. */
 export const FEATURE_IDEA_TITLE_MAX = 60;
 export const FEATURE_IDEA_TEASER_MAX = 280;
 /** §38.5: the optional note sent with a decline. */
@@ -117,6 +119,17 @@ export function validateIdeaText(value: unknown): IdeaResult<string> {
   return { ok: true, value: text };
 }
 
+/** §38.4: the proposer's own title — required, trimmed, one line, at most FEATURE_IDEA_TITLE_MAX
+ *  characters. No internal-reference check: it reaches Coming soon only through Approve, which
+ *  applies one (§38.5). */
+export function validateIdeaTitle(value: unknown): IdeaResult<string> {
+  if (typeof value !== "string" || value.trim() === "") return { ok: false, error: "Give your idea a title first." };
+  const title = value.trim();
+  if (/[\r\n]/.test(title)) return { ok: false, error: "The title must fit on one line." };
+  if (title.length > FEATURE_IDEA_TITLE_MAX) return { ok: false, error: `The title can be at most ${FEATURE_IDEA_TITLE_MAX} characters.` };
+  return { ok: true, value: title };
+}
+
 export interface PublishedCopy {
   title: string;
   teaser: string;
@@ -157,7 +170,7 @@ export function validateDecisionNote(value: unknown): IdeaResult<string | null> 
   return { ok: true, value: note === "" ? null : note };
 }
 
-// ── The Approve dialog's pre-fill (§38.5) ────────────────────────────────────────────────
+// ── Pre-fills and excerpts (§38.5, §38.13) ───────────────────────────────────────────────
 
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 
@@ -182,7 +195,9 @@ function trimTrailing(text: string, drop: (ch: string) => boolean): string {
 const isSentenceEnd = (ch: string): boolean => ch === "." || ch === "!" || ch === "?";
 
 /** The text's first sentence (up to the first `.`, `!` or `?` followed by a space, or the first
- *  line break), cut at a word boundary. */
+ *  line break), cut at a word boundary — or, when that leaves nothing, the text's start. The title
+ *  migration 0057 gave every proposal sent before proposals had titles (its SQL mirrors this), and
+ *  the Approve dialog's fallback for a row without one. */
 export function titlePrefill(text: string): string {
   const firstLine = text.trim().split(/\r?\n/)[0] ?? "";
   let sentence = firstLine;
@@ -192,7 +207,7 @@ export function titlePrefill(text: string): string {
       break;
     }
   }
-  return cutAtWord(trimTrailing(sentence, isSentenceEnd), FEATURE_IDEA_TITLE_MAX);
+  return cutAtWord(trimTrailing(sentence, isSentenceEnd), FEATURE_IDEA_TITLE_MAX) || cutAtWord(text, FEATURE_IDEA_TITLE_MAX);
 }
 
 export function teaserPrefill(text: string): string {
@@ -312,7 +327,9 @@ export interface IdeaNotification {
 
 export const COMING_SOON_LINK = "/whats-new#coming-soon";
 
-/** Event 19, for one of the proposer's own proposals. It names no admin. */
+/** Event 19, for one of the proposer's own proposals. It names no admin. `title` is the published
+ *  title for an approval or a merge (the entry as Coming soon shows it), and the proposal's own
+ *  title for a decline. */
 export function ideaReviewedNotification(
   outcome: ReviewOutcome,
   input: { title?: string | null; teaser?: string | null; text: string; note?: string | null },
@@ -337,9 +354,9 @@ export function ideaReviewedNotification(
   }
   const note = input.note ? `\n\nNote from the reviewer: ${input.note}` : "";
   return {
-    message: "Your feature idea wasn't taken forward.",
+    message: title ? `Your feature idea wasn't taken forward: ${title}.` : "Your feature idea wasn't taken forward.",
     subject: "Your feature idea was reviewed",
-    emailText: `A platform admin reviewed your feature idea and isn't taking it forward.\n\nYour idea: "${ideaExcerpt(input.text, DECLINED_EXCERPT_MAX)}"${note}`,
+    emailText: `A platform admin reviewed your feature idea${title ? ` "${title}"` : ""} and isn't taking it forward.\n\nYour idea: "${ideaExcerpt(input.text, DECLINED_EXCERPT_MAX)}"${note}`,
     link: "/profile",
   };
 }

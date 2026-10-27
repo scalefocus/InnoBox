@@ -155,6 +155,6 @@
   },
   "dependencies": {
     "htmlparser2": "^12.0.0",
-    "sanitize-html": "^2.18.0"
+    "sanitize-html": "^2.18.1"
   }
 }

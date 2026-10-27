@@ -1,14 +1,16 @@
 "use client";
 // /admin/feature-ideas — the §38.5 review page (INNOBOX_SPEC.md §38.5). Platform admins only (gated
 // in-page against /api/me; every API call is gated server-side too). Three tabs:
-//   Pending  — oldest first. Selecting a row opens the review panel with the full text and the four
-//              decisions: Approve (a dialog for the published title, teaser and audience, pre-filled
-//              from the text), Decline (an optional note to the proposer), Merge as duplicate (a live
-//              Coming soon entry; one the proposer cannot see is disabled) and Delete as spam.
+//   Pending  — oldest first, each row led by the proposal's own title over an excerpt of its text.
+//              Selecting a row opens the review panel, headed by that title, with the full text and
+//              the four decisions: Approve (a dialog for the published title, teaser and audience —
+//              the title pre-filled with the proposer's, the teaser from the text), Decline (an
+//              optional note to the proposer), Merge as duplicate (a live Coming soon entry; one the
+//              proposer cannot see is disabled) and Delete as spam.
 //   Planned  — every Coming soon entry by votes, the ones migration 0055 seeded included (they have
 //              no proposer), with Edit (the same dialog) and Delete (with "Notify that it shipped",
 //              ticked by default).
-//   Decided  — declined and merged proposals of the last 90 days, newest first.
+//   Decided  — declined and merged proposals of the last 90 days, newest first, by their own title.
 // The proposer is always named here, whatever their name switch says. The proposals switch (§38.11)
 // never blocks anything on this page.
 import Link from "next/link";
@@ -46,6 +48,8 @@ interface IdeaRow {
   id: string;
   status: "pending" | "planned" | "declined" | "merged";
   createdAt: string;
+  /** The proposer's own title; `title` is the published one. */
+  proposalTitle: string | null;
   description: string | null;
   excerpt: string;
   /** Null for an entry without a proposer (the seeded ones). */
@@ -204,8 +208,13 @@ function Review() {
                 )}
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="ttl" style={{ overflowWrap: "anywhere" }}>
-                    {tab === "pending" ? r.excerpt : r.title ?? r.excerpt}
+                    {tab === "planned" ? (r.title ?? r.excerpt) : (r.proposalTitle ?? r.excerpt)}
                   </div>
+                  {tab === "pending" && r.proposalTitle && (
+                    <div className="sub muted" style={{ overflowWrap: "anywhere" }}>
+                      {r.excerpt}
+                    </div>
+                  )}
                   <div className="sub" style={{ overflowWrap: "anywhere" }}>
                     {r.proposer ? r.proposer.displayName : "No proposer"}
                     {tab === "planned" && r.proposer && !r.proposer.named && " · name hidden on What's new"}
@@ -276,7 +285,7 @@ function IdeaPanel({
   const prefill: Copy =
     tab === "planned" && idea.title && idea.teaser && idea.audience
       ? { title: idea.title, teaser: idea.teaser, audience: idea.audience }
-      : { title: titlePrefill(text), teaser: teaserPrefill(text), audience: "everyone" };
+      : { title: idea.proposalTitle ?? titlePrefill(text), teaser: teaserPrefill(text), audience: "everyone" };
   const disabled = busy;
 
   return (
@@ -286,7 +295,11 @@ function IdeaPanel({
           <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: "0 0 4px", overflowWrap: "anywhere" }}>{idea.title}</h3>
           <p style={{ margin: "0 0 12px", fontSize: 14.5, lineHeight: 1.6 }}>{idea.teaser}</p>
           {idea.proposer && <div style={labelStyle}>The original idea</div>}
+          {idea.proposer && idea.proposalTitle && <p style={{ margin: "0 0 6px", fontWeight: 600, overflowWrap: "anywhere" }}>{idea.proposalTitle}</p>}
         </>
+      )}
+      {tab !== "planned" && idea.proposalTitle && (
+        <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: "0 0 8px", overflowWrap: "anywhere" }}>{idea.proposalTitle}</h3>
       )}
       {idea.proposer && text && <p style={{ whiteSpace: "pre-wrap", fontSize: 14.5, lineHeight: 1.65, overflowWrap: "anywhere" }}>{text}</p>}
       {idea.proposer && !text && <p className="muted">The original text was removed with its author&apos;s account.</p>}
@@ -419,7 +432,7 @@ function IdeaPanel({
   );
 }
 
-/** §38.5: the published title, teaser and audience — for Approve (pre-filled from the text) and Edit. */
+/** §38.5: the published title, teaser and audience — for Approve (pre-filled from the proposal) and Edit. */
 function CopyDialog({
   heading,
   submitLabel,
