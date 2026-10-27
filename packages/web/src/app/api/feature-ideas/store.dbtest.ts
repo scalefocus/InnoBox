@@ -1,11 +1,12 @@
 // Live-DB integration test (gated) for §38 feature ideas (INNOBOX_SPEC.md §38.14):
-//   • proposing: stored pending and audited without its text; the fourth pending is refused, also
-//     for two concurrent requests, but never for a platform admin; withdraw deletes a pending row,
-//     409 once decided, 404 for others;
-//   • approve: planned with the admin's copy, the proposer's vote, event 19 with its e-mail text,
-//     idea_approved (10 points, item-less), audited — and a second decision is a conflict; a platform
-//     admin approving their own proposal gets the vote but no event and no award;
-//   • decline carries the note to event 19; merge moves the vote, refuses an entry outside the
+//   • proposing: stored pending with its own title and audited without its title or text; the
+//     fourth pending is refused, also for two concurrent requests, but never for a platform admin;
+//     withdraw deletes a pending row, 409 once decided, 404 for others;
+//   • approve: planned with the admin's copy, the proposer's own title kept beside it, the
+//     proposer's vote, event 19 with its e-mail text, idea_approved (10 points, item-less), audited —
+//     and a second decision is a conflict; a platform admin approving their own proposal gets the
+//     vote but no event and no award;
+//   • decline carries the note to event 19, naming the proposal's own title; merge moves the vote, refuses an entry outside the
 //     proposer's audience (`not_visible`) and one that is not planned, awards nothing;
 //   • the Coming soon read: audience-filtered, ordered by votes, entries without a proposer, the name
 //     switch read live for the proposer and the voters, the viewer's own unnamed vote; who may
@@ -17,11 +18,14 @@
 //     outside a narrowed audience), held for a digest recipient, idea_shipped and Roadmapper — to
 //     voters only and with no award for an entry without a proposer, no award for a self-approved
 //     one — and silent when unticked; the spam delete sends nothing; a declined row is not deleted;
-//   • erasure deletes pending/declined/merged rows, keeps a planned one without its text, keeps votes;
+//   • erasure deletes pending/declined/merged rows, keeps a planned one without its own title and
+//     text (under its published title), keeps votes;
 //   • the switch is audited, and the migrations' CHECKs hold.
-// A second test (owner connection only, inside a rolled-back transaction) runs migration 0055 against
-// a pre-0055 shape: the ten rows seeded in their former order, votes moved from their keys, merge
-// targets rewritten, the key column and the teaser mirror dropped, and a re-run changes nothing.
+// Two more tests (owner connection only, each inside a rolled-back transaction) run a migration
+// against the shape before it: 0055 — the ten rows seeded in their former order, votes moved from
+// their keys, merge targets rewritten, the key column and the teaser mirror dropped; 0057 — every row
+// with a text given the title `titlePrefill` derives from it, the rest and the published titles left
+// alone, and the both-or-neither CHECK. A re-run of either changes nothing.
 // Self-skips when DATABASE_URL is unset. It flips the proposals switch and restores it to on.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -100,11 +104,13 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
           [action, targetId],
         )
       ).rows[0];
-    const propose = async (who: { userId: string }, text: string, uncapped = false) => {
-      const r = await ideas.proposeIdea(pool, who.userId, text, { uncapped });
+    const propose = async (who: { userId: string }, text: string, uncapped = false, title = `Idea: ${text}`.slice(0, 60)) => {
+      const r = await ideas.proposeIdea(pool, who.userId, { title, text }, { uncapped });
       if (r.status !== "ok") throw new Error(`propose failed: ${r.status}`);
       return r.id;
     };
+    const proposalTitle = async (id: string) =>
+      (await pool.query<{ proposal_title: string | null }>(`select proposal_title from feature_ideas where id = $1`, [id])).rows[0]?.proposal_title;
     const copy = (title: string, audience: "everyone" | "admins" | "platform_admin" = "everyone") => ({ title, teaser: `${title} — the teaser.`, audience });
     // An entry without a proposer, as migration 0055 seeds them.
     const seedEntry = async (title: string, audience: "everyone" | "admins" | "platform_admin", decidedAt: string) =>
@@ -117,16 +123,21 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
       ).rows[0]!.id;
 
     // ── Proposing and the pending cap. ──
-    const first = await propose(proposer, "A dark mode for long evenings. Please.");
+    const first = await propose(proposer, "A dark mode for long evenings. Please.", false, "Evening theme");
     assert.equal(await status(first), "pending");
+    assert.equal(await proposalTitle(first), "Evening theme", "stored with its own title");
     const proposed = await lastAudit("feature_idea.proposed", first);
     assert.equal(proposed?.actor_user_id, proposer.userId);
     assert.doesNotMatch(JSON.stringify(proposed), /dark mode/i, "the audit row never carries the text");
+    assert.doesNotMatch(JSON.stringify(proposed), /evening theme/i, "nor the proposal's own title");
     await propose(proposer, "Second idea");
     // Two concurrent requests for the third slot: exactly one wins.
-    const race = await Promise.all([ideas.proposeIdea(pool, proposer.userId, "Third A"), ideas.proposeIdea(pool, proposer.userId, "Third B")]);
+    const race = await Promise.all([
+      ideas.proposeIdea(pool, proposer.userId, { title: "Third A", text: "Third A" }),
+      ideas.proposeIdea(pool, proposer.userId, { title: "Third B", text: "Third B" }),
+    ]);
     assert.deepEqual(race.map((r) => r.status).sort(), ["ok", "too_many_pending"]);
-    assert.equal((await ideas.proposeIdea(pool, proposer.userId, "Fourth")).status, "too_many_pending");
+    assert.equal((await ideas.proposeIdea(pool, proposer.userId, { title: "Fourth", text: "Fourth" })).status, "too_many_pending");
 
     // ── Withdraw: own pending only. ──
     const third = race.find((r) => r.status === "ok") as { status: "ok"; id: string };
@@ -147,6 +158,10 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
     assert.equal(approvedMail.at(-1)?.digest_due_at, null, "event 19 is never held");
     assert.deepEqual(await ledger(proposer.userId, "idea_approved"), [{ points: 10, item_type: null }]);
     assert.deepEqual((await lastAudit("feature_idea.approved", first))?.after, copy(`Dark mode ${stamp}`));
+    assert.equal(await proposalTitle(first), "Evening theme", "the proposer's own title survives a different published one");
+    const approvedOwn = (await ideas.listOwnIdeas(pool, proposer.userId)).find((i) => i.id === first);
+    assert.equal(approvedOwn?.title, `Dark mode ${stamp}`);
+    assert.equal(approvedOwn?.proposalTitle, "Evening theme");
     assert.equal((await ideas.approveIdea(pool, admin.userId, first, copy("Again"))).status, "conflict");
     assert.equal((await ideas.declineIdea(pool, admin.userId, first, null)).status, "conflict");
     assert.equal((await ideas.approveIdea(pool, admin.userId, randomUUID(), copy("Ghost"))).status, "not_found");
@@ -161,11 +176,15 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
     assert.equal((await inbox(admin.userId, "feature_idea_reviewed")).length, 0, "no event 19 to the actor");
     for (const id of own.slice(1)) await ideas.deleteIdea(pool, admin.userId, id, undefined);
 
-    // ── Decline: the note reaches the proposer by e-mail. ──
-    const declined = await propose(proposer, "Make the logo bigger");
+    // ── Decline: named by the proposal's own title; the note reaches the proposer by e-mail. ──
+    const declined = await propose(proposer, "Make the logo bigger", false, `Bigger logo ${stamp}`);
     assert.equal((await ideas.declineIdea(pool, admin.userId, declined, "Out of scope for now.")).status, "ok");
     assert.equal(await status(declined), "declined");
-    assert.match((await outbox(proposer.userId, "feature_idea_reviewed")).at(-1)!.payload.emailText, /Note from the reviewer: Out of scope for now\./);
+    assert.equal((await inbox(proposer.userId, "feature_idea_reviewed")).at(-1)?.payload.message, `Your feature idea wasn't taken forward: Bigger logo ${stamp}.`);
+    const declinedMail = (await outbox(proposer.userId, "feature_idea_reviewed")).at(-1)!.payload;
+    assert.equal(declinedMail.subject, "Your feature idea was reviewed");
+    assert.match(declinedMail.emailText, new RegExp(`"Bigger logo ${stamp}"`));
+    assert.match(declinedMail.emailText, /Note from the reviewer: Out of scope for now\./);
     assert.deepEqual((await lastAudit("feature_idea.declined", declined))?.after, { note: "Out of scope for now." });
 
     // Entries without a proposer, as the seeded ones: one for everyone, one for platform admins.
@@ -253,11 +272,14 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
     const pendingTab = await ideas.listAdminIdeas(pool, "pending");
     const row = pendingTab.ideas.find((i) => i.id === pendingIdea);
     assert.equal(row?.proposerScope, "everyone");
+    assert.equal(row?.proposalTitle, "Idea: Pending, not votable", "the pending row carries the proposal's own title");
+    assert.equal(row?.title, null, "and no published one yet");
     assert.ok(pendingTab.targets.some((t) => t.id === first) && pendingTab.targets.some((t) => t.id === adminEntry));
     const plannedTab = await ideas.listAdminIdeas(pool, "planned");
     assert.equal(plannedTab.ideas.find((i) => i.id === publicEntry)?.proposer, null, "the Planned tab lists entries without a proposer");
     const decidedTab = await ideas.listAdminIdeas(pool, "decided");
     assert.ok(decidedTab.ideas.some((i) => i.id === declined) && decidedTab.ideas.some((i) => i.id === dup));
+    assert.equal(decidedTab.ideas.find((i) => i.id === declined)?.proposalTitle, `Bigger logo ${stamp}`);
 
     // ── The planned delete: a choice is required; ticked → event 20, idea_shipped, Roadmapper. ──
     await pool.query(`update users set email_delivery = 'daily' where id = $1`, [digestFan.userId]);
@@ -326,7 +348,15 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
     assert.equal((await scrubUser(pool, admin.userId, other.userId)).status, "ok");
     assert.equal(await status(pendingIdea), null, "pending deleted");
     assert.equal(await status(keepPlanned), "planned");
-    assert.equal((await pool.query<{ description: string | null }>(`select description from feature_ideas where id = $1`, [keepPlanned])).rows[0]?.description, null);
+    const keptRow = (
+      await pool.query<{ description: string | null; proposal_title: string | null; title: string }>(
+        `select description, proposal_title, title from feature_ideas where id = $1`,
+        [keepPlanned],
+      )
+    ).rows[0];
+    assert.equal(keptRow?.description, null);
+    assert.equal(keptRow?.proposal_title, null, "the proposer's own title goes with the text");
+    assert.equal(keptRow?.title, `Kept ${stamp}`, "the published title stays");
     assert.equal((await pool.query(`select 1 from feature_idea_votes where user_id = $1 and idea_id = $2`, [other.userId, otherEntry])).rows.length, 1, "votes stay");
     const kept = (await ideas.getComingSoon(pool, quiet, true)).entries.find((e) => e.title === `Kept ${stamp}`) as ComingSoonEntry;
     assert.equal(kept.proposedBy, null, "an erased proposer is never named");
@@ -334,8 +364,20 @@ test("feature ideas: propose, review, votes, Coming soon, events 19–20, awards
     for (const id of [keepPlanned, adminIdea, adminEntry, otherEntry]) await ideas.deleteIdea(pool, admin.userId, id, false);
 
     // ── The migrations' CHECKs. ──
-    await assert.rejects(pool.query(`insert into feature_ideas (author_id, description, status, decided_at) values ($1, 'x', 'planned', now())`, [proposer.userId]), "planned without copy");
-    await assert.rejects(pool.query(`insert into feature_ideas (author_id, description) values (null, 'x')`), "a pending row needs its author");
+    await assert.rejects(
+      pool.query(`insert into feature_ideas (author_id, proposal_title, description, status, decided_at) values ($1, 'x', 'x', 'planned', now())`, [proposer.userId]),
+      "planned without copy",
+    );
+    await assert.rejects(pool.query(`insert into feature_ideas (author_id, proposal_title, description) values (null, 'x', 'x')`), "a pending row needs its author");
+    await assert.rejects(pool.query(`insert into feature_ideas (author_id, description) values ($1, 'x')`, [proposer.userId]), "a text needs its title");
+    await assert.rejects(
+      pool.query(
+        `insert into feature_ideas (author_id, proposal_title, status, title, teaser, audience, decided_at) values ($1, 'x', 'planned', 't', 't', 'everyone', now())`,
+        [proposer.userId],
+      ),
+      "a title needs its text",
+    );
+    await assert.rejects(pool.query(`insert into feature_ideas (author_id, proposal_title, description) values ($1, $2, 'x')`, [proposer.userId, "x".repeat(61)]), "at most 60");
     await assert.rejects(pool.query(`insert into feature_idea_votes (user_id) values ($1)`, [proposer.userId]), "a vote needs its entry");
 
     // ── The switch is audited. ──
@@ -402,13 +444,14 @@ test(
         await client.query(`insert into feature_idea_votes (user_id, spec_key, created_at) values ($1, $2, timestamptz '2026-10-21 12:00:00+00')`, [user, key]);
       }
       const { rows: planned } = await client.query<{ id: string }>(
-        `insert into feature_ideas (author_id, description, status, title, teaser, audience, decided_at) values ($1, 'x', 'planned', 'Planned', 'p', 'everyone', now()) returning id`,
+        `insert into feature_ideas (author_id, proposal_title, description, status, title, teaser, audience, decided_at)
+         values ($1, 'x', 'x', 'planned', 'Planned', 'p', 'everyone', now()) returning id`,
         [a],
       );
       const mergedInto = async (target: string) =>
         (
           await client.query<{ id: string }>(
-            `insert into feature_ideas (author_id, description, status, merged_into, decided_at) values ($1, 'dup', 'merged', $2, now()) returning id`,
+            `insert into feature_ideas (author_id, proposal_title, description, status, merged_into, decided_at) values ($1, 'Dup', 'dup', 'merged', $2, now()) returning id`,
             [b, target],
           )
         ).rows[0]!.id;
@@ -448,6 +491,85 @@ test(
       await client.query(sql);
       assert.equal((await client.query(`select 1 from feature_ideas where id = any($1::uuid[])`, [ids])).rows.length, 9, "the deleted entry stays deleted");
       assert.equal((await votesOn(SEEDED[7][1])).length, 2);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
+      await pool.end();
+    }
+  },
+);
+
+// Texts migration 0057 must title exactly as `titlePrefill` does: a first sentence, a first line, a
+// closing mark, cuts at a word and hard, trailing punctuation before the ellipsis, and the fallback
+// when the first sentence is marks alone.
+const BACKFILL_TEXTS = [
+  "Add a dark mode. It would help at night.",
+  "Export to CSV\nso we can report on it",
+  "Export to CSV\r\nwith Windows line ends",
+  "Why not?",
+  "Wait... what? Yes.",
+  "Let people subscribe to a namespace and get a weekly summary of everything that changed there",
+  "Make it possible to export, filter, sort and share the leaderboard, monthly, weekly, daily",
+  "x".repeat(80),
+  "?! Then the rest.",
+  "...",
+  "...\nmore",
+] as const;
+
+test(
+  "migration 0057: titles every proposal from its text, leaves the rest and the published titles alone, adds the CHECK",
+  { skip: skip || (ownerUrl ? false : "TEST_OWNER_DATABASE_URL not set — migration cases self-skip") },
+  async () => {
+    const { Pool } = await import("pg");
+    const { readFileSync } = await import("node:fs");
+    const { dirname, join, resolve } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const { titlePrefill } = await import("@innobox/shared");
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..");
+    const sql = readFileSync(join(repoRoot, "db", "migrations", "0057_feature_idea_titles.sql"), "utf8");
+
+    const pool = new Pool({ connectionString: ownerUrl });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // The harness applied 0057 already: put back the shape before it.
+      await client.query(`alter table feature_ideas drop constraint if exists feature_ideas_proposal_title`);
+      await client.query(`alter table feature_ideas drop column proposal_title`);
+      const { rows: u } = await client.query<{ id: string }>(`insert into users (external_id, user_name, display_name) values ($1, $1, $1) returning id`, ["dbtest-fi-0057"]);
+      const author = u[0]!.id;
+      const pending: { id: string; text: string }[] = [];
+      for (const text of BACKFILL_TEXTS) {
+        const { rows } = await client.query<{ id: string }>(`insert into feature_ideas (author_id, description) values ($1, $2) returning id`, [author, text]);
+        pending.push({ id: rows[0]!.id, text });
+      }
+      const { rows: planned } = await client.query<{ id: string }>(
+        `insert into feature_ideas (author_id, description, status, title, teaser, audience, decided_at)
+         values ($1, 'Add a dark mode. Please.', 'planned', 'Published title', 't', 'everyone', now()) returning id`,
+        [author],
+      );
+      const { rows: seeded } = await client.query<{ id: string }>(
+        `insert into feature_ideas (author_id, description, status, title, teaser, audience, decided_at)
+         values (null, null, 'planned', 'Seeded', 't', 'everyone', now()) returning id`,
+      );
+
+      await client.query(sql);
+
+      const row = async (id: string) =>
+        (await client.query<{ proposal_title: string | null; title: string | null }>(`select proposal_title, title from feature_ideas where id = $1`, [id])).rows[0];
+      for (const p of pending) assert.equal((await row(p.id))?.proposal_title, titlePrefill(p.text), JSON.stringify(p.text));
+      assert.deepEqual(await row(planned[0]!.id), { proposal_title: "Add a dark mode", title: "Published title" }, "the published title is left alone");
+      assert.deepEqual(await row(seeded[0]!.id), { proposal_title: null, title: "Seeded" }, "no text, no title");
+      await client.query("savepoint both_or_neither");
+      await assert.rejects(client.query(`insert into feature_ideas (author_id, description) values ($1, 'x')`, [author]), "the CHECK is in place");
+      await client.query("rollback to savepoint both_or_neither");
+
+      // A re-run changes nothing: a row that has a title keeps it.
+      await client.query(`update feature_ideas set proposal_title = 'Kept as is' where id = $1`, [pending[0]!.id]);
+      await client.query(sql);
+      assert.equal((await row(pending[0]!.id))?.proposal_title, "Kept as is");
+      assert.equal((await row(pending[1]!.id))?.proposal_title, titlePrefill(pending[1]!.text));
+      const checks = await client.query(`select 1 from pg_constraint where conname = 'feature_ideas_proposal_title'`);
+      assert.equal(checks.rows.length, 1, "the CHECK is added once");
     } finally {
       await client.query("rollback").catch(() => {});
       client.release();

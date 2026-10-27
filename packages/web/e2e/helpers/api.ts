@@ -194,7 +194,10 @@ export async function plantComingSoonEntryViaApi(
   opts: { title: string; teaser?: string; audience?: "everyone" | "admins" | "platform_admin" },
 ): Promise<string> {
   const proposed = (await jsonOrThrow(
-    await adminRequest.post(`${base()}/api/feature-ideas`, { headers: JSON_HEADERS, data: { description: `${opts.title}: planted by an e2e spec.` } }),
+    await adminRequest.post(`${base()}/api/feature-ideas`, {
+      headers: JSON_HEADERS,
+      data: { title: opts.title.slice(0, 60), description: `${opts.title}: planted by an e2e spec.` },
+    }),
     201,
     "POST /api/feature-ideas",
   )) as { id: string };

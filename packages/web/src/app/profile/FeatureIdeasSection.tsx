@@ -1,9 +1,10 @@
 "use client";
 // The own profile's Feature ideas section (INNOBOX_SPEC.md §38.6, §38.7): the "Show my name on
 // feature ideas" switch — optimistic flip, inline-error revert, like every profile switch — and
-// "Your ideas", newest first: waiting for review (with Withdraw), planned (its votes, linked to
-// What's new), declined (the admin's note) and merged. Always shown: the proposals switch (§38.11)
-// closes proposing, not this list.
+// "Your ideas", newest first, each under the proposal's own title: waiting for review (with
+// Withdraw), declined (the admin's note) and merged. A planned idea is headed by its published title
+// instead (its votes, linked to What's new), with the original title and text collapsed. Always
+// shown: the proposals switch (§38.11) closes proposing, not this list.
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { FEATURE_IDEA_STATUS_LABEL, type FeatureIdeaStatus } from "@innobox/shared/feature-ideas";
@@ -14,6 +15,7 @@ interface OwnIdea {
   id: string;
   status: FeatureIdeaStatus;
   createdAt: string;
+  proposalTitle: string | null;
   description: string | null;
   title: string | null;
   votes: number | null;
@@ -133,32 +135,45 @@ export function FeatureIdeasSection() {
                     </button>
                   )}
                 </div>
-                {idea.status === "planned" && (
-                  <p className="idea-row-line">
-                    <Link href={COMING_SOON}>{idea.title}</Link>{" "}
-                    <span className="sub">
-                      · {idea.votes ?? 0} {idea.votes === 1 ? "upvote" : "upvotes"}
-                    </span>
-                  </p>
-                )}
-                {idea.status === "merged" && (
-                  <p className="idea-row-line">
-                    {idea.mergedTitle ? (
-                      <>
-                        Already planned as <Link href={COMING_SOON}>{idea.mergedTitle}</Link>
-                      </>
-                    ) : (
-                      "Already planned"
-                    )}
-                  </p>
-                )}
-                {idea.description && (
+                {idea.status === "planned" ? (
                   <>
-                    <p className={expanded[idea.id] ? "idea-text" : "idea-text is-clamped"}>{idea.description}</p>
-                    {!expanded[idea.id] && idea.description.length > 160 && (
-                      <button type="button" className="link-btn" onClick={() => setExpanded((e) => ({ ...e, [idea.id]: true }))}>
-                        Show all
-                      </button>
+                    <p className="idea-row-line">
+                      <Link href={COMING_SOON}>{idea.title}</Link>{" "}
+                      <span className="sub">
+                        · {idea.votes ?? 0} {idea.votes === 1 ? "upvote" : "upvotes"}
+                      </span>
+                    </p>
+                    {(idea.proposalTitle || idea.description) && (
+                      <details className="idea-original">
+                        <summary>Your original idea</summary>
+                        {idea.proposalTitle && <p className="idea-row-title">{idea.proposalTitle}</p>}
+                        {idea.description && <p className="idea-text">{idea.description}</p>}
+                      </details>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {idea.proposalTitle && <p className="idea-row-title">{idea.proposalTitle}</p>}
+                    {idea.status === "merged" && (
+                      <p className="idea-row-line">
+                        {idea.mergedTitle ? (
+                          <>
+                            Already planned as <Link href={COMING_SOON}>{idea.mergedTitle}</Link>
+                          </>
+                        ) : (
+                          "Already planned"
+                        )}
+                      </p>
+                    )}
+                    {idea.description && (
+                      <>
+                        <p className={expanded[idea.id] ? "idea-text" : "idea-text is-clamped"}>{idea.description}</p>
+                        {!expanded[idea.id] && idea.description.length > 160 && (
+                          <button type="button" className="link-btn" onClick={() => setExpanded((e) => ({ ...e, [idea.id]: true }))}>
+                            Show all
+                          </button>
+                        )}
+                      </>
                     )}
                   </>
                 )}
