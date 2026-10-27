@@ -28,6 +28,9 @@ async function soonTitles(page: Page): Promise<string[]> {
 }
 
 test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and the switch", async ({ browser }) => {
+  // Three sign-ins and thirteen page loads across three contexts: the longest journey in the
+  // one-worker platform-state chain, past the default 120 s on a loaded dev server.
+  test.slow();
   const stamp = uniqueStamp();
   const adminCtx = await browser.newContext();
   const proposerCtx = await browser.newContext();

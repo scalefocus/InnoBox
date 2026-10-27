@@ -20,6 +20,14 @@ async function impactAreaNames(page: Page): Promise<string[]> {
   return impactAreaInputs(page).evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value));
 }
 
+// The impact-area create form's Add. Scoped to the form holding the "New impact area name" box:
+// the page has other Add buttons (the Topics card's, §34.2), so a page-wide name match is ambiguous.
+function addImpactAreaButton(page: Page): Locator {
+  return page
+    .locator("form", { has: page.getByPlaceholder("New impact area name") })
+    .getByRole("button", { name: "Add", exact: true });
+}
+
 // Poll until a row with that value exists (the list re-fetches after each mutation), then return
 // its `.row` parent.
 async function impactAreaRow(page: Page, value: string): Promise<Locator> {
@@ -53,7 +61,7 @@ test("impact areas: create, retire, then delete a zero-reference area", async ({
 
   // Create.
   await page.getByPlaceholder("New impact area name").fill(name);
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await addImpactAreaButton(page).click();
   let row = await impactAreaRow(page, name);
   await expect(row.locator(".pill", { hasText: "Active" })).toBeVisible();
 
@@ -86,7 +94,7 @@ test("impact areas: a retired area with challenges is deleted only after reassig
 
   // Create the area, then file a challenge under it so it has a live reference.
   await page.getByPlaceholder("New impact area name").fill(name);
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await addImpactAreaButton(page).click();
   await impactAreaRow(page, name);
   const areaId = await getImpactAreaId(ctx.request, name);
   await createChallengeViaApi(ctx.request, {
