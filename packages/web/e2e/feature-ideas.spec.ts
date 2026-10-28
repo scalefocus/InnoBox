@@ -99,8 +99,20 @@ test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and
     let titles = await soonTitles(fanPage);
     expect(titles.indexOf(rival)).toBeLessThan(titles.indexOf(title));
 
+    // Clicks the vote and resolves once its POST has answered. The optimistic flip renders before
+    // the server replies, and while that request is in flight the handler ignores another click on
+    // the same entry, so the next click must wait for it: on a loaded dev server the POST takes
+    // seconds, and a click fired straight after the flip's assertions is dropped.
+    const clickVote = async () => {
+      const settled = fanPage.waitForResponse(
+        (r) => r.url().endsWith("/api/coming-soon/votes") && r.request().method() === "POST",
+      );
+      await vote.click();
+      return settled;
+    };
+
     // ── A second member upvotes — the idea climbs at once — takes it back, and upvotes again. ──
-    await vote.click();
+    let settled = clickVote();
     await expect(vote).toHaveAttribute("aria-pressed", "true");
     await expect(vote).toContainText("2");
     await expect(row.getByTestId("soon-voters")).toBeVisible();
@@ -108,11 +120,14 @@ test("feature ideas: propose, approve, upvote, hide the name, edit, ship — and
       titles = await soonTitles(fanPage);
       return titles.indexOf(title) < titles.indexOf(rival);
     }).toBe(true);
-    await vote.click();
+    await settled;
+    settled = clickVote();
     await expect(vote).toHaveAttribute("aria-pressed", "false");
     await expect(vote).toContainText("1");
-    await vote.click();
+    await settled;
+    settled = clickVote();
     await expect(vote).toContainText("2");
+    await settled;
 
     // ── The proposer hides their name: the line goes, live. ──
     await page.goto("/profile");
