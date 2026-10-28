@@ -9,6 +9,7 @@ import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
 import { getHypeEnabled } from "@/lib/hype-settings";
 import { decorateDetailWithHype } from "../../hypes/store";
+import { invitationDetailFields } from "../invitations";
 import { logNotifyFailure, notifyChallengeStatusChanged, notifyTopicFollowers } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
@@ -32,11 +33,13 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
   // challenge's and its solutions'). Best-effort — never fails the page. The §10.4 trashed view
   // stamps nothing: its inbox rows stay hidden, untouched, until a restore brings them back.
   if (!challenge.trashed) await markCommentNotificationsReadForChallenge(pool, gate.user.id, challenge.id).catch(() => {});
+  const viewer = { userId: gate.user.id, roles: gate.user.roles };
+  // §40.11: the viewer's invitation fields — canInvite, their own "You invited" block and their open
+  // invitations — ride on this payload only.
+  const invitations = await invitationDetailFields(pool, viewer, challenge);
   // §26.11: the hype fields ride on this payload only, and only while hype is on.
-  if (await getHypeEnabled(pool)) {
-    return Response.json({ challenge: await decorateDetailWithHype(pool, { userId: gate.user.id, roles: gate.user.roles }, challenge) });
-  }
-  return Response.json({ challenge });
+  const detail = (await getHypeEnabled(pool)) ? await decorateDetailWithHype(pool, viewer, challenge) : challenge;
+  return Response.json({ challenge: { ...detail, ...invitations } });
 }
 
 async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {

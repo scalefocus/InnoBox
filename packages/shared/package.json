@@ -137,6 +137,10 @@
     "./feature-ideas": {
       "types": "./dist/feature-ideas.d.ts",
       "default": "./dist/feature-ideas.js"
+    },
+    "./invitations": {
+      "types": "./dist/invitations.d.ts",
+      "default": "./dist/invitations.js"
     }
   },
   "scripts": {

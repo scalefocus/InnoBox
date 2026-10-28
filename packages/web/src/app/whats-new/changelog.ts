@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.25.0",
+    date: "2026-10-28",
+    summary:
+      "New: invite a solver. On a challenge that's open for solutions, use Invite a solver to ask up to five colleagues to propose one, with an optional note. They hear by e-mail and in the app and see your note on the challenge, or can quietly pass with Not for me. When someone you invited proposes, you're told and move toward the Matchmaker badge. You can mute invitations on your profile.",
+  },
+  {
     version: "1.24.0",
     date: "2026-10-23",
     summary:

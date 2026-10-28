@@ -2,11 +2,13 @@
 // for everyone (§39.5) — withdraws the solution from any non-terminal status → `withdrawn`. Namespace
 // + platform admins (§12.1 event 10), the parent challenge's assignee, the other members of the team
 // (§39.8) and the solution's existing followers are notified,
-// delivered directly (see the challenge withdraw route for the visibility rationale).
+// delivered directly (see the challenge withdraw route for the visibility rationale). A withdrawal
+// straight out of `proposed` may pay off invitations to the team (§40.5) — event 23 to each inviter.
 import { formatSolutionNumber } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { dispatchToUser, getFollowerUserIds, getNamespaceAdminUserIds } from "@/lib/notify";
+import { logNotifyFailure, notifyInvitationPayoffs } from "@/lib/notify-events";
 import { withdrawSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
@@ -43,6 +45,7 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
           }, { parentType: "solution", parentId: result.solutionId }),
         ),
       ).catch((err) => console.error(JSON.stringify({ level: "error", msg: "solution withdraw notification failed", error: String(err) })));
+      await notifyInvitationPayoffs(ctx, result.payoffs).catch(logNotifyFailure("invitation payoff notification failed"));
       return Response.json({ ok: true });
     }
     case "not_found":

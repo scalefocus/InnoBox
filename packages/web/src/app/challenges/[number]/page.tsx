@@ -6,7 +6,8 @@
 // §11 attachment control, the §8.3 like freeze, the platform-admin danger zone (§10.3, §10.4:
 // Move to trash / Delete permanently), and the §25.8 "via agent" tag on the author line and on
 // each solution card. A platform admin who opens an item in the trash sees it read-only under a
-// banner with Restore and Delete permanently; every other control is absent.
+// banner with Restore and Delete permanently; every other control is absent. Invite a solver
+// (§40.2) sits beside Propose a solution, and an invitee sees the §40.3 banner under the header.
 import { useParams, useRouter } from "next/navigation";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { useEffect, useRef, useState } from "react";
@@ -35,6 +36,7 @@ import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicP
 import { TeamBubbles } from "@/components/TeamByline";
 import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker, TeamFullNames, TeamPanel, type TeamMember } from "@/components/TeamPanel";
 import type { UserResult } from "@/components/UserResultButton";
+import { InvitationBanner, InviteSolverButton, type InvitationsSent, type InvitedBy } from "@/components/InviteSolver";
 import { OWN_ITEM_REVIEW_HINT } from "@innobox/shared/coauthors";
 
 interface MaskedAuthor {
@@ -175,6 +177,12 @@ interface ChallengeDetail extends Partial<HypeFields> {
   attachments: AttachmentItem[];
   /** §25.8: set when submitted through an AI agent (client name masked on anonymous items). */
   viaAgent?: ViaAgent;
+  /** §40.11: the challenge accepts invitations from this viewer (the challenge half of canPropose). */
+  canInvite?: boolean;
+  /** §40.2: the viewer's own "You invited" list and room left — null while canInvite is false. */
+  invitations?: InvitationsSent | null;
+  /** §40.3: the viewer's open invitations — null when they have none. */
+  invited?: { inviters: InvitedBy[] } | null;
 }
 
 export default function ChallengeDetailPage() {
@@ -253,6 +261,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
   const [revealed, setRevealed] = useState<RevealedAuthor | null>(null);
   const [assigneeQuery, setAssigneeQuery] = useState("");
   const [assigneeResults, setAssigneeResults] = useState<{ id: string; displayName: string; email: string | null }[]>([]);
+  // §40.3: the banner's Propose a solution opens the page's own form — each click bumps the request.
+  const [proposeRequest, setProposeRequest] = useState(0);
 
   const notify = (message: string) => {
     setToast(message);
@@ -759,6 +769,18 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         <ChallengeTopicsRow key={(challenge.topics ?? []).map((t) => t.id).join(",")} challenge={challenge} onSaved={onChanged} />
       </div>
 
+      {!readOnly && challenge.invited && (
+        <InvitationBanner
+          challengeNumber={challenge.number}
+          inviters={challenge.invited.inviters}
+          canPropose={challenge.canPropose}
+          busy={busy}
+          onPropose={() => setProposeRequest((n) => n + 1)}
+          onDismissed={onChanged}
+          onError={notify}
+        />
+      )}
+
       <div className="card card-pad reveal" data-attach-scope style={{ marginBottom: 18 }}>
         <div className="row detail-head" style={{ border: 0, padding: 0, marginBottom: 16 }}>
           {teamOfItem(challenge).length === 1 && <TeamBubbles authors={teamOfItem(challenge)} size="md" />}
@@ -1018,6 +1040,20 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
             restricted={challenge.visibility !== "org"}
             onProposed={onChanged}
+            openRequest={proposeRequest}
+            beside={
+              challenge.canInvite && challenge.invitations ? (
+                <InviteSolverButton
+                  challengeNumber={challenge.number}
+                  invitations={challenge.invitations}
+                  busy={busy}
+                  onSent={async (toast) => {
+                    notify(toast);
+                    await onChanged();
+                  }}
+                />
+              ) : null
+            }
           />
         </>
       )}
@@ -1208,6 +1244,8 @@ function ProposeSolutionForm({
   disabledReason,
   restricted,
   onProposed,
+  openRequest = 0,
+  beside = null,
 }: {
   challengeNumber: string;
   /** The parent challenge is namespace-only — restricted content for the AI draft (§22.7). */
@@ -1216,8 +1254,26 @@ function ProposeSolutionForm({
    *  reason disables it and is shown beside it. The server refuses a proposal off `valid` anyway. */
   disabledReason: string | null;
   onProposed: () => Promise<void>;
+  /** §40.3: bumped by the invitation banner's Propose a solution — opens the form and scrolls to it. */
+  openRequest?: number;
+  /** §40.2: shown beside the closed form's button — the Invite a solver button. */
+  beside?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  // A new request opens the form during render (no effect round trip); the effect only scrolls to
+  // it once it is on screen, once per request.
+  const [handledRequest, setHandledRequest] = useState(openRequest);
+  if (openRequest !== handledRequest) {
+    setHandledRequest(openRequest);
+    setOpen(true);
+  }
+  const scrolledFor = useRef(0);
+  useEffect(() => {
+    if (!open || openRequest === 0 || scrolledFor.current === openRequest) return;
+    scrolledFor.current = openRequest;
+    formRef.current?.scrollIntoView({ block: "start" });
+  }, [open, openRequest]);
   const [description, setDescription] = useState("");
   const [costVsBenefits, setCostVsBenefits] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
@@ -1251,6 +1307,7 @@ function ProposeSolutionForm({
             {disabledReason}
           </span>
         )}
+        {beside}
       </div>
     );
   }
@@ -1290,6 +1347,7 @@ function ProposeSolutionForm({
 
   return (
     <form
+      ref={formRef}
       onSubmit={onSubmit}
       className="card card-pad reveal form-lock"
       data-attach-scope

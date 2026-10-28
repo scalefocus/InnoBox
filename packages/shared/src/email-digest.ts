@@ -23,7 +23,7 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
  *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable), 18 (a new
@@ -36,7 +36,8 @@ const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
  * recipient on the ADMIN route (namespace admins and the committee on a new solution) is an
  * attention event and always immediate, as are the actionable author/assignee events (4, 5, 7,
- * 11, 12, 19), the admin events (1, 9, 10, 14) and event 13, which has no e-mail at all.
+ * 11, 12, 19, 21, and 22 — an invitation to propose, §40.6), the admin events (1, 9, 10, 14) and
+ * events 13 and 23, which have no e-mail at all.
  */
 export function isDigestableEvent(event: NotificationEventNumber, onAdminRoute = false): boolean {
   return DIGESTABLE_EVENTS.has(event) && !onAdminRoute;

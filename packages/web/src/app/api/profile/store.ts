@@ -98,11 +98,12 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
     notify_followed_comments: boolean;
     notify_followed_status: boolean;
     notify_followed_solutions: boolean;
+    notify_invitations: boolean;
     surveys_enabled: boolean;
     feature_ideas_named: boolean;
   }>(
     `select id, display_name, email, department, job_title, office_location, email_notifications_enabled, email_delivery,
-            notify_followed_comments, notify_followed_status, notify_followed_solutions, surveys_enabled, feature_ideas_named
+            notify_followed_comments, notify_followed_status, notify_followed_solutions, notify_invitations, surveys_enabled, feature_ideas_named
        from users where id = $1`,
     [userId],
   );
@@ -189,6 +190,7 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
       followedComments: userRow.notify_followed_comments,
       followedStatus: userRow.notify_followed_status,
       followedSolutions: userRow.notify_followed_solutions,
+      invitations: userRow.notify_invitations, // §40.6
     },
     surveysEnabled: userRow.surveys_enabled,
     featureIdeasNamed: userRow.feature_ideas_named,

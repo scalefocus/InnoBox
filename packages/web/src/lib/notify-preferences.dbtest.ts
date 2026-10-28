@@ -45,12 +45,12 @@ test(
 
       // Defaults are all on.
       const fresh = await getOwnProfile(pool, asViewer(quiet));
-      assert.deepEqual(fresh!.notificationPreferences, { followedComments: true, followedStatus: true, followedSolutions: true });
+      assert.deepEqual(fresh!.notificationPreferences, { followedComments: true, followedStatus: true, followedSolutions: true, invitations: true });
 
       await setNotificationPreferences(pool, quiet, { followedComments: false });
       await setNotificationPreferences(pool, duty, { followedComments: false, followedSolutions: false });
-      assert.deepEqual((await getOwnProfile(pool, asViewer(quiet)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: true });
-      assert.deepEqual((await getOwnProfile(pool, asViewer(duty)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: false });
+      assert.deepEqual((await getOwnProfile(pool, asViewer(quiet)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: true, invitations: true });
+      assert.deepEqual((await getOwnProfile(pool, asViewer(duty)))!.notificationPreferences, { followedComments: false, followedStatus: true, followedSolutions: false, invitations: true });
 
       const rowsFor = async (table: "notifications" | "notification_outbox", message: string) =>
         (await pool.query<{ user_id: string }>(`select user_id from ${table} where payload->>'message' = $1`, [message])).rows.map((r) => r.user_id).sort();

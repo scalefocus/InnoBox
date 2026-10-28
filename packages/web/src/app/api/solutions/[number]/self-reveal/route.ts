@@ -1,7 +1,9 @@
 // POST /api/solutions/:number/self-reveal (INNOBOX_SPEC.md §9): the author permanently
-// removes their own anonymity (one-way, audited).
-import { requireUser } from "@/lib/auth";
+// removes their own anonymity (one-way, audited). An anonymous solution out of `proposed` that
+// answers invitations pays them off now (§40.5) — event 23 to each inviter.
+import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { logNotifyFailure, notifyInvitationPayoffs } from "@/lib/notify-events";
 import { selfRevealSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
@@ -19,6 +21,9 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
   const result = await selfRevealSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {
     case "ok":
+      await notifyInvitationPayoffs({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.payoffs ?? []).catch(
+        logNotifyFailure("invitation payoff notification failed"),
+      );
       return new Response(null, { status: 204 });
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });

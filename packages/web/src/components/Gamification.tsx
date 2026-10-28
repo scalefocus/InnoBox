@@ -44,6 +44,7 @@ const BADGE_GLYPH: Record<string, string> = {
   first_idea: "✨",
   full_circle: "⭕",
   talent_scout: "🔭",
+  matchmaker: "🤝",
 };
 
 export function badgeGlyph(key: string): string {

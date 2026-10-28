@@ -10,6 +10,8 @@ export interface NotificationItem {
   id: string;
   type: string;
   message: string;
+  /** A second, muted line under the message — §40.6's quoted note on an invitation; null otherwise. */
+  detail: string | null;
   link: string;
   read: boolean;
   createdAt: string;
@@ -80,7 +82,7 @@ export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
   const { rows } = await pool.query<{
     id: string;
     type: string;
-    payload: { message: string; link: string };
+    payload: { message: string; link: string; detail?: unknown };
     read_at: Date | null;
     created_at: Date;
     unread_count: string;
@@ -97,6 +99,7 @@ export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
       id: r.id,
       type: r.type,
       message: r.payload.message,
+      detail: typeof r.payload.detail === "string" ? r.payload.detail : null,
       link: r.payload.link,
       read: r.read_at !== null,
       createdAt: r.created_at.toISOString(),
@@ -131,7 +134,7 @@ export async function listInboxPage(
       select 1 from challenges c
        where c.id = n.challenge_id and c.visibility <> 'org')`);
   }
-  const { rows } = await pool.query<{ id: string; type: string; payload: { message: string; link: string }; read_at: Date | null; created_at: Date }>(
+  const { rows } = await pool.query<{ id: string; type: string; payload: { message: string; link: string; detail?: unknown }; read_at: Date | null; created_at: Date }>(
     `select n.id, n.type, n.payload, n.read_at, n.created_at from notifications n
       where ${conditions.join(" and ")}
       order by n.created_at desc limit ${opts.limit + 1} offset ${opts.offset}`,
@@ -142,6 +145,7 @@ export async function listInboxPage(
       id: r.id,
       type: r.type,
       message: r.payload.message,
+      detail: typeof r.payload.detail === "string" ? r.payload.detail : null,
       link: r.payload.link,
       read: r.read_at !== null,
       createdAt: r.created_at.toISOString(),

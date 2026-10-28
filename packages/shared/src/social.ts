@@ -85,6 +85,12 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 21 / §39.8: another member added you to, or removed you from, an item's co-author
   // team — immediate, never digested, not mutable; at most one e-mail per item per UTC day.
   "coauthor_changed",
+  // §12.1 event 22 / §40.6: someone invited you to propose a solution to a challenge — immediate,
+  // never digested, muted by the Invitations preference; at most one e-mail per challenge per UTC day.
+  "invitation",
+  // §12.1 event 23 / §40.6: a person you invited answered with a solution — the inviter only,
+  // in-app only (no outbox row), like achievement_earned.
+  "invitation_paid_off",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

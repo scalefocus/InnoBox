@@ -16,8 +16,10 @@ test("the column map is fixed and complete", () => {
     followedComments: "notify_followed_comments",
     followedStatus: "notify_followed_status",
     followedSolutions: "notify_followed_solutions",
+    invitations: "notify_invitations", // §40.6: the one actionable event a person can mute
   });
   assert.equal(isNotificationPreference("followedStatus"), true);
+  assert.equal(isNotificationPreference("invitations"), true);
   assert.equal(isNotificationPreference("emailNotificationsEnabled"), false);
 });
 
@@ -27,6 +29,7 @@ test("parsePreferencePatch accepts any subset of booleans and refuses the rest",
     ok: true,
     value: { emailNotificationsEnabled: true, followedStatus: false },
   });
+  assert.deepEqual(parsePreferencePatch({ invitations: false }), { ok: true, value: { invitations: false } });
   assert.equal(parsePreferencePatch({}).ok, false, "nothing recognised");
   assert.equal(parsePreferencePatch({ followedSolutions: "no" }).ok, false, "not a boolean");
   assert.equal(parsePreferencePatch(null).ok, false);

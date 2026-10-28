@@ -356,14 +356,14 @@ export async function dispatchCoalescedComment(
 }
 
 /** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
- *  since §26.6, their unread "hyped" rows, and since §34.5 their event-18 row — for the challenge
- *  itself AND its solutions (the page shows both). A solution row carries its challenge in
- *  `challenge_id` (§5, migration 0051), so one probe of the (user_id, challenge_id) unread index
- *  covers both. */
+ *  since §26.6, their unread "hyped" rows, since §34.5 their event-18 row, and since §40.6 their
+ *  event-22 invitations (the page shows them in its banner) — for the challenge itself AND its
+ *  solutions (the page shows both). A solution row carries its challenge in `challenge_id` (§5,
+ *  migration 0051), so one probe of the (user_id, challenge_id) unread index covers both. */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge') and read_at is null and challenge_id = $2::uuid`,
+      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge', 'invitation') and read_at is null and challenge_id = $2::uuid`,
     [userId, challengeId],
   );
 }
@@ -563,6 +563,60 @@ export async function dispatchTeamChange(ctx: NotifyContext, userId: string, pay
     await writeOutbox(client, userId, "coauthor_changed", full, rows[0]!.id, undefined, undefined);
     return true;
   });
+}
+
+/**
+ * §12.1 event 22 (§40.6): one invitation to propose a solution, to its invitee. The usual drops apply
+ * — the actor, a deactivated or erased invitee, one who cannot see the challenge — and the
+ * *Invitations to propose a solution* preference mutes it row-level. Immediate and never digested.
+ * The daily e-mail cap: only the first event-22 row about this challenge for this person since UTC
+ * midnight gets an outbox row; later ones that day are in-app only, like event 21's. A caller drops
+ * an invitee who chose *Not for me* before this (§40.3). Returns what was written.
+ */
+export async function dispatchInvitation(ctx: NotifyContext, inviteeId: string, challengeId: string, payload: NotificationPayload): Promise<"none" | "in_app" | "email"> {
+  const target = { parentType: "challenge", parentId: challengeId } as const;
+  if ((await finalRecipients(ctx, target, [inviteeId], { preference: "invitations" })).length === 0) return "none";
+  return inTransaction(ctx.pool, async (client) => {
+    // One recipient at a time per challenge: two invitations racing for "the first today" serialize here.
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`invitation_mail:${inviteeId}:${challengeId}`]);
+    const { rows: earlier } = await client.query(
+      `select 1 from notifications
+        where user_id = $1 and type = 'invitation' and challenge_id = $2::uuid
+          and created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc'
+        limit 1`,
+      [inviteeId, challengeId],
+    );
+    const full = withTarget(payload, target);
+    const { rows } = await client.query<{ id: string }>(`insert into notifications (user_id, type, payload) values ($1, 'invitation', $2) returning id`, [
+      inviteeId,
+      JSON.stringify(full),
+    ]);
+    if (earlier.length > 0) return "in_app";
+    await writeOutbox(client, inviteeId, "invitation", full, rows[0]!.id, undefined, undefined);
+    return "email";
+  });
+}
+
+/**
+ * An in-app-only event (§12.1 event 23, §40.6): the usual drops — the actor, the deactivated and
+ * erased, anyone outside the item's visibility — then the inbox rows and NO outbox row, so there is
+ * no e-mail and nothing for a digest. No preference gates it. Returns how many rows were written.
+ */
+export async function dispatchInAppEvent(
+  ctx: NotifyContext,
+  visibilityScope: NotificationTarget,
+  candidates: readonly (string | null)[],
+  type: NotificationType,
+  payload: NotificationPayload,
+): Promise<number> {
+  const recipients = await finalRecipients(ctx, visibilityScope, candidates);
+  if (recipients.length === 0) return 0;
+  await ctx.pool.query(`insert into notifications (user_id, type, payload) select u, $2, $3 from unnest($1::uuid[]) as u`, [
+    recipients,
+    type,
+    JSON.stringify(withTarget(payload, visibilityScope)),
+  ]);
+  return recipients.length;
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by
