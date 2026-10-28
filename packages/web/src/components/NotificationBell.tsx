@@ -11,6 +11,8 @@ interface NotificationItem {
   id: string;
   type: string;
   message: string;
+  /** §40.6: a muted second line — an invitation's quoted note. */
+  detail?: string | null;
   link: string;
   read: boolean;
   createdAt: string;
@@ -127,6 +129,7 @@ export function NotificationBell({
                     <div className="ttl" style={{ fontWeight: item.read ? 400 : 600 }}>
                       {item.message}
                     </div>
+                    {item.detail && <div className="sub notification-detail">{item.detail}</div>}
                     <div className="sub mono">{fmt.dateTime(item.createdAt)}</div>
                   </div>
                 </button>

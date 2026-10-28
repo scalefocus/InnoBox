@@ -8,7 +8,7 @@
 import { isSolutionStatus, parseBaseEditedAt, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { logNotifyFailure, notifySolutionStatusChanged } from "@/lib/notify-events";
+import { logNotifyFailure, notifyInvitationPayoffs, notifySolutionStatusChanged } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, parseStatusOverride } from "../../challenges/validation";
 import { deleteSolution } from "../../challenges/delete";
@@ -56,6 +56,10 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
           result.autoClose,
         ).catch(logNotifyFailure("solution status notification failed"));
       }
+      // §40.6 event 23: a move out of `proposed` may have paid off invitations to the solution's team.
+      await notifyInvitationPayoffs({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.payoffs).catch(
+        logNotifyFailure("invitation payoff notification failed"),
+      );
       return Response.json({ solution: result.solution });
     }
     case "not_found":

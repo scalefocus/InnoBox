@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.26 — draft for review** (2026-10-23; v0.2 added the UI and CI/CD
+> Status: **v0.27 — draft for review** (2026-10-28; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -88,7 +88,13 @@
 > (§39, §4.2, §7.2, §8.2); v0.26 (2026-10-23) gave every feature-idea proposal a
 > **title** of the proposer's own — required, at most 60 characters, seen only by the
 > proposer and platform admins — that names the idea in the review queue, the proposer's
-> own list and the decline notice, and pre-fills the published title on approval (§38)).
+> own list and the decline notice, and pre-fills the published title on approval (§38);
+> v0.27 (2026-10-28) specified **invite a solver** as a new-feature gap — on a challenge
+> open for solutions, anyone who can see it invites up to five colleagues who can see it
+> too, with an optional note; the invitee hears by e-mail and in-app (event 22) and
+> finds a banner with a quiet *Not for me*; when they propose, every inviter is told
+> in-app (event 23) and moves toward a Matchmaker badge — never widening visibility,
+> naming nobody anonymous, and seen by nobody but the two people involved (§40)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -989,9 +995,11 @@ Entra runbook); on conflict this document wins.
   `planned` ones (kept, unnamed, under the published title; the row keeps `author_id`,
   so the entry still counts as proposed, §38.12)
   and resets `feature_ideas_named` to its default — their votes stay and are counted
-  unnamed (§38.12) — and resets the notification preferences
+  unnamed (§38.12) — deletes the user's §40 invitations, sent and received, and their
+  invitation dismissals, and resets the notification preferences
   (`email_notifications_enabled` to false, since no address is left; the three
-  `notify_followed_*` columns, which are `NOT NULL`, to their default). Everything runs
+  `notify_followed_*` columns and `notify_invitations`, which are `NOT NULL`, to their
+  default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
   - **leaves the row unrelinkable** — `scim_synced` is set to `false` and `user_name` is
     rewritten to `deleted-<id>`, so a scrubbed row can never be a sign-in relink
@@ -1121,7 +1129,7 @@ shown (§13.6).
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
-| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
+| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
 
 A user may hold different roles in different namespaces. Roles are additive.
 
@@ -1255,7 +1263,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **survey_self_shown_at** (the §13.10 per-user survey state),
   **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
-  default true — the §12.1 per-event preferences), **email_delivery** (`immediate |
+  default true — the §12.1 per-event preferences), **notify_invitations** (boolean,
+  not null, default true — the §40.6 invitation preference), **email_delivery** (`immediate |
   daily | weekly`, not null, default `immediate` — the §12.1 digest choice),
   **gamification_public** /
   **notify_achievements** / **achievements_seen_at** (the §23 opt-out, achievement
@@ -1334,6 +1343,11 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   challenge_id / solution_id (FK, `ON DELETE CASCADE`), user_id (FK), left_at; primary
   key on the pair. Written by a leave only, never by a removal, and never undone: a
   person with a row can't be added back to that item (§39.4).
+- **`challenge_invitations`** / **`challenge_invitation_dismissals`** — the §40
+  invitations to propose a solution (challenge, inviter, invitee, optional note, and
+  the payoff's `paid_off_at` / `paid_off_solution_id`; unique per inviter, invitee and
+  challenge) and the invitee's quiet *Not for me* per challenge (§40.10). Both are
+  private to the two people involved and removed with the challenge.
 - **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
   **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
   for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
@@ -1994,8 +2008,10 @@ the challenge and on those solutions; every `attachments` row of the challenge a
 those solutions — tombstones included; and every `notifications` inbox row and unsent
 `notification_outbox` row targeting any of them; every `webhook_deliveries` row
 (§12.4) targeting any of them; every §22 `ai_results` row (triage notes, discussion
-summaries) of any of them; and the challenge's §34 `challenge_topics` and
-`topic_notices` rows. Before the row goes, if the challenge was featured, the
+summaries) of any of them; the challenge's §34 `challenge_topics` and
+`topic_notices` rows; and its §40 `challenge_invitations` and
+`challenge_invitation_dismissals` rows (deleting a solution instead nulls the
+`paid_off_solution_id` that points at it, §40.8). Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
 a **solution** removes the same subtree rooted at that solution and leaves the parent
 challenge standing. Any
@@ -2597,14 +2613,16 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 19 | Feature idea reviewed — approved, declined or merged (§38.8) | The proposer only. Immediate, never digested, not mutable |
 | 20 | Feature now available — a *Coming soon* entry deleted as shipped (§38.8) | The entry's proposer, when it has one, and its voters, to whom the entry still applied — never the deleting admin. Follower-type for the digest |
 | 21 | Co-author added / removed (§39.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable; at most one e-mail per person per item per UTC day, the in-app line always |
+| 22 | Invited to propose a solution (§40.6) | The invitee only — not written after their *Not for me* on that challenge or while their *Invitations* preference is off. Actionable: immediate, never digested; at most one e-mail per person per challenge per UTC day, the in-app line always |
+| 23 | Invitation paid off (§40.6) | The inviter only — **in-app only**: no outbox row, so no e-mail; no preference; written whether or not gamification is on |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
 item's co-author team is a recipient. An e-mail or inbox line that names an item's
 author names its first member plus *"and N others"* (§39.7).
 
-Event 13 is the one exception to "an e-mail and an in-app inbox item" above: it is
-in-app only, by design (§23.1).
+Events 13 and 23 are the exceptions to "an e-mail and an in-app inbox item" above:
+they are in-app only, by design (§23.1, §40.1).
 
 Event 15's subject is *"A challenge has been shared with you"*; the body carries the
 number, the title and the author (masked per §9, or *"External submission"*, §24.6),
@@ -2667,7 +2685,7 @@ a day or a week.
   available, §38.8). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 21, and 19 to a proposer). Event 13 has no e-mail at all.
+  12, 21, 22, and 19 to a proposer). Events 13 and 23 have no e-mail at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
   and the dispatcher skips it until then. The inbox row is written and shown exactly as
@@ -2722,6 +2740,10 @@ true; existing users backfilled on):
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
   and followers; the admin/committee recipients of event 2 are unaffected.
 
+A fourth toggle, *Invitations to propose a solution* (`notify_invitations`, default
+**on**, §40.6), gates **event 22** the same row-level way. It is the one actionable
+event a person can mute, because anyone who can see a challenge may send one.
+
 These are **row-level, applied at insert time**: an opted-out recipient is removed
 from the recipient set before either the inbox row or the outbox row is written — no
 bell, no e-mail, nothing to deliver. The e-mail switch (§13.5) stays **channel-level**
@@ -2745,7 +2767,8 @@ row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
 author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
 **or opening the item's detail page** all mark that item's row read. **Only events 6
 and 16 (hyped, §26.6) coalesce**; every other event remains one row per occurrence.
-Opening a challenge's detail page also reads its event-18 row (§34.5).
+Opening a challenge's detail page also reads its event-18 row (§34.5) and the viewer's
+event-22 rows about it (§40.6).
 
 **Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
 (§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
@@ -2796,7 +2819,8 @@ state, mark-read and mark-all-read. In-app notifications are always on; the per-
 opt-out (§13.5 profile) affects e-mail only, and the §12.1 per-event preferences
 remove a recipient before any row exists. A coalesced comment row (§12.1) renders its
 count and latest commenter; the platform admins' `system.error` alert (§14.7) is an
-ordinary inbox row that is never e-mailed.
+ordinary inbox row that is never e-mailed. A row may carry a muted second line under its
+message — an invitation's quoted note (§40.6).
 
 **The pulse — one poll per tab (v1.18).** Every signed-in tab keeps its live counters
 current through **one** request, `GET /api/me/pulse`, instead of one poller per
@@ -3223,6 +3247,10 @@ whole visit, and the next visit flags only genuinely newer items.
 
   No standalone `/solutions/:number` page — the §12.1 deep-link convention resolves to
   the parent challenge page, scrolled to the solution.
+- **Invite a solver** (§40.2): beside **Propose a solution**, shown while the challenge
+  accepts solutions (`canInvite`), opening the invitation dialog. A viewer with open
+  invitations to the challenge also sees the §40.3 **banner** under the header, with
+  the inviters, their notes, **Propose a solution** and **Not for me**.
 - **Status transitions** — two role-scoped controls, on the challenge and on each
   solution:
   - **Admin override** (namespace admin of this namespace, or platform admin): a
@@ -3466,8 +3494,9 @@ under it naming the next send (*"Next digest: 13/10/2026 09:00"* — the 06:00 U
 in the viewer's local time, through `useDateFmt()`), disabled while the e-mail switch is off
 — followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
-follow* — rendered as the same pill switch with the same on-left travel, optimistic
-flip and inline-error revert), then the §34.6 **Topics** section (a pill switch of the
+follow* — and the §40.6 *Invitations to propose a solution* toggle, all rendered as the
+same pill switch with the same on-left travel, optimistic flip and inline-error
+revert), then the §34.6 **Topics** section (a pill switch of the
 same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
 feedback* switch and *Give feedback now*) and the §38.7
 **Feature ideas** section (the *Show my name on feature ideas* switch and *Your ideas*,
@@ -5803,7 +5832,11 @@ anomalies. Since v0.10 also:
   `like.*`); `feature_idea.approved`, `feature_idea.declined`, `feature_idea.merged`,
   `feature_idea.edited` and `feature_idea.deleted` under Admin; and
   `settings.feature_ideas_enabled_changed` (§38.14). **No row carries a proposal's
-  text or title.** Migrations 0055 and 0057, the awards and events 19–20 are not audited.
+  text or title.** Migrations 0055 and 0057, the awards and events 19–20 are not audited;
+- **invitations** — `invitation.sent` (one row per invitee, actor the inviter, target
+  the challenge, `after: { inviteeId, withNote }`; under All only, as `like.*`).
+  **No row carries the note.** *Not for me*, the payoff, the award, the badge and
+  events 22–23 are not audited (§40.11).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6040,6 +6073,13 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   payload `canManageTeam`, `canLeave` and each member's `creator` flag; the challenge
   and solution `PUT` edits require `baseEditedAt` (409 on a stale copy, §39.5); a
   committee member's transition on an item they are an author of is 403 (§39.5)
+- invitations (§40.11): `challenges/:number/invitations` (`POST { userIds, note? }` —
+  1–5 people, all-or-nothing; 404 on an invisible challenge, 409 when trashed, not open
+  for solutions or at the per-challenge or daily cap, 422 for a long note or an
+  ineligible person; no `PATCH` or `DELETE`) and `challenges/:number/invitations/dismiss`
+  (`POST`, the invitee's *Not for me*); `users?q=` accepts `inviteFor` for the picker;
+  the detail payload carries `canInvite`, the viewer's own `invitations` (*You invited*,
+  `left`, `leftToday`) and their open `invited` block
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -6075,8 +6115,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   JSON, **204**, never a row with a user id), `profile` (own and other users'
   profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the §12.1
   `emailDelivery` choice, the three §12.1 per-event
-  toggles, the §13.10 `surveysEnabled` switch and the §23 `gamificationPublic` and
-  `notifyAchievements` switches)
+  toggles, the §40.6 `notifyInvitations` toggle, the §13.10 `surveysEnabled` switch and
+  the §23 `gamificationPublic` and `notifyAchievements` switches)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
   malformed id, §13.8)
@@ -6245,6 +6285,12 @@ free-text or user-created tags, no topic hierarchy, no merge, no topics on solut
 notice for anything in a topic but a challenge opening, no backfill on follow, no
 auto-follow of the challenges a notice is about, no topic follows or admin re-tagging
 through MCP, no list of a topic's followers for anyone, and no topic-level webhooks;
+for invite a solver (§40): no invitations to a solution or to a challenge that is not
+open for solutions, no withdrawing, editing or expiring an invitation, no decline the
+inviter is told of, no *seen*, *proposed* or *dismissed* state for the inviter, no list
+or count of invitations for anyone but the inviter and the invitee, no invitation that
+widens visibility, no points for inviting, no invitations through MCP, no leaderboard
+metric, and no platform switch;
 no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
@@ -7061,6 +7107,7 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
 | `hype_fulfilled` | **0** | the hyper | an item they hyped first reaches `solved` (challenge) or `implemented` (solution) — drives the Talent Scout badge (§26.7) | `hype_fulfilled:<parentType>:<parentId>:<hyperId>` |
 | `idea_approved` | **10** | the feature idea's proposer | a platform admin approves it (§38.10) — never a merge, a decline or a spam delete | `idea_approved:<ideaId>` |
 | `idea_shipped` | **25** | the feature idea's proposer | a platform admin deletes the planned idea with *Notify that it shipped* ticked (§38.10) — drives the Roadmapper badge | `idea_shipped:<ideaId>` |
+| `invite_fulfilled` | **0** | the inviter | a solution answering their invitation first leaves `proposed`, named, without them on its team — or at its self-reveal if it was anonymous (§40.5) — drives the Matchmaker badge | `invite_fulfilled:<challengeId>:<inviteeId>:<inviterId>` |
 
 - **Who moved it doesn't matter.** A milestone counts whether the transition was an
   enforced one by a committee member or assignee, or an admin override (§7.2, §8.2).
@@ -7146,6 +7193,7 @@ and count capped (0-point) rows too.
 | **Human in the Loop** (`human_in_the_loop`) | one-off | a challenge or solution you submitted through an agent reached `valid` | — |
 | **Talent Scout** (`talent_scout`) | tiered | items you hyped that were later solved or implemented (§26.7) | 1 / 5 / 20 |
 | **Roadmapper** (`roadmapper`) | tiered | feature ideas you proposed that shipped (§38.10) | 1 / 3 / 10 |
+| **Matchmaker** (`matchmaker`) | tiered | invitations of yours that paid off — the invitee proposed (§40.7) | 1 / 5 / 20 |
 
 - **Evaluation.** After writing award rows, the same transaction re-counts the affected
   user's relevant reasons and inserts any newly reached `(badge, tier)` rows
@@ -7249,7 +7297,8 @@ When the feature is **off** (§23.10) none of this renders and the payloads belo
   ledger also gains `via_mcp` (boolean) and the 0-point, item-less `agent_connected`
   reason (§25.12, §25.13); with §26 the reasons `hype_received` and the 0-point
   `hype_fulfilled` (§26.7, §26.10); with §38 the item-less reasons `idea_approved` and
-  `idea_shipped` (§38.10, §38.13).
+  `idea_shipped` (§38.10, §38.13); with §40 the 0-point `invite_fulfilled` (§40.7,
+  §40.10).
 - **`user_badges`** — user_id (FK), badge_key, tier (`1 | 2 | 3`, null for a one-off),
   earned_at. Unique `(user_id, badge_key, coalesce(tier, 0))`. Same grants as the
   ledger.
@@ -8012,6 +8061,7 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
 - **Everything under `/api/admin/*`** — settings, namespaces, role mappings, the audit
   log, the system log, presence, webhooks, the AI card, public submissions.
 - **AI tasks** (§22) — drafting, triage assist, summaries.
+- **Invitations to propose a solution** (§40.9) — sending one and *Not for me*.
 - **Profiles, leaderboards and gamification.**
 
 **15 is the ceiling.** A sixteenth tool is a spec change, and the first answer to
@@ -9860,3 +9910,450 @@ comments keep a single author.
   a user proposes a solution with a co-author picked in the form; the co-author
   receives the inbox item, edits the solution and leaves it from the Team panel, after
   which the proposed solution is hidden from them.
+
+---
+
+## §40 Invite a solver
+
+People often know a colleague who could crack a challenge but have no way to bring them
+in short of an e-mail. **Invite a solver** does it from the challenge: while a challenge
+accepts solutions, anyone who can see it picks colleagues who can see it too, with an
+optional note. Each is told by e-mail and in-app and finds a banner on the challenge
+with a Propose button. When an invitee goes on to propose, everyone who invited them
+hears of it and moves toward the **Matchmaker** badge. An invitation is a nudge between
+two people: nobody else sees it, it widens no visibility, and it decides nothing about
+triage, review or the single accepted solution (§8.3).
+
+### §40.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Challenges only, and only while they accept solutions** — `valid`, in a namespace that is not archived, not in the trash. | An invitation asks for a solution, so it is offered exactly when one can be proposed (§6.2). |
+| 2 | **Anyone who can see the challenge may invite; only people who can already see it may be invited.** An invitation never widens visibility. | Widening stays with the namespace and platform admins (§4.3), so an invitation cannot be used to share a restricted challenge. |
+| 3 | **Up to 5 people per challenge per inviter, at most 20 invitations a day per inviter, and one invitation per inviter, invitee and challenge, ever.** Fixed in code. | Enough to bring in the right people; not enough to mass-mail the organization. |
+| 4 | **An optional plain-text note, at most 500 characters.** | A reason is what makes an invitation land; plain text keeps the trusted mailbox safe (§12.1 *E-mail content safety*). |
+| 5 | **No take-backs.** An invitation cannot be withdrawn or edited once sent. | The e-mail has already gone; a withdrawal would only tell the invitee they were un-invited. |
+| 6 | **The invitee hears by e-mail and in-app (event 22), immediately and never in a digest; a profile toggle mutes it; at most one e-mail per invitee per challenge per UTC day.** | A personal request is worth a nudge, but since anyone who can see a challenge may send one, a person must be able to switch them off. |
+| 7 | **A banner on the challenge shows the invitee who invited them, with the notes and a Propose button.** No new page, filter or Home section. | The invitation lands where the invitee acts. |
+| 8 | **"Not for me" dismisses quietly:** the banner goes for good and further invitations to that challenge are silenced. Nobody is told. | Turning someone down should not be a social event. |
+| 9 | **Private to the inviter and the invitee.** No list, count or flag for anyone else — not the challenge's authors, its admins, its committee or its assignee. The audit log records each one. | Who singled out whom is personal, and a count would be one more number to filter per viewer (invariant 2). |
+| 10 | **An invitation pays off when the invitee proposes:** a solution on that challenge, created after the invitation, that the invitee wrote or was named a co-author of on the form, with the inviter not on its team. **It counts the first time that solution leaves `proposed`.** | "When they propose", delayed only until the inviter may see the solution: a `proposed` solution is hidden from them (§4.3). Leaving out the inviter's own team closes self-credit. |
+| 11 | **An anonymous solution pays off only after its author's self-reveal**, then backdated. | Otherwise the inviter's notice and badge would say who wrote it (invariant 3). |
+| 12 | **Every inviter of that person to that challenge gets credit.** | No race, and every one of them was a real nudge — as every hyper of a solved item earns Talent Scout (§26.7). |
+| 13 | **The Matchmaker badge: tiered 1 / 5 / 20, with no points.** | Giving never earns points (§23.2). Proposing is an easy bar, so the tiers sit high. |
+| 14 | **The inviter hears each payoff in-app (event 23), whether or not gamification is on.** No toggle. | It is feedback on the invitation, not on the badge, and its volume is bounded by the inviter's own invitations. |
+| 15 | **No platform switch.** Only the badge needs gamification. | A core way of working together, like co-authors and topics; the caps and the mute handle the noise. |
+| 16 | **Leaving `valid` pauses invitations; they never expire.** | A challenge that comes back to `valid` still has the people someone thought of. |
+| 17 | **The picker filters only on what the inviter can see for themselves.** | Leaving out the author of a hidden or anonymous solution, an anonymous challenge author or someone who dismissed would tell the inviter something they may not know. |
+| 18 | **No invitations through MCP.** Still 15 tools. | MCP has no people lookup (§39 decision 13). |
+
+### §40.2 Sending an invitation
+
+- **Who may invite.** Any viewer of the challenge, whatever their role — its own authors,
+  its assignee, committee members and admins included. The anonymous author of an
+  anonymous challenge may invite too: the invitation names them as the inviter only,
+  and since anyone may invite, that says nothing about who wrote the challenge
+  (invariant 3).
+- **When.** The detail payload's **`canInvite`** is true when the viewer can see the
+  challenge (§4.3), it is not trashed (§10.4), its status is `valid` and its namespace
+  is not archived — the challenge half of `canPropose` (§13.1). The **Invite a solver**
+  button sits beside **Propose a solution** and is hidden while `canInvite` is false.
+  When the viewer has used their room on this challenge it is disabled with the hint
+  *"You've invited 5 people to this challenge."*; when they have used the day's
+  invitations, *"You've sent 20 invitations today. You can send more tomorrow."*
+- **The dialog.** A modal headed *"Invite a solver to CH-412"*:
+  - a **people** field with the look of the §4.3 access-list editor, backed by the
+    picker below and capped at the viewer's remaining room — the smaller of what is left
+    on this challenge and what is left today;
+  - an optional **Note** (*"Why them? (optional)"*), a plain-text area with a live
+    *"N / 500"* counter;
+  - **You invited** — the people this viewer has already invited to this challenge,
+    newest first, as small avatar bubbles with names. It is the viewer's own list only,
+    and it shows nothing about what any invitee did: no *proposed*, *seen* or
+    *dismissed* state (§40.4);
+  - **Send invitation** (*Send N invitations* with several picked). The button locks
+    while the request is in flight; success closes the dialog with the toast
+    *"Invitation sent"* / *"N invitations sent"*, and an error keeps the dialog open
+    with its fields and shows the server's message.
+- **One request, several people, one note.** A request names 1–5 distinct people and
+  is all-or-nothing: if any one of them can't be invited, nothing is written. The note,
+  if any, is stored on every invitation the request writes.
+- **The caps** (decision 3), fixed in `@innobox/shared/invitations` as
+  `INVITES_PER_CHALLENGE = 5`, `INVITES_PER_DAY = 20` and `INVITE_NOTE_MAX = 500`:
+  - **per challenge** — at most 5 invitations from one inviter on one challenge, over the
+    challenge's whole life, paused ones included (§40.8);
+  - **per day** — at most 20 invitations written by one inviter per UTC day, across all
+    challenges. Nothing is scheduled: the count is taken from the rows' `created_at`;
+  - **per pair** — an inviter invites a given person to a given challenge once, ever.
+  
+  The cap checks and the inserts run in one transaction under a transaction-scoped
+  advisory lock per inviter (as §26.2), so two concurrent requests can never both take
+  the last place. The unique key on `(challenge_id, inviter_id, invitee_id)` makes a
+  retried request a refusal, never a second row.
+- **The note.** Trimmed; empty after trimming means no note. At most 500 characters
+  after trimming. Plain text: line breaks are kept and nothing is rendered as markup. In
+  an e-mail only a link to the app itself becomes clickable, as for any user-written text
+  (§12.1 *E-mail content safety*); on the page a URL is plain text. It takes no `§` check (§21.9): it is the inviter's
+  words, shown to the invitee.
+- **What sending writes**, in one transaction: one `challenge_invitations` row and one
+  `invitation.sent` audit row per invitee (§40.11). After commit, one event 22 per
+  invitee (§40.6). Nothing else: no follow for anyone, no points, nothing on the
+  challenge — an invitation bumps neither `updated_at` nor `edited_at`.
+
+**Who can be invited — the picker.** `GET /api/users?q=&inviteFor=<CH-n>` offers the
+people who are all of:
+
+- **active** and not erased;
+- **not the caller**;
+- able to **see the challenge** under the full §4.3 predicate (the `canSee` rule of
+  §39.2): anyone for an `org` challenge; a member of its namespace or a platform admin for
+  a `namespace` one; and for a `people` one, someone on its access list, an admin or
+  committee member of its namespace, its assignee or a platform admin;
+- **not already invited to it by the caller**;
+- **not visible to the caller as an author of the challenge** — a member of its named
+  team (§39). An anonymous challenge's author is never left out;
+- **not visible to the caller as a member of a named, open solution on it** — one in the
+  open list of the detail page, not in *Closed solutions* (§4.3). The author of a
+  `rejected` or `withdrawn` solution can be invited to try again.
+
+The picker **never** filters on anything the caller cannot see for themselves: a
+`proposed` solution hidden from them, an anonymous solution or its author, an anonymous
+challenge's author, another inviter's invitations, or a *Not for me*. Rows are the §7.3
+result rows (bubble, name, dimmed e-mail). An id that is unknown, inactive, erased, the
+caller's own or ineligible for any reason above is refused with the same **422**,
+*"This person can't be invited to this challenge."*, so the API reveals no more than the
+picker shows.
+
+### §40.3 The invitee's side
+
+- **Event 22** tells them by e-mail and in-app (§40.6).
+- **Open invitations.** An invitation is **answered** by a solution when the solution
+  is on its challenge, was created after the invitation, and has the invitee on its
+  team from the create — its creator, or a co-author named on the §6.2 form. A person's
+  **open** invitations to a challenge are those not yet answered, while they have not
+  dismissed the challenge.
+- **The banner.** The challenge's detail page shows the viewer a banner under the
+  challenge's header while they hold at least one open invitation to it **and** the
+  challenge accepts solutions (`canPropose`, §13.1). It is hidden, not dismissed, while
+  the challenge is out of `valid`, its namespace is archived or it is in the trash, and
+  it comes back if that changes.
+  - *"Ana Petrova invited you to propose a solution."*, or with several inviters
+    *"Ana Petrova and 2 others invited you to propose a solution."* — the newest
+    inviter named, with up to three overlapping small bubbles (the §39.7 compact form),
+    each an ordinary real-user bubble with its §13.8 hover card. A deactivated inviter
+    shows the greyed bubble.
+  - Each note below, newest first, attributed (*Ana Petrova: "You built the cost model
+    last year — this is right up your street."*). After three, *"Show N more"*
+    expands the rest.
+  - **Propose a solution** opens the §6.2 form, exactly as the page's own button does.
+    **Not for me** dismisses (below).
+  - Inviters are always real names: an invitation is never anonymous. The challenge's
+    author stays masked per §9 everywhere the invitation appears.
+- **Answering.** Proposing works exactly as §6.2 says; an invitation adds no field, tag
+  or marker to the solution, and nothing tells anyone else that the solution was
+  invited. Once the viewer's solution answers their invitations, the banner goes. An
+  invitation that arrives after that solution stays open until a later solution answers
+  it, so the banner shows it.
+- **Not for me.** One click, no confirmation:
+  - writes a `challenge_invitation_dismissals` row for the person and the challenge,
+    hides the banner for good and marks their unread event-22 rows about the challenge
+    read;
+  - silences every later invitation to that challenge for them: each is still recorded,
+    still counts toward its inviter's caps and can still pay off (§40.5), but writes no
+    event 22 — no inbox row and no e-mail — and no banner;
+  - tells nobody. The inviters' *You invited* lists are unchanged, and no payload, count
+    or error reveals it.
+
+  There is no undo, and none is needed: the challenge's own **Propose a solution**
+  button is unaffected. A dismissal is a preference, so it is not audited.
+- **No auto-follow.** Being invited follows nothing; proposing auto-follows the
+  solution as always (§6.2).
+
+### §40.4 The inviter's side
+
+- **The *You invited* list** in the dialog (§40.2) is the only place an inviter sees
+  their invitations to a challenge, and it carries names only. A state there — *seen*,
+  *proposed*, *dismissed* — would leak a solution still hidden in `proposed`, an
+  anonymous author or a quiet decline.
+- **A payoff** reaches them through event 23 (§40.6) and, while gamification is on, the
+  Matchmaker badge (§40.7).
+- **Nowhere else.** No list on the profile, no count of invitations sent or answered,
+  no leaderboard metric.
+
+### §40.5 When an invitation pays off
+
+An invitation **pays off** when a solution that answers it (§40.3) also, at that
+moment:
+
+1. has **left `proposed`** at least once — so anyone who can see the challenge can see
+   it (§4.3);
+2. is **not anonymous**;
+3. does **not** have the inviter on its team (§39).
+
+**When the payoff is counted.** In the transaction that first makes all three true:
+
+- **the solution's first move out of `proposed`** — by any path: an enforced
+  `proposed → in_review | rejected`, an admin override, the author's withdrawal, or the
+  §8.3 auto-close that sets it `not_selected` — when it is named;
+- **the author's self-reveal** (§9), for an anonymous solution that has already left
+  `proposed`. A self-reveal while it is still `proposed` counts nothing yet; its first
+  move out does.
+
+Condition 3 is read at that moment. An inviter who joins the team later takes nothing
+away from a payoff already counted.
+
+**Once per inviter, invitee and challenge.** The award key (§40.7) makes the payoff
+once-only: a second solution by the same invitee on the same challenge adds nothing,
+while two different invitees answering on one challenge are two payoffs for the inviter.
+**Every** inviter whose invitation the solution answers is credited (decision 12),
+including one whose invitation was silenced by a *Not for me*.
+
+**What a payoff writes**, in that transaction, for each inviter it credits:
+
+- the invitation's **`paid_off_at`** and **`paid_off_solution_id`** are set — once,
+  with `… WHERE paid_off_at IS NULL`, which is what keeps event 23 to one per
+  invitation;
+- the 0-point **`invite_fulfilled`** ledger row and the Matchmaker evaluation (§40.7);
+- after commit, **event 23** to the inviter (§40.6).
+
+**Nothing is taken back** (§23 decision 3). A later rejection, withdrawal, revert,
+trash or delete of the solution leaves the payoff, the ledger row and the badge tiers
+where they are.
+
+**The invitee gains nothing extra.** They earn the usual §23 awards for their solution;
+an invitation adds no points for them.
+
+### §40.6 Notifications — events 22 and 23
+
+**Event 22 — "Invited to propose a solution."** A new row of the §12.1 matrix.
+
+- **Recipient:** the invitee only — never the inviter (the actor), the challenge's
+  authors, followers, admins or the assignee.
+- **When:** after commit, one per invitation.
+- **Not written** — neither the inbox row nor the outbox row — when the invitee has
+  dismissed the challenge (§40.3), when their *Invitations to propose a solution*
+  preference is off (below), or when they are deactivated, erased or cannot see the
+  challenge (the §12.1 drops; the picker makes the last impossible, but the rule still
+  holds).
+- **In-app:** *"Ana Petrova invited you to propose a solution to CH-412 Reduce invoice
+  matching time"*, linked to the challenge, with the note, if any, quoted on a second
+  line and cut at 200 characters (the banner shows it in full). One row per
+  invitation, **never coalesced**.
+- **E-mail:** subject *"Ana Petrova invited you to propose a solution to CH-412"*; the
+  body carries the number, the title, the namespace, the author masked per §9 (or
+  *"External submission"*, §24.6), the inviter's name, the note as quoted plain text,
+  and the link. It never quotes the description. The §12.1 content-safety rules apply.
+- **Actionable:** always immediate, never held for a digest; the e-mail switch applies.
+- **Daily e-mail cap** (decision 6): at most **one** event-22 e-mail goes to a person
+  about one challenge per UTC day. The first invitation that day writes the outbox row,
+  and later ones that day write the in-app line only (no outbox row, as for event 13).
+  The check looks for an earlier event-22 inbox row for the same recipient and
+  `challenge_id` (§5) created since that UTC midnight, read or not — the same check as
+  event 21's (§39.8).
+- **The preference** — *Invitations to propose a solution* (`notify_invitations`,
+  default on), a pill switch on the own profile after the three follower toggles
+  (§13.5). Row-level and applied at insert time, as the §12.1 toggles are: off writes
+  neither row. It is the one actionable event a person can mute, because anyone who can
+  see a challenge may send one. Silent (not audited) and forward-only.
+- **Read.** Opening the challenge's detail page marks the viewer's event-22 rows for it
+  read, as for events 6, 16 and 18; so does *Not for me*. The §12.1 read-time gate hides
+  a row whose challenge the recipient can no longer see.
+- **No channel webhook** (§12.4 is unchanged).
+
+**Event 23 — "Your invitation paid off."** A new row of the §12.1 matrix.
+
+- **Recipient:** the inviter of the invitation that paid off — one row per invitation.
+- **When:** after commit of the payoff's transaction (§40.5).
+- **In-app only:** an inbox row and **no outbox row**, like event 13 — no e-mail, no
+  digest, no channel webhook. Written **whether or not gamification is on**, and gated
+  by no toggle (decision 14).
+- **Copy:** *"Bob Ivanov answered your invitation with SOL-34 on CH-412"*, linked to
+  `/challenges/412#SOL-34`. Naming the invitee is safe: the solution is named and,
+  having left `proposed`, visible to anyone who can see the challenge.
+- **Not written** to an inviter who can no longer see the challenge, who is deactivated
+  or erased, or whose own move counted it — a reviewer who invited the person (the §12.1
+  drops: actors never notify themselves). The payoff itself, its ledger row and the
+  badge are still written (§40.7). Never coalesced.
+
+### §40.7 Gamification — the Matchmaker badge
+
+Following §23 to the letter: append-only, written in the triggering transaction, nothing
+deducted, nothing while anonymous, nothing names the item.
+
+- **`invite_fulfilled` — 0 points, to the inviter**, award key
+  `invite_fulfilled:<challengeId>:<inviteeId>:<inviterId>`, `item_type` `solution`,
+  `item_id` the answering solution. `occurred_at` is the payoff's moment: the
+  solution's first move out of `proposed`, or, when the payoff lands at a self-reveal,
+  that same first move, taken from the solution's first status audit row out of
+  `proposed` (the §23.2 replay rule). Zero points keeps the rule that giving earns
+  nothing, so the level total and the Points ranking are unchanged.
+- **Matchmaker** (`matchmaker`) — a **tiered** achievement badge for the inviter:
+  *invitations of yours that paid off*, **1 / 5 / 20**, counted from the ledger and
+  evaluated in the payoff's transaction (§23.4 *Evaluation*). A new tier notifies through
+  event 13 and the achievement toast (§23.7) as every badge does. It always appears among
+  a profile's locked badges, since the feature has no switch.
+- **Restricted namespaces count in full** (§23 decision 5): the row and the badge name
+  no item.
+- **Anonymity.** The award goes to the inviter, whose invitation is never anonymous,
+  and waits for the solution's self-reveal (§40.5), so no ledger row, earned date or
+  notification links an invitee to an anonymous solution (invariant 3).
+- **Via agent.** An invitation can't be sent through an agent (§40.9), so an
+  `invite_fulfilled` row is always `via_mcp = false`, even when the solution was
+  proposed through one: the mark describes the recipient's own action (§25.12).
+- **No backfill.** Invitations are new, so the §23.11 backfill has nothing to replay.
+- **Accrual is independent of the gamification switch** (§23.8); the badge renders only
+  while it is on (§23.10).
+
+### §40.8 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** The picker offers only people who can see the challenge, and an
+  invitation never adds anyone to a `people` access list (contrast assignment, §7.3).
+  Every invitation field is part of the detail payload and is never returned for a
+  challenge the viewer cannot see (404). Nothing aggregates invitations — no count
+  anywhere — and the only cross-challenge number, what is left today, is the caller's
+  own.
+- **Invariant 3.** An invitation names its inviter and masks the challenge's author.
+  The picker never leaves out an anonymous author, and a payoff on an anonymous
+  solution waits for its self-reveal.
+- **Leaving `valid`** (decision 16). The button and the banner go; invitations are kept,
+  nothing is sent, and they count toward the caps as before. A return to `valid` — an
+  admin override, the §10.3 revert — brings the banner back for open invitations. A
+  solution that answers one can only be created while the challenge is `valid` (§6.2),
+  but it pays off whenever it later leaves `proposed`, even if the challenge has closed
+  since — the §8.3 auto-close included.
+- **Archived namespace (§4.1).** As leaving `valid`: no button, no banner, nothing new.
+- **Trash (§10.4).** A trashed challenge shows nothing and accepts no invitations (the
+  `trashed` refusal); its invitations are kept and come back with a restore, which
+  sends nothing.
+- **Delete (§10.3).** The cascade removes the challenge's `challenge_invitations` and
+  `challenge_invitation_dismissals` rows — the delete's audit row counts them as
+  `invitations` and `invitationDismissals` — and its event-22 and event-23 inbox rows.
+  Deleting a solution nulls the `paid_off_solution_id` that points at it and keeps
+  `paid_off_at`. The ledger is untouched (§23 decision 3), so earned tiers stay.
+- **Visibility narrowed.** An invitee who can no longer see the challenge loses the
+  page, the banner and, through the §12.1 read-time gate, their event-22 rows; their
+  invitation stays and returns with access. An inviter who can no longer see it still
+  earns a payoff's ledger row, but event 23 is dropped.
+- **Erasure (§3)** deletes the person's invitations, sent and received, and their
+  dismissals — a note is free text about a person, and the rows carry no history the
+  audit log does not — and resets `notify_invitations` to its default. Another inviter's
+  payoffs already counted stay where they are; the erased person's own
+  `invite_fulfilled` rows go with the §23 erasure.
+- **Deactivation.** A deactivated person cannot be picked and receives nothing (§12.1);
+  their invitations stay, their bubble greys in a banner, and a payoff still writes their
+  ledger row.
+- **Public submissions (§24.6).** A challenge accepted from the public form takes
+  invitations like any other; it has no author to leave out of the picker.
+
+### §40.9 Agents (MCP)
+
+- **No invitation tool;** the surface stays at **15** tools (§25.6). Inviting needs a
+  people lookup, which MCP does not have (§39 decision 13).
+- Event 22 and event 23 rows appear in `list_my_notifications` like any inbox row.
+- A solution proposed through `propose_solution` answers and pays off exactly like one
+  proposed in the browser. Tool results carry no invitation fields.
+
+### §40.10 Data model (migration 0058)
+
+- **`challenge_invitations`** — id (bigint identity), challenge_id (FK `challenges`, `ON
+  DELETE CASCADE`), inviter_id (FK `users`), invitee_id (FK `users`; check `<>
+  inviter_id`), note (nullable text, at most 500 characters, checked), created_at
+  (timestamptz, default `now()`), paid_off_at (nullable timestamptz) and
+  paid_off_solution_id (nullable FK `solutions`, `ON DELETE SET NULL`). **Unique
+  `(challenge_id, inviter_id, invitee_id)`**; indexes on `(invitee_id, challenge_id)`
+  (the banner and the payoff lookup) and `(inviter_id, created_at)` (the daily cap).
+  Grants: SELECT and INSERT; UPDATE on `paid_off_at` and `paid_off_solution_id` only —
+  an invitation is otherwise immutable; DELETE for the §10.3 cascade (which deletes the
+  rows itself, so its audit row can count them) and the §3 erasure.
+- **`challenge_invitation_dismissals`** — challenge_id (FK `challenges`, `ON DELETE
+  CASCADE`), user_id (FK `users`), dismissed_at (timestamptz, default `now()`); primary
+  key `(challenge_id, user_id)`. Grants: SELECT, INSERT, and DELETE for the §10.3
+  cascade and the §3 erasure.
+- **`users`** gains **`notify_invitations`** (boolean, not null, default true; existing
+  users on).
+- **`gamification_ledger.reason`** gains `invite_fulfilled`; **`user_badges`** needs no
+  change — `matchmaker` joins the fixed catalogue.
+- **`notifications.type`** gains **`invitation`** (payload: the challenge as its
+  `parentType` / `parentId` target, `challengeId`, `number`, `title`, `inviterId`,
+  `inviterName`, `note`, the bell's `detail` line, and the e-mail's `subject` and
+  `emailDetail`) and **`invitation_paid_off`** (payload: the solution as its target,
+  `challengeId`, `challengeNumber`, `solutionNumber`, `inviteeName`); the §5 trigger
+  sets `challenge_id` and `solution_id` from the target as for every row. No coalescing
+  index. An inbox item carries the optional `detail` as a muted second line (§12.2).
+- No column on `challenges` or `solutions`.
+
+### §40.11 API, audit, tests
+
+- **API (§16).**
+  - `POST /api/challenges/:number/invitations { userIds, note? }` — session, `mutation`
+    bucket, `Origin`-checked. Order of checks (§2.4): **404** when the number is
+    malformed or the caller cannot see the challenge; the shared **409** on a trashed
+    one (§10.4); **409** when it does not accept solutions (*"This challenge isn't open
+    for solutions, so nobody can be invited to it."*); **400** when `userIds` is not 1–5
+    distinct ids; **422** for a note over 500 characters (*"A note can be at most 500
+    characters."*) and for any ineligible person (the one §40.2 message); then **409**
+    for the per-challenge cap (*"You can invite at most 5 people to one challenge."*)
+    and the daily cap (*"You've sent 20 invitations today. You can send more
+    tomorrow."*). Success **201** `{ sent, invitations }` — `sent` the number written,
+    `invitations` the refreshed block below. No `PATCH` and no `DELETE` (decision 5).
+  - `POST /api/challenges/:number/invitations/dismiss` — *Not for me*. **404** as above;
+    **409** when the caller holds no invitation to it (*"You have no invitation to this
+    challenge."*). Idempotent: a repeat succeeds and writes nothing new. Returns `{
+    dismissed: true }`.
+  - `GET /api/users?q=&inviteFor=<CH-n>` — the picker (§40.2). Like the §39.2 picker
+    variants it answers **no users**, never an error, when the caller cannot see the
+    challenge or it does not accept solutions.
+  - The challenge detail payload carries, per viewer, **`canInvite`**;
+    **`invitations: { sent: [{ id, displayName, active }], left, leftToday } | null`**
+    — the viewer's own *You invited* list, newest first, and their room on this
+    challenge and today (`null` while `canInvite` is false); and **`invited: {
+    inviters: [{ id, displayName, active, note, invitedAt }] } | null`** — the viewer's
+    open invitations, newest first, `null` when they have none, have dismissed, or
+    the challenge does not accept solutions.
+  - `GET` and `PATCH /api/profile` carry **`notifyInvitations`**.
+- **Audit (§15).** **`invitation.sent`** — one row per invitee, actor the inviter,
+  target the challenge, `after: { inviteeId, withNote }` — under All only, as `like.*`
+  and `hype.given` are. **No row carries the note.** *Not for me*, the preference, the
+  payoff, events 22 and 23, the award and the badge are not audited (the dismissal is a
+  preference, and the ledger and the inbox are their own records, §23.12).
+- **Tests.**
+  - *Unit:* `canInvite` over every challenge status, an archived namespace and the
+    trash; the caps — the 5th invitation on a challenge allowed and the 6th refused, the
+    20th of a UTC day allowed and the 21st refused, the day boundary at 00:00:00 UTC; the
+    note's trimming and length; the picker's eligibility for each visibility — self,
+    inactive, erased, already invited by the caller, a visible member of the challenge's
+    team and of an open named solution left out, while an anonymous challenge author, the
+    author of a `proposed` solution the caller cannot see, an anonymous solution's
+    author, a `rejected` solution's author, someone another inviter invited and someone
+    who dismissed are all still offered; the answered and pays-off predicates (created
+    before or after the invitation, creator, form co-author or later joiner, the inviter
+    on the team at the moment, anonymous, still `proposed`); the award key's
+    once-per-pair rule; the Matchmaker tiers; event 22's copy and its actionable,
+    non-digestable class; the daily e-mail check; event 23's copy.
+  - *Integration:* a send writes the rows and one audit row per invitee with no note in
+    it, then one event 22 each; an ineligible id refuses the whole request and writes
+    nothing; a repeat pair is 422 with a single row; concurrent sends cannot exceed
+    either cap; a `people` challenge's access list is unchanged; event 22 is skipped for a
+    dismisser, a muted invitee and a deactivated one, never held for a digest, and a
+    second one about the same challenge on the same UTC day writes the inbox line but no
+    outbox row; opening the challenge and *Not for me* read the rows; the `invited`
+    block lists open invitations only and is empty after answering, after a dismissal,
+    out of `valid`, in an archived namespace and in the trash; a payoff on each path out
+    of `proposed` — enforced to `in_review` and to `rejected`, an override, the author's
+    withdrawal, the §8.3 auto-close — credits every inviter once, with one
+    event 23 each; nothing while the solution is anonymous, then the payoff at its
+    self-reveal, backdated; a second solution by the same invitee adds nothing; the
+    inviter on the team and a later joiner earn nothing; event 23 writes no outbox row,
+    is written with gamification off and is dropped for an inviter who lost sight of the
+    challenge, whose ledger row is still written; nothing is revoked on a revert, a
+    withdrawal or a delete; the §10.3 cascade removes the rows and leaves the ledger
+    alone; erasure removes sent and received invitations and dismissals; the read-time
+    gate hides event 22 after a narrowing; `inviteFor` offers nobody for a challenge that
+    does not accept solutions; a solution proposed through an agent pays off and its row is
+    not `via_mcp`.
+  - *E2e:* on a `valid` challenge, user A opens **Invite a solver**, picks user B and
+    writes a note; B's bell shows the invitation, and the challenge shows B the banner
+    with the note; B proposes from the banner, after which the banner is gone; a
+    reviewer moves the solution to `in_review`; A's bell shows *"… answered your
+    invitation with SOL-…"* and, with gamification on, A's profile shows Matchmaker
+    (Bronze).

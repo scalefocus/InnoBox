@@ -10,6 +10,10 @@ import {
   challengeTeamJsonSql,
   formatChallengeNumber,
   formatSolutionNumber,
+  inboxNote,
+  invitationMessage,
+  invitationPaidOffMessage,
+  invitationSubject,
   solutionAuthorIdsSql,
   teamChangeMessage,
   teamDisplayText,
@@ -20,10 +24,13 @@ import {
 } from "@innobox/shared";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
+import type { InvitationPayoff } from "./invitation-payoffs";
 import {
   dispatchCoalescedComment,
   dispatchCoalescedHype,
   dispatchEvent,
+  dispatchInAppEvent,
+  dispatchInvitation,
   dispatchTeamChange,
   dispatchTopicNotices,
   dispatchToUser,
@@ -579,6 +586,106 @@ export async function notifyCoAuthorsAdded(ctx: NotifyContext, target: Notificat
   const ref = await teamItemRef(ctx, target);
   if (!ref) return;
   for (const userId of coAuthorIds) await notifyTeamChange(ctx, { userId, change: "added", target, ...ref });
+}
+
+/**
+ * §12.1 event 22 (§40.6): each invitation of a send, to its invitee — "Ana Petrova invited you to
+ * propose a solution to CH-412 …", the note quoted on the bell's second line. The e-mail adds the
+ * namespace, the author masked per §9 (or the §24.6 label) and the note in full, never the
+ * description. An invitee who chose *Not for me* on the challenge gets nothing (§40.3); the mute, the
+ * drops and the daily e-mail cap live in dispatchInvitation. Called after the send committed.
+ */
+export async function notifyInvited(ctx: NotifyContext, challengeId: string, invitations: readonly { inviteeId: string; note: string | null }[]): Promise<void> {
+  if (!ctx.actorId || invitations.length === 0) return;
+  const { rows } = await ctx.pool.query<{
+    number: string;
+    title: string;
+    slug: string;
+    author_id: string | null;
+    is_anonymous: boolean;
+    author_display_name: string | null;
+    company: string | null;
+    team: TeamMemberRow[];
+  }>(
+    `select c.number::text, c.title, ns.slug, c.author_id, c.is_anonymous, u.display_name as author_display_name, ps.company,
+            ${challengeTeamJsonSql("c")} as team
+       from challenges c
+       join namespaces ns on ns.id = c.namespace_id
+       left join users u on u.id = c.author_id
+       left join public_submissions ps on ps.id = c.public_submission_id
+      where c.id = $1`,
+    [challengeId],
+  );
+  const challenge = rows[0];
+  if (!challenge) return;
+  const { rows: who } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [ctx.actorId]);
+  const inviterName = who[0]?.display_name ?? "Someone";
+  const { rows: dismissed } = await ctx.pool.query<{ user_id: string }>(
+    `select user_id from challenge_invitation_dismissals where challenge_id = $1 and user_id = any($2::uuid[])`,
+    [challengeId, invitations.map((i) => i.inviteeId)],
+  );
+  const silenced = new Set(dismissed.map((r) => r.user_id));
+  const author = teamDisplayText({
+    isAnonymous: challenge.is_anonymous,
+    authorId: challenge.author_id,
+    authorDisplayName: challenge.author_display_name,
+    externalCompany: challenge.company,
+    team: challenge.team,
+  });
+  for (const invitation of invitations) {
+    if (silenced.has(invitation.inviteeId)) continue;
+    const note = invitation.note;
+    await dispatchInvitation(ctx, invitation.inviteeId, challengeId, {
+      message: invitationMessage(inviterName, challenge.number, challenge.title),
+      subject: invitationSubject(inviterName, challenge.number),
+      // The bell's second line (§40.6), and the e-mail's lines under the message.
+      ...(note ? { detail: `"${inboxNote(note)}"` } : {}),
+      emailDetail: `In /${challenge.slug} · submitted by ${author}${note ? `\n\n${inviterName}'s note:\n"${note}"` : ""}`,
+      link: itemHref(challenge.number),
+      parentType: "challenge",
+      parentId: challengeId,
+      challengeId,
+      number: formatChallengeNumber(challenge.number),
+      title: challenge.title,
+      inviterId: ctx.actorId,
+      inviterName,
+      note,
+    });
+  }
+}
+
+/**
+ * §12.1 event 23 (§40.6): each invitation a solution paid off, to its inviter — in-app only, written
+ * whether or not gamification is on, with no preference. Naming the invitee is safe: the solution is
+ * named and, out of `proposed`, visible to anyone who can see the challenge — which the visibility
+ * drop checks for the inviter. Called after the transition or the self-reveal committed.
+ */
+export async function notifyInvitationPayoffs(ctx: NotifyContext, payoffs: readonly InvitationPayoff[]): Promise<void> {
+  if (payoffs.length === 0) return;
+  const { rows } = await ctx.pool.query<{ id: string; solution_number: string; challenge_number: string; invitee_name: string }>(
+    `select i.id::text as id, s.number::text as solution_number, c.number::text as challenge_number, u.display_name as invitee_name
+       from challenge_invitations i
+       join solutions s on s.id = i.paid_off_solution_id
+       join challenges c on c.id = s.challenge_id
+       join users u on u.id = i.invitee_id
+      where i.id = any($1::bigint[])`,
+    [payoffs.map((p) => p.invitationId)],
+  );
+  const facts = new Map(rows.map((r) => [r.id, r]));
+  for (const payoff of payoffs) {
+    const f = facts.get(payoff.invitationId);
+    if (!f) continue;
+    await dispatchInAppEvent(ctx, { parentType: "solution", parentId: payoff.solutionId }, [payoff.inviterId], "invitation_paid_off", {
+      message: invitationPaidOffMessage(f.invitee_name, f.solution_number, f.challenge_number),
+      link: itemHref(f.challenge_number, f.solution_number),
+      parentType: "solution",
+      parentId: payoff.solutionId,
+      challengeId: payoff.challengeId,
+      inviteeName: f.invitee_name,
+      challengeNumber: formatChallengeNumber(f.challenge_number),
+      solutionNumber: formatSolutionNumber(f.solution_number),
+    });
+  }
 }
 
 /** Notification failures are logged, never thrown — the state change already committed. */

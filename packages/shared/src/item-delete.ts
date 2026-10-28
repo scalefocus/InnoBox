@@ -46,6 +46,11 @@ export interface CascadeCounts {
   topics: number;
   /** §34.8: the challenge's event-18 markers (`topic_notices`) — none for a solution purge. */
   topicNotices: number;
+  /** §40.8: the challenge's invitations to propose a solution — none for a solution purge, which
+   *  only nulls the payoff's `paid_off_solution_id`. */
+  invitations: number;
+  /** §40.8: the challenge's "Not for me" dismissals — none for a solution purge. */
+  invitationDismissals: number;
 }
 
 /** Who asked for the purge and why (§10.3 audit). `manual` is Delete permanently — from the
@@ -221,6 +226,12 @@ async function deleteChildren(
   const topics = await client.query(`delete from challenge_topics where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
   const topicNotices = await client.query(`delete from topic_notices where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
 
+  // §40.8: a challenge's invitations and dismissals go with it; a solution's delete keeps the payoff
+  // it counted (paid_off_at) and only forgets which solution it was.
+  const invitations = await client.query(`delete from challenge_invitations where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
+  const invitationDismissals = await client.query(`delete from challenge_invitation_dismissals where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
+  await client.query(`update challenge_invitations set paid_off_solution_id = null where paid_off_solution_id = any($1::uuid[])`, [subtree.solutionIds]);
+
   // §12.1: no inbox item may survive pointing at an entity that no longer exists; unsent e-mail
   // about it never goes out.
   // Inbox rows carry what they are about as columns (§5, migration 0051 — a solution row carries its
@@ -247,6 +258,8 @@ async function deleteChildren(
       aiResults,
       topics: topics.rowCount ?? 0,
       topicNotices: topicNotices.rowCount ?? 0,
+      invitations: invitations.rowCount ?? 0,
+      invitationDismissals: invitationDismissals.rowCount ?? 0,
       notifications: inbox.rowCount ?? 0,
       outbox: outbox.rowCount ?? 0,
     },

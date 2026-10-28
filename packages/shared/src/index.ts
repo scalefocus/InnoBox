@@ -117,6 +117,9 @@ export * from "./topics.js";
 export * from "./coauthors.js";
 // …and the server-only SQL every read path uses to see an item's team.
 export * from "./coauthors-db.js";
+// §40 invite a solver: the caps, the request parser, the "answered" rule and the copy of the dialog,
+// the banner and events 22–23 (client-safe, also at `@innobox/shared/invitations`).
+export * from "./invitations.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the

@@ -27,6 +27,9 @@ export const GAMIFICATION_REASONS = [
   // (the Planned-tab delete with "Notify that it shipped"). Item-less, like agent_connected.
   "idea_approved",
   "idea_shipped",
+  // §40.7: 0 points to an inviter, once per (challenge, invitee, inviter), when the person they
+  // invited answers with a solution that leaves `proposed` (Matchmaker). Names the solution.
+  "invite_fulfilled",
 ] as const;
 export type GamificationReason = (typeof GAMIFICATION_REASONS)[number];
 
@@ -45,6 +48,7 @@ export const POINTS: Record<GamificationReason, number> = {
   hype_fulfilled: 0,
   idea_approved: 10,
   idea_shipped: 25,
+  invite_fulfilled: 0,
 };
 
 /** Per recipient, per UTC day of the event: only the first N awards of the reason earn points.
@@ -91,6 +95,8 @@ export const awardKey = {
   /** §38.10: once per idea. */
   ideaApproved: (ideaId: string) => `idea_approved:${ideaId}`,
   ideaShipped: (ideaId: string) => `idea_shipped:${ideaId}`,
+  /** §40.7: once per (challenge, invitee, inviter) — a second solution by the same invitee adds nothing. */
+  inviteFulfilled: (challengeId: string, inviteeId: string, inviterId: string) => `invite_fulfilled:${challengeId}:${inviteeId}:${inviterId}`,
 };
 
 /** §38.10: the reasons written with no item (§25.12, §38.10) — the ledger CHECK and the Points
@@ -170,7 +176,8 @@ export type BadgeKey =
   | "agent_of_change"
   | "human_in_the_loop"
   | "talent_scout"
-  | "roadmapper";
+  | "roadmapper"
+  | "matchmaker";
 
 /** What a count-based badge counts: a ledger reason, or one of the §25.12 agent counters — rows
  *  of the given reasons whose item was created through an AI agent (`via_mcp`). */
@@ -192,6 +199,7 @@ export const BADGE_COUNTERS: Record<BadgeCounter, { reasons: readonly Gamificati
   hype_fulfilled: { reasons: ["hype_fulfilled"], viaMcp: null },
   idea_approved: { reasons: ["idea_approved"], viaMcp: null },
   idea_shipped: { reasons: ["idea_shipped"], viaMcp: null },
+  invite_fulfilled: { reasons: ["invite_fulfilled"], viaMcp: null },
   challenge_submitted_via_mcp: { reasons: ["challenge_submitted"], viaMcp: true },
   solution_proposed_via_mcp: { reasons: ["solution_proposed"], viaMcp: true },
   validated_via_mcp: { reasons: ["challenge_validated", "solution_validated"], viaMcp: true },
@@ -232,6 +240,7 @@ export const BADGES: readonly BadgeDef[] = [
   { key: "human_in_the_loop", name: "Human in the Loop", criterion: "A challenge or solution you submitted through an agent was validated", counts: "validated_via_mcp", thresholds: [1], unit: "agent submissions validated", agent: true },
   { key: "talent_scout", name: "Talent Scout", criterion: "Items you hyped that were later solved or implemented", counts: "hype_fulfilled", thresholds: [1, 5, 20], unit: "hyped items solved or implemented", hype: true },
   { key: "roadmapper", name: "Roadmapper", criterion: "Feature ideas you proposed that shipped", counts: "idea_shipped", thresholds: [1, 3, 10], unit: "feature ideas shipped" },
+  { key: "matchmaker", name: "Matchmaker", criterion: "People you invited who went on to propose a solution", counts: "invite_fulfilled", thresholds: [1, 5, 20], unit: "invitations that paid off" },
 ];
 
 export function badgeDef(key: string): BadgeDef | undefined {

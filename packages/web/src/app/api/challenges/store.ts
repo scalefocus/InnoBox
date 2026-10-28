@@ -84,6 +84,7 @@ import {
   writeJoinAwards,
   writeLiveAwards,
 } from "../../../lib/gamification";
+import { recordInvitationPayoffs, type InvitationPayoff } from "../../../lib/invitation-payoffs";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
@@ -1491,6 +1492,9 @@ export type SetSolutionStatusResult =
       previousStatus: string;
       /** Present only when this transition triggered the §8.3 auto-close cascade. */
       autoClose?: { challengeId: string; challengeNumber: string; challengeTitle: string; notSelectedAuthorIds: string[]; solutionIds: string[] };
+      /** §40.5: the invitations this move paid off — the solution's own, and any sibling the §8.3
+       *  auto-close took out of `proposed`. Event 23 goes out after the commit. */
+      payoffs: InvitationPayoff[];
     }
   | { status: "not_found" }
   | { status: "trashed" }
@@ -1556,6 +1560,7 @@ export async function setSolutionStatus(
   try {
     return await inTransaction(pool, async (client) => {
       let autoClose: { challengeId: string; challengeNumber: string; challengeTitle: string; notSelectedAuthorIds: string[]; solutionIds: string[] } | undefined;
+      const payoffs: InvitationPayoff[] = [];
 
       if (current.status !== newStatus) {
         try {
@@ -1578,6 +1583,14 @@ export async function setSolutionStatus(
         // §23.2: the solution's own milestone; the §8.3 auto-close adds the challenge's below, and
         // all of them are written together (one event 13 row per transaction).
         const awards = await solutionStatusAwards(client, current.id, newStatus);
+        // §40.5: a solution leaving `proposed` pays off the invitations it answers — its awards join
+        // the batch below.
+        const payOff = async (solutionId: string) => {
+          const outcome = await recordInvitationPayoffs(client, solutionId);
+          payoffs.push(...outcome.payoffs);
+          awards.push(...outcome.awards);
+        };
+        if (current.status === "proposed") await payOff(current.id);
 
         if (newStatus === "implemented") {
           // §8.3 auto-close cascade: the parent challenge becomes solved, and every other
@@ -1615,6 +1628,8 @@ export async function setSolutionStatus(
               before: { status: before },
               after: { status: "not_selected", override: mode === "override", trigger: "auto_close", implementedSolutionId: current.id },
             });
+            // §40.5: a sibling closed straight out of `proposed` was still proposed — it pays off too.
+            if (before === "proposed") await payOff(siblingId);
           }
           // §10.4: a trashed sibling is closed like any other (its restore then matches §8.3), but
           // nobody is told about it — a trashed item sends no notification.
@@ -1642,6 +1657,7 @@ export async function setSolutionStatus(
         changed: current.status !== newStatus,
         previousStatus: current.status,
         autoClose,
+        payoffs,
       };
     });
   } catch (err) {
@@ -2341,6 +2357,8 @@ export type WithdrawSolutionResult =
       assigneeId: string | null;
       /** The team, so the OTHER members hear of it (§12.1 event 10, §39.8). */
       authorIds: string[];
+      /** §40.5: a withdrawal straight out of `proposed` pays off the invitations it answers. */
+      payoffs: InvitationPayoff[];
     }
   | { status: "not_found" }
   | { status: "trashed" }
@@ -2371,6 +2389,8 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
       before: { status: cur.status },
       after: { status: "withdrawn", trigger: "author_withdrawn" },
     });
+    const payoff = cur.status === "proposed" ? await recordInvitationPayoffs(client, cur.id) : { payoffs: [], awards: [] };
+    await writeLiveAwards(client, payoff.awards);
     return {
       status: "ok",
       solutionId: cur.id,
@@ -2381,6 +2401,7 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
       previousStatus: cur.status,
       assigneeId: cur.assignee_id,
       authorIds: cur.author_ids,
+      payoffs: payoff.payoffs,
     };
   });
 }
@@ -2545,7 +2566,9 @@ export async function revealSolutionAuthor(pool: Pool, admin: Viewer, number: st
 }
 
 export type SelfRevealResult =
-  | { status: "ok"; challenge?: ChallengeDetail }
+  /** `payoffs`: §40.5 — a solution's self-reveal counts the invitations it answers, once it has left
+   *  `proposed`. */
+  | { status: "ok"; challenge?: ChallengeDetail; payoffs?: InvitationPayoff[] }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
@@ -2609,7 +2632,10 @@ export async function selfRevealSolution(pool: Pool, viewer: Viewer, number: str
       targetId: row.id,
     });
     await replayOnSelfReveal(client, "solution", row.id); // §23.2
-    return { status: "ok" as const };
+    // §40.5: the payoff waited for the reveal; it is dated to the solution's first move out of proposed.
+    const payoff = await recordInvitationPayoffs(client, row.id);
+    await writeLiveAwards(client, payoff.awards);
+    return { status: "ok" as const, payoffs: payoff.payoffs };
   });
 }
 
@@ -2704,6 +2730,65 @@ export async function getCoAuthorPickerAudience(
     };
   }
   return null;
+}
+
+// ── Invite a solver (§40.2) ──────────────────────────────────────────────────────────────
+
+/** §40.2: a challenge as the invitation paths read it — only when the viewer can see it. */
+export interface InvitationChallenge {
+  id: string;
+  number: string;
+  title: string;
+  /** §40 decision 1: `valid`, in a namespace that is not archived, not in the trash — the challenge
+   *  half of `canPropose`. */
+  open: boolean;
+  trashed: boolean;
+  isAnonymous: boolean;
+  /** §39.2: the team's member ids, in team order. */
+  authorIds: string[];
+  visibility: ChallengeVisibilityInput;
+}
+
+/** Reads a challenge for an invitation path by number; null when it does not exist or the viewer
+ *  cannot see it (§2.4: the same answer). `lock` reads it FOR SHARE, so a concurrent close cannot
+ *  slip past the open check of a send. */
+export async function loadInvitationChallenge(db: Pool | PoolClient, viewer: Viewer, number: string, lock = false): Promise<InvitationChallenge | null> {
+  if (!isEntityNumber(number)) return null;
+  const { rows } = await db.query<ChallengeVisibilityColumns & { number: string; title: string; is_anonymous: boolean; namespace_archived: boolean }>(
+    `select ${CHALLENGE_VIS_COLS}, c.number::text as number, c.title, c.is_anonymous, n.archived_at is not null as namespace_archived
+       from challenges c join namespaces n on n.id = c.namespace_id
+      where c.number = $1${lock ? " for share of c" : ""}`,
+    [number],
+  );
+  const row = rows[0];
+  if (!row || !isChallengeRowVisible(viewer, row)) return null;
+  return {
+    id: row.id,
+    number: row.number,
+    title: row.title,
+    open: !row.trashed && row.status === "valid" && !row.namespace_archived,
+    trashed: row.trashed,
+    isAnonymous: row.is_anonymous,
+    authorIds: row.author_ids,
+    visibility: challengeVisibilityInput(row),
+  };
+}
+
+/** §40.2: the members of the named, open solutions on the challenge that `viewer` can see — in the
+ *  detail page's open list, not under *Closed solutions*. A `proposed` solution hidden from them, an
+ *  anonymous one and a trashed one never count, so the picker reveals nothing it filters on. */
+export async function visibleOpenSolutionMemberIds(db: Pool | PoolClient, viewer: Viewer, challenge: InvitationChallenge): Promise<string[]> {
+  const { rows } = await db.query<{ status: string; author_ids: string[] }>(
+    `select s.status, ${solutionAuthorIdsSql("s")} as author_ids
+       from solutions s
+      where s.challenge_id = $1 and not s.is_anonymous and s.trashed_at is null
+        and s.status not in ('rejected', 'not_selected', 'withdrawn')`,
+    [challenge.id],
+  );
+  const parent = { namespaceId: challenge.visibility.namespaceId, assigneeId: challenge.visibility.assigneeId };
+  return rows
+    .filter((s) => canSeeSolution(viewer, parent, { status: s.status as SolutionStatus, authorIds: s.author_ids, trashed: false }))
+    .flatMap((s) => s.author_ids);
 }
 
 /** Locks the item's row FIRST (§39.4 serialized: two concurrent adds cannot exceed five, two

@@ -1778,6 +1778,33 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 /* ── end Hype ───────────────────────────────────────────────────────────── */
 
+/* ── Invite a solver (INNOBOX_SPEC.md §40.2, §40.3) ─────────────────────────
+   The Invite dialog reuses the propose-dialog shell and the co-author tag field; the invitee's
+   banner sits under the challenge header in the accent tint. Tokens only. */
+.invite-hint { font-size: 13px; }
+.invite-note-label { margin-top: 12px; }
+.invite-note { width: 100%; min-height: 80px; resize: vertical; }
+.invite-sent { margin-top: 12px; }
+.invite-sent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.invite-sent-item {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px 3px 3px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.invitation-banner {
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; margin-bottom: 18px;
+  border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--ink);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.invitation-banner-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.invitation-banner-title { margin: 0; font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.invitation-banner-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.invitation-banner-note { font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.invitation-banner-by { font-weight: 600; }
+.invitation-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.notification-detail { overflow-wrap: anywhere; }
+/* ── end Invite a solver ───────────────────────────────────────────────────── */
+
 /* ── Author reveal dialog (INNOBOX_SPEC.md §9, §13.6) ───────────────────────
    The audited admin reveal opens a native modal <dialog>: the revealed author's real, large
    (~96 px) avatar bubble above their name, flagged "Revealed to you only". Native showModal gives
