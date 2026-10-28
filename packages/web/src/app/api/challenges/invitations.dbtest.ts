@@ -220,7 +220,12 @@ test(
       ]);
       const another = await newChallenge("Daily2");
       assert.deepEqual(await send(fred, another.num, [bob.userId]), { status: "daily_cap" }, "the 21st of a UTC day");
-      await pool.query(`update challenge_invitations set created_at = now() - interval '1 day' where inviter_id = $1`, [fred.userId]);
+      // The app role may update only the payoff columns, so move the 20 to yesterday by re-inserting them.
+      await pool.query(`delete from challenge_invitations where inviter_id = $1`, [fred.userId]);
+      await pool.query(
+        `insert into challenge_invitations (challenge_id, inviter_id, invitee_id, created_at) select $1, $2, u, now() - interval '1 day' from unnest($3::uuid[]) as u`,
+        [dayCh.id, fred.userId, daily.map((u) => u.userId)],
+      );
       assert.equal((await send(fred, another.num, [bob.userId])).status, "ok", "yesterday's invitations do not count");
 
       // ── The detail fields: the inviter's own list, the invitee's open invitations, newest first. ──
