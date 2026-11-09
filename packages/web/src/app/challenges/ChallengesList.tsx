@@ -1,7 +1,7 @@
 "use client";
 // List presentation of the Challenges gallery (INNOBOX_SPEC.md §13.1 "Cards / List view toggle").
 // Renders the SAME payload as the cards — no extra data, no refetch — as a §14.1-style `.rows`
-// table: number · title · status · namespace · author · likes · solutions · date. The whole row
+// table: number · title · status · namespace · author · likes · [hype] · reach · solutions · date. The whole row
 // opens the challenge (the title stays the real link / keyboard target); text selection and
 // clicks on interactive elements never navigate. Anonymity is the server's: an anonymous author
 // arrives with userId null and renders the neutral bubble with no directory card (§9, §13.8).
@@ -13,6 +13,7 @@ import { challengeHref, shouldRowNavigate, solutionCountLabel, type ChallengesVi
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
 import { ChallengeAuthorBubbles, ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges, type ChallengeBadgeData } from "./ChallengeBadges";
 import { HYPE_GLYPH } from "@/components/Hype";
+import { ReachCount } from "@/components/Affected";
 
 /** The subset of the list payload a row reads (the page's list item satisfies it). */
 export interface ChallengeRowData extends ChallengeBadgeData {
@@ -25,6 +26,8 @@ export interface ChallengeRowData extends ChallengeBadgeData {
   solutionCount: number;
   /** §26.5: present only while hype is on — then the list gains a Hype column. */
   hype?: number;
+  /** §41.5: about how many people it affects — the Reach column. */
+  reach?: number;
 }
 
 const INTERACTIVE = "a, button, input, select, textarea, label, [role='dialog'], [tabindex]";
@@ -54,6 +57,7 @@ export function ChallengesList({ challenges }: { challenges: ChallengeRowData[] 
         <span className="ch-c-author">Author</span>
         <span className="ch-c-likes">Likes</span>
         {hasHype && <span className="ch-c-hype">Hype</span>}
+        <span className="ch-c-reach">Reach</span>
         <span className="ch-c-sol">Solutions</span>
         <span className="ch-c-date">Date</span>
       </div>
@@ -109,6 +113,8 @@ function ChallengeRow({
           {HYPE_GLYPH} {challenge.hype}
         </span>
       )}
+      {/* §41.5: the reach, always — an absent value (an older payload) leaves the cell empty. */}
+      <span className="ch-c-reach">{challenge.reach !== undefined && <ReachCount value={challenge.reach} className="" />}</span>
       <span className="ch-c-sol">
         <span className="ch-sol-n">{challenge.solutionCount}</span>
         <span className="ch-sol-label">{solutionCountLabel(challenge.solutionCount)}</span>

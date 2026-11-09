@@ -14,6 +14,9 @@
 import type { Pool, PoolClient } from "pg";
 import {
   NOTIFICATION_PREFERENCE_COLUMN,
+  affectedEmailDetail,
+  affectedEmailSubject,
+  affectedNotificationMessage,
   applyPreferenceMute,
   commentNotificationMessage,
   finalizeRecipients,
@@ -356,14 +359,15 @@ export async function dispatchCoalescedComment(
 }
 
 /** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
- *  since §26.6, their unread "hyped" rows, since §34.5 their event-18 row, and since §40.6 their
- *  event-22 invitations (the page shows them in its banner) — for the challenge itself AND its
- *  solutions (the page shows both). A solution row carries its challenge in `challenge_id` (§5,
- *  migration 0051), so one probe of the (user_id, challenge_id) unread index covers both. */
+ *  since §26.6, their unread "hyped" rows, since §34.5 their event-18 row, since §40.6 their
+ *  event-22 invitations (the page shows them in its banner) and since §41.6 their event-24 row — for
+ *  the challenge itself AND its solutions (the page shows both). A solution row carries its challenge
+ *  in `challenge_id` (§5, migration 0051), so one probe of the (user_id, challenge_id) unread index
+ *  covers both. */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge', 'invitation') and read_at is null and challenge_id = $2::uuid`,
+      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge', 'invitation', 'affected') and read_at is null and challenge_id = $2::uuid`,
     [userId, challengeId],
   );
 }
@@ -527,6 +531,86 @@ export async function dispatchCoalescedHype(ctx: NotifyContext, authorIds: reado
     // A refresh preserves the delivery bookkeeping: the e-mail went out with the first hype.
     if (rows[0]?.inserted) {
       await writeOutbox(ctx.pool, userId, "hyped", payload, rows[0].id, slots.get(userId), hold);
+    }
+  }
+}
+
+// ── §12.1 event 24 / §41.6: coalesced "affected" notifications ──────────────────────────
+
+export interface AffectedNotification {
+  /** The challenge — the coalescing key and the page that reads the row. */
+  challengeId: string;
+  challengeNumber: string; // "CH-412"
+  challengeTitle: string;
+  /** The marker's display name — markers are public (§41 decision 4). */
+  latestBy: string;
+  /** Their headcount, and the challenge's numbers after the mark. */
+  headcount: number;
+  reach: number;
+  people: number;
+  link: string;
+}
+
+/** The count ≥ 2 message, rendered in SQL with the same text as `affectedNotificationMessage`. */
+const AFFECTED_MESSAGE_SQL = (n: string, p: string) => `format('%s people say %s affects them too — latest %s.', ${n}, ${p}->>'challengeNumber', ${p}->>'latestBy')`;
+
+/**
+ * Event 24 delivery: one UNREAD inbox row per recipient per challenge, refreshed in place by every
+ * further first mark while unread (the 0059 partial unique index), with ONE outbox row — the e-mail
+ * goes out with the first marker and is not re-sent until the row is read (§41.6). The recipients are
+ * the challenge's authors only — every member of its team (§39.8); the usual drops apply (the actor,
+ * a deactivated or erased author, a challenge they can no longer see). No per-event preference: the
+ * e-mail switch and digest choice are the controls, and the outbox row is held for a recipient on a
+ * digest. The caller writes it only for a person's FIRST mark on the challenge.
+ */
+export async function dispatchCoalescedAffected(ctx: NotifyContext, authorIds: readonly string[], affected: AffectedNotification): Promise<void> {
+  const recipients = await finalRecipients(ctx, { parentType: "challenge", parentId: affected.challengeId }, authorIds);
+  const hold: DigestHold = {
+    event: 24,
+    facts: { kind: "affected", challengeNumber: affected.challengeNumber.replace(/\D/g, ""), challengeTitle: affected.challengeTitle, reach: affected.reach },
+  };
+  const slots = await digestSlots(ctx.pool, recipients, hold);
+  for (const userId of recipients) {
+    const payload = {
+      message: affectedNotificationMessage(1, affected.challengeNumber, affected.latestBy),
+      subject: affectedEmailSubject(affected.latestBy, affected.challengeNumber),
+      emailDetail: affectedEmailDetail({
+        headcount: affected.headcount,
+        challengeNumber: affected.challengeNumber,
+        title: affected.challengeTitle,
+        reach: affected.reach,
+        people: affected.people,
+      }),
+      link: affected.link,
+      parentType: "challenge" as const,
+      parentId: affected.challengeId,
+      challengeId: affected.challengeId,
+      challengeNumber: affected.challengeNumber,
+      latestBy: affected.latestBy,
+      latestAt: new Date().toISOString(),
+      reach: affected.reach,
+      count: 1,
+    };
+    const newCount = `(coalesce((notifications.payload->>'count')::int, 1) + 1)`;
+    const { rows } = await ctx.pool.query<{ id: string; inserted: boolean }>(
+      `insert into notifications (user_id, type, payload) values ($1, 'affected', $2::jsonb)
+       on conflict (user_id, (payload->>'parentType'), (payload->>'parentId'))
+         where read_at is null and type = 'affected'
+       do update set
+         payload = notifications.payload
+           || jsonb_build_object(
+                'count', ${newCount},
+                'latestBy', excluded.payload->>'latestBy',
+                'latestAt', excluded.payload->>'latestAt',
+                'reach', (excluded.payload->>'reach')::int,
+                'message', ${AFFECTED_MESSAGE_SQL(newCount, "excluded.payload")}),
+         created_at = now()
+       returning id, (xmax = 0) as inserted`,
+      [userId, JSON.stringify(payload)],
+    );
+    // A refresh preserves the delivery bookkeeping: the e-mail went out with the first marker.
+    if (rows[0]?.inserted) {
+      await writeOutbox(ctx.pool, userId, "affected", payload, rows[0].id, slots.get(userId), hold);
     }
   }
 }

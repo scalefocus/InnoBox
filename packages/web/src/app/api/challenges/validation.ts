@@ -30,7 +30,8 @@ export const CHALLENGE_TABS = ["open", "mine", "completed"] as const;
 export type ChallengeTab = (typeof CHALLENGE_TABS)[number];
 
 // `most_hyped` (§26.5) is always accepted; the route falls it back to newest while hype is off.
-export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions", "most_hyped"] as const;
+// `widest_reach` (§41.5) orders by the challenge's reach — always on.
+export const CHALLENGE_SORTS = ["newest", "most_liked", "most_solutions", "most_hyped", "widest_reach"] as const;
 export type ChallengeSort = (typeof CHALLENGE_SORTS)[number];
 
 /** The §13.1 gallery filters (status / impact area / topic / namespace / author name). Shared by

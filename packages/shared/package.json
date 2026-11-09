@@ -141,6 +141,10 @@
     "./invitations": {
       "types": "./dist/invitations.d.ts",
       "default": "./dist/invitations.js"
+    },
+    "./affected": {
+      "types": "./dist/affected.d.ts",
+      "default": "./dist/affected.js"
     }
   },
   "scripts": {

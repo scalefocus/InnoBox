@@ -51,6 +51,9 @@ export interface CascadeCounts {
   invitations: number;
   /** §40.8: the challenge's "Not for me" dismissals — none for a solution purge. */
   invitationDismissals: number;
+  /** §41.7: the challenge's "affects me too" marks, current and taken back — none for a solution
+   *  purge. */
+  affectedMarks: number;
 }
 
 /** Who asked for the purge and why (§10.3 audit). `manual` is Delete permanently — from the
@@ -232,6 +235,10 @@ async function deleteChildren(
   const invitationDismissals = await client.query(`delete from challenge_invitation_dismissals where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
   await client.query(`update challenge_invitations set paid_off_solution_id = null where paid_off_solution_id = any($1::uuid[])`, [subtree.solutionIds]);
 
+  // §41.7: a challenge's "affects me too" marks go with it (their FK cascades too; deleting them
+  // here first lets the audit row count them).
+  const affectedMarks = await client.query(`delete from challenge_affected where challenge_id = any($1::uuid[])`, [subtree.challengeIds]);
+
   // §12.1: no inbox item may survive pointing at an entity that no longer exists; unsent e-mail
   // about it never goes out.
   // Inbox rows carry what they are about as columns (§5, migration 0051 — a solution row carries its
@@ -260,6 +267,7 @@ async function deleteChildren(
       topicNotices: topicNotices.rowCount ?? 0,
       invitations: invitations.rowCount ?? 0,
       invitationDismissals: invitationDismissals.rowCount ?? 0,
+      affectedMarks: affectedMarks.rowCount ?? 0,
       notifications: inbox.rowCount ?? 0,
       outbox: outbox.rowCount ?? 0,
     },

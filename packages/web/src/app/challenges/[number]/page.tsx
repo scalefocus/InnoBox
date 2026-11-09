@@ -30,6 +30,8 @@ import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 import { VisibilityControl } from "@/components/VisibilityControl";
 import { PEOPLE_VISIBILITY_LABEL, type AccessEntryView } from "@innobox/shared/challenge-access";
 import { HypeButton, HypeCount, HypersList, type HypeFields } from "@/components/Hype";
+import { AffectedButton, ReachCount, WhoIsAffected, type AffectedBlock } from "@/components/Affected";
+import { AFFECTED_ESTIMATE_HINT, AFFECTED_HEADCOUNT_MAX, AFFECTED_HEADCOUNT_MIN, AFFECTED_QUESTION } from "@innobox/shared/affected";
 import { invalidateApi } from "@/lib/ui";
 import { TopicChips } from "@/components/TopicChips";
 import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicPicker";
@@ -107,7 +109,8 @@ interface SolutionItem extends Partial<HypeFields> {
   viaAgent?: ViaAgent;
 }
 
-interface ChallengeDetail extends Partial<HypeFields> {
+/** §41.10: the "affects me too" block rides on every detail payload. */
+interface ChallengeDetail extends Partial<HypeFields>, AffectedBlock {
   /** §26.11: the viewer's budget — present only while hype is on. */
   hypesLeft?: number;
   id: string;
@@ -813,6 +816,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             <>
               <span className="sub mono">♡ {challenge.likeCount}</span>
               {challenge.hype !== undefined && <HypeCount value={challenge.hype} className="sub mono hype-count" />}
+              <ReachCount value={challenge.reach} className="sub mono hype-count" />
             </>
           ) : (
             <>
@@ -833,10 +837,24 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               {challenge.hypeReason !== undefined && (
                 <HypeButton item={challenge as HypeFields} hypesLeft={challenge.hypesLeft ?? 0} busy={busy} onHype={() => giveHype("challenge", challenge.id)} />
               )}
+              {/* §41.3: hidden for the authors and before triage; disabled once closed. */}
+              <AffectedButton
+                challengeNumber={challenge.number}
+                mine={challenge.affectedMine}
+                reason={challenge.affectedReason}
+                disabled={busy}
+                onSaved={() => {
+                  onChanged();
+                }}
+                onError={notify}
+              />
             </>
           )}
         </div>
         {challenge.hypers && <HypersList hypers={challenge.hypers} />}
+        {/* §41.5: about how many people it affects, and who said so. */}
+        <WhoIsAffected block={challenge} teamSize={teamOfItem(challenge).length} external={challenge.external !== null} />
+
         <p style={{ whiteSpace: "pre-wrap", fontSize: 14.5, lineHeight: 1.65 }}>{challenge.description}</p>
 
         {challenge.externalContact && (
@@ -1541,6 +1559,8 @@ function ChallengeEditForm({
   // §34.3: topics are an editable field like impact area; the same picker as on submit.
   const [topics, setTopics] = useState<TopicTag[]>(challenge.topics ?? []);
   const topicOptions = useActiveTopics();
+  // §41.2: the authors' estimate — empty means "not given".
+  const [estimate, setEstimate] = useState(challenge.affectedEstimate === null ? "" : String(challenge.affectedEstimate));
   const [submitting, setSubmitting] = useState(false);
   // §39.5: a save from a stale copy is refused; the form keeps the text so it can be copied.
   const [stale, setStale] = useState<string | null>(null);
@@ -1567,6 +1587,7 @@ function ChallengeEditForm({
           impactAreaId,
           clientName: isClient ? clientName : null,
           topicIds: topics.map((t) => t.id),
+          affectedEstimate: estimate.trim() === "" ? null : Number(estimate),
           baseEditedAt: challenge.editedAt,
         }),
       });
@@ -1607,6 +1628,25 @@ function ChallengeEditForm({
           <TopicPicker id="challenge-edit-topics" value={topics} onChange={setTopics} options={topicOptions} disabled={submitting} />
         </>
       )}
+      <label style={EDIT_LABEL} htmlFor="challenge-edit-affected">
+        {AFFECTED_QUESTION}
+      </label>
+      <input
+        id="challenge-edit-affected"
+        className="field"
+        type="number"
+        inputMode="numeric"
+        min={AFFECTED_HEADCOUNT_MIN}
+        max={AFFECTED_HEADCOUNT_MAX}
+        step={1}
+        value={estimate}
+        onChange={(e) => setEstimate(e.target.value)}
+        aria-describedby="challenge-edit-affected-hint"
+        style={{ maxWidth: 160 }}
+      />
+      <span id="challenge-edit-affected-hint" className="sub">
+        {AFFECTED_ESTIMATE_HINT}
+      </span>
       {isClient && (
         <>
           <label style={EDIT_LABEL}>Client name</label>

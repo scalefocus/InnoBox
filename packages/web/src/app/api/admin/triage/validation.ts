@@ -1,7 +1,7 @@
 // Pure request-shape parsing for /api/admin/triage (INNOBOX_SPEC.md §14.1).
 import { CHALLENGE_STATUSES, type ChallengeStatus } from "@innobox/shared";
 import { isUuid } from "../../challenges/validation";
-import { TRIAGE_PAGE_SIZE_DEFAULT, TRIAGE_PAGE_SIZE_MAX, type TriageFilters } from "./store";
+import { TRIAGE_PAGE_SIZE_DEFAULT, TRIAGE_PAGE_SIZE_MAX, TRIAGE_SORTS, type TriageFilters, type TriageSort } from "./store";
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -54,6 +54,13 @@ export function parseTriageFilters(params: URLSearchParams): Parsed<TriageFilter
     if (topic === "none") value.topicId = "none";
     else if (isUuid(topic)) value.topicId = topic.toLowerCase();
     else return fail("topic must be a topic id or 'none'");
+  }
+
+  // §41.5: the queue's one sort; absent is newest first. Shared with the export.
+  const sort = params.get("sort");
+  if (sort !== null) {
+    if (!(TRIAGE_SORTS as readonly string[]).includes(sort)) return fail(`sort must be one of: ${TRIAGE_SORTS.join(", ")}`);
+    if (sort !== "newest") value.sort = sort as TriageSort;
   }
 
   return { ok: true, value };

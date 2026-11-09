@@ -32,6 +32,13 @@ test("parseTriageFilters: the §34.6 topic filter — a topic id or 'none'", () 
   assert.equal(parseTriageFilters(new URLSearchParams("topic=ai")).ok, false);
 });
 
+test("parseTriageFilters: the §41.5 sort — newest (the default, left out) or widest_reach; anything else is a 400", () => {
+  assert.deepEqual(parseTriageFilters(new URLSearchParams("sort=widest_reach")), { ok: true, value: { sort: "widest_reach" } });
+  assert.deepEqual(parseTriageFilters(new URLSearchParams("sort=newest")), { ok: true, value: {} });
+  assert.equal(parseTriageFilters(new URLSearchParams("sort=reach")).ok, false);
+  assert.equal(parseTriageFilters(new URLSearchParams("sort=")).ok, false);
+});
+
 test("parseBulkTopicBody: numbers, add or remove, and a topic id", () => {
   const id = "33333333-3333-3333-3333-333333333333";
   assert.deepEqual(parseBulkTopicBody({ numbers: ["CH-12", "13"], action: "add", topicId: id.toUpperCase() }), {

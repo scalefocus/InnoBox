@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.26.0",
+    date: "2026-11-09",
+    summary:
+      "New: This affects me too. On a challenge under review, say it affects you and how many people, yourself included; when you raise a challenge, you can estimate it yourself. Each challenge now shows about how many people it affects and who said so, the gallery can sort by Widest reach, and the triage queue sorts by Reach. If your draft matches an existing challenge, you can mark that one instead.",
+  },
+  {
     version: "1.25.0",
     date: "2026-10-28",
     summary:

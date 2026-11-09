@@ -26,6 +26,7 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges
 import { itemHref } from "./deep-link";
 import type { InvitationPayoff } from "./invitation-payoffs";
 import {
+  dispatchCoalescedAffected,
   dispatchCoalescedComment,
   dispatchCoalescedHype,
   dispatchEvent,
@@ -446,6 +447,36 @@ export async function notifyHyped(ctx: NotifyContext, parentType: "challenge" | 
     challengeNumber,
     challengeTitle: item.challenge_title,
     solutionNumber: item.solution_number,
+  });
+}
+
+/**
+ * §12.1 event 24 (affects them too, §41.6): the challenge's authors only — every member of its team
+ * (§39.8). The route calls it after the commit, and only for a person's FIRST mark on the challenge,
+ * so a mark toggled off and on never notifies twice. An external challenge has no author: nobody.
+ */
+export async function notifyAffected(
+  ctx: NotifyContext,
+  challengeId: string,
+  markerId: string,
+  numbers: { headcount: number; reach: number; people: number },
+): Promise<void> {
+  const { rows } = await ctx.pool.query<{ author_ids: string[]; number: string; title: string }>(
+    `select ${challengeAuthorIdsSql("c")} as author_ids, c.number::text, c.title from challenges c where c.id = $1`,
+    [challengeId],
+  );
+  const item = rows[0];
+  if (!item || item.author_ids.length === 0) return;
+  const { rows: who } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [markerId]);
+  await dispatchCoalescedAffected(ctx, item.author_ids, {
+    challengeId,
+    challengeNumber: formatChallengeNumber(item.number),
+    challengeTitle: item.title,
+    latestBy: who[0]?.display_name ?? "Someone",
+    headcount: numbers.headcount,
+    reach: numbers.reach,
+    people: numbers.people,
+    link: itemHref(item.number),
   });
 }
 

@@ -25,8 +25,11 @@ import {
   canAuthorEditChallenge,
   canAuthorResubmit,
   isChallengeStatus,
+  parseAffectedEstimate,
   parseBaseEditedAt,
   parseTopicIds,
+  AFFECTED_HEADCOUNT_MAX,
+  AFFECTED_HEADCOUNT_MIN,
   TEAM_MESSAGES,
   type AttachmentView,
   type McpSettings,
@@ -158,6 +161,22 @@ const TOPIC_IDS_SCHEMA = {
   items: { type: "string" },
   maxItems: TOPICS_PER_CHALLENGE_MAX,
   description: "Topic ids from innobox_get_reference_data, at most 3",
+};
+
+/** §41.2: the authors' optional estimate of how many people a challenge affects — undefined when
+ *  absent (an edit keeps the current one), null to clear it, otherwise a whole number 1–1,000. */
+function affectedEstimateArg(args: Record<string, unknown>): number | null | undefined {
+  if (args.affectedEstimate === undefined) return undefined;
+  const parsed = parseAffectedEstimate(args.affectedEstimate);
+  if (!parsed.ok) throw new ArgError(parsed.error);
+  return parsed.value;
+}
+
+const AFFECTED_ESTIMATE_SCHEMA = {
+  type: ["integer", "null"],
+  minimum: AFFECTED_HEADCOUNT_MIN,
+  maximum: AFFECTED_HEADCOUNT_MAX,
+  description: "How many people the challenge affects, the authors included — optional; null clears it on an edit",
 };
 
 function uuidArg(args: Record<string, unknown>, key: string, required = false): string | undefined {
@@ -310,6 +329,9 @@ export const TOOLS: readonly ToolDef[] = [
           editedAt: c.editedAt,
           resolvedAt: c.resolvedAt,
           likeCount: c.likeCount,
+          // §41.8: the reach and how many colleagues said it affects them — never the markers.
+          reach: c.reach,
+          affectedPeople: c.affectedPeople,
           following: c.followedByViewer,
           attachments: attachmentMeta(c.attachments),
           solutions: c.solutions.map((s) => ({
@@ -539,6 +561,7 @@ export const TOOLS: readonly ToolDef[] = [
         visibility: { type: "string", enum: ["org", "namespace"], default: "org" },
         anonymous: { type: "boolean", default: false },
         topicIds: TOPIC_IDS_SCHEMA,
+        affectedEstimate: AFFECTED_ESTIMATE_SCHEMA,
         similarAcknowledged: { type: "array", items: { type: "string" }, maxItems: 5 },
       },
       required: ["title", "description", "impactAreaId", "namespaceId"],
@@ -563,6 +586,7 @@ export const TOOLS: readonly ToolDef[] = [
           isAnonymous: bool(args, "anonymous") ?? false,
           similarAcknowledged: parseSimilarAcknowledged(args.similarAcknowledged),
           topicIds: topicIdsArg(args) ?? [],
+          affectedEstimate: affectedEstimateArg(args) ?? null,
         },
         via(ctx),
       );
@@ -651,7 +675,7 @@ export const TOOLS: readonly ToolDef[] = [
     name: "edit_challenge",
     title: "Edit my challenge",
     description:
-      "Edits the title, description, impact area, client name or topics of a challenge the person is an author of, inside its edit window (awaiting triage or needs improvement). Pass baseEditedAt — the editedAt from innobox_get_challenge. Fields left out keep their value; topicIds replaces the topics.",
+      "Edits the title, description, impact area, client name, topics or the estimate of how many people it affects of a challenge the person is an author of, inside its edit window (awaiting triage or needs improvement). Pass baseEditedAt — the editedAt from innobox_get_challenge. Fields left out keep their value; topicIds replaces the topics; affectedEstimate null clears the estimate.",
     readOnly: false,
     bucket: "mutation",
     inputSchema: {
@@ -664,6 +688,7 @@ export const TOOLS: readonly ToolDef[] = [
         impactAreaId: { type: "string" },
         clientName: { type: "string", maxLength: CLIENT_NAME_MAX },
         topicIds: TOPIC_IDS_SCHEMA,
+        affectedEstimate: AFFECTED_ESTIMATE_SCHEMA,
       },
       required: ["number", "baseEditedAt"],
       additionalProperties: false,
@@ -683,6 +708,8 @@ export const TOOLS: readonly ToolDef[] = [
           clientName: args.clientName !== undefined ? str(args, "clientName") : current.clientName,
           impactAreaId: uuidArg(args, "impactAreaId") ?? current.impactAreaId,
           ...(args.topicIds !== undefined && args.topicIds !== null ? { topicIds: topicIdsArg(args) } : {}),
+          // §41.8: absent keeps the authors' estimate; null clears it.
+          ...(args.affectedEstimate !== undefined ? { affectedEstimate: affectedEstimateArg(args) } : {}),
           baseEditedAt,
         },
         via(ctx),

@@ -19,6 +19,7 @@ import { useDateFmt } from "@/components/DateFormat";
 import { reportFeatureUse } from "@/lib/survey-client";
 import { ViaAgentTag, type ViaAgent } from "@/components/ViaAgentTag";
 import { HypeCount } from "@/components/Hype";
+import { ReachCount } from "@/components/Affected";
 
 interface MeResponse {
   user: { id: string };
@@ -55,6 +56,9 @@ interface TriageRow {
   viaAgent?: ViaAgent;
   /** §26.5: all-time hype points — present only while hype is on. */
   hype?: number;
+  /** §41.4: about how many people it affects, and how many colleagues said so. */
+  reach: number;
+  affectedPeople: number;
 }
 
 type Tab = "challenges" | "solutions";
@@ -167,6 +171,8 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
   const [assignee, setAssignee] = useState("");
   // §34.6: "" (any), "none" (no topic) or a topic id.
   const [topic, setTopic] = useState("");
+  // §41.5: the queue's one sort — newest first, or by reach (the Reach header toggles it).
+  const [sortByReach, setSortByReach] = useState(false);
   const [topicOptions, setTopicOptions] = useState<TopicOption[]>([]);
   // A picked specific person for the assignee filter (overrides the preset select above).
   const [specificAssignee, setSpecificAssignee] = useState<{ id: string; displayName: string } | null>(null);
@@ -209,7 +215,7 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
   // could otherwise land past the end of a broader one's result set.
   useEffect(() => {
     setPage(1);
-  }, [status, authorName, number, assignee, specificAssignee, topic]);
+  }, [status, authorName, number, assignee, specificAssignee, topic, sortByReach]);
 
   // The effective assignee filter: a picked specific person wins; otherwise the preset select
   // ("unassigned", or "me" → my own id). "" means Any assignee.
@@ -228,10 +234,12 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
     if (number.trim()) params.set("number", number.trim());
     if (effectiveAssigneeId) params.set("assigneeId", effectiveAssigneeId);
     if (topic) params.set("topic", topic);
+    // §41.5: the server sorts (the queue is paginated), and the export follows the same order.
+    if (sortByReach) params.set("sort", "widest_reach");
     params.set("page", String(page));
     params.set("pageSize", String(PAGE_SIZE));
     return params.toString();
-  }, [status, authorName, number, effectiveAssigneeId, topic, page]);
+  }, [status, authorName, number, effectiveAssigneeId, topic, sortByReach, page]);
 
   // silent refresh (used after an inline row assign) keeps the current rows visible instead of
   // flashing the whole table to "Loading…", while still re-applying the active filters.
@@ -550,6 +558,18 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
             <span>Status</span>
             <span>Assignee</span>
             {rows.some((r) => r.hype !== undefined) && <span>Hype</span>}
+            <span aria-sort={sortByReach ? "descending" : "none"}>
+              <button
+                type="button"
+                className="triage-sort"
+                aria-pressed={sortByReach}
+                title={sortByReach ? "Sorted by reach — click for newest first" : "Sort by reach, widest first"}
+                onClick={() => setSortByReach((v) => !v)}
+                data-testid="triage-sort-reach"
+              >
+                Reach{sortByReach && <span aria-hidden="true">↓</span>}
+              </button>
+            </span>
             <span>Created</span>
           </div>
           {rows.map((r) => {
@@ -604,6 +624,8 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
                 }}
               />
               {r.hype !== undefined && <HypeCount value={r.hype} className="sub mono" />}
+              {/* §41.5: the reach with the people count muted after it ("120 · 8"). */}
+              <ReachCount value={r.reach} people={r.affectedPeople} className="sub mono" />
               <span className="sub mono">{fmt.date(r.createdAt)}</span>
             </div>
             );

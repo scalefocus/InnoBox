@@ -1668,7 +1668,8 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .ch-view-toggle { margin-left: auto; }
 .ch-rows .ch-row {
   display: grid; position: relative;
-  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 76px 96px;
+  /* number · title · status · namespace · author · likes · reach (§41.5) · solutions · date */
+  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 64px 76px 96px;
   gap: 14px; padding: 12px 20px;
 }
 .ch-rows .ch-row.row-head {
@@ -1750,7 +1751,7 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
    The list gains a Hype column after Likes while hype is on; the detail page gets the button,
    the count and the hypers row; Home gets the "Hyped this week" rows. Tokens only (§2.2). */
 .ch-rows.has-hype .ch-row {
-  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 56px 76px 96px;
+  grid-template-columns: 76px minmax(0, 1fr) 132px minmax(0, 120px) minmax(0, 180px) 56px 56px 64px 76px 96px;
 }
 .ch-c-hype { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .hype-count { white-space: nowrap; }
@@ -1777,6 +1778,47 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .detail-head > .grow { flex-basis: calc(100% - 64px); }
 }
 /* ── end Hype ───────────────────────────────────────────────────────────── */
+
+/* ── This affects me too (§41.5) ───────────────────────────────────────────
+   The detail header gets the button and its headcount popover, the body the "Who's affected"
+   section; cards, list rows and the triage queue get the reach count. Tokens only (§2.2). */
+.affected-anchor { position: relative; display: inline-flex; }
+.affected-btn.is-on { background: var(--accent-soft); border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); color: var(--ink); opacity: 1; }
+.affected-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  width: min(320px, calc(100vw - 32px)); transform-origin: top right;
+}
+.affected-pop-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; text-align: left; }
+.affected-pop-q { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+.affected-pop-hint { margin: 0; font-size: 12px; }
+.affected-pop-problem { color: var(--danger); font-size: 12.5px; }
+.affected-pop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.affected-remove { margin-left: auto; color: var(--danger); }
+.affected {
+  display: flex; flex-direction: column; gap: 4px; margin: 6px 0 14px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.affected-head { display: flex; align-items: center; gap: 6px; }
+.affected-info { color: var(--faint); cursor: help; font-size: 13px; }
+.affected-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.affected-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 9px 2px 2px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 12.5px;
+}
+.affected-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.affected-count { color: var(--muted); }
+.reach-people { color: var(--faint); }
+.ch-c-reach { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.similar-affected { display: inline-flex; margin-left: 6px; vertical-align: middle; }
+.triage-sort { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.triage-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+.triage-sort[aria-pressed="true"] { color: var(--ink); }
+@media (max-width: 880px) {
+  .ch-c-reach { order: 8; font-size: 12px; }
+  .ch-c-sol { order: 9; }
+  .ch-c-reach::before { content: "·"; color: var(--faint); margin-right: 4px; }
+}
+/* ── end This affects me too ────────────────────────────────────────────── */
 
 /* ── Invite a solver (INNOBOX_SPEC.md §40.2, §40.3) ─────────────────────────
    The Invite dialog reuses the propose-dialog shell and the co-author tag field; the invitee's

@@ -27,6 +27,7 @@ const POPOVERS: Record<string, string> = {
   "dir-card": "components/DirectoryCard.tsx", // directory hover card
   "search-ac": "components/TopbarSearch.tsx", // topbar search autocomplete
   "user-search-pop": "components/FloatingResults.tsx", // triage assignee pickers + the §4.3 access-list editor
+  "affected-pop": "components/Affected.tsx", // §41.3 "This affects me too" headcount popover
 };
 
 function tsxFiles(dir: string): string[] {

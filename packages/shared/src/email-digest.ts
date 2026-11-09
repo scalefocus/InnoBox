@@ -4,6 +4,7 @@
 // owns the choice, which events a digest may hold, the fixed send slots, and the digest's copy;
 // the hold at insert time lives in the web tier (lib/notify.ts) and the send in the worker.
 import { topicDigestLine } from "./topics.js";
+import { affectedDigestLine } from "./affected.js";
 
 export const EMAIL_DELIVERY_MODES = ["immediate", "daily", "weekly"] as const;
 export type EmailDelivery = (typeof EMAIL_DELIVERY_MODES)[number];
@@ -23,14 +24,14 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
  *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable), 18 (a new
- *  challenge in a topic the recipient follows, §34.5) and 20 (a feature you proposed or upvoted is
- *  now available, §38.8). Event 19, a review of your own proposal, is actionable and always
- *  immediate. */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20]);
+ *  challenge in a topic the recipient follows, §34.5), 20 (a feature you proposed or upvoted is
+ *  now available, §38.8) and 24 (someone said your challenge affects them too, §41.6). Event 19, a
+ *  review of your own proposal, is actionable and always immediate. */
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20, 24]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
@@ -65,7 +66,7 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature";
+export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature" | "affected";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
@@ -82,6 +83,9 @@ export interface DigestFacts {
   statusLabel?: string | null;
   /** §34.5 event 18: the followed topics the challenge opened in. */
   topics?: string[] | null;
+  /** §41.6 event 24: the challenge's reach when the row was written — the digest prefers the
+   *  coalesced inbox row's latest figure. */
+  reach?: number | null;
 }
 
 /** One held row, as the digest job hands it to the renderer. */
@@ -144,6 +148,14 @@ function itemLines(updates: readonly DigestUpdate[]): string[] {
   const hypeSubjects = [...hypeBySubject.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : Number(a) - Number(b)));
   for (const key of hypeSubjects) {
     lines.push(`${key ? `SOL-${key}: ` : ""}${plural(hypeBySubject.get(key)!, "new hype", "new hypes")}`);
+  }
+
+  // §41.6: one line for the people who said the challenge affects them, with its latest reach.
+  const affected = updates.filter((u) => u.kind === "affected");
+  if (affected.length > 0) {
+    const count = affected.reduce((n, u) => n + u.count, 0);
+    const latest = affected.reduce((a, b) => (b.at.getTime() >= a.at.getTime() ? b : a));
+    lines.push(affectedDigestLine(count, latest.reach ?? null));
   }
   return lines;
 }
