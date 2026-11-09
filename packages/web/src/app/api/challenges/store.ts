@@ -16,6 +16,9 @@ import {
   parseAccessListInput,
   replaceAccessList,
   canAssignAtStatus,
+  challengeAffectedPeopleSql,
+  challengeReachSql,
+  decideAffected,
   canAuthorEditChallenge,
   canAuthorEditSolution,
   canAuthorResubmit,
@@ -247,6 +250,13 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   canEdit: boolean;
   canWithdraw: boolean;
   canResubmit: boolean;
+  /** §41.4: about how many people the challenge affects — the authors' estimate (1 when empty)
+   *  plus every current mark's headcount. */
+  reach: number;
+  /** §41.4: how many colleagues have said it affects them (its current marks). */
+  affectedPeople: number;
+  /** §41.2: the authors' own estimate — null when they left it empty. */
+  affectedEstimate: number | null;
   /** §10.3 permanent delete — platform admins only, on any status, in the trash or not. */
   canDelete: boolean;
   /** §10.4 Move to trash — platform admins only, while it is not already trashed. */
@@ -333,6 +343,11 @@ export interface ChallengeRow {
   trash_reason: string | null;
   /** §25.8: the MCP client name at creation, null for the browser. */
   mcp_client_name: string | null;
+  /** §41.2: the authors' estimate (null when empty). */
+  affected_estimate: number | null;
+  /** §41.4: `challengeReachSql` / `challengeAffectedPeopleSql`. */
+  reach: number;
+  affected_people: number;
 }
 
 interface SolutionRow {
@@ -381,7 +396,8 @@ export const CHALLENGE_SELECT = `
          (c.created_at > coalesce((select su.challenges_seen_at from users su where su.id = $viewer), '-infinity'::timestamptz)) as is_new,
          c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name,
          c.mcp_client_name,
-         c.trashed_at, c.trash_reason, (select tu.display_name from users tu where tu.id = c.trashed_by) as trashed_by_name
+         c.trashed_at, c.trash_reason, (select tu.display_name from users tu where tu.id = c.trashed_by) as trashed_by_name,
+         c.affected_estimate, ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -611,6 +627,9 @@ function toDetail(
     canEdit: isLiveMine && canAuthorEditChallenge(status),
     canWithdraw: isLiveMine && canAuthorWithdrawChallenge(status),
     canResubmit: isLiveMine && canAuthorResubmit(status),
+    reach: row.reach,
+    affectedPeople: row.affected_people,
+    affectedEstimate: row.affected_estimate,
     canDelete: isPlatformAdmin,
     canTrash: isPlatformAdmin && live,
     canRestore: isPlatformAdmin && !live,
@@ -842,6 +861,10 @@ export interface SimilarChallenge {
   title: string;
   status: ChallengeStatus;
   author: MaskedAuthor;
+  /** §41.5: the viewer may mark this match as affecting them (open past triage, not their own). */
+  canMarkAffected: boolean;
+  /** §41.5: the viewer's own current headcount on this match, or null. */
+  affectedMine: number | null;
 }
 
 /** At most this many matches are shown in the warning. */
@@ -901,6 +924,8 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
     return `$${params.length}`;
   };
   const termsParam = push(terms);
+  // §41.5: whether the viewer is on the match's team, and their own current mark on it.
+  const viewerParam = push(viewer.userId);
   // Each stem is quoted as a tsquery literal, so punctuation inside a lexeme can never be read
   // as tsquery syntax.
   const tsquery = `to_tsquery('simple', (select string_agg(quote_literal(t), ' | ') from unnest(${termsParam}::text[]) t))`;
@@ -921,11 +946,16 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
     visibility: "org" | "namespace";
     excerpt: string;
     shared: number;
+    is_member: boolean;
+    affected_mine: number | null;
   }>(
     `select * from (
        select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
               u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
               ${challengeTeamJsonSql("c")} as team,
+              ${isChallengeMemberSql("c", viewerParam)} as is_member,
+              (select ca.headcount from challenge_affected ca
+                where ca.challenge_id = c.id and ca.user_id = ${viewerParam} and ca.removed_at is null) as affected_mine,
               c.visibility, left(c.description, 500) as excerpt,
               ts_rank(c.search_vector, ${tsquery}) as rank,
               (select count(*)::int from unnest(tsvector_to_array(c.search_vector)) l where l = any(${termsParam}::text[])) as shared
@@ -959,6 +989,9 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
         r.team,
       ),
     ),
+    // §41.5: the trash never reaches this list, so only the status and the team decide.
+    canMarkAffected: decideAffected({ status: r.status as ChallengeStatus, isAuthor: r.is_member, trashed: false }).canMark,
+    affectedMine: r.affected_mine,
     visibility: r.visibility,
     excerpt: r.excerpt,
   }));
@@ -980,11 +1013,15 @@ export async function countNewChallenges(pool: Pool, viewer: Viewer): Promise<nu
   return Number(rows[0]?.count ?? 0);
 }
 
+/** A gallery row: the list item plus its §41.4 reach, which the gallery's cards and list show and
+ *  nothing else that reuses the list item does (§41.5 — no reach on Home or the profile). */
+export type GalleryListItem = ChallengeListItem & { reach: number };
+
 export async function listChallenges(
   pool: Pool,
   viewer: Viewer,
   filters: ChallengeListFilters,
-): Promise<ChallengeListItem[]> {
+): Promise<GalleryListItem[]> {
   const params: unknown[] = [];
   const push = (v: unknown): string => {
     params.push(v);
@@ -1025,13 +1062,16 @@ export async function listChallenges(
         : filters.sort === "most_hyped"
           ? // §26.5: the challenge's own all-time hype points, then newest.
             "(select coalesce(sum(h.weight), 0) from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) DESC, c.created_at DESC"
-          : "c.created_at DESC";
+          : filters.sort === "widest_reach"
+            ? // §41.5: the challenge's reach (the select's own column), then newest.
+              "reach DESC, c.created_at DESC"
+            : "c.created_at DESC";
 
   const whereClause = conditions.length ? `where ${conditions.join(" and ")}` : "";
   const sql = `${CHALLENGE_SELECT.replaceAll("$viewer", viewerParam)} ${whereClause} order by ${orderBy} limit 100`;
 
   const { rows } = await pool.query<ChallengeRow>(sql, params);
-  return rows.map(toListItem);
+  return rows.map((row) => ({ ...toListItem(row), reach: row.reach }));
 }
 
 /** Folds "doesn't exist" and "exists but not visible" into the same null result — an
@@ -1145,6 +1185,9 @@ export async function createChallenge(
     topicIds?: string[];
     /** §6.1 / §39: up to four co-authors — never through an agent (§39.10). */
     coAuthors?: CreateCoAuthors;
+    /** §41.2: the authors' estimate of how many people it affects, already parsed — null or absent
+     *  when left empty. */
+    affectedEstimate?: number | null;
   },
   via?: AgentSource,
 ): Promise<CreateChallengeResult> {
@@ -1210,9 +1253,10 @@ export async function createChallenge(
     // Claim (lock + check) the staged rows before anything is written, so a refusal leaves no trace.
     const staged = draftKey ? await claimStagedAttachments(client, author, "challenge", draftKey, { maxPerItem, requireClean }) : null;
     if (staged && staged.status !== "ok") return staged;
+    const affectedEstimate = input.affectedEstimate ?? null;
     const { rows } = await client.query<{ id: string }>(
-      `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id, mcp_client_name)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `insert into challenges (namespace_id, visibility, title, description, impact_area_id, client_name, is_anonymous, author_id, mcp_client_name, affected_estimate)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        returning id`,
       [
         input.namespaceId,
@@ -1224,6 +1268,7 @@ export async function createChallenge(
         validated.value.isAnonymous,
         author.userId,
         via?.clientName ?? null,
+        affectedEstimate,
       ],
     );
     const id = rows[0]!.id;
@@ -1239,6 +1284,8 @@ export async function createChallenge(
         visibility: validated.value.visibility,
         isAnonymous: validated.value.isAnonymous,
         ...(topicIds.length > 0 ? { topicIds } : {}),
+        // §41.10: the authors' estimate, when they gave one.
+        ...(affectedEstimate !== null ? { affectedEstimate } : {}),
         // §6.1: present only when the author submitted past a duplicate warning.
         ...(input.similarAcknowledged && input.similarAcknowledged.length > 0 ? { similarAcknowledged: input.similarAcknowledged } : {}),
         ...agentAuditFields(via),
@@ -2140,7 +2187,16 @@ export async function editChallenge(
   pool: Pool,
   author: Viewer,
   number: string,
-  input: { title: unknown; description: unknown; clientName: unknown; impactAreaId: string; topicIds?: string[]; baseEditedAt: string | null },
+  input: {
+    title: unknown;
+    description: unknown;
+    clientName: unknown;
+    impactAreaId: string;
+    topicIds?: string[];
+    /** §41.2: the authors' estimate, already parsed — absent keeps the current one; null clears it. */
+    affectedEstimate?: number | null;
+    baseEditedAt: string | null;
+  },
   via?: AgentSource,
 ): Promise<EditChallengeResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -2151,9 +2207,10 @@ export async function editChallenge(
       description: string;
       client_name: string | null;
       is_anonymous: boolean;
+      affected_estimate: number | null;
     }
   >(
-    `select ${CHALLENGE_VIS_COLS}, c.impact_area_id, c.title, c.description, c.client_name, c.is_anonymous
+    `select ${CHALLENGE_VIS_COLS}, c.impact_area_id, c.title, c.description, c.client_name, c.is_anonymous, c.affected_estimate
        from challenges c where c.number = $1`,
     [number],
   );
@@ -2178,11 +2235,14 @@ export async function editChallenge(
   });
   if (!validated.ok) return { status: "invalid", error: validated.error };
 
+  // §41.2: absent keeps the authors' estimate; a value (or null) replaces it.
+  const nextEstimate = input.affectedEstimate === undefined ? cur.affected_estimate : input.affectedEstimate;
   const diff = diffFields([
     { key: "title", before: cur.title, after: validated.value.title },
     { key: "description", before: cur.description, after: validated.value.description },
     { key: "clientName", before: cur.client_name, after: validated.value.clientName },
     { key: "impactAreaId", before: cur.impact_area_id, after: input.impactAreaId },
+    { key: "affectedEstimate", before: cur.affected_estimate, after: nextEstimate },
   ]);
 
   // §34.3: topics are an editable field like impact area — the same rules as the admin's control.
@@ -2200,9 +2260,10 @@ export async function editChallenge(
     if (diff.changed || topicsChanged) {
       // §39.5: the stale-copy check and the write are one statement; a refusal writes nothing.
       const { rowCount } = await client.query(
-        `update challenges set title = $2, description = $3, client_name = $4, impact_area_id = $5, edited_at = now(), updated_at = now()
+        `update challenges set title = $2, description = $3, client_name = $4, impact_area_id = $5, affected_estimate = $7,
+                edited_at = now(), updated_at = now()
           where id = $1 and ${sameEditSql("edited_at", "$6")}`,
-        [cur.id, validated.value.title, validated.value.description, validated.value.clientName, input.impactAreaId, input.baseEditedAt],
+        [cur.id, validated.value.title, validated.value.description, validated.value.clientName, input.impactAreaId, input.baseEditedAt, nextEstimate],
       );
       if (!rowCount) return { status: "stale" };
       if (topicsChanged && topicCheck) await writeChallengeTopics(client, cur.id, currentTopics, nextTopics, topicCheck.topics, author.userId);
@@ -2879,6 +2940,27 @@ async function teamAuthorsOf(db: Pool | PoolClient, entity: "challenge" | "solut
   return maskTeam({ userId: null, displayName: "", anonymous: false }, rows[0]?.team ?? [], { creatorFlag: true });
 }
 
+/** §41.3: a marker added to the challenge's team loses their current mark in the team change's
+ *  transaction — audited as `affected.removed` with `trigger: "joined_team"`, the actor being the
+ *  member who added them. A taken-back mark is left alone; the row itself stays (§41.9). */
+async function removeAffectedOnJoin(client: PoolClient, challengeId: string, userId: string, actorId: string): Promise<void> {
+  const { rows } = await client.query<{ headcount: number }>(
+    `update challenge_affected set removed_at = now(), updated_at = now()
+      where challenge_id = $1 and user_id = $2 and removed_at is null
+      returning headcount`,
+    [challengeId, userId],
+  );
+  if (!rows[0]) return;
+  await appendAudit(client, {
+    actorUserId: actorId,
+    action: "affected.removed",
+    targetType: "challenge",
+    targetId: challengeId,
+    before: { headcount: rows[0].headcount, userId },
+    after: { trigger: "joined_team" },
+  });
+}
+
 /**
  * §39.4 / §39.13: add a member, remove one, or — when `userId` is the caller's own — leave. Checks in
  * order: 404 (unseen, malformed, trashed; a removal of someone who is not a member), 403 (the caller
@@ -2929,6 +3011,8 @@ export async function changeTeam(
       // §39.8: a member auto-follows the item when they join.
       await client.query(`insert into follows (user_id, parent_type, parent_id) values ($1, $2, $3) on conflict do nothing`, [targetId, entity, item.id]);
       await appendAudit(client, { actorUserId: viewer.userId, action: `${entity}.author_added`, targetType: entity, targetId: item.id, after: { userId: targetId, via: "team" } });
+      // §41.3: from now on the team's estimate speaks for the joiner, so their mark is taken back.
+      if (entity === "challenge") await removeAffectedOnJoin(client, item.id, targetId, viewer.userId);
       await writeJoinAwards(client, entity, item.id, targetId, added[0]!.added_at); // §39.9, after the audit row
     } else {
       await client.query(`delete from ${membersTable} where ${itemColumn} = $1 and user_id = $2`, [item.id, targetId]);

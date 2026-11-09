@@ -47,6 +47,15 @@ import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicP
 import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker } from "@/components/TeamPanel";
 import type { UserResult } from "@/components/UserResultButton";
 import { readJson } from "@/lib/api-client";
+import { AffectedButton } from "@/components/Affected";
+import {
+  AFFECTED_BANNER_LINE,
+  AFFECTED_ESTIMATE_HINT,
+  AFFECTED_HEADCOUNT_MAX,
+  AFFECTED_HEADCOUNT_MIN,
+  AFFECTED_QUESTION,
+  affectedBannerToast,
+} from "@innobox/shared/affected";
 
 interface ImpactArea {
   id: string;
@@ -67,6 +76,9 @@ interface SimilarChallenge {
   author: { displayName: string; anonymous: boolean };
   /** §22.12: a one-line AI reason, when "Explain similar challenges" is on. */
   reason?: string;
+  /** §41.5: the viewer may say this match affects them, and their own current headcount on it. */
+  canMarkAffected?: boolean;
+  affectedMine?: number | null;
 }
 
 const labelStyle: React.CSSProperties = {
@@ -95,13 +107,15 @@ export default function NewChallengePage() {
   const [coAuthorNote, setCoAuthorNote] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicTag[]>([]);
   const topicOptions = useActiveTopics();
+  // §41.2: the authors' optional estimate of how many people it affects — empty means not given.
+  const [estimate, setEstimate] = useState("");
   const [draftKey] = useState(() => crypto.randomUUID());
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
   // §6.1: the warning is tied to the exact form contents it was computed for. Any edit changes
   // the signature, so the banner clears and the next click re-checks — derived, no effect needed.
-  const formSignature = JSON.stringify([title, description, impactAreaId, topics.map((t) => t.id), clientName, namespaceId, visibility, isAnonymous]);
+  const formSignature = JSON.stringify([title, description, impactAreaId, topics.map((t) => t.id), estimate, clientName, namespaceId, visibility, isAnonymous]);
   const [warning, setWarning] = useState<{ signature: string; matches: SimilarChallenge[]; explainedBy: string | null } | null>(null);
   const similar = warning && warning.signature === formSignature ? warning.matches : null;
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +231,7 @@ export default function NewChallengePage() {
           draftKey,
           topicIds: topics.map((t) => t.id),
           coAuthorIds: coAuthors.map((u) => u.id),
+          affectedEstimate: estimate.trim() === "" ? null : Number(estimate),
           similarAcknowledged: similar?.map((m) => m.number) ?? [],
         }),
       });
@@ -316,6 +331,28 @@ export default function NewChallengePage() {
               <TopicPicker id="topics" value={topics} onChange={setTopics} options={topicOptions} disabled={lock.locked} />
             </div>
           )}
+
+          <div>
+            <label style={labelStyle} htmlFor="affectedEstimate">
+              {AFFECTED_QUESTION} <span style={{ textTransform: "none", letterSpacing: 0 }}>(optional)</span>
+            </label>
+            <input
+              id="affectedEstimate"
+              className="field"
+              type="number"
+              inputMode="numeric"
+              min={AFFECTED_HEADCOUNT_MIN}
+              max={AFFECTED_HEADCOUNT_MAX}
+              step={1}
+              value={estimate}
+              onChange={(e) => setEstimate(e.target.value)}
+              aria-describedby="affectedEstimateHint"
+              style={{ width: 160 }}
+            />
+            <div id="affectedEstimateHint" className="sub" style={{ marginTop: 4 }}>
+              {AFFECTED_ESTIMATE_HINT}
+            </div>
+          </div>
 
           {isClient && (
             <div>
@@ -427,6 +464,26 @@ export default function NewChallengePage() {
                     <span className="sub">
                       · {CHALLENGE_STATUS_LABEL[m.status] ?? m.status} · {m.author.anonymous ? "Anonymous" : m.author.displayName}
                     </span>
+                    {/* §41.5: say the match affects you instead of submitting a duplicate. Marking
+                        changes nothing on the form, so the warning stays armed as it was. */}
+                    {m.canMarkAffected && (
+                      <span className="similar-affected">
+                        <AffectedButton
+                          challengeNumber={m.number}
+                          mine={m.affectedMine ?? null}
+                          reason={null}
+                          compact
+                          disabled={lock.locked}
+                          onSaved={(block) => {
+                            setWarning((w) =>
+                              w ? { ...w, matches: w.matches.map((x) => (x.number === m.number ? { ...x, affectedMine: block.affectedMine } : x)) } : w,
+                            );
+                            if (block.affectedMine !== null) notify(affectedBannerToast(m.number));
+                          }}
+                          onError={notify}
+                        />
+                      </span>
+                    )}
                     {m.reason && (
                       <div className="sub" data-testid="similar-reason" style={{ marginTop: 2 }}>
                         {m.reason}
@@ -435,6 +492,11 @@ export default function NewChallengePage() {
                   </li>
                 ))}
               </ul>
+              {similar.some((m) => m.canMarkAffected) && (
+                <p className="sub" style={{ margin: "10px 0 0" }}>
+                  {AFFECTED_BANNER_LINE}
+                </p>
+              )}
               {warning?.explainedBy && similar.some((m) => m.reason) && (
                 <p className="sub" style={{ margin: "10px 0 0" }}>
                   Reasons suggested by {warning.explainedBy} — they may be inaccurate.

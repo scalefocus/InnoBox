@@ -57,6 +57,8 @@ export interface HeldRow {
   inbox_read_at: Date | null;
   inbox_at: Date | null;
   inbox_count: number | null;
+  /** §41.6: a coalesced "affected" row's latest reach — refreshed with every new marker. */
+  inbox_reach?: number | null;
 }
 
 export type DropReason = "malformed" | "gone" | "read" | "invisible";
@@ -79,9 +81,12 @@ export function namesNoItem(row: HeldRow): boolean {
  *  gathered, and is as recent as its latest one. */
 export function toDigestUpdate(row: HeldRow): DigestUpdate {
   const facts = row.payload.digest!;
-  // §26.6: a coalesced "hyped" row counts every hype its inbox row gathered, like comments.
-  const count = facts.kind === "comment" || facts.kind === "hype" ? Math.max(1, row.inbox_count ?? 1) : 1;
+  // §26.6 / §41.6: a coalesced "hyped" or "affected" row counts every hype or marker its inbox row
+  // gathered, like comments.
+  const coalesced = facts.kind === "comment" || facts.kind === "hype" || facts.kind === "affected";
+  const count = coalesced ? Math.max(1, row.inbox_count ?? 1) : 1;
   const at = row.inbox_at && row.inbox_at.getTime() > row.created_at.getTime() ? row.inbox_at : row.created_at;
+  if (facts.kind === "affected") return { ...facts, count, at, reach: row.inbox_reach ?? facts.reach ?? null };
   return { ...facts, count, at };
 }
 
@@ -199,7 +204,7 @@ export async function runDigestSweep(
       const { rows: held } = await pool.query<HeldRow>(
         `select o.id, o.attempts, o.created_at, o.payload,
                 n.id as inbox_id, n.read_at as inbox_read_at, n.created_at as inbox_at,
-                (n.payload->>'count')::int as inbox_count
+                (n.payload->>'count')::int as inbox_count, (n.payload->>'reach')::int as inbox_reach
            from notification_outbox o
            left join notifications n on n.id = (o.payload->>'notificationId')::uuid and n.user_id = o.user_id
           where o.user_id = $1 and o.digest_due_at <= now() and ${OUTBOX_DUE_SQL}

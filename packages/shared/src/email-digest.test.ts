@@ -14,13 +14,28 @@ import {
 } from "./email-digest.js";
 import { parsePreferencePatch } from "./notification-preferences.js";
 
-const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
 
-test("only the follower-type events (2, 3, 6, 8), hyped (16), a new challenge in a followed topic (18) and feature now available (20) are digestable", () => {
+test("only the follower-type events (2, 3, 6, 8), hyped (16), a new challenge in a followed topic (18), feature now available (20) and affects them too (24) are digestable", () => {
   assert.deepEqual(
     ALL_EVENTS.filter((e) => isDigestableEvent(e)),
-    [2, 3, 6, 8, 16, 18, 20],
+    [2, 3, 6, 8, 16, 18, 20, 24],
   );
+});
+
+test("renderDigest: the people who said a challenge affects them get one line, with the latest reach (§41.6)", () => {
+  const digest = renderDigest(
+    [
+      update({ kind: "comment", count: 1 }),
+      update({ kind: "affected", count: 2, reach: 40, at: new Date("2026-11-01T08:00:00Z") }),
+      update({ kind: "affected", count: 1, reach: 52, at: new Date("2026-11-02T08:00:00Z") }),
+    ],
+    "daily",
+    "https://x.test",
+  );
+  assert.ok(digest);
+  const lines = digest!.text.split("\n");
+  assert.ok(lines.includes("- 3 more people say it affects them — about 52 in all"), digest!.text);
 });
 
 test("renderDigest: a challenge new in a followed topic leads its block, topics merged and sorted (§34.5)", () => {

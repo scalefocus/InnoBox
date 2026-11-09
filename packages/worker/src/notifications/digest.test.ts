@@ -42,6 +42,15 @@ test("toDigestUpdate: a coalesced hyped row counts every hype it gathered (§26.
   assert.equal(u.count, 3);
 });
 
+test("toDigestUpdate: a coalesced affected row counts every marker and takes the inbox row's latest reach (§41.6)", () => {
+  const facts = { kind: "affected" as const, challengeNumber: "1", challengeTitle: "T", reach: 13 };
+  const latest = toDigestUpdate(row({ payload: { digest: facts }, inbox_count: 4, inbox_reach: 60 }));
+  assert.equal(latest.count, 4);
+  assert.equal(latest.reach, 60);
+  // A row written before the inbox carried a reach falls back to the figure in its facts.
+  assert.equal(toDigestUpdate(row({ payload: { digest: facts }, inbox_count: 1 })).reach, 13);
+});
+
 test("toDigestUpdate: a coalesced comment row counts every comment and is as recent as the latest", () => {
   const u = toDigestUpdate(
     row({

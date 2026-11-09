@@ -120,6 +120,9 @@ export * from "./coauthors-db.js";
 // §40 invite a solver: the caps, the request parser, the "answered" rule and the copy of the dialog,
 // the banner and events 22–23 (client-safe, also at `@innobox/shared/invitations`).
 export * from "./invitations.js";
+// §41 "this affects me too": the headcount bounds and parsers, the eligibility matrix, the reach
+// arithmetic and its SQL twin, and the copy (client-safe, also at `@innobox/shared/affected`).
+export * from "./affected.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the

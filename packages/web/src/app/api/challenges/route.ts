@@ -3,7 +3,7 @@
 // their visibility); every list is visibility-filtered and anonymity-masked server-side.
 // Submission auto-follows the author and every co-author (§12.3, §39.8), notifies namespace admins
 // (§12.1 event 1) and tells each co-author they were added (event 21).
-import { parseCoAuthorIds, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR } from "@innobox/shared";
+import { parseAffectedEstimate, parseCoAuthorIds, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyChallengeSubmitted, notifyCoAuthorsAdded } from "@/lib/notify-events";
@@ -51,6 +51,9 @@ async function handlePOST(req: Request): Promise<Response> {
   // §6.1 / §39: up to four co-authors.
   const coAuthorIds = parseCoAuthorIds(body.coAuthorIds, gate.user.id);
   if (!coAuthorIds.ok) return Response.json({ error: coAuthorIds.error }, { status: 400 });
+  // §41.2: the authors' optional estimate — absent or null when left empty.
+  const estimate = body.affectedEstimate === undefined ? ({ ok: true, value: null } as const) : parseAffectedEstimate(body.affectedEstimate);
+  if (!estimate.ok) return Response.json({ error: estimate.error, code: "invalid_headcount" }, { status: 422 });
 
   const result = await createChallenge(
     pool,
@@ -67,6 +70,7 @@ async function handlePOST(req: Request): Promise<Response> {
       similarAcknowledged: parseSimilarAcknowledged(body.similarAcknowledged),
       topicIds: topicIds.value,
       coAuthors: { ids: coAuthorIds.value, resolveRoles: resolveRolesForUser },
+      affectedEstimate: estimate.value,
     },
   );
 

@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.27 — draft for review** (2026-10-28; v0.2 added the UI and CI/CD
+> Status: **v0.28 — draft for review** (2026-11-09; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -94,7 +94,14 @@
 > too, with an optional note; the invitee hears by e-mail and in-app (event 22) and
 > finds a banner with a quiet *Not for me*; when they propose, every inviter is told
 > in-app (event 23) and moves toward a Matchmaker badge — never widening visibility,
-> naming nobody anonymous, and seen by nobody but the two people involved (§40)).
+> naming nobody anonymous, and seen by nobody but the two people involved (§40); v0.28
+> (2026-11-09) specified **"this affects me too"** as a new-feature gap — on a challenge
+> past triage, anyone but its authors says it affects them with a headcount of 1–1,000,
+> added to the authors' own estimate from the submit form; the challenge shows *about N
+> people affected* and the public list of who said so, the triage queue gains a sortable
+> Reach column, the gallery a *Widest reach* sort, and the duplicate warning a way to
+> mark the match instead of submitting; the authors hear of each new marker once
+> (event 24), with no points and no switch (§41)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -1007,7 +1014,8 @@ Entra runbook); on conflict this document wins.
   - optionally **hands over open assignments** to a successor (below).
 
   What erasure deliberately **keeps**, attached to the de-identified row: the user's
-  likes and follows; **curation provenance** — their Home pins stay in place and
+  likes, follows and §41 "affects me too" marks (which keep counting toward a
+  challenge's reach); **curation provenance** — their Home pins stay in place and
   `featured_by` keeps pointing at the scrubbed row, so the admin control's sub-text reads
   *"Featured by Deleted User on <date>"* (erasure does not unpin anything); and the user
   references on channel-webhook configuration rows they created or updated (§12.4),
@@ -1129,7 +1137,7 @@ shown (§13.6).
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
-| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
+| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
 
 A user may hold different roles in different namespaces. Roles are additive.
 
@@ -1317,6 +1325,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   challenge accepted from the §24 public form). For such a challenge **`author_id` is
   null**; a check constraint requires exactly one of `author_id` and
   `public_submission_id` to be non-null, so every other challenge keeps a real author.
+  **affected_estimate** (nullable smallint, 1–1,000 — the authors' answer to *"How many
+  people does this affect?"*, §41.2; content, edited as any author field).
   A platform admin may **hard-delete** a challenge, cascading to every child row
   (§10.3); that is the only path that removes the row.
 - **`challenge_access`** — the §4.3 `people` access list: id, challenge_id (FK,
@@ -1348,6 +1358,11 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   the payoff's `paid_off_at` / `paid_off_solution_id`; unique per inviter, invitee and
   challenge) and the invitee's quiet *Not for me* per challenge (§40.10). Both are
   private to the two people involved and removed with the challenge.
+- **`challenge_affected`** — the §41 "this affects me too" marks: challenge, user,
+  headcount (1–1,000), created_at, updated_at and `removed_at` (a taken-back mark keeps
+  its row); unique per person and challenge, public to anyone who can see the challenge,
+  removed with it (§41.9). The authors' own estimate is
+  `challenges.affected_estimate`.
 - **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
   **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
   for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
@@ -1506,7 +1521,8 @@ impact = Client; at most 200 characters, §2.4), namespace (memberships, archive
 anywhere on the page, or pasted**, §11 *Drop and paste*), **"Submit
 anonymously"** checkbox (§9), **co-authors** (up to four colleagues from the eligible
 people of the chosen namespace and visibility; never together with *Submit
-anonymously*, §39.2, §39.3).
+anonymously*, §39.2, §39.3), and an optional **"How many people does this affect, you
+included?"** (a whole number 1–1,000, after topics — the authors' estimate, §41.2).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
@@ -1534,6 +1550,9 @@ check is **advisory, always on, never a hard block**, and has no platform settin
 When the author submitted past a warning, the `challenge.created` audit payload
 records `similarAcknowledged: [<numbers>]` (absent otherwise) — no new column. The
 endpoint shares the search rate limit (§2.4). **Solutions get no duplicate check in v1.**
+The banner also lets the author say a listed match **affects them too** instead of
+submitting (§41.5); marking one changes nothing on the form and does not re-arm the
+check.
 
 ### §6.2 Solution proposal (any user who can see the challenge)
 
@@ -1882,7 +1901,8 @@ check, which refuses a save made from a stale copy (§39.5).
   re-unlocks editing for the author on either entity. Editing is **author-only** —
   admins moderate via status override + comment deletion, not content edits.
   - **Editable fields** — challenge: title, description, impact area (the §5
-    Client↔client-name pairing is re-validated), topics (§34.3); solution: description,
+    Client↔client-name pairing is re-validated), topics (§34.3), the authors' estimate
+    of how many people it affects (§41.2); solution: description,
     cost vs benefits. (Namespace and platform admins may also change a challenge's
     topics at any time; that is curation, not a content edit, §34.3.) **Not** editable here: `visibility` (namespace/platform-admin only,
     §4.3), anonymity (removed only via one-way self-reveal, §9), and namespace.
@@ -2009,7 +2029,7 @@ those solutions — tombstones included; and every `notifications` inbox row and
 `notification_outbox` row targeting any of them; every `webhook_deliveries` row
 (§12.4) targeting any of them; every §22 `ai_results` row (triage notes, discussion
 summaries) of any of them; the challenge's §34 `challenge_topics` and
-`topic_notices` rows; and its §40 `challenge_invitations` and
+`topic_notices` rows; its §41 `challenge_affected` rows; and its §40 `challenge_invitations` and
 `challenge_invitation_dismissals` rows (deleting a solution instead nulls the
 `paid_off_solution_id` that points at it, §40.8). Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
@@ -2615,6 +2635,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 21 | Co-author added / removed (§39.8) | The person another member added to or removed from an item's team — never on a leave, never the other members. Actionable: immediate, never digested, not mutable; at most one e-mail per person per item per UTC day, the in-app line always |
 | 22 | Invited to propose a solution (§40.6) | The invitee only — not written after their *Not for me* on that challenge or while their *Invitations* preference is off. Actionable: immediate, never digested; at most one e-mail per person per challenge per UTC day, the in-app line always |
 | 23 | Invitation paid off (§40.6) | The inviter only — **in-app only**: no outbox row, so no e-mail; no preference; written whether or not gamification is on |
+| 24 | Affects them too (§41.6) | The challenge's authors only — never the marker, followers, admins or the assignee; nobody on an external challenge. Written on a person's **first** mark of the challenge only, never on a change, removal or re-mark. Coalesced per challenge in the inbox like events 6 and 16; the e-mail honors the opt-out and the digest choice |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2681,8 +2702,8 @@ a day or a week.
 - **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
   challenge author and followers, not the admin and committee route), 3 (status
   changed), 6 (comments, including replies), 8 (solution implemented), 16 (hyped,
-  §26.6), 18 (new challenge in a topic you follow, §34.5) and 20 (feature now
-  available, §38.8). Everything
+  §26.6), 18 (new challenge in a topic you follow, §34.5), 20 (feature now
+  available, §38.8) and 24 (affects them too, §41.6). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
   12, 21, 22, and 19 to a proposer). Events 13 and 23 have no e-mail at all.
@@ -2765,8 +2786,9 @@ one e-mail per item until they read it**; once read, the next comment starts a f
 row (and a fresh e-mail). Copy: *"3 new comments on CH-412 — latest by Alice"*
 (comments carry no anonymity option, so the commenter's name is safe; the item's own
 author stays masked per §9). **Read actions:** opening the inbox row, mark-all-read,
-**or opening the item's detail page** all mark that item's row read. **Only events 6
-and 16 (hyped, §26.6) coalesce**; every other event remains one row per occurrence.
+**or opening the item's detail page** all mark that item's row read. **Only events 6,
+16 (hyped, §26.6) and 24 (affects them too, §41.6) coalesce**; every other event
+remains one row per occurrence.
 Opening a challenge's detail page also reads its event-18 row (§34.5) and the viewer's
 event-22 rows about it (§40.6).
 
@@ -2867,8 +2889,9 @@ concurrently after one §4.2 resolution.
 
 Any user may follow/unfollow any challenge or solution they can see. Authors (every
 member of a co-author team, including one who joins later, §39.8) and
-assignees are auto-followed to their items (can unfollow). Followers receive events
-3, 6, 8 (and 2 for challenge followers).
+assignees are auto-followed to their items (can unfollow), and so is anyone the first
+time they mark a challenge as affecting them (§41.3; removing the mark does not
+unfollow). Followers receive events 3, 6, 8 (and 2 for challenge followers).
 
 A user may also follow a **topic** (§34.4): any active one, from `/topics`, the filtered
 gallery or their profile. A topic follow is not a follow of any item. It delivers only
@@ -3157,11 +3180,13 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
   `rejected`). Filters: status, impact area, **topic** (§34.6 — with its filtered
   header and Follow button), namespace, author name (matching any
   member of a co-author team, §39); sort: newest
-  (default), most liked, most solutions, and — while hype is on — most hyped (§26.5).
+  (default), most liked, most solutions, most hyped (while hype is on, §26.5) and
+  widest reach (§41.5).
 - Cards show number (`CH-<n>`), title, author (masked if anonymous, §9; a co-author
   team in its compact form, §39.7), created
   date, impact area, **topic chips** (each a link that filters by the topic, §34.6),
-  status, like count, the hype number while hype is on (§26.5), and
+  status, like count, the hype number while hype is on (§26.5), the reach (*about N
+  people affected*, §41.5), and
   a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
 - **Cards / List view toggle.** A two-option segmented control (**Cards** | **List**,
   the existing `.sort-toggle` look, each option `aria-pressed`, §2.2) at the end of the
@@ -3180,7 +3205,8 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
     pill) · **namespace** (`/<slug>`) · **author** (small avatar bubble + name, or
     **"Anonymous"** with the neutral bubble — masked exactly as on the card, invariant 3,
     §9; real-user bubbles carry the §13.8 card, anonymous ones never do) · **likes**
-    (count only — no like toggle) · **solutions** (the same filtered count as the card)
+    (count only — no like toggle) · **reach** (the §41.4 number, no mark button) ·
+    **solutions** (the same filtered count as the card)
     · **date** (created, date only, via the shared formatter). Impact area and topics
     stay filters and card chips but are not list columns.
   - **Rows** reuse the §14.1 list pattern: a `.rows` table with a mono uppercase header
@@ -3194,7 +3220,7 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
     too, with the same wording, condition and masking. The list never shows less state
     than the card.
   - **Mobile (≤ 880 px):** the header row hides and each row stacks: number + status;
-    title; then a muted meta line (namespace · author · date · likes · solutions). The
+    title; then a muted meta line (namespace · author · date · likes · reach · solutions). The
     "new" tab stays pinned to the right edge.
   - Visibility and counts are those of the shared payload (invariant 2). The list adds
     no data.
@@ -3226,6 +3252,10 @@ whole visit, and the next visit flags only genuinely newer items.
   (§8.3).
 - Hype button, hype number and hypers list (§26.5) while hype is on — on the challenge
   and on each listed solution, beside the like button.
+- **This affects me too** (§41.3) beside the like and hype buttons, and the **Who's
+  affected** section below the hypers list — *about N people affected*, the authors'
+  estimate and the colleagues who said it affects them, each with their headcount
+  (§41.5). Challenges only.
 - The challenge's solutions, listed inline, honoring §4.3's solution-visibility rule
   (a `proposed` solution is hidden except to its author, the challenge's assignee,
   and the namespace's committee/admins), with `rejected`/`not_selected` ones in the
@@ -4669,7 +4699,11 @@ the existing brand link tokens; the separator is a `›` glyph.
 A filterable queue of the namespace's challenges: columns number, title, author
 (masked when anonymous until revealed §9; a co-author team in its compact form,
 §39.7), status, impact area, **topics** (§34.6), assignee, hype (the
-§26 number, while hype is on), created.
+§26 number, while hype is on), **reach** (the §41.4 number with the people count,
+*"120 · 8"*), created.
+**Sort:** newest first by default; the **Reach** column header sorts by reach,
+descending, and pressing it again restores newest first — a server-side `sort`
+parameter, because the queue is paginated (§41.5). It is the queue's only sort.
 Filters: author name (matches non-anonymous items only, and any member of a co-author
 team, §39), **assignee — Any,
 "Unassigned", "Assigned to me", or a specific person (searchable)**, status, number,
@@ -4715,7 +4749,8 @@ the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
 the export, and a co-author team fills the author cell with every member in order,
 separated by `; ` (§39.7); a **Topics** column carries the topic names joined by `; `
-(§34.6); every export is audited (who, filter, row count).
+(§34.6); a **Reach** column after it carries the reach (§41.5); the rows follow the
+queue's current sort; every export is audited (who, filter, row count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
 (titles, names, impact areas), and spreadsheet applications run a cell that begins with
@@ -5836,7 +5871,12 @@ anomalies. Since v0.10 also:
 - **invitations** — `invitation.sent` (one row per invitee, actor the inviter, target
   the challenge, `after: { inviteeId, withNote }`; under All only, as `like.*`).
   **No row carries the note.** *Not for me*, the payoff, the award, the badge and
-  events 22–23 are not audited (§40.11).
+  events 22–23 are not audited (§40.11);
+- **affects me too** — `affected.marked`, `affected.changed` and `affected.removed`
+  (actor the marker, or the person who changed the team for a removal with `trigger:
+  "joined_team"`; target the challenge; the headcount before and after; under All only,
+  as `like.*`). The authors' estimate is part of `challenge.created` and
+  `challenge.edited`. The auto-follow and event 24 are not audited (§41.10).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6080,6 +6120,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   (`POST`, the invitee's *Not for me*); `users?q=` accepts `inviteFor` for the picker;
   the detail payload carries `canInvite`, the viewer's own `invitations` (*You invited*,
   `left`, `leftToday`) and their open `invited` block
+- affects me too (§41.10): `challenges/:number/affected` (`PUT { headcount }` sets the
+  caller's mark, 1–1,000; `DELETE` takes it back; 404 on an invisible challenge, 409 when
+  trashed, the caller's own, `awaiting_triage` or closed, 422 for a bad headcount); the
+  challenge create and `PUT` accept `affectedEstimate`; the detail payload carries
+  `reach`, `affectedPeople`, `affectedEstimate`, `affectedMine`, `canMarkAffected`,
+  `affectedReason` and `affected[]`; gallery rows carry `reach` and accept
+  `sort=widest_reach`; triage rows carry `reach` and `affectedPeople`, and the triage
+  list and export accept `sort=newest | widest_reach`; `challenges/similar` matches carry
+  `canMarkAffected` and `affectedMine`
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -6290,7 +6339,11 @@ open for solutions, no withdrawing, editing or expiring an invitation, no declin
 inviter is told of, no *seen*, *proposed* or *dismissed* state for the inviter, no list
 or count of invitations for anyone but the inviter and the invitee, no invitation that
 widens visibility, no points for inviting, no invitations through MCP, no leaderboard
-metric, and no platform switch;
+metric, and no platform switch; for "this affects me too" (§41): no marks on solutions,
+no note on a mark, no headcount bands and no de-duplication of overlapping headcounts,
+no mark before triage or after a close, no admin edit of someone else's mark, no points,
+badge or platform switch, no marking through MCP, no reach on Home, the profile, search
+results, the leaderboard, webhooks or AI prompts, and no reach total across challenges;
 no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
@@ -7119,7 +7172,8 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   **25** likes received that day and `hype_received` for the first **10** hypes
   received that day. Past the cap the award row is still written, with
   **0 points**, so badges that count events (§23.4) still see it.
-- **Never points for:** giving a like or a hype, following, editing, attaching a file, a comment
+- **Never points for:** giving a like or a hype, marking a challenge as affecting you
+  or having one marked (§41), following, editing, attaching a file, a comment
   on a deleted thread, a `not_selected` or `rejected` outcome, or liking your own item
   (no row at all). Withdrawing or deleting an item, deleting a comment, and unliking
   deduct nothing (decision 3).
@@ -8023,7 +8077,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | Tool | Behavior |
 |---|---|
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
-| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, `reach` and `affectedPeople` (§41.8), whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§39.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
@@ -8035,9 +8089,9 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 
 | Tool | Behavior |
 |---|---|
-| `submit_challenge` | §6.1: title, description, impact area, topics (optional, at most 3 active topic ids, §34.3), client name (only for Client), namespace, visibility (§25.5), `anonymous`. Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
+| `submit_challenge` | §6.1: title, description, impact area, topics (optional, at most 3 active topic ids, §34.3), client name (only for Client), namespace, visibility (§25.5), `anonymous`, `affectedEstimate` (optional, 1–1,000, §41.2). Created in `awaiting_triage`; the author follows it; event 1 fires. Optional `similarAcknowledged: [numbers]` lands in the audit payload as on the web. No attachments. |
 | `propose_solution` | §6.2: challenge number, description, cost vs benefits, `anonymous`. Only while the challenge is `valid`. Created `proposed`; event 2 fires. |
-| `edit_challenge` | §10.1 author edit — title, description, impact area, topics — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§39.5). |
+| `edit_challenge` | §10.1 author edit — title, description, impact area, topics, `affectedEstimate` (§41.2) — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§39.5). |
 | `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. Requires `baseEditedAt` from `get_solution`; a stale copy is refused (§39.5). |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
 | `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
@@ -8062,6 +8116,8 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
   log, the system log, presence, webhooks, the AI card, public submissions.
 - **AI tasks** (§22) — drafting, triage assist, summaries.
 - **Invitations to propose a solution** (§40.9) — sending one and *Not for me*.
+- **Marking a challenge as affecting you** (§41.8). `get_challenge` reads the reach and
+  the people count; no tool adds, changes or removes a mark.
 - **Profiles, leaderboards and gamification.**
 
 **15 is the ceiling.** A sixteenth tool is a spec change, and the first answer to
@@ -9683,7 +9739,7 @@ refuses a stale move.
 ### §39.8 Notifications — event 21
 
 - **"Author" in the §12.1 matrix means every member.** The *item author* of events 3,
-  4, 5, 6 and 16, the *challenge author* of events 2 and 8, and the *authors of
+  4, 5, 6 and 16, the *challenge author* of events 2, 8 and 24 (§41.6), and the *authors of
   `not_selected` siblings* of event 8 are each the item's whole team. The usual rules
   hold: recipients are deduplicated, and a member who acts (commenting, resubmitting)
   does not notify themselves.
@@ -9817,6 +9873,9 @@ member alike:
 - §26.3, §26.6 — no member may hype the item, and event 16 goes to every member.
 - §34.3, §34.5 — any member tags the challenge in the edit window, and event 18
   skips every member.
+- §41.2, §41.3, §41.6 — any member sets the team's one estimate in the edit window, no
+  member may mark the challenge as affecting them (a marker who joins loses the mark),
+  and event 24 goes to every member.
 - §4.2, §7.2, §8.2, §13.1 — the committee bar (§39.5): a committee member moves no
   item they are a member of.
 
@@ -10357,3 +10416,309 @@ deducted, nothing while anonymous, nothing names the item.
     reviewer moves the solution to `in_review`; A's bell shows *"… answered your
     invitation with SOL-…"* and, with gamification on, A's profile shows Matchmaker
     (Bronze).
+
+---
+
+## §41 "This affects me too"
+
+A like says *"I agree"* and a hype says *"act on this first"*; neither says how big a
+problem is. **"This affects me too"** lets anyone who can see a challenge say that it
+affects them, and how many people it affects, themselves included. The authors give the
+first estimate on the submit form, and every colleague who marks the challenge adds
+theirs. The challenge shows the total and who reported it, and the triage queue sorts
+by it, so the problems with the widest reach stand out. It is a signal for triage,
+never a vote: nothing about status, assignment or the single accepted solution (§8.3)
+is decided by it.
+
+### §41.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Challenges only.** | Reach describes a problem. A solution does not affect people in the same sense, and the triage Solutions tab is for navigation only (§14.1). |
+| 2 | **A mark carries a headcount: a whole number from 1 to 1,000, the person included, default 1.** Fixed in code. | Precise enough for triage (*"my team, about 12"*); the cap bounds what one person can add. |
+| 3 | **Two numbers: the reach** (the authors' estimate plus every mark's headcount) **and the people count** (the number of marks). Triage sorts by the reach. | People in one team may each count the whole team, so the sum can count someone twice. Showing the people count beside it, and calling the sum "about", keeps the estimate honest without a de-duplication rule nobody could apply. |
+| 4 | **Marks are public.** Anyone who can see the challenge sees who marked it and each person's headcount. | A mark is a real-name statement, like a like or a hype. A public number discourages inflation, and reviewers can follow up with the people affected. |
+| 5 | **The authors don't mark; they give an optional estimate on the submit form**, editable whenever the challenge is editable. Left empty, the authors count as 1. | The authors are affected by definition. One estimate for the team, set where the problem is described, counts them once, and a number names nobody, so it is safe on an anonymous challenge (invariant 3). |
+| 6 | **Marks open once the challenge is past triage and freeze when it closes.** `in_review`, `needs_improvement`, `meeting_scheduled` and `valid` take them; `solved`, `rejected` and `withdrawn` keep them, read-only. | An `awaiting_triage` challenge is visible only to its authors and admins (§4.3). A closed challenge's reach is history, as its likes are (§8.3). |
+| 7 | **A mark can be changed and taken back while marks are open.** | It is a statement of fact, not a scarce budget, and facts change. |
+| 8 | **A person's first mark auto-follows the challenge.** | Someone it affects wants to hear when it is solved or rejected. They can unfollow; removing the mark leaves the follow alone. |
+| 9 | **The authors hear of each new marker in-app and by e-mail (event 24)**, coalesced per challenge while unread and follower-type for the digest — **once per marker per challenge, ever.** | Knowing the problem is shared is worth a nudge. Once per person means a mark toggled on and off cannot spam the authors. |
+| 10 | **No note on a mark.** | Anyone with more to say writes a comment, which is already threaded, moderated and notified (§10.2). |
+| 11 | **No points, no badge, no platform switch.** | It is a factual statement, not an endorsement; rewarding it would invite inflated headcounts and traded marks. Always on, as topics and invitations are. |
+| 12 | **Surfaces:** the detail page, gallery cards and list rows, a *Widest reach* gallery sort, the triage queue's Reach column with its sort, the triage CSV, and a button on each match of the submit form's similar-challenges banner. | Triage is where reach is weighed. The gallery and its sort let colleagues find the widespread problems. The banner turns a would-be duplicate into reach on the original. |
+| 13 | **MCP reads it and never marks.** `get_challenge` carries the reach and the people count; `submit_challenge` and `edit_challenge` take the authors' estimate, as the form does. No marking tool: still 15 tools. | An agent can weigh breadth when it reads a challenge. A mark is a person's own statement, like a like (§25 decision 8). |
+
+### §41.2 The authors' estimate
+
+- **The field.** The §6.1 submit form gains an optional number field after **topics**:
+  **"How many people does this affect, you included?"**, with the hint *"Optional —
+  your best guess. Colleagues can add themselves once it has been reviewed."* A whole
+  number from 1 to 1,000, or empty. Stored as `challenges.affected_estimate` (null when
+  empty). The field takes no AI drafting (§22.10 is unchanged).
+- **Editing.** It is one of the author's editable fields (§10.1): any member of the team
+  may change it in `awaiting_triage` and `needs_improvement`; the change is part of the
+  `challenge.edited` field-level diff and stamps `edited_at`. Admins do not edit it, as
+  they do not edit content.
+- **Counting.** The authors count once — as their estimate, or as **1** when it is
+  empty. Co-authors do not add to it: the estimate speaks for the team.
+- **External submissions (§24.6)** have no author and no estimate; the outside
+  submitter counts as 1. The §24.5 Accept dialog does not gain the field.
+- **Anonymous challenges.** The estimate reads *"the author's estimate"* and names
+  nobody (invariant 3).
+
+### §41.3 Marking
+
+A person may mark a challenge when **all** of the following hold. The detail payload's
+`canMarkAffected` and `affectedReason` carry the result per viewer, and the API checks
+every one again.
+
+1. They can see the challenge (§4.3), and it is not trashed (§10.4).
+2. They are not one of its authors — no member of its co-author team (§39). On an
+   anonymous challenge this flag is per-viewer, so the author's `false` is seen by
+   nobody else.
+3. Its status is `in_review`, `needs_improvement`, `meeting_scheduled` or `valid`.
+
+Everyone else may mark it — admins, committee members and its assignee included —
+whether or not its namespace is archived (as with likes and hypes, §26.9).
+
+- **The button.** In the challenge header's action row, beside the like and hype
+  buttons: **This affects me too**, with a people glyph. It is hidden from the authors
+  (`own`) and while the challenge is `awaiting_triage` (`not_yet`), and disabled once
+  the challenge closes (`closed`), with the tooltip *"This challenge is closed, so its
+  reach is final."* A viewer who has marked it sees the button pressed (`aria-pressed`),
+  reading **Affects me · 12** — still pressed, and disabled, after the close.
+- **The popover.** Clicking opens a small popover (the §2.2 popover treatment). It has
+  the heading *"How many people does this affect, you included?"*, a number field
+  pre-filled with 1, or with the viewer's current number, and the hint *"Count yourself
+  and colleagues who have the same problem. Everyone who can see this challenge sees your
+  name and number."* Below are **Add** (**Save** when already marked) and **Cancel**,
+  plus **Remove my mark** when already marked. A number that is empty, not whole, or
+  outside 1–1,000 is refused inline with *"Enter a whole number from 1 to 1,000."*
+  Escape or a click outside closes the popover without saving. The submit button locks
+  while the request is in flight.
+- **Changing and removing.** **Save** updates the mark; **Remove my mark** takes it
+  back. Both are possible only while rule 3 holds. A removed mark no longer counts and
+  leaves the list; marking again later restores it with the new number.
+- **The first mark** — the first time this person marks this challenge — also
+  **auto-follows** it (§12.3) unless they already follow it, and writes **event 24**
+  (§41.6). A change, a removal and a re-mark do neither. Removing a mark does not
+  unfollow.
+- **Joining the team.** A marker added to the challenge's co-author team (§39.4) loses
+  their mark in the same transaction, because from then on the team's estimate speaks
+  for them. A leave is final (§39.4) and makes them an ordinary viewer again, who may
+  mark the challenge once more — with no second event 24.
+- **Concurrency.** The status check and the write run in one transaction with the
+  challenge row held `FOR SHARE`, so a mark never lands on a challenge that has just
+  closed. The unique key on `(challenge, user)` makes two concurrent first marks one
+  row, one follow and one event.
+
+### §41.4 The numbers
+
+- **Reach** = the authors' estimate (1 when empty) + the headcounts of every current
+  mark. **People** = the number of current marks. Both are computed in the query that
+  counts likes; neither is a stored column. Both keep counting a mark whose maker has
+  since lost sight of the challenge, been deactivated or been erased: what they reported
+  is still true of the challenge.
+- **The reach is at least 1**, so it is always shown — never hidden at zero.
+- **Copy.** The reach reads **"About N people affected"**, or **"1 person affected"**
+  when it is 1, with a thousands separator (*1,240*). One explanation serves every
+  tooltip and info icon: *"The author's estimate plus what each colleague reported.
+  People in the same team may be counted more than once."*
+
+### §41.5 Surfaces
+
+- **The detail page — "Who's affected".** A section under the challenge header, below
+  the hypers list (§26.5), rendered for every challenge the viewer can see:
+  - **About 120 people affected**, with an info icon carrying the §41.4 explanation;
+  - a muted breakdown line: *"The author's estimate of 30, plus 8 colleagues who say it
+    affects them too."* A team reads *"The authors' estimate of 30"*; an empty estimate
+    reads *"The author, plus …"*; an external challenge reads *"The outside submitter,
+    plus …"*. The *plus* clause is left out while nobody has marked the challenge, so an
+    `awaiting_triage` challenge shows the authors' part alone;
+  - the **markers**, as chips — avatar bubble (with the §13.8 hover card), name and
+    *"· 12"* — largest headcount first, then newest. The first **12** are shown, and
+    *"+N more"* expands the rest. Markers are real names by design, so the list masks
+    nothing. A deactivated marker has the greyed bubble; an erased one the scrubbed
+    bubble (§3).
+- **Gallery cards and list rows (§13.1).** Each card shows the reach after the hype
+  number (after the like count while hype is off), as a people glyph and the number,
+  with the tooltip *"About N people affected"*. The list view gains a **Reach** column
+  after **likes**, and on mobile the meta line adds it after likes. The §13.1 rule that
+  card badges carry over to the list covers it.
+- **Gallery sort — "Widest reach".** A new option on the challenges page's sort control
+  (newest · most liked · most solutions · most hyped while hype is on · **widest
+  reach**), `sort=widest_reach`: reach descending, then newest. On every tab. It is a
+  sort, not a filter.
+- **Triage queue (§14.1), Challenges tab.**
+  - A **Reach** column after **hype** (after **assignee** while hype is off) and before
+    **created**: the reach, with the people count muted after it (*"120 · 8"*) and the
+    §41.4 explanation as its tooltip. Mobile rows add it to the meta line.
+  - **Sorting.** The **Reach** column header is a button that sorts the queue by reach,
+    descending, ties newest first; pressing it again returns to the default order,
+    newest first. While active it shows a ↓ and carries `aria-sort="descending"`. The
+    queue is paginated on the server, so the sort is a request parameter (`sort=newest |
+    widest_reach`); changing it returns to page 1 and keeps every filter. It is the
+    queue's only sort.
+  - **CSV export** follows the current sort and gains a **Reach** column (the reach)
+    after **Topics**.
+  - The Solutions tab, bulk actions and the §14.4 attention badge are unchanged.
+- **The similar-challenges banner (§6.1).** While at least one listed match may be marked,
+  the banner gains a second line: *"If one of them is your problem, you can say it affects
+  you too instead of submitting."* Each
+  listed match the viewer may mark carries a small **This affects me too** button that
+  opens the §41.3 popover; a match they have already marked shows **Affects me · 12** and
+  opens the popover to change or remove the mark. A match they may not mark (a `solved`
+  one, their own) has no button. Marking from the banner confirms with the toast
+  *"Marked CH-12 as affecting you. You can still submit yours."* It leaves the form, the
+  banner and the **Submit anyway** button as they were, and does not re-arm the check.
+- **Nowhere else.** No reach on Home, the profile, the hover card, search results, the
+  leaderboard, channel webhooks (§12.4), AI prompts (§22) or e-mails of other events.
+
+### §41.6 Notifications — event 24
+
+A new row of the §12.1 matrix, **"Affects them too"**: someone has said your challenge
+affects them.
+
+- **Recipients:** the challenge's authors — every member of its team (§39.8) — and
+  nobody else: never the marker, followers, admins or the assignee. An external
+  challenge has no author, so nobody. The author of an anonymous challenge is a safe
+  recipient: nobody else receives it.
+- **When:** a person's **first** mark of the challenge (§41.3). Changing a number,
+  removing a mark and marking again write nothing.
+- **In-app:** coalesced per challenge while unread, exactly as events 6 and 16, against
+  a third partial unique index (`type = 'affected'`); opening the challenge's detail
+  page reads it. Copy: *"Alice says CH-412 affects them too"*; once coalesced, *"3
+  people say CH-412 affects them too — latest Alice"*. The marker's name is safe to
+  show, because marks are public (decision 4).
+- **E-mail:** a standard outbox row. The subject is *"<Name> says your challenge CH-412
+  affects them too"*. The body carries the number and title, the marker's name and
+  headcount, the challenge's current reach and people count, and the link. It honours
+  the e-mail switch and the digest choice: event 24 is a **follower-type** event, listed
+  in a digest as one line per challenge (*"3 more people say it affects them — about
+  120 in all"*). As for events 6 and 16, the e-mail goes out with the first mark and is
+  **not re-sent** while the inbox row stays unread.
+- **No preference** of its own (§13.5 is unchanged): the e-mail switch and the digest
+  choice are the controls. No channel webhook (§12.4 is unchanged).
+
+### §41.7 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** Marks inherit the challenge's visibility (§4.3). The numbers, the
+  markers, `canMarkAffected` and the viewer's own mark belong to the challenge's payload
+  and are never returned for a challenge the viewer cannot see (404). Nothing sums reach
+  across challenges — no total, KPI tile or leaderboard metric — and the gallery and
+  triage sorts rank only the viewer's own visible set, so a hidden challenge never
+  ranks.
+- **Invariant 3.** The authors stay masked everywhere; the markers are real names by
+  design; the estimate names nobody. An author never appears among the markers: authors
+  cannot mark, and a marker who joins the team loses the mark (§41.3). An anonymous
+  challenge has no team (§39.3), so no join can expose its author this way.
+- **Trash (§10.4).** A trashed challenge cannot be marked. Its marks are kept and come
+  back on restore.
+- **Hard delete (§10.3).** The cascade removes the challenge's `challenge_affected`
+  rows.
+- **Visibility change (§4.3).** Nothing is rewritten; the per-viewer filter does the
+  rest. A marker who loses sight of the challenge keeps their mark, which still counts,
+  but can no longer change it.
+- **Status moves.** A move back into the open set — an admin override, the §10.3 revert
+  — reopens the marks for change. Nothing else changes.
+- **Erasure (§3)** keeps the person's marks on the de-identified row, as it keeps their
+  likes; the chip shows the scrubbed bubble. **Deactivation** keeps them and shows the
+  greyed bubble.
+
+### §41.8 Agents (MCP)
+
+- `get_challenge` gains **`reach`** and **`affectedPeople`** — not the markers, as it
+  carries no likers.
+- `submit_challenge` and `edit_challenge` take an optional **`affectedEstimate`** (1–1,000
+  or null), as the form does, within the same edit window.
+- No tool marks a challenge, so there are still 15 tools. `search_challenges` is
+  unchanged.
+
+### §41.9 Data model (migration 0059)
+
+- **`challenges`** gains **`affected_estimate`** (smallint, nullable, check `between 1
+  and 1000`). It is content: only an author edit writes it after creation (§10.1).
+- **`challenge_affected`** — id (bigint identity), challenge_id (FK `challenges`, `ON
+  DELETE CASCADE`), user_id (FK `users`), headcount (smallint, not null, check `between
+  1 and 1000`), created_at (timestamptz, default `now()` — the first mark), updated_at
+  (timestamptz), removed_at (nullable timestamptz — set by **Remove my mark** or a team
+  join, cleared by a re-mark). **Unique `(challenge_id, user_id)`**: one row per person
+  per challenge, ever, which is what keeps the first-mark effects to once. A partial
+  index on `(challenge_id) WHERE removed_at IS NULL` serves the counts. Grants: SELECT,
+  INSERT, and UPDATE on `headcount`, `updated_at` and `removed_at` only; DELETE solely
+  for the §10.3 cascade.
+- **`notifications.type`** gains **`affected`** (payload: the challenge as its
+  `parentType` / `parentId` target, `number`, `title`, `count`, `latestBy`, `latestAt`),
+  with a partial unique index on `(user_id, payload->>'parentType',
+  payload->>'parentId') WHERE read_at IS NULL AND type = 'affected'` for the coalescing.
+  The §5 trigger sets `challenge_id` from the target as for every row.
+- **`@innobox/shared/affected`** holds `AFFECTED_HEADCOUNT_MAX = 1000`, the headcount
+  validator and the reach arithmetic.
+- No column on `solutions`, no settings key.
+
+### §41.10 API, audit, tests
+
+- **API (§16).**
+  - `PUT /api/challenges/:number/affected { headcount }` — sets the caller's mark,
+    creating or changing it. Session, `mutation` bucket, `Origin`-checked. Order of
+    checks (§2.4): **404** when the number is malformed or the caller cannot see the
+    challenge; the shared **409** on a trashed one (§10.4); **409** *"You can't mark
+    this challenge as affecting you."* for the caller's own challenge, one in
+    `awaiting_triage` and a closed one — one message for all three; **422** *"Enter a
+    whole number from 1 to 1,000."* for a headcount that is missing, not a whole number
+    or out of range. Success **200** with the refreshed block below.
+  - `DELETE /api/challenges/:number/affected` — takes the caller's mark back. The same
+    404 and 409 checks; with no current mark it succeeds and writes nothing. Success
+    **200** with the refreshed block.
+  - **The block**, on the challenge detail payload and in both responses: `reach`,
+    `affectedPeople`, `affectedEstimate` (number | null), `affectedMine` (the caller's
+    headcount | null), `canMarkAffected`, `affectedReason` (`own | not_yet | closed |
+    null`) and `affected: [{ id, displayName, headcount, deactivated, scrubbed }]`,
+    largest headcount first, then newest.
+  - `POST /api/challenges` and `PUT /api/challenges/:number` accept
+    **`affectedEstimate`** — a whole number 1–1,000, or null; **422** with the message
+    above otherwise.
+  - Gallery and list rows carry `reach`; `GET /api/challenges` accepts
+    `sort=widest_reach`.
+  - Triage rows carry `reach` and `affectedPeople`; the triage list and its CSV export
+    accept `sort=newest | widest_reach` (**400** for anything else), and the export
+    carries the **Reach** column.
+  - `POST /api/challenges/similar` matches carry `canMarkAffected` and `affectedMine`.
+- **Audit (§15).** **`affected.marked`** (`after: { headcount }`, also on a re-mark),
+  **`affected.changed`** (`before`, `after`) and **`affected.removed`** (`before: {
+  headcount }`; when a team join removed it, `before` also names the joiner's `userId` and
+  `after` is `{ trigger: "joined_team" }`). The actor is the marker — for a join, the
+  person who changed the team — and the target the challenge. Under All only, as `like.*` and `hype.given` are. The estimate is part of
+  `challenge.created` and of the `challenge.edited` diff. Event 24 and the auto-follow
+  are not audited.
+- **Tests.**
+  - *Unit:* the headcount validator (1 and 1,000 accepted; 0, 1,001, 1.5, `"12"`, null
+    and a missing value refused) and the estimate's (null accepted as well); the reach
+    and people arithmetic (an empty estimate counts 1, removed marks are left out);
+    `canMarkAffected` and `affectedReason` over every challenge status, for an author, a
+    team member, an external challenge and the trash; the breakdown line for each case;
+    the gallery and triage comparators (reach, then newest); event 24's copy, single and
+    coalesced, and its follower-type class.
+  - *Integration:* a first mark writes the row, one audit row, one follow and one event
+    24 to every team member; a change and a removal are audited and notify nobody; a
+    re-mark after a removal restores the row with no second event or follow; an author,
+    a team member, an `awaiting_triage`, a closed and a trashed challenge refuse without
+    a row; an invisible challenge is 404; an out-of-range headcount is 422; two
+    concurrent first marks give one row and one event; a mark cannot land on a challenge
+    closed by a concurrent transaction; joining the team removes the mark (audited with
+    `joined_team`) and a later leave lets the person mark again with no event; event 24
+    coalesces in the inbox, honours the e-mail switch and the digest, is not re-sent
+    while unread, and reaches nobody on an external challenge and no deactivated
+    author; the estimate is written on create and can be edited only within the
+    author's edit window; the numbers, the markers and the flags are never returned for
+    an invisible challenge, and a namespace-restricted or `people` challenge never ranks
+    in another viewer's gallery or triage sort; the triage sort pages correctly and the
+    export follows it with the Reach column; the similar endpoint carries the per-match
+    fields; the §10.3 cascade removes the rows; erasure keeps them; `get_challenge`
+    carries the two numbers.
+  - *E2e:* user B opens a challenge in `in_review` and marks it with 12: the button
+    reads *Affects me · 12*, B's chip appears, the reach rises by 12 and B follows the
+    challenge; the author's bell shows *"B says CH-… affects them too"*; in the triage
+    queue the namespace admin sorts by **Reach** and the challenge moves up. On the
+    submit form, a user whose draft matches an existing challenge marks it from the
+    similar-challenges banner and sees the toast.

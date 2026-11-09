@@ -10,6 +10,8 @@
 import type { Pool } from "pg";
 import {
   canAssignAtStatus,
+  challengeAffectedPeopleSql,
+  challengeReachSql,
   challengeTeamJsonSql,
   escapeLike,
   formatChallengeNumber,
@@ -64,7 +66,14 @@ export interface TriageRow {
   viaAgent: ViaAgent;
   /** §26.5 the challenge's all-time hype points — present only while hype is on. */
   hype?: number;
+  /** §41.4: about how many people the challenge affects, and how many colleagues said so. */
+  reach: number;
+  affectedPeople: number;
 }
+
+/** §41.5: the queue's one sort — newest first (the default) or by reach. */
+export const TRIAGE_SORTS = ["newest", "widest_reach"] as const;
+export type TriageSort = (typeof TRIAGE_SORTS)[number];
 
 export interface TriageFilters {
   namespaceId?: string;
@@ -74,6 +83,14 @@ export interface TriageFilters {
   number?: string;
   /** §34.6: a topic's id, or "none" for challenges with no topic. */
   topicId?: string | "none";
+  /** §41.5: absent means newest first. Carried here so the export follows the queue's order. */
+  sort?: TriageSort;
+}
+
+/** The ORDER BY of the queue and its export over the `TRIAGE_SELECT` subquery `alias` (§41.5): reach
+ *  descending, ties newest first; or newest first. */
+export function triageOrderBy(sort: TriageSort | undefined, alias: string): string {
+  return sort === "widest_reach" ? `${alias}.reach desc, ${alias}.created_at desc` : `${alias}.created_at desc`;
 }
 
 /** Namespace ids the viewer may administer, or "all" for platform admins. Empty array means
@@ -149,6 +166,8 @@ interface TriageQueryRow {
   created_at: Date;
   mcp_client_name: string | null;
   hype_points: number;
+  reach: number;
+  affected_people: number;
 }
 
 /** The `author*` fields of a triage row — the first member of the team, masked (§9, §39.7). */
@@ -193,6 +212,8 @@ function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
     createdAt: row.created_at.toISOString(),
     viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
     ...(withHype ? { hype: row.hype_points } : {}),
+    reach: row.reach,
+    affectedPeople: row.affected_people,
   };
 }
 
@@ -204,7 +225,8 @@ const TRIAGE_SELECT = `
          c.created_at, c.mcp_client_name,
          (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
             from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics,
-         (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) as hype_points
+         (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) as hype_points,
+         ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -247,7 +269,7 @@ export async function listTriageQueue(
        ${TRIAGE_SELECT}
        ${whereClause}
      ) t
-     order by t.created_at desc
+     order by ${triageOrderBy(filters.sort, "t")}
      limit ${pageSize} offset ${offset}`,
     params,
   );
@@ -365,7 +387,8 @@ export async function exportTriageCsv(pool: Pool, admin: Viewer, filters: Triage
   const rows = query
     ? (
         await pool.query<TriageQueryRow>(
-          `${TRIAGE_SELECT} ${query.whereClause} order by c.created_at desc limit ${TRIAGE_EXPORT_MAX}`,
+          // §41.5: the export follows the queue's current sort.
+          `select * from (${TRIAGE_SELECT} ${query.whereClause}) t order by ${triageOrderBy(filters.sort, "t")} limit ${TRIAGE_EXPORT_MAX}`,
           query.params,
         )
       ).rows.map((r) => toTriageRow(r))

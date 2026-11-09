@@ -105,6 +105,8 @@ export async function createChallengeViaApi(
     topicIds?: string[];
     /** §39: up to four co-authors' user ids. */
     coAuthorIds?: string[];
+    /** §41.2: the authors' estimate of how many people it affects. */
+    affectedEstimate?: number;
   },
 ): Promise<CreatedChallenge> {
   const impactAreaId = input.impactAreaId ?? (await getImpactAreaId(request));
@@ -121,6 +123,7 @@ export async function createChallengeViaApi(
         clientName: input.clientName,
         ...(input.topicIds ? { topicIds: input.topicIds } : {}),
         ...(input.coAuthorIds ? { coAuthorIds: input.coAuthorIds } : {}),
+        ...(input.affectedEstimate !== undefined ? { affectedEstimate: input.affectedEstimate } : {}),
       },
       headers: JSON_HEADERS,
     }),

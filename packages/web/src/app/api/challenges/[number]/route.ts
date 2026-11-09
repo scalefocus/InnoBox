@@ -3,13 +3,14 @@
 // status (override), while a committee member or the assignee traverses the enforced graph — the
 // store derives the mode from the caller's role. An illegal enforced transition is a 422. A real
 // transition fires notification event 3/4/5 (§12.1) to author/assignee/followers.
-import { isChallengeStatus, parseBaseEditedAt, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
+import { isChallengeStatus, parseAffectedEstimate, parseBaseEditedAt, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
 import { getHypeEnabled } from "@/lib/hype-settings";
 import { decorateDetailWithHype } from "../../hypes/store";
 import { invitationDetailFields } from "../invitations";
+import { affectedDetailFields } from "../affected";
 import { logNotifyFailure, notifyChallengeStatusChanged, notifyTopicFollowers } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, isUuid, parseStatusOverride } from "../validation";
@@ -37,9 +38,11 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
   // §40.11: the viewer's invitation fields — canInvite, their own "You invited" block and their open
   // invitations — ride on this payload only.
   const invitations = await invitationDetailFields(pool, viewer, challenge);
+  // §41.10: the viewer's "affects me too" block — their own mark, whether they may mark, the markers.
+  const affected = await affectedDetailFields(pool, viewer, challenge);
   // §26.11: the hype fields ride on this payload only, and only while hype is on.
   const detail = (await getHypeEnabled(pool)) ? await decorateDetailWithHype(pool, viewer, challenge) : challenge;
-  return Response.json({ challenge: { ...detail, ...invitations } });
+  return Response.json({ challenge: { ...detail, ...invitations, ...affected } });
 }
 
 async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {
@@ -106,6 +109,9 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
   // §39.5: the editedAt the editor loaded — a save from a stale copy is refused.
   const baseEditedAt = parseBaseEditedAt(body.baseEditedAt);
   if (!baseEditedAt.ok) return Response.json({ error: baseEditedAt.error }, { status: 400 });
+  // §41.2: present replaces the authors' estimate (null clears it); absent keeps it.
+  const estimate = body.affectedEstimate === undefined ? null : parseAffectedEstimate(body.affectedEstimate);
+  if (estimate && !estimate.ok) return Response.json({ error: estimate.error, code: "invalid_headcount" }, { status: 422 });
 
   const result = await editChallenge(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     title: body.title,
@@ -113,6 +119,7 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
     clientName: body.clientName,
     impactAreaId: body.impactAreaId,
     ...(topicIds ? { topicIds: topicIds.value } : {}),
+    ...(estimate ? { affectedEstimate: estimate.value } : {}),
     baseEditedAt: baseEditedAt.value,
   });
   switch (result.status) {

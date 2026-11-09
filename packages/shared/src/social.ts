@@ -91,6 +91,9 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 23 / §40.6: a person you invited answered with a solution — the inviter only,
   // in-app only (no outbox row), like achievement_earned.
   "invitation_paid_off",
+  // §12.1 event 24 / §41.6: someone said your challenge affects them too — the authors only, on a
+  // person's first mark, coalesced per challenge while unread like hyped, e-mailed (digestable).
+  "affected",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

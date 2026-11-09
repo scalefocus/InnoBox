@@ -16,6 +16,7 @@ import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
 import { ChallengeAuthorBubbles, ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
 import { HypeCount } from "@/components/Hype";
+import { ReachCount } from "@/components/Affected";
 import { TopicChips, type TopicChipData } from "@/components/TopicChips";
 import { TopicFollowButton } from "@/components/TopicFollowButton";
 import { cachedGet } from "@/lib/ui";
@@ -39,10 +40,12 @@ interface ChallengeListItem {
   isNew: boolean;
   /** §26.5: all-time hype points — present only while hype is on. */
   hype?: number;
+  /** §41.4: about how many people it affects. */
+  reach: number;
 }
 
 type Tab = "open" | "mine" | "completed";
-type Sort = "newest" | "most_liked" | "most_solutions" | "most_hyped";
+type Sort = "newest" | "most_liked" | "most_solutions" | "most_hyped" | "widest_reach";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "open", label: "Open" },
@@ -56,6 +59,8 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: "most_solutions", label: "Most solutions" },
   // §26.5: offered only while hype is on.
   { key: "most_hyped", label: "Most hyped" },
+  // §41.5: always offered.
+  { key: "widest_reach", label: "Widest reach" },
 ];
 
 /** §34.6: the filtered gallery's header — what GET /api/topics/:id returns. */
@@ -290,6 +295,7 @@ function ChallengeCard({ challenge }: { challenge: ChallengeListItem }) {
       <div className="meta">
         <span className="chip">❤ {challenge.likeCount}</span>
         {challenge.hype !== undefined && <HypeCount value={challenge.hype} />}
+        {challenge.reach !== undefined && <ReachCount value={challenge.reach} />}
         <span className="chip">{challenge.solutionCount} solution{challenge.solutionCount === 1 ? "" : "s"}</span>
       </div>
     </Link>
