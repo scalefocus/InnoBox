@@ -3,7 +3,14 @@
 // (also picked up compiled by the package's `pnpm test` dist run).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeMembershipDiff, computeUserHeal, directoryAttr, type GraphUser, type LocalUserAttrs } from "./diff.js";
+import {
+  computeFirstSyncHeal,
+  computeMembershipDiff,
+  computeUserHeal,
+  directoryAttr,
+  type GraphUser,
+  type LocalUserAttrs,
+} from "./diff.js";
 
 const local: LocalUserAttrs = {
   userName: "ada@example.com",
@@ -36,6 +43,30 @@ test("computeUserHeal: disabled account → deactivate, even with attribute drif
 
 test("computeUserHeal: identical snapshot → none", () => {
   assert.deepEqual(computeUserHeal(local, graphSame), { action: "none" });
+});
+
+// ── the first directory sync never deactivates (INNOBOX_SPEC.md §3) ────────────────────────────
+
+test("computeFirstSyncHeal: user missing in tenant → absent, where the hourly pass deactivates", () => {
+  assert.deepEqual(computeFirstSyncHeal(local, { exists: false }), { action: "absent" });
+  assert.deepEqual(computeUserHeal(local, { exists: false }), { action: "deactivate" });
+});
+
+test("computeFirstSyncHeal: disabled account → absent, even with attribute drift (nothing is written)", () => {
+  const disabled: GraphUser = { ...graphSame, accountEnabled: false, displayName: "Ada L." };
+  assert.deepEqual(computeFirstSyncHeal(local, disabled), { action: "absent" });
+  assert.deepEqual(computeUserHeal(local, disabled), { action: "deactivate" });
+});
+
+test("computeFirstSyncHeal: a present, enabled account gets exactly the hourly pass's decision", () => {
+  assert.deepEqual(computeFirstSyncHeal(local, graphSame), { action: "none" });
+  // A JIT stub: name and e-mail from the token, no directory profile yet.
+  const stub: LocalUserAttrs = { ...local, department: null, jobTitle: null, officeLocation: null };
+  assert.deepEqual(computeFirstSyncHeal(stub, graphSame), computeUserHeal(stub, graphSame));
+  assert.deepEqual(computeFirstSyncHeal(stub, graphSame), {
+    action: "refresh",
+    patch: { department: "R&D", job_title: "Engineer", office_location: "Sofia" },
+  });
 });
 
 test("computeUserHeal: displayName drift → refresh with ONLY display_name in the patch", () => {

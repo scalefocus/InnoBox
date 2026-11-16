@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS users (
   active        boolean NOT NULL DEFAULT true,
   deactivated_at timestamptz,
   scim_synced   boolean NOT NULL DEFAULT false, -- false = JIT stub; true once SCIM/recon owns attributes
+  first_synced_at timestamptz,                 -- first successful Graph read; NULL = first directory sync pending (INNOBOX_SPEC.md §3)
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -293,9 +294,11 @@ provisioning contract, including the Entra dialect quirks:
 
 - **Leadership**: Postgres advisory lock on a **dedicated long-lived connection** (not the
   pool — pooled sessions silently drop session locks); standbys retry periodically.
-- **Cadence**: on worker boot, then hourly.
+- **Cadence**: the pass on worker boot, then hourly; the **first directory sync** for
+  new rows every 30 s (below).
 - **Pass**: with Graph client credentials —
-  1. Every local `active` user → `GET /users/{oid}` (`accountEnabled`, profile fields):
+  1. Every local `active` user — except a row still inside the first-sync window
+     (below) — → `GET /users/{oid}` (`accountEnabled`, profile fields):
      missing or disabled → deactivate (audited `recon.user_deactivated`); refresh
      `display_name/email/user_name/department/job_title/office_location`; fetch the
      240×240 photo (INNOBOX_SPEC.md §3.1) when the ETag changed. The three directory-profile fields
@@ -306,10 +309,20 @@ provisioning contract, including the Entra dialect quirks:
      permission** (default properties of the user resource, covered by application
      `User.Read.All`). Because this pass visits *every* local active user, a user who
      belongs to no role-mapped group still gets a current directory profile. `mail` is
-     normalized the same way: an empty or blank value writes NULL.
+     normalized the same way: an empty or blank value writes NULL. A successful read
+     of a row whose `first_synced_at` is NULL stamps it.
   2. Every synced group ∪ every group referenced by `role_mappings` ∪ the bootstrap group →
      `GET /groups/{id}/members` → replace local membership (creating JIT-grade stubs for
      unknown members); group gone in Entra → drop group + memberships (audited).
+- **First directory sync** (INNOBOX_SPEC.md §3 is the full contract): every 30 s the
+  leader takes up to 20 rows with `first_synced_at IS NULL`, `active`, not scrubbed and
+  created within the last 5 minutes, newest first, and runs step 1 for each — the
+  attribute refresh and the photo, with the same writes and the same
+  `recon.user_refreshed` audit row — then stamps `first_synced_at`. It **never
+  deactivates**: a missing or disabled account is left unchanged and unstamped for the
+  hourly pass. A Graph failure is logged, not audited, and retried on the next sweep
+  while the row is inside the window; it never stops the sweep. The sweep does not
+  wait for the hourly pass, which leaves those rows out of its own user list.
 - Reconciliation is tenant-based (not app-assignment-based) because sign-in is open to the
   tenant: a JIT user who was never assigned to the provisioning app must not be "healed"
   into deactivation.

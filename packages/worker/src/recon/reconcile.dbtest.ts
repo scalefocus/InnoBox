@@ -2,7 +2,10 @@
 // "Reconciliation") against a stubbed Graph client: deactivation of a missing and of a disabled
 // user, attribute refresh including empty → NULL (the three directory fields and mail), the
 // photo ETag skip, membership replacement with a JIT stub for an unknown member, a group gone in
-// Entra, and the bootstrap group mirrored from worker boot. Self-skips when DATABASE_URL is unset.
+// Entra, and the bootstrap group mirrored from worker boot. Also the pass's side of the first
+// directory sync (INNOBOX_SPEC.md §3): a row still inside the first-sync window is left out, and
+// the first successful read stamps `first_synced_at`. The sweep itself is first-sync.dbtest.ts.
+// Self-skips when DATABASE_URL is unset.
 //
 // The pass walks EVERY active user and EVERY local group, and the suites share one database, so
 // the stub answers for rows this test does not own by echoing their local state back — the pass
@@ -29,13 +32,24 @@ test(
     const run = `${Date.now().toString(36)}${randomUUID().slice(0, 4)}`;
     const oid = (name: string) => `recontest-${run}-${name}`;
 
+    // Rows are created 10 minutes in the past unless `fresh`: a new row no pass has read yet is
+    // the first directory sync's, and the pass leaves it out (§3).
     const insertUser = async (
       name: string,
-      cols: { email?: string | null; department?: string | null; job_title?: string | null; office_location?: string | null; photo_etag?: string | null } = {},
+      cols: {
+        email?: string | null;
+        department?: string | null;
+        job_title?: string | null;
+        office_location?: string | null;
+        photo_etag?: string | null;
+        first_synced_at?: string;
+        fresh?: boolean;
+      } = {},
     ): Promise<string> => {
       const { rows } = await pool.query<{ id: string }>(
-        `insert into users (external_id, user_name, display_name, email, department, job_title, office_location, photo, photo_etag)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
+        `insert into users (external_id, user_name, display_name, email, department, job_title, office_location, photo, photo_etag,
+                            first_synced_at, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() - ($11::int * interval '1 minute')) returning id`,
         [
           oid(name),
           `${oid(name)}@example.com`,
@@ -46,6 +60,8 @@ test(
           cols.office_location ?? null,
           cols.photo_etag ? Buffer.from("old-photo") : null,
           cols.photo_etag ?? null,
+          cols.first_synced_at ?? null,
+          cols.fresh ? 0 : 10,
         ],
       );
       return rows[0]!.id;
@@ -60,7 +76,8 @@ test(
     const user = async (id: string) =>
       (
         await pool.query(
-          `select active, deactivated_at, email, department, job_title, office_location, display_name, photo, photo_etag
+          `select active, deactivated_at, email, department, job_title, office_location, display_name, photo, photo_etag,
+                  first_synced_at
              from users where id = $1`,
           [id],
         )
@@ -84,10 +101,14 @@ test(
       job_title: "Engineer",
       office_location: "Sofia",
       photo_etag: "etag-same",
+      first_synced_at: "2020-01-01T00:00:00Z", // read long ago — the stamp must survive this pass
     });
     const renamed = await insertUser("renamed", { photo_etag: "etag-old" });
     const stayer = await insertUser("stayer");
     const leaver = await insertUser("leaver");
+    // New and not yet read: inside the first-sync window, so this pass must not even look at it —
+    // although the tenant below says it is gone.
+    const windowed = await insertUser("windowed", { fresh: true });
 
     const team = await insertGroup("team");
     await pool.query(`insert into group_members (group_id, user_id) values ($1, $2), ($1, $3)`, [team, stayer, leaver]);
@@ -117,15 +138,18 @@ test(
       [oid("leaver"), enabled("leaver")],
       [oid("joiner"), enabled("joiner", { department: "Ops" })],
       [oid("disabled-joiner"), enabled("disabled-joiner", { accountEnabled: false })],
+      [oid("windowed"), { exists: false }],
     ]);
     const tenantGroups = new Map<string, { displayName: string; members: string[] }>([
       [oid("team"), { displayName: "Group team", members: [oid("stayer"), oid("joiner"), oid("disabled-joiner")] }],
       [oid("bootstrap"), { displayName: "Bootstrap admins", members: [oid("stayer")] }],
     ]);
     const photoCalls = new Map<string, string | null>();
+    const userReads = new Set<string>();
 
     const graphClient: GraphClient = {
       async getUser(id) {
+        userReads.add(id);
         const known = tenantUsers.get(id);
         if (known) return known;
         // Not this test's row: echo the local state back so the pass changes nothing.
@@ -222,15 +246,27 @@ test(
       // ── nothing drifted → no write, no audit ─────────────────────────────────────────────
       assert.equal((await auditFor(stayer, "recon.user_refreshed")).length, 0);
 
+      // ── §3: a row inside the first-sync window is left out of the pass entirely ──────────
+      assert.ok(!userReads.has(oid("windowed")), "the pass never reads a row the first directory sync owns");
+      const windowedRow = await user(windowed);
+      assert.equal(windowedRow.active, true, "so it is not deactivated by this pass, whatever the tenant says");
+      assert.equal(windowedRow.first_synced_at, null);
+
+      // ── §3: the first successful read stamps the marker; an earlier stamp is kept ────────
+      assert.ok((await user(stayer)).first_synced_at, "a user this pass read successfully is stamped");
+      assert.equal(new Date(clearedRow.first_synced_at).toISOString(), "2020-01-01T00:00:00.000Z");
+      assert.equal(goneRow.first_synced_at, null, "a deactivated user is not stamped");
+
       // ── membership replaced: leaver out, joiner in as a JIT stub, disabled joiner skipped ──
       assert.deepEqual(await members(team), [oid("joiner"), oid("stayer")].sort());
       const { rows: joiner } = await pool.query(
-        `select id, active, scim_synced, department from users where external_id = $1`,
+        `select id, active, scim_synced, department, first_synced_at from users where external_id = $1`,
         [oid("joiner")],
       );
       assert.equal(joiner.length, 1);
       assert.equal(joiner[0].scim_synced, false, "a reconciliation stub stays JIT-grade");
       assert.equal(joiner[0].department, "Ops");
+      assert.equal(joiner[0].first_synced_at, null, "a stub has no photo yet — the first directory sync completes it (§3)");
       assert.equal((await auditFor(joiner[0].id, "user.jit_created"))[0]?.after.via, "reconciliation");
       const { rows: disabledJoiner } = await pool.query(`select 1 from users where external_id = $1`, [oid("disabled-joiner")]);
       assert.equal(disabledJoiner.length, 0, "a disabled account never enters via a membership race");

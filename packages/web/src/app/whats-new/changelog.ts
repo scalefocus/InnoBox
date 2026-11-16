@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.28.0",
+    date: "2026-11-16",
+    summary:
+      "New colleagues now show up complete. A person's job title, department, office and photo used to appear up to an hour after they first signed in; they now arrive within about a minute. Reload the page to see them on the hover card, and allow the photo a few more minutes if your browser already showed the initials. Nothing to set up.",
+  },
+  {
     version: "1.27.0",
     date: "2026-11-16",
     summary:
