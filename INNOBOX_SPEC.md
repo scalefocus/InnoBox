@@ -3790,9 +3790,35 @@ via the account menu (§2.2), positioned above **What's new**.
   `quick_start_seen_at = now()` — and, in the same statement, stamps the §13.9 What's new
   marker at the server's `APP_VERSION` — (via the `me` resource, §16) and navigates to `/`
   (Home dashboard, §13.2); the redirect never fires again for that user afterward.
+- **The way out is on the first screen:** the **Continue to InnoBox** action appears
+  twice — in the page head, where it is in view without scrolling on desktop and on the
+  mobile layout, and after the last section. The two are one action with one state:
+  while the request is in flight both are disabled.
+- **Saying that the app is held:** the navigation stays on screen while a user is
+  unseen, and every item in it leads back here. So, for an unseen user only, the page
+  head carries one line beside the action — *"The rest of InnoBox opens once you
+  continue."* It is driven by the `me` resource the shell has already loaded (the page
+  makes no request of its own for it): absent until `me` has loaded, and absent for
+  anyone who has already continued. A navigation that is sent back here — a sidebar or
+  account-menu item, or a link inside the walkthrough such as the one to `/topics` —
+  lands with the page head in view, so the line and the action are what the person sees
+  next.
+- **A failed Continue is said, not swallowed:** the page navigates to `/` only when the
+  `me` request succeeded (a 2xx response). On any other response, or none, it stays
+  where it is, makes the action usable again, and shows an inline error beside it —
+  *"That didn't save. Please try again."* — announced to assistive technology
+  (`role="alert"`) and cleared on the next attempt. There is no automatic retry.
+  Navigating regardless would only meet the redirect again, with nothing to say why.
 - **Manual re-access:** the account-menu link navigates to `/quick-start` as an
   ordinary page — no redirect logic, and visiting it this way never touches
-  `quick_start_seen_at` (already set).
+  `quick_start_seen_at` (already set). A returning visitor sees the page-head action
+  without the held line.
+- **Tests:** e2e, with a never-onboarded persona — the page-head action and the held
+  line are inside the viewport on first paint, at desktop and at mobile width; a sidebar
+  click returns to `/quick-start` with the page head in view; the page-head action alone
+  completes onboarding (Home, and no redirect on reload); with the `me` request forced
+  to fail the page stays, shows the error, and a retry succeeds. And with an ordinary
+  persona — opening Quick start from the account menu shows the action and no held line.
 - **No visibility/anonymity surface:** the page shows no challenge/solution/user
   data, only static instructional content and mockups, so §2.1 invariants 2–3
   don't apply.
