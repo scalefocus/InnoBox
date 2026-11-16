@@ -38,6 +38,10 @@ test(
     const { notifyClosedAsDuplicate } = await import("../../../lib/notify-events");
 
     const pool = new Pool({ connectionString: url });
+    // The public-form challenges this suite makes have no author. Later suites re-run migration
+    // 0037's backfill, which reads every challenge's author_id, so they are purged on the way out.
+    const externals: string[] = [];
+    let purge: (() => Promise<void>) | null = null;
     try {
       const stamp = randomUUID().slice(0, 8);
       const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
@@ -73,6 +77,12 @@ test(
       const resolveMany = async (ids: readonly string[]) => new Map(ids.map((id) => [id, rolesOf.get(id) ?? roles([{ role: "member", ns: globalId }])]));
       const ctx = (actorId: string | null) => ({ pool, actorId, resolveRoles });
       const storage = { deleteObject: async () => {}, abortMultipartUpload: async () => {} };
+      // Set once the platform admin exists (below); the finally runs it, pass or fail.
+      const armPurge = (admin: { userId: string; roles: Roles }) => {
+        purge = async () => {
+          for (const num of externals) await deleteChallenge({ pool, storage } as never, admin, num, "dbtest cleanup");
+        };
+      };
 
       const author = await mkUser("author");
       const follower = await mkUser("follower");
@@ -84,6 +94,7 @@ test(
       const nsAdmin = await mkUser("nsadmin", roles([{ role: "namespace_admin", ns: nsId }]));
       const otherAdmin = await mkUser("other-admin", roles([{ role: "namespace_admin", ns: otherNsId }]));
       const platform = await mkUser("platform", buildRoleSet([{ role: "platform_admin", namespaceId: null }], { globalNamespaceId: globalId }));
+      armPurge(platform);
       const internal = (await store.listActiveImpactAreas(pool)).find((a) => a.name === "Internal")!;
 
       const newChallenge = async (
@@ -107,7 +118,7 @@ test(
         return { id: r.challenge.id, num, label: r.challenge.number, title: `${title} ${stamp}` };
       };
       /** Turns a fresh challenge into one accepted from the public form (§24.6): no author, a submission. */
-      const makeExternal = async (c: { id: string }, label: string) => {
+      const makeExternal = async (c: { id: string; num: string }, label: string) => {
         const ps = (
           await pool.query<{ id: string }>(
             `insert into public_submissions (status, title, description, submitter_name, submitter_email, confirm_expires_at, pow_salt, decided_at)
@@ -117,6 +128,7 @@ test(
         ).rows[0]!.id;
         await pool.query(`delete from challenge_authors where challenge_id = $1`, [c.id]);
         await pool.query(`update challenges set author_id = null, public_submission_id = $2 where id = $1`, [c.id, ps]);
+        externals.push(c.num);
         return ps;
       };
       const mark = (actor: typeof author, d: { num: string }, original: string, note: unknown = null) =>
@@ -370,7 +382,16 @@ test(
       assert.ok(nsSearch.status === "ok" && nsSearch.candidates.length === 0, "an org duplicate never gets a namespace-only original");
       const exported = await exportTriageCsv(pool, nsAdmin, { namespaceId: nsId, status: "duplicate" });
       assert.equal(exported.rows.find((r) => r.number === visDup.label)?.duplicateOf?.number, visOriginal.label);
+
+      // The purge (in the finally) must leave no author-less challenge behind.
+      await (purge as unknown as () => Promise<void>)();
+      purge = null;
+      assert.equal(
+        (await pool.query(`select 1 from challenges where author_id is null and number::text = any($1::text[])`, [externals])).rowCount,
+        0,
+      );
     } finally {
+      if (purge) await (purge as () => Promise<void>)().catch(() => {});
       await pool.end();
     }
   },
