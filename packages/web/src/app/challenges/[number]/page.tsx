@@ -13,7 +13,7 @@ import { reportFeatureUse } from "@/lib/survey-client";
 import { useEffect, useRef, useState } from "react";
 import { useDateFmt } from "@/components/DateFormat";
 import { readJson } from "@/lib/api-client";
-import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL, statusPillClass } from "../status";
+import { CHALLENGE_STATUS_LABEL, SETTABLE_CHALLENGE_STATUSES, SOLUTION_STATUS_LABEL, statusPillClass } from "../status";
 import { CommentThread } from "@/components/CommentThread";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { UserResultButton } from "@/components/UserResultButton";
@@ -40,6 +40,8 @@ import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker, TeamFullNames, TeamPanel, 
 import type { UserResult } from "@/components/UserResultButton";
 import { InvitationBanner, InviteSolverButton, type InvitationsSent, type InvitedBy } from "@/components/InviteSolver";
 import { OWN_ITEM_REVIEW_HINT } from "@innobox/shared/coauthors";
+import { duplicateCommentsNotice } from "@innobox/shared/duplicates";
+import { AlsoRaisedAs, DuplicateBanner, MarkDuplicateButton, type DuplicateRef } from "@/components/MarkDuplicate";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -186,6 +188,16 @@ interface ChallengeDetail extends Partial<HypeFields>, AffectedBlock {
   invitations?: InvitationsSent | null;
   /** §40.3: the viewer's open invitations — null when they have none. */
   invited?: { inviters: InvitedBy[] } | null;
+  /** §42.3: Mark as duplicate is offered to this viewer. */
+  canMarkDuplicate?: boolean;
+  /** §42.5: a duplicate's original — null when the viewer cannot see it, or it was deleted. */
+  duplicateOf?: DuplicateRef | null;
+  /** §42.5: the marker's note — only beside a non-null duplicateOf. */
+  duplicateNote?: string | null;
+  /** §42.5: the duplicates pointing here that the viewer can see. */
+  duplicates?: DuplicateRef[];
+  /** §42.5: a duplicate takes no new comment or reply, on itself or its solutions. */
+  commentsClosed?: boolean;
 }
 
 export default function ChallengeDetailPage() {
@@ -266,6 +278,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
   const [assigneeResults, setAssigneeResults] = useState<{ id: string; displayName: string; email: string | null }[]>([]);
   // §40.3: the banner's Propose a solution opens the page's own form — each click bumps the request.
   const [proposeRequest, setProposeRequest] = useState(0);
+  // §42.3: the triage notes' "Mark as duplicate of this" opens the mark dialog with that original.
+  const [duplicateRequest, setDuplicateRequest] = useState<{ n: number; original: string | null }>({ n: 0, original: null });
 
   const notify = (message: string) => {
     setToast(message);
@@ -559,6 +573,8 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
   const canReveal = challenge.canReveal && challenge.author.anonymous;
   const canSelfReveal = challenge.canSelfReveal && challenge.author.anonymous;
   const likeHint = challenge.likesFrozen ? LIKES_FROZEN_HINT : undefined;
+  // §10.2 / §42.5: a duplicate's threads (its own and its solutions') take no new comment or reply.
+  const commentsClosedNotice = challenge.commentsClosed ? duplicateCommentsNotice(challenge.duplicateOf ?? null) : null;
   // §4.3: closed solutions go to a collapsed section; the heading counts only the open list.
   const { open: openSolutions, closed: closedSolutions } = splitSolutions(challenge.solutions);
 
@@ -733,6 +749,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         parentNumber={s.number}
         authoredAnonymously={s.isMine && s.author.anonymous}
         readOnly={solutionReadOnly}
+        closedNotice={commentsClosedNotice}
       />
     </div>
     );
@@ -770,7 +787,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         </div>
         {/* §34.6: keyed on the server's topics, so a re-read resets any local edit state. */}
         <ChallengeTopicsRow key={(challenge.topics ?? []).map((t) => t.id).join(",")} challenge={challenge} onSaved={onChanged} />
+        {/* §42.5: on an original, the duplicates the viewer can see. */}
+        <AlsoRaisedAs duplicates={challenge.duplicates ?? []} />
       </div>
+
+      {/* §42.5: on a duplicate — the original (and the note) only for a viewer who can see it. */}
+      {challenge.status === "duplicate" && (
+        <DuplicateBanner original={challenge.duplicateOf ?? null} note={challenge.duplicateNote ?? null} isAuthor={challenge.isMine} />
+      )}
 
       {!readOnly && challenge.invited && (
         <InvitationBanner
@@ -944,6 +968,23 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           </p>
         )}
 
+        {/* §42.3: Mark as duplicate — admins from any open status, the committee and the assignee
+            from review; never with an open solution. The triage notes' shortcut opens it too. */}
+        {challenge.canMarkDuplicate && !readOnly && (
+          <div style={{ marginTop: 14 }}>
+            <MarkDuplicateButton
+              challengeNumber={challenge.number}
+              busy={busy}
+              openRequest={duplicateRequest.n}
+              openWith={duplicateRequest.original}
+              onMarked={async (message) => {
+                notify(message);
+                await onChanged();
+              }}
+            />
+          </div>
+        )}
+
         {challenge.canOverrideStatus && (
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
             <label style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--faint)", marginBottom: 8, display: "block" }}>
@@ -955,14 +996,19 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
               disabled={busy}
               onChange={(e) => changeChallengeStatus(e.target.value)}
             >
-              {/* §24.6: an outside submission has no author to improve it — needs_improvement is left out. */}
-              {Object.keys(CHALLENGE_STATUS_LABEL)
-                .filter((s) => !(challenge.external && s === "needs_improvement"))
-                .map((s) => (
-                  <option key={s} value={s}>
-                    {CHALLENGE_STATUS_LABEL[s]}
-                  </option>
-                ))}
+              {/* §24.6: an outside submission has no author to improve it — needs_improvement is left out.
+                  §42.2: `duplicate` needs an original, so it is never offered — on a duplicate it shows
+                  as the current value only, and picking any other status moves it out. */}
+              {challenge.status === "duplicate" && (
+                <option value="duplicate" disabled>
+                  {CHALLENGE_STATUS_LABEL.duplicate}
+                </option>
+              )}
+              {SETTABLE_CHALLENGE_STATUSES.filter((s) => !(challenge.external && s === "needs_improvement")).map((s) => (
+                <option key={s} value={s}>
+                  {CHALLENGE_STATUS_LABEL[s]}
+                </option>
+              ))}
             </select>
 
             {/* §4.3: keyed on the saved state, so a reload after a save starts the editor afresh. */}
@@ -1040,6 +1086,12 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           <DangerZone
             label={challenge.number}
             what={challengeWhat}
+            note={
+              // §42.7: duplicates pointing here stay closed and lose their link on a permanent delete.
+              (challenge.duplicates ?? []).length > 0
+                ? `${(challenge.duplicates ?? []).length} ${(challenge.duplicates ?? []).length === 1 ? "challenge is" : "challenges are"} marked as ${(challenge.duplicates ?? []).length === 1 ? "a duplicate" : "duplicates"} of this one. They stay closed and lose their link.`
+                : undefined
+            }
             busy={busy}
             canTrash={challenge.canTrash}
             onTrash={(reason) => trashAction(`/api/challenges/${chNum}`, "trash", reason)}
@@ -1051,7 +1103,11 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
       {!readOnly && (
         <>
           {/* §22.11: shown only to those the server allows (never the author); renders nothing otherwise. */}
-          <TriageNotesPanel challengeNumber={challenge.number} version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`} />
+          <TriageNotesPanel
+            challengeNumber={challenge.number}
+            version={`${challenge.status}|${challenge.updatedAt}|${challenge.editedAt ?? ""}`}
+            onMarkDuplicate={challenge.canMarkDuplicate ? (original) => setDuplicateRequest((r) => ({ n: r.n + 1, original })) : undefined}
+          />
 
           <ProposeSolutionForm
             challengeNumber={challenge.number}
@@ -1104,6 +1160,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
         parentNumber={challenge.number}
         authoredAnonymously={challenge.isMine && challenge.author.anonymous}
         readOnly={readOnly}
+        closedNotice={commentsClosedNotice}
       />
 
       {revealed && <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />}

@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cachedGet } from "@/lib/ui";
-import { CHALLENGE_STATUS_LABEL, statusPillClass } from "@/app/challenges/status";
+import { CHALLENGE_STATUS_LABEL, SETTABLE_CHALLENGE_STATUSES, statusPillClass } from "@/app/challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { TeamByline, type TeamPerson } from "@/components/TeamByline";
 import { FloatingResults } from "@/components/FloatingResults";
@@ -469,7 +469,8 @@ function TriageQueue({ myUserId }: { myUserId: string | null }) {
               <option value="" disabled>
                 Bulk set status…
               </option>
-              {Object.keys(CHALLENGE_STATUS_LABEL).map((s) => (
+              {/* §42.2: never `duplicate` — it needs an original, picked one challenge at a time. */}
+              {SETTABLE_CHALLENGE_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {CHALLENGE_STATUS_LABEL[s]}
                 </option>

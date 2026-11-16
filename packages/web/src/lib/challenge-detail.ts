@@ -17,6 +17,9 @@ export function proposeDisabledReason(status: string, namespaceArchived = false)
     case "rejected":
     case "withdrawn":
       return "This challenge is closed, so it does not accept solutions.";
+    case "duplicate":
+      // §42.5: its own hint (DUPLICATE_PROPOSE_HINT in @innobox/shared/duplicates; pinned in the test).
+      return "This challenge was closed as a duplicate, so it does not accept solutions.";
     default:
       return "Solutions can be proposed once the challenge has been validated.";
   }

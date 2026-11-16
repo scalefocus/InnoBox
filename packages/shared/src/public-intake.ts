@@ -213,7 +213,7 @@ export function privacyNoticeSegments(notice: string): NoticeSegment[] {
 // link (the worker prefixes PUBLIC_BASE_URL). None links into InnoBox, names an employee, or
 // carries comments or solution content. The confirmation carries nothing the submitter wrote.
 
-export type SubmitterEmailKind = "confirm" | "accepted" | "declined" | "solved" | "rejected";
+export type SubmitterEmailKind = "confirm" | "accepted" | "declined" | "solved" | "rejected" | "merged";
 
 export interface SubmitterEmail {
   kind: SubmitterEmailKind;
@@ -274,6 +274,20 @@ export function outcomeEmail(title: string, outcome: "solved" | "rejected"): Sub
         message: `Your submission "${title}" has been closed without a solution. Thank you for raising it.`,
         link: "",
       };
+}
+
+/** §42.6: the challenge made from the submission was marked as a duplicate of an existing one. No
+ *  number, no link, no names — the submitter can open neither challenge; their one outcome mail now
+ *  follows the original. */
+export function mergedEmail(title: string): SubmitterEmail {
+  return {
+    kind: "merged",
+    subject: "Your submission joins an existing challenge",
+    message:
+      `Thank you for your submission "${title}". Our team found that the same problem had already been raised, ` +
+      "so your submission will be taken forward together with it. We'll e-mail you again once it reaches an outcome.",
+    link: "",
+  };
 }
 
 /** The outbox `type` of a submitter e-mail. */

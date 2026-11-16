@@ -15,6 +15,7 @@ import type { Pool } from "pg";
 import {
   CHALLENGE_STATUSES,
   CLIENT_NAME_MAX,
+  DUPLICATE_MESSAGES,
   COMMENT_BODY_MAX,
   COST_VS_BENEFITS_MAX,
   DESCRIPTION_MAX,
@@ -332,6 +333,11 @@ export const TOOLS: readonly ToolDef[] = [
           // §41.8: the reach and how many colleagues said it affects them — never the markers.
           reach: c.reach,
           affectedPeople: c.affectedPeople,
+          // §42.8: a duplicate's original and the note — only when the caller can see the original —
+          // and the duplicates pointing here that the caller can see.
+          duplicateOf: c.duplicateOf ? { ...c.duplicateOf, url: challengeUrl(ctx, c.duplicateOf.number) } : null,
+          ...(c.duplicateOf ? { duplicateNote: c.duplicateNote } : {}),
+          duplicates: c.duplicates.map((d) => ({ ...d, url: challengeUrl(ctx, d.number) })),
           following: c.followedByViewer,
           attachments: attachmentMeta(c.attachments),
           solutions: c.solutions.map((s) => ({
@@ -860,6 +866,8 @@ export const TOOLS: readonly ToolDef[] = [
       const replyTo = str(args, "replyTo", { max: 100 }) ?? null;
       const result = await createComment(ctx.pool, ctx.viewer, parent.type, parent.id, str(args, "body", { required: true }), undefined, replyTo, via(ctx));
       if (result.status === "not_found" || result.status === "trashed") return NOT_FOUND(parent.type);
+      // §42.8: a duplicate takes no new comment — the API's own refusal.
+      if (result.status === "closed") return fail(409, DUPLICATE_MESSAGES.commentsClosed);
       if (result.status === "invalid") return fail(400, result.error);
       if (result.status === "unprocessable") return fail(422, result.error);
       await notifyCommentPosted(notifyCtx(ctx), parent.type, parent.id, ctx.viewer.userId, result.replyToAuthorId).catch(logNotifyFailure("comment notification failed"));

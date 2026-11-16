@@ -246,7 +246,14 @@ export async function runDigestSweep(
 
       // The cadence word names the user's CURRENT choice; none after a switch back to immediate.
       const cadence = isEmailDelivery(user.email_delivery) && user.email_delivery !== "immediate" ? user.email_delivery : null;
-      const digest = renderDigest(kept.map(toDigestUpdate), cadence, opts.baseUrl);
+      // §42.6: an event-25 row names its original only while the recipient can still see it.
+      const updates: DigestUpdate[] = [];
+      for (const row of kept) {
+        const update = toDigestUpdate(row);
+        const hidden = update.kind === "duplicate" && update.originalId && !(await isVisibleTo(pool, viewer, "challenge", update.originalId));
+        updates.push(hidden || (update.kind === "duplicate" && !update.originalId) ? { ...update, originalNumber: null } : update);
+      }
+      const digest = renderDigest(updates, cadence, opts.baseUrl);
       if (!digest) continue;
 
       const { text, html } = renderEmailParts(digest.text, wrapper, opts.baseUrl);

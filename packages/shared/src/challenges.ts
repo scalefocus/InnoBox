@@ -13,6 +13,8 @@ export const CHALLENGE_STATUSES = [
   "solved",
   "rejected",
   "withdrawn",
+  // §42: terminal, reached only through Mark as duplicate (never the status PATCH or bulk).
+  "duplicate",
 ] as const;
 export type ChallengeStatus = (typeof CHALLENGE_STATUSES)[number];
 
@@ -68,7 +70,19 @@ const TERMINAL_SOLUTION_STATUSES = new Set<SolutionStatus>([
   "withdrawn",
 ]);
 
-export const CHALLENGE_TERMINAL_STATUSES: ReadonlySet<ChallengeStatus> = new Set(["solved", "rejected", "withdrawn"]);
+export const CHALLENGE_TERMINAL_STATUSES: ReadonlySet<ChallengeStatus> = new Set(["solved", "rejected", "withdrawn", "duplicate"]);
+
+/** §42.2: `duplicate` is set only by Mark as duplicate, which picks the original — the status PATCH,
+ *  the dropdowns and the bulk status set refuse it as a target. */
+export function isSettableByTransition(status: ChallengeStatus): boolean {
+  return status !== "duplicate";
+}
+
+/** §42.3 rule 3: an open solution — anything not yet `implemented`, `rejected`, `not_selected` or
+ *  `withdrawn` (`proposed` included). */
+export function isSolutionOpen(status: SolutionStatus): boolean {
+  return !TERMINAL_SOLUTION_STATUSES.has(status);
+}
 
 // ── Anonymity masking (§9, invariant 3) ─────────────────────────────────────────────────
 
@@ -293,6 +307,9 @@ const CHALLENGE_ENFORCED_TRANSITIONS: Record<ChallengeStatus, readonly Challenge
   solved: [],
   rejected: [],
   withdrawn: [],
+  // §42.2: the committee/assignee reach `duplicate` from in_review / meeting_scheduled only through
+  // Mark as duplicate (shared/duplicates.ts) — never as a transition target of this graph.
+  duplicate: [],
 };
 
 const SOLUTION_ENFORCED_TRANSITIONS: Record<SolutionStatus, readonly SolutionStatus[]> = {

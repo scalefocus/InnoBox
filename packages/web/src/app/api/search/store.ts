@@ -42,7 +42,9 @@ import {
   pushTopicFilter,
   teamNameMatchSql,
   toListItem,
+  visibleChallengeRefs,
   type ChallengeListItem,
+  type DuplicateRef,
   type ChallengeRow,
   type Viewer,
 } from "../challenges/store";
@@ -59,6 +61,8 @@ export interface ChallengeSearchResult {
   namespaceSlug: string;
   /** §34.6: the challenge's topics, alphabetical. */
   topics: TopicRef[];
+  /** §42.5: a duplicate's original — only when the viewer can see it. */
+  duplicateOf: DuplicateRef | null;
 }
 
 export interface SolutionSearchResult {
@@ -147,6 +151,7 @@ interface ChallengeCandidate {
   assignee_id: string | null;
   namespace_slug: string;
   topics: TopicRef[];
+  duplicate_of_id: string | null;
 }
 
 interface SolutionCandidate {
@@ -195,7 +200,7 @@ async function challengeCandidates(pool: Pool, viewer: Viewer, match: Match, fil
     `select c.number::text, c.title, c.status, c.is_anonymous, c.author_id, u.display_name as author_display_name,
             u.active as author_active, u.scrubbed_at is not null as author_scrubbed, ps.company as external_company,
             ${challengeTeamJsonSql("c")} as team,
-            c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug,
+            c.id, c.namespace_id, c.visibility, c.assignee_id, ns.slug as namespace_slug, c.duplicate_of_id,
             (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
                from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics
        from challenges c
@@ -249,8 +254,8 @@ async function solutionCandidates(pool: Pool, viewer: Viewer, match: Match, filt
   return rows;
 }
 
-function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): ChallengeSearchResult[] {
-  return rows
+async function toChallengeResults(pool: Pool, viewer: Viewer, rows: ChallengeCandidate[]): Promise<ChallengeSearchResult[]> {
+  const kept = rows
     .filter((row) =>
       canSeeChallenge(viewer, {
         id: row.id,
@@ -262,19 +267,22 @@ function toChallengeResults(viewer: Viewer, rows: ChallengeCandidate[]): Challen
         trashed: false, // §10.4: the SQL predicate already dropped trashed rows
       }),
     )
-    .slice(0, RESULT_LIMIT)
-    .map((row) => {
-      const authors = teamOf(row);
-      return {
-        number: formatChallengeNumber(row.number),
-        title: row.title,
-        author: authors[0]!,
-        authors,
-        status: row.status,
-        namespaceSlug: row.namespace_slug,
-        topics: row.topics ?? [],
-      };
-    });
+    .slice(0, RESULT_LIMIT);
+  // §42.5: a duplicate names its original only to a viewer who can see it.
+  const refs = await visibleChallengeRefs(pool, viewer, kept.map((row) => row.duplicate_of_id));
+  return kept.map((row) => {
+    const authors = teamOf(row);
+    return {
+      number: formatChallengeNumber(row.number),
+      title: row.title,
+      author: authors[0]!,
+      authors,
+      status: row.status,
+      namespaceSlug: row.namespace_slug,
+      topics: row.topics ?? [],
+      duplicateOf: row.duplicate_of_id ? (refs.get(row.duplicate_of_id) ?? null) : null,
+    };
+  });
 }
 
 function toSolutionResults(viewer: Viewer, rows: SolutionCandidate[]): SolutionSearchResult[] {
@@ -320,7 +328,7 @@ export async function search(pool: Pool, viewer: Viewer, rawQuery: string, filte
   if (chNumberMatch) {
     const number = chNumberMatch[1]!;
     if (!isEntityNumber(number)) return EMPTY; // §2.4: malformed → no match, no DB round-trip
-    return { challenges: toChallengeResults(viewer, await challengeCandidates(pool, viewer, { kind: "number", number }, filters)), solutions: [] };
+    return { challenges: await toChallengeResults(pool, viewer, await challengeCandidates(pool, viewer, { kind: "number", number }, filters)), solutions: [] };
   }
   const solNumberMatch = query.match(SOLUTION_NUMBER_RE);
   if (solNumberMatch) {
@@ -334,7 +342,7 @@ export async function search(pool: Pool, viewer: Viewer, rawQuery: string, filte
     challengeCandidates(pool, viewer, match, filters),
     solutionCandidates(pool, viewer, match, filters),
   ]);
-  return { challenges: toChallengeResults(viewer, challengeRows), solutions: toSolutionResults(viewer, solutionRows) };
+  return { challenges: await toChallengeResults(pool, viewer, challengeRows), solutions: toSolutionResults(viewer, solutionRows) };
 }
 
 // ── §25.6 search_challenges: paginated, challenges only ─────────────────────────────────

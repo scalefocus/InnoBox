@@ -145,6 +145,10 @@
     "./affected": {
       "types": "./dist/affected.d.ts",
       "default": "./dist/affected.js"
+    },
+    "./duplicates": {
+      "types": "./dist/duplicates.d.ts",
+      "default": "./dist/duplicates.js"
     }
   },
   "scripts": {

@@ -36,12 +36,12 @@ export function canAssignAtStatus(status: ChallengeStatus): boolean {
 
 // ── Likes (§8.3) ─────────────────────────────────────────────────────────────────────────
 
-/** §8.3: while a challenge is closed — `solved`, `rejected` or `withdrawn` — likes are frozen,
- *  on the challenge itself and on its solutions. Existing counts stay displayed; no like or
- *  unlike lands. A move back to an open status (an admin override, or the §10.3 winner-delete
- *  revert to `valid`) unfreezes them. */
+/** §8.3: while a challenge is closed — `solved`, `rejected`, `withdrawn` or `duplicate` (§42) —
+ *  likes are frozen, on the challenge itself and on its solutions. Existing counts stay displayed;
+ *  no like or unlike lands. A move back to an open status (an admin override, or the §10.3
+ *  winner-delete revert to `valid`) unfreezes them. */
 export function areLikesFrozen(challengeStatus: ChallengeStatus): boolean {
-  return challengeStatus === "solved" || challengeStatus === "rejected" || challengeStatus === "withdrawn";
+  return challengeStatus === "solved" || challengeStatus === "rejected" || challengeStatus === "withdrawn" || challengeStatus === "duplicate";
 }
 
 // ── Notifications (§12.1) ────────────────────────────────────────────────────────────────
@@ -94,6 +94,10 @@ export const NOTIFICATION_TYPES = [
   // §12.1 event 24 / §41.6: someone said your challenge affects them too — the authors only, on a
   // person's first mark, coalesced per challenge while unread like hyped, e-mailed (digestable).
   "affected",
+  // §12.1 event 25 / §42.6: a challenge was closed as a duplicate — its authors (actionable,
+  // immediate) and its assignee and followers (follower-type, digestable). Rendered per recipient:
+  // the original is named only to those who can see it, and the inbox resolves it at read time.
+  "closed_as_duplicate",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

@@ -30,7 +30,7 @@ import {
 import { appendAudit } from "../../../../lib/audit";
 import type { NotifyContext } from "../../../../lib/notify";
 import { logNotifyFailure, notifyAssignmentChanged, notifyChallengeStatusChanged, notifyTopicFollowers } from "../../../../lib/notify-events";
-import { setChallengeAssigneeLean, setChallengeStatusLean, teamNameMatchSql, type Viewer } from "../../challenges/store";
+import { attachDuplicateRefs, setChallengeAssigneeLean, setChallengeStatusLean, teamNameMatchSql, type DuplicateRef, type Viewer } from "../../challenges/store";
 import { isEntityNumber } from "../../challenges/validation";
 
 export interface TriageRow {
@@ -69,6 +69,8 @@ export interface TriageRow {
   /** §41.4: about how many people the challenge affects, and how many colleagues said so. */
   reach: number;
   affectedPeople: number;
+  /** §42.5: a duplicate's original — only when the admin can see it (the export's Duplicate of). */
+  duplicateOf: DuplicateRef | null;
 }
 
 /** §41.5: the queue's one sort — newest first (the default) or by reach. */
@@ -168,6 +170,7 @@ interface TriageQueryRow {
   hype_points: number;
   reach: number;
   affected_people: number;
+  duplicate_of_id: string | null;
 }
 
 /** The `author*` fields of a triage row — the first member of the team, masked (§9, §39.7). */
@@ -214,7 +217,14 @@ function toTriageRow(row: TriageQueryRow, withHype = false): TriageRow {
     ...(withHype ? { hype: row.hype_points } : {}),
     reach: row.reach,
     affectedPeople: row.affected_people,
+    // §42.5: resolved per viewer by withDuplicateRefs.
+    duplicateOf: null,
   };
+}
+
+/** §42.5: fill each row's `duplicateOf` — the original's number only when the viewer can see it. */
+async function withDuplicateRefs(pool: Pool, viewer: Viewer, raw: readonly TriageQueryRow[], rows: TriageRow[]): Promise<TriageRow[]> {
+  return attachDuplicateRefs(pool, viewer, rows, raw.map((r) => r.duplicate_of_id));
 }
 
 const TRIAGE_SELECT = `
@@ -226,7 +236,8 @@ const TRIAGE_SELECT = `
          (select coalesce(json_agg(json_build_object('id', t.id, 'name', t.name, 'active', t.active) order by lower(t.name)), '[]'::json)
             from challenge_topics ct join topics t on t.id = ct.topic_id where ct.challenge_id = c.id) as topics,
          (select coalesce(sum(h.weight), 0)::int from hypes h where h.parent_type = 'challenge' and h.parent_id = c.id) as hype_points,
-         ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people
+         ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people,
+         c.duplicate_of_id
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -275,7 +286,7 @@ export async function listTriageQueue(
   );
 
   return {
-    rows: rows.map((r) => toTriageRow(r, opts.hype === true)),
+    rows: await withDuplicateRefs(pool, viewer, rows, rows.map((r) => toTriageRow(r, opts.hype === true))),
     total: rows.length > 0 ? Number(rows[0]!.total_count) : 0,
     page,
     pageSize,
@@ -339,7 +350,7 @@ export async function bulkSetStatus(
       status:
         result.status === "ok"
           ? "ok"
-          : result.status === "invalid_status" || result.status === "illegal_transition"
+          : result.status === "invalid_status" || result.status === "illegal_transition" || result.status === "use_mark_duplicate"
             ? "invalid"
             : result.status === "trashed"
               ? "not_found"
@@ -384,15 +395,17 @@ export { canAssignAtStatus };
  *  exports must capture everything matching the filter, not just one page of it. */
 export async function exportTriageCsv(pool: Pool, admin: Viewer, filters: TriageFilters): Promise<{ rows: TriageRow[] }> {
   const query = buildTriageQuery(admin, filters);
-  const rows = query
+  const raw = query
     ? (
         await pool.query<TriageQueryRow>(
           // §41.5: the export follows the queue's current sort.
           `select * from (${TRIAGE_SELECT} ${query.whereClause}) t order by ${triageOrderBy(filters.sort, "t")} limit ${TRIAGE_EXPORT_MAX}`,
           query.params,
         )
-      ).rows.map((r) => toTriageRow(r))
+      ).rows
     : [];
+  // §42.5: the Duplicate of column names the original only when the exporter can see it.
+  const rows = await withDuplicateRefs(pool, admin, raw, raw.map((r) => toTriageRow(r)));
 
   await appendAudit(pool, {
     actorUserId: admin.userId,

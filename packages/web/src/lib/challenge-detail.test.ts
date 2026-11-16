@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RESTORE_CHALLENGE_FIRST as SERVER_RESTORE_CHALLENGE_FIRST } from "@innobox/shared";
+import { DUPLICATE_PROPOSE_HINT } from "@innobox/shared/duplicates";
 import { LIKES_FROZEN_HINT, RESTORE_CHALLENGE_FIRST, proposeDisabledReason, splitSolutions } from "./challenge-detail";
 
 test("proposeDisabledReason: enabled only while valid", () => {
@@ -16,6 +17,8 @@ test("proposeDisabledReason: solved and closed statuses say so; pre-validation o
   assert.match(proposeDisabledReason("solved")!, /solved/);
   assert.match(proposeDisabledReason("rejected")!, /closed/);
   assert.match(proposeDisabledReason("withdrawn")!, /closed/);
+  // §42.5: a duplicate has its own hint — the same text as @innobox/shared/duplicates.
+  assert.equal(proposeDisabledReason("duplicate"), DUPLICATE_PROPOSE_HINT);
   assert.match(proposeDisabledReason("in_review")!, /validated/);
 });
 

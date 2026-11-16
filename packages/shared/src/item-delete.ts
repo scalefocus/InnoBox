@@ -17,6 +17,7 @@
 import { appendAudit } from "./audit.js";
 import { notificationLinkScope, parentStatusAfterSolutionDelete, type ChallengeStatus, type SolutionStatus } from "./challenges.js";
 import { deleteAiResults } from "./ai.js";
+import { CONTACT_RETENTION_DAYS } from "./public-intake.js";
 import type { DbClient, DbPool } from "./email-graph.js";
 
 /** The object-store calls the purge needs (the web StorageClient and the worker S3 client both fit). */
@@ -332,6 +333,21 @@ export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage
       linkScope: notificationLinkScope({ challengeNumber: challenge.number }),
     });
 
+    // §42.7: challenges marked as duplicates of this one are not part of its subtree — they stay
+    // `duplicate` and their link becomes null (ON DELETE SET NULL). Each of their submissions still
+    // waiting for an outcome starts its erasure clock now, with no mail; the audit row lists them.
+    const { rows: duplicateRows } = await client.query<{ number: string }>(
+      `select number::text from challenges where duplicate_of_id = $1 order by number`,
+      [challenge.id],
+    );
+    await client.query(
+      `update public_submissions ps
+          set contact_erase_due_at = now() + make_interval(days => $2)
+         from challenges d
+        where d.duplicate_of_id = $1 and ps.id = d.public_submission_id and ps.contact_erase_due_at is null`,
+      [challenge.id, CONTACT_RETENTION_DAYS],
+    );
+
     // §13.2: a featured challenge's pin is closed out in the audit trail before the row goes.
     await unpinChallenge(client, request.actorUserId, challenge.id, "deleted");
     await client.query(`delete from solutions where challenge_id = $1`, [challenge.id]);
@@ -360,7 +376,10 @@ export async function purgeChallenge(deps: { pool: DbPool; storage: PurgeStorage
         status: challenge.status,
         namespaceId: challenge.namespace_id,
       },
-      after: purgeAuditAfter(request, counts, locked[0].trashed_at),
+      after: {
+        ...purgeAuditAfter(request, counts, locked[0].trashed_at),
+        ...(duplicateRows.length > 0 ? { duplicatesUnlinked: duplicateRows.map((r) => `CH-${r.number}`) } : {}),
+      },
     });
     return { counts, purge: children.purge };
   });

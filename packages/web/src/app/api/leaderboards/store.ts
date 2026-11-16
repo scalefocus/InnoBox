@@ -1,6 +1,7 @@
 // Data layer for /api/leaderboards (INNOBOX_SPEC.md §13.3): top 10 per metric/window,
-// computed over org-visible, non-anonymous, non-rejected contributions only (§4.3, §9) — so a
-// public leaderboard never hints at restricted, un-triaged, un-reviewed or anonymous work.
+// computed over org-visible, non-anonymous contributions that are neither rejected nor a
+// duplicate (§4.3, §9, §42.5) — so a public leaderboard never hints at restricted, un-triaged,
+// un-reviewed or anonymous work.
 //
 // "Org-visible" is the full §4.3 test an arbitrary authenticated viewer would pass — the same
 // predicate the public profile uses (§13.5) — applied to the item AND, for a solution (and a
@@ -11,7 +12,8 @@
 // A trashed item (§10.4) is not org-visible to anyone, so it drops out of every board while it
 // waits in the trash and comes back on restore.
 // On top of that every metric excludes anonymous items unconditionally (after a self-reveal,
-// is_anonymous flips false and they start counting) and `rejected` contributions.
+// is_anonymous flips false and they start counting) and `rejected` contributions — a challenge
+// closed as a `duplicate` counts exactly as a rejected one does (§42.5).
 //
 // Ranked by count descending; ties break by earliest achiever — the earliest qualifying
 // timestamp ascending. For "solutions implemented" that timestamp is when the solution
@@ -82,7 +84,7 @@ export async function getLeaderboard(
         select ca.user_id, count(*)::int as cnt, min(greatest(c.created_at, ca.added_at)) as first_at
           from challenges c
           join challenge_authors ca on ca.challenge_id = c.id
-         where c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+         where c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status not in ('rejected', 'duplicate')
            and ($1::timestamptz is null or greatest(c.created_at, ca.added_at) >= $1)
          group by ca.user_id`;
       break;
@@ -127,7 +129,7 @@ export async function getLeaderboard(
               join challenges c on c.id = l.parent_id
               join challenge_authors ca on ca.challenge_id = c.id and l.created_at >= ca.added_at
              where l.parent_type = 'challenge'
-               and c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status <> 'rejected'
+               and c.is_anonymous = false and ${CHALLENGE_ORG_VISIBLE} and c.status not in ('rejected', 'duplicate')
                and not exists (select 1 from challenge_authors lm where lm.challenge_id = c.id and lm.user_id = l.user_id)
                and ($1::timestamptz is null or l.created_at >= $1)
             union all

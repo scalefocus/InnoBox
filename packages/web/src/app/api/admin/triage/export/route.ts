@@ -25,7 +25,8 @@ async function handleGET(req: Request): Promise<Response> {
 
   const { rows } = await exportTriageCsv(pool, admin, parsed.value);
   // §41.5: a Reach column after Topics; the rows follow the queue's current sort.
-  const header = toCsvRow(["Number", "Title", "Author", "Status", "Impact area", "Topics", "Reach", "Namespace", "Assignee", "Created"]);
+  // §42.5: a Duplicate of column after Reach — the original, when the exporter can see it.
+  const header = toCsvRow(["Number", "Title", "Author", "Status", "Impact area", "Topics", "Reach", "Duplicate of", "Namespace", "Assignee", "Created"]);
   const body = [
     header,
     ...rows.map((r) =>
@@ -39,6 +40,7 @@ async function handleGET(req: Request): Promise<Response> {
         // §34.6: the topic names, alphabetical, joined by "; " (the neutralization still applies).
         r.topics.map((t) => t.name).join("; "),
         String(r.reach),
+        r.duplicateOf?.number ?? "",
         r.namespaceSlug,
         r.assigneeDisplayName ?? "Unassigned",
         r.createdAt,
