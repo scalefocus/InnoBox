@@ -5,8 +5,14 @@
 // "Continue to InnoBox" marks it seen and hard-navigates to "/" — a full reload so the
 // shell's cached /api/me is refetched fresh, rather than client-routing off a stale
 // in-memory "unseen" state that would just bounce the user straight back here.
+//
+// The action sits in the page head as well as after the last section, so the way out is on the
+// first screen. While the user is unseen the head also says that the rest of the app is held —
+// the navigation stays on screen and every item in it leads back here. A Continue that fails is
+// reported beside the action that was pressed; the page navigates only once it has saved.
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { cachedGet } from "@/lib/ui";
 
 // Real screenshots of the current UI (INNOBOX_SPEC.md §13.7), captured from a running instance
 // with neutral demo content. Re-capture them when the pictured screens change. A step may draw an
@@ -66,23 +72,55 @@ const STEPS: Step[] = [
   },
 ];
 
+/** Which of the two Continue actions was pressed — the error is shown beside that one. */
+type ActionPlace = "head" | "foot";
+
 export default function QuickStartPage() {
   const [continuing, setContinuing] = useState(false);
+  const [failedAt, setFailedAt] = useState<ActionPlace | null>(null);
+  // True only once `me` has loaded and says this user has never continued. The shell fetches the
+  // same resource through the same cache, so this costs no request of the page's own.
+  const [held, setHeld] = useState(false);
 
-  const finish = async () => {
+  useEffect(() => {
+    let live = true;
+    cachedGet<{ quickStartSeenAt: string | null }>("/api/me")
+      .then((me) => {
+        if (live) setHeld(me.quickStartSeenAt === null);
+      })
+      .catch(() => {
+        /* unknown: say nothing rather than claim the app is held */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const finish = async (place: ActionPlace) => {
     setContinuing(true);
+    setFailedAt(null);
+    let saved = false;
     try {
-      await fetch("/api/me", {
+      const res = await fetch("/api/me", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ quickStartSeen: true }),
       });
-    } finally {
-      // Hard navigation: a fresh load remounts the shell so it fetches /api/me anew,
-      // instead of client-routing off the stale cached "unseen" state (see file header).
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- the full reload is the point
-      window.location.href = "/";
+      saved = res.ok;
+    } catch {
+      saved = false; // no response at all
     }
+    if (!saved) {
+      // Navigating anyway would only meet the redirect again, with nothing to say why.
+      setFailedAt(place);
+      setContinuing(false);
+      return;
+    }
+    // Hard navigation: a fresh load remounts the shell so it fetches /api/me anew,
+    // instead of client-routing off the stale cached "unseen" state (see file header).
+    // `continuing` stays set, so both actions remain disabled while the page unloads.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- the full reload is the point
+    window.location.href = "/";
   };
 
   return (
@@ -94,6 +132,17 @@ export default function QuickStartPage() {
           A two-minute tour of the basics — submitting challenges, proposing solutions, and finding your way
           around InnoBox.
         </p>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8, marginTop: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "10px 16px" }}>
+            <ContinueButton disabled={continuing} onContinue={() => finish("head")} />
+            {held && (
+              <p className="muted" data-testid="quick-start-held" style={{ margin: 0, fontSize: 14.5 }}>
+                The rest of InnoBox opens once you continue.
+              </p>
+            )}
+          </div>
+          {failedAt === "head" && <ContinueError />}
+        </div>
       </div>
 
       <div className="reveal" style={{ display: "flex", flexDirection: "column", gap: 22, marginBottom: 26 }}>
@@ -134,12 +183,31 @@ export default function QuickStartPage() {
             <div className="ttl">Ready to dive in?</div>
             <div className="sub">You can always come back here from the account menu.</div>
           </div>
-          <button type="button" className="btn btn-primary" disabled={continuing} onClick={finish}>
-            Continue to InnoBox
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <ContinueButton disabled={continuing} onContinue={() => finish("foot")} />
+            {failedAt === "foot" && <ContinueError />}
+          </div>
         </div>
       </div>
     </>
+  );
+}
+
+/** The Continue action. It is on the page twice; both share the page's one in-flight state. */
+function ContinueButton({ disabled, onContinue }: { disabled: boolean; onContinue: () => void }) {
+  return (
+    <button type="button" className="btn btn-primary" disabled={disabled} onClick={onContinue}>
+      Continue to InnoBox
+    </button>
+  );
+}
+
+/** Shown beneath whichever Continue action was pressed when the save did not go through. */
+function ContinueError() {
+  return (
+    <p role="alert" style={{ margin: 0, fontSize: 13.5, color: "var(--danger)" }}>
+      That didn&apos;t save. Please try again.
+    </p>
   );
 }
 

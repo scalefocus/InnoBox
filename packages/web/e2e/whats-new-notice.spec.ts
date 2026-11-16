@@ -168,7 +168,8 @@ test("Quick start's Continue leaves no notice behind", async ({ browser }) => {
   await expect(page).toHaveURL(/\/quick-start$/);
   await expect(notice(page)).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Continue to InnoBox" }).click();
+  // The action is on the page twice (§13.7: the page head and after the last section).
+  await page.getByRole("button", { name: "Continue to InnoBox" }).first().click();
   await expect(page).toHaveURL(/\/$/);
   await page.reload();
   await expect(page.locator(".user-trigger")).toBeVisible();

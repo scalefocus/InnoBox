@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.28.1",
+    date: "2026-11-16",
+    summary:
+      "Quick start is easier to get out of. Continue to InnoBox is now at the top of the tour as well as the bottom, and people signing in for the first time are told that the rest of InnoBox opens once they continue. If continuing does not save, the page now says so and lets you try again.",
+  },
+  {
     version: "1.28.0",
     date: "2026-11-16",
     summary:
