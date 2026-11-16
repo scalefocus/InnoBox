@@ -1,7 +1,7 @@
 // POST /api/admin/triage/bulk-status (INNOBOX_SPEC.md §14.1): bulk admin status override
 // over a selection — each item audited individually, exactly like a single-row override, and a
 // real transition fires the same §12.1 notifications (events 3/4/5).
-import { isChallengeStatus } from "@innobox/shared";
+import { isChallengeStatus, isSettableByTransition } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { adminNamespaceIds, bulkSetStatus } from "../store";
@@ -22,7 +22,8 @@ async function handlePOST(req: Request): Promise<Response> {
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
   const body = read.value;
-  const parsed = parseBulkStatusBody(body, isChallengeStatus);
+  // §42.2 / §14.1: `duplicate` needs an original — never a bulk target (400 like any invalid status).
+  const parsed = parseBulkStatusBody(body, (s) => isChallengeStatus(s) && isSettableByTransition(s));
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
   const outcomes = await bulkSetStatus(pool, admin, parsed.value.numbers, parsed.value.status, resolveRolesForUser);

@@ -26,6 +26,7 @@ import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges
 import { itemHref } from "./deep-link";
 import type { InvitationPayoff } from "./invitation-payoffs";
 import {
+  dispatchClosedAsDuplicate,
   dispatchCoalescedAffected,
   dispatchCoalescedComment,
   dispatchCoalescedHype,
@@ -39,6 +40,7 @@ import {
   getNamespaceAdminUserIds,
   getNamespaceCommitteeUserIds,
   getOtherCommenterUserIds,
+  type ClosedAsDuplicateNotification,
   type NotifyContext,
 } from "./notify";
 
@@ -101,6 +103,13 @@ export async function notifyChallengeStatusChanged(
       facts: { kind: "status", challengeNumber: row.number, challengeTitle: row.title, statusLabel: CHALLENGE_STATUS_LABEL[newStatus] ?? humanStatus(newStatus) },
     },
   );
+}
+
+/** §12.1 event 25 (§42.6): a challenge was closed as a duplicate — written by the mark route after
+ *  commit, instead of events 3/4. Recipient routes and the per-recipient rendering live in
+ *  ./notify (dispatchClosedAsDuplicate). */
+export async function notifyClosedAsDuplicate(ctx: NotifyContext, notice: ClosedAsDuplicateNotification): Promise<void> {
+  await dispatchClosedAsDuplicate(ctx, notice);
 }
 
 /** What the §8.3 auto-close cascade hands the event-8 dispatch. */

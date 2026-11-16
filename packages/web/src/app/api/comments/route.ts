@@ -4,6 +4,7 @@
 // number/title (solutions have no title of their own) but recipients are scoped to the
 // comment's actual parent (a solution's own commenters/followers). A reply (§10.2, `replyTo`) is a
 // comment like any other; its row also counts it as a reply for the author of the comment answered.
+import { DUPLICATE_MESSAGES } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyCommentPosted } from "@/lib/notify-events";
@@ -43,6 +44,8 @@ async function handlePOST(req: Request): Promise<Response> {
 
   if (result.status === "not_found") return Response.json({ error: "not found" }, { status: 404 });
   if (result.status === "trashed") return trashedResponse();
+  // §10.2 / §42.5: a duplicate (or a solution under one) takes no new comment or reply.
+  if (result.status === "closed") return Response.json({ error: DUPLICATE_MESSAGES.commentsClosed, code: "comments_closed" }, { status: 409 });
   if (result.status === "invalid") return Response.json({ error: result.error }, { status: 400 });
   if (result.status === "unprocessable") return Response.json({ error: result.error }, { status: 422 });
 

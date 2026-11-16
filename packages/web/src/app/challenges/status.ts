@@ -11,7 +11,13 @@ export const CHALLENGE_STATUS_LABEL: Record<string, string> = {
   solved: "Solved",
   rejected: "Rejected",
   withdrawn: "Withdrawn",
+  // §42.2: informational (--accent), never --danger — it is no judgement on the idea.
+  duplicate: "Duplicate",
 };
+
+/** §42.2: the statuses a dropdown may SET — every status but `duplicate`, which needs an original
+ *  and is reached only through Mark as duplicate. Filters still list every status. */
+export const SETTABLE_CHALLENGE_STATUSES: string[] = Object.keys(CHALLENGE_STATUS_LABEL).filter((s) => s !== "duplicate");
 
 export const SOLUTION_STATUS_LABEL: Record<string, string> = {
   proposed: "Proposed",

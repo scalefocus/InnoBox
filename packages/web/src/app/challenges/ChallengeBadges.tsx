@@ -6,10 +6,10 @@
 //   - ChallengeNewTag      — the "new since your last visit" tag (card corner / full-height row tab)
 //   - ChallengeAuthorName  — the masked author name (§9) and the co-author "+N" (§39.7)
 //   - ChallengeAuthorBubbles — the author's bubble, or up to three stacked bubbles for a team (§39.7)
-//   - ChallengeStateBadges — state chips next to the title/status: the Committee pick chip
-//                            (§13.10) and the visibility-gated "Duplicate of CH-<n>" (§7.4)
-//                            belong here
+//   - ChallengeStateBadges — state chips next to the title/status: the visibility-gated
+//                            "Duplicate of CH-<n>" line (§42.5) lives here
 import { teamAriaLabel } from "@innobox/shared/coauthors";
+import { duplicateOfLine } from "@innobox/shared/duplicates";
 import { useDateFmt } from "@/components/DateFormat";
 import { TeamBubbles, TeamNames, teamOf, type TeamPerson } from "@/components/TeamByline";
 
@@ -21,6 +21,8 @@ export interface ChallengeBadgeData {
   author: TeamPerson;
   /** §39.7: every member in order — the single masked shape for an anonymous or external item. */
   authors?: TeamPerson[];
+  /** §42.5: a duplicate's original — present only when the viewer can see it. */
+  duplicateOf?: { number: string; title: string } | null;
 }
 
 /** §13.1: created since this viewer last left the Challenges surface — exactly the items the
@@ -51,9 +53,14 @@ export function ChallengeAuthorBubbles({ challenge }: { challenge: ChallengeBadg
   );
 }
 
-/** State chips that accompany the title/status on both views. None exist yet; this is the single
- *  mount point so the card and the list row always carry the same set. */
+/** State chips that accompany the title/status on both views — the single mount point so the card
+ *  and the list row always carry the same set. §42.5: a duplicate names its original, muted, only
+ *  for a viewer who can see it (the server sends `duplicateOf` null otherwise). */
 export function ChallengeStateBadges({ challenge }: { challenge: ChallengeBadgeData }) {
-  void challenge;
-  return null;
+  if (!challenge.duplicateOf) return null;
+  return (
+    <span className="duplicate-of-line" title={challenge.duplicateOf.title} data-testid="duplicate-of-line" style={{ display: "block" }}>
+      {duplicateOfLine(challenge.duplicateOf.number)}
+    </span>
+  );
 }

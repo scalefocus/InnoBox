@@ -108,7 +108,8 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
       summary.ran++;
 
       // Duplicate candidates: same namespace, visible to every reader of the note — org-visible
-      // (or restricted, while the switch allows), never awaiting_triage or withdrawn.
+      // (or restricted, while the switch allows), never awaiting_triage, withdrawn or a duplicate
+      // (§42.5 — a duplicate's original is a candidate in its place).
       const { rows: candidates } = await pool.query<{ number: string; title: string; visibility: string }>(
         `with q as (
            select to_tsquery('simple', coalesce(
@@ -120,7 +121,7 @@ export async function runTriageAssistSweep(pool: Pool, ai: AiClient, scope: { na
            from challenges c, q
           where c.namespace_id = $1
             and c.id <> $4
-            and c.status not in ('awaiting_triage', 'withdrawn')
+            and c.status not in ('awaiting_triage', 'withdrawn', 'duplicate')
             and c.trashed_at is null
             and (c.visibility = 'org' or $5::boolean)
           order by ts_rank(c.search_vector, q.tsq) desc, c.created_at desc

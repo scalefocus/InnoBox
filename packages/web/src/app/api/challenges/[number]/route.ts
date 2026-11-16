@@ -3,7 +3,7 @@
 // status (override), while a committee member or the assignee traverses the enforced graph — the
 // store derives the mode from the caller's role. An illegal enforced transition is a 422. A real
 // transition fires notification event 3/4/5 (§12.1) to author/assignee/followers.
-import { isChallengeStatus, parseAffectedEstimate, parseBaseEditedAt, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
+import { DUPLICATE_MESSAGES, isChallengeStatus, parseAffectedEstimate, parseBaseEditedAt, parseTopicIds, TEAM_MESSAGES, TOPIC_SET_ERROR, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
@@ -86,6 +86,9 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
       return Response.json({ error: "An outside submission has no author who can improve it.", code: "external_no_author" }, { status: 422 });
     case "invalid_status":
       return Response.json({ error: "status must be a valid challenge status" }, { status: 400 });
+    case "use_mark_duplicate":
+      // §42.2: the status needs an original — only Mark as duplicate sets it.
+      return Response.json({ error: DUPLICATE_MESSAGES.useMarkDuplicate, code: "use_mark_duplicate" }, { status: 422 });
   }
 }
 

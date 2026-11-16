@@ -1847,6 +1847,38 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 .notification-detail { overflow-wrap: anywhere; }
 /* ── end Invite a solver ───────────────────────────────────────────────────── */
 
+/* ── Mark as duplicate (§42.3, §42.5) ──────────────────────────────────────── */
+/* The banner on a duplicate: informational (--accent), never --danger — no judgement on the idea. */
+.duplicate-banner {
+  display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; margin-bottom: 18px;
+  border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--ink);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.duplicate-banner-title { margin: 0; font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.duplicate-banner-title a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.duplicate-banner-note {
+  margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.duplicate-banner-hint { margin: 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.also-raised { margin: 10px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.also-raised a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.duplicate-of-line { margin-top: 4px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.duplicate-candidates { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.duplicate-candidate {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit;
+}
+.duplicate-candidate:hover { background: var(--surface-2); }
+.duplicate-candidate[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.duplicate-candidate-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.duplicate-candidate-ns { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.duplicate-preview { margin: 10px 0 0; padding-left: 18px; font-size: 13.5px; line-height: 1.55; }
+@media (max-width: 560px) {
+  .duplicate-candidate { flex-wrap: wrap; }
+  .duplicate-candidate-title { flex-basis: 100%; white-space: normal; }
+}
+/* ── end Mark as duplicate ─────────────────────────────────────────────────── */
+
 /* ── Author reveal dialog (INNOBOX_SPEC.md §9, §13.6) ───────────────────────
    The audited admin reveal opens a native modal <dialog>: the revealed author's real, large
    (~96 px) avatar bubble above their name, flagged "Revealed to you only". Native showModal gives

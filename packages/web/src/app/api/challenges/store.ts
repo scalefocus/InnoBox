@@ -34,6 +34,9 @@ import {
   challengeTargetsFor,
   challengeTeamJsonSql,
   decideTransition,
+  decideDuplicateActor,
+  isSettableByTransition,
+  isSolutionOpen,
   escapeLike,
   formatChallengeNumber,
   formatSolutionNumber,
@@ -93,7 +96,7 @@ import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
 import { featuredDetailFields, type FeaturedDetailFields } from "./featured-rules";
 import { unpinOnStatusChange } from "./featured-unpin";
-import { onExternalChallengeClosed } from "./external";
+import { onExternalChallengeClosed, settleDuplicateOutcomes } from "./external";
 
 export interface Viewer {
   userId: string;
@@ -149,6 +152,15 @@ export interface ChallengeListItem {
   solutionCount: number;
   /** §13.1: created after the viewer last left the Challenges surface (and visible to them). */
   isNew: boolean;
+  /** §42.5: a duplicate's original — only when the viewer can see it (null otherwise, and on every
+   *  challenge that is not a duplicate or whose original was deleted). */
+  duplicateOf: DuplicateRef | null;
+}
+
+/** §42.5: a challenge named by a duplicate pointer — number and title, never an author. */
+export interface DuplicateRef {
+  number: string;
+  title: string;
 }
 
 export interface SolutionListItem {
@@ -279,6 +291,14 @@ export interface ChallengeDetail extends ChallengeListItem, FeaturedDetailFields
   /** §34.3 Edit topics — the challenge's namespace admins and platform admins, in every status
    *  but the read-only trashed view. Curation, not a content edit. */
   canEditTopics: boolean;
+  /** §42.3: Mark as duplicate — rules 1–3 (the actor and the status, not trashed, no open solution). */
+  canMarkDuplicate: boolean;
+  /** §42.5: the marker's note — only beside a non-null `duplicateOf` (it may name the original). */
+  duplicateNote: string | null;
+  /** §42.5: the duplicates pointing at this challenge that the viewer can see, lowest number first. */
+  duplicates: DuplicateRef[];
+  /** §42.5 / §10.2: a duplicate takes no new comment or reply, on itself or its solutions. */
+  commentsClosed: boolean;
 }
 
 /** §24.6 "Submitted from outside": name and e-mail are null once erased (§24.8). */
@@ -348,6 +368,9 @@ export interface ChallengeRow {
   /** §41.4: `challengeReachSql` / `challengeAffectedPeopleSql`. */
   reach: number;
   affected_people: number;
+  /** §42: the original a duplicate points to (null once deleted) and the marker's note. */
+  duplicate_of_id: string | null;
+  duplicate_note: string | null;
 }
 
 interface SolutionRow {
@@ -397,7 +420,8 @@ export const CHALLENGE_SELECT = `
          c.featured_at, (select fu.display_name from users fu where fu.id = c.featured_by) as featured_by_name,
          c.mcp_client_name,
          c.trashed_at, c.trash_reason, (select tu.display_name from users tu where tu.id = c.trashed_by) as trashed_by_name,
-         c.affected_estimate, ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people
+         c.affected_estimate, ${challengeReachSql("c")} as reach, ${challengeAffectedPeopleSql("c")} as affected_people,
+         c.duplicate_of_id, c.duplicate_note
     from challenges c
     left join users u on u.id = c.author_id
     left join public_submissions ps on ps.id = c.public_submission_id
@@ -448,12 +472,46 @@ export function toListItem(row: ChallengeRow): ChallengeListItem {
     followedByViewer: row.followed_by_viewer,
     solutionCount: Number(row.solution_count),
     isNew: row.is_new,
+    // §42.5: filled per viewer by attachDuplicateRefs — never from the row alone.
+    duplicateOf: null,
   };
+}
+
+/**
+ * §42.5: the challenges among `ids` that the viewer can see right now, with number and title — the
+ * per-viewer filter behind every duplicate pointer (the banner, the card line, the "Also raised as"
+ * line, the triage export). A trashed challenge is visible to nobody here, platform admins included:
+ * it drops out of everything (§10.4).
+ */
+export async function visibleChallengeRefs(db: Pool | PoolClient, viewer: Viewer, ids: readonly (string | null | undefined)[]): Promise<Map<string, DuplicateRef>> {
+  const unique = [...new Set(ids.filter((id): id is string => typeof id === "string"))];
+  if (unique.length === 0) return new Map();
+  const { rows } = await db.query<ChallengeVisibilityColumns & { number: string; title: string }>(
+    `select ${CHALLENGE_VIS_COLS}, c.number::text, c.title from challenges c where c.id = any($1::uuid[])`,
+    [unique],
+  );
+  return new Map(
+    rows.filter((r) => !r.trashed && isChallengeRowVisible(viewer, r)).map((r) => [r.id, { number: formatChallengeNumber(r.number), title: r.title }]),
+  );
+}
+
+/** §42.5: fill `duplicateOf` on list items from their rows' `duplicate_of_id`, per viewer. */
+export async function attachDuplicateRefs<T extends { duplicateOf: DuplicateRef | null }>(
+  db: Pool | PoolClient,
+  viewer: Viewer,
+  items: T[],
+  originalIds: readonly (string | null)[],
+): Promise<T[]> {
+  const refs = await visibleChallengeRefs(db, viewer, originalIds);
+  return items.map((item, i) => {
+    const id = originalIds[i];
+    return { ...item, duplicateOf: id ? (refs.get(id) ?? null) : null };
+  });
 }
 
 /** The §39.5 review roles of a viewer on an item: committee of its namespace, the challenge's
  *  assignee, and an author of the item itself (a member of its team). */
-function reviewRoles(viewer: Viewer, namespaceId: string, assigneeId: string | null, authorIds: readonly string[]) {
+export function reviewRoles(viewer: Viewer, namespaceId: string, assigneeId: string | null, authorIds: readonly string[]) {
   return {
     isCommittee: viewer.roles.isCommittee(namespaceId),
     isAssignee: assigneeId !== null && assigneeId === viewer.userId,
@@ -464,12 +522,12 @@ function reviewRoles(viewer: Viewer, namespaceId: string, assigneeId: string | n
 /** §2.4 existence-not-disclosed: the visibility gate every by-number write path runs BEFORE any
  *  permission (403) or state (409) check, so an item the caller cannot see answers exactly like
  *  one that does not exist. Takes the raw challenge columns the write paths already select. */
-function isChallengeRowVisible(viewer: Viewer, row: ChallengeVisibilityColumns): boolean {
+export function isChallengeRowVisible(viewer: Viewer, row: ChallengeVisibilityColumns): boolean {
   return canSeeChallenge(viewer, challengeVisibilityInput(row));
 }
 
 /** The §4.3 input for a row read with CHALLENGE_VIS_COLS. */
-function challengeVisibilityInput(row: ChallengeVisibilityColumns): ChallengeVisibilityInput {
+export function challengeVisibilityInput(row: ChallengeVisibilityColumns): ChallengeVisibilityInput {
   return {
     id: row.id,
     namespaceId: row.namespace_id,
@@ -498,7 +556,7 @@ export interface ChallengeVisibilityColumns {
 }
 
 /** The ChallengeVisibilityColumns of `challenges c` — every by-number path selects these. */
-const CHALLENGE_VIS_COLS = `c.id, c.namespace_id, c.visibility, c.status, c.assignee_id, c.author_id,
+export const CHALLENGE_VIS_COLS = `c.id, c.namespace_id, c.visibility, c.status, c.assignee_id, c.author_id,
             ${challengeAuthorIdsSql("c")} as author_ids, c.trashed_at is not null as trashed`;
 
 /** The columns isSolutionRowVisible needs, as the `solutions s join challenges c` reads name them. */
@@ -577,12 +635,44 @@ function externalContactFor(row: ChallengeRow, isAdmin: boolean): ExternalContac
   };
 }
 
+/** §42.5: what the detail needs about duplicates beyond the row — resolved per viewer by
+ *  `duplicateContext`; the lean write paths pass none (the client re-reads right after). */
+interface DuplicateContext {
+  duplicateOf: DuplicateRef | null;
+  duplicates: DuplicateRef[];
+  /** §42.3 rule 3: a solution under it is still open (trashed ones are gone for everyone). */
+  hasOpenSolution: boolean;
+}
+
+async function duplicateContext(db: Pool | PoolClient, viewer: Viewer, row: ChallengeRow, solutionRows: readonly SolutionRow[]): Promise<DuplicateContext> {
+  const { rows: pointing } = await db.query<{ id: string }>(`select id from challenges where duplicate_of_id = $1 order by number`, [row.id]);
+  const refs = await visibleChallengeRefs(db, viewer, [row.duplicate_of_id, ...pointing.map((p) => p.id)]);
+  return {
+    duplicateOf: row.duplicate_of_id ? (refs.get(row.duplicate_of_id) ?? null) : null,
+    duplicates: pointing.map((p) => refs.get(p.id)).filter((r): r is DuplicateRef => r !== undefined),
+    hasOpenSolution: solutionRows.some((s) => s.trashed_at === null && isSolutionOpen(s.status as SolutionStatus)),
+  };
+}
+
+/** §42.3 rules 1–3 for this viewer: the actor and the status, live, no open solution. */
+function canMarkDuplicateFor(viewer: Viewer, row: ChallengeRow, authorIds: readonly string[], hasOpenSolution: boolean | null): boolean {
+  if (row.trashed_at !== null || hasOpenSolution !== false) return false;
+  const roles = reviewRoles(viewer, row.namespace_id, row.assignee_id, authorIds);
+  return decideDuplicateActor({
+    status: row.status as ChallengeStatus,
+    isAdmin: viewer.roles.isNamespaceAdmin(row.namespace_id),
+    isEnforcer: isReviewEnforcer(roles),
+    barredAsAuthor: isBarredAsAuthor(roles),
+  }).allowed;
+}
+
 function toDetail(
   row: ChallengeRow,
   viewer: Viewer,
   solutions: SolutionListItem[],
   attachments: AttachmentView[] = [],
   access: AccessEntryView[] | null = null,
+  dup: DuplicateContext | null = null,
 ): ChallengeDetail {
   // §10.4: a trashed challenge (seen by platform admins only) is read-only — every control is off
   // except Restore and Delete permanently.
@@ -642,6 +732,13 @@ function toDetail(
     viaAgent: viaAgentOf(row.mcp_client_name, row.is_anonymous),
     // §34.3: curation by the item's admins; `isAdmin` is already false on a trashed challenge.
     canEditTopics: isAdmin,
+    // §42.5: the pointer, the note (only beside a visible original — it may name it) and the list of
+    // duplicates are per viewer; without the context (a lean write path) they read as none.
+    duplicateOf: dup?.duplicateOf ?? null,
+    duplicateNote: dup?.duplicateOf ? row.duplicate_note : null,
+    duplicates: dup?.duplicates ?? [],
+    canMarkDuplicate: canMarkDuplicateFor(viewer, row, authorIds, dup ? dup.hasOpenSolution : null),
+    commentsClosed: status === "duplicate",
     ...featuredDetailFields({
       isPlatformAdmin: isPlatformAdmin && live,
       status: row.status,
@@ -741,7 +838,8 @@ async function buildDetailWithAttachments(db: Pool | PoolClient, viewer: Viewer,
   const challengeAttachments = await listAttachmentsForParent(db, viewer, "challenge", row.id);
   // §4.3: who is on a `people` list is the item's admins' business only.
   const access = row.visibility === "people" && viewer.roles.isNamespaceAdmin(row.namespace_id) ? await listAccessEntries(db, row.id) : null;
-  return toDetail(row, viewer, solutions, challengeAttachments, access);
+  const dup = await duplicateContext(db, viewer, row, solutionRows);
+  return toDetail(row, viewer, solutions, challengeAttachments, access, dup);
 }
 
 /** The §4.3 solution gate as the detail builders apply it — a trashed solution (§10.4) is listed
@@ -802,23 +900,24 @@ function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] 
  *  committee, and the assignee. Platform admins see everything — except the trash (§10.4): a trashed challenge
  *  is gone from every list for everyone, platform admins included (they reach it through the
  *  trash page instead). */
-export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
-  conditions.push(`c.trashed_at is null`);
+export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[], alias = "c"): void {
+  const a = alias;
+  conditions.push(`${a}.trashed_at is null`);
   // §25.5: an agent's view while restricted content is not shared — before the platform-admin
   // shortcut, since the switch governs what leaves through MCP whoever the person is.
-  if (viewer.orgVisibleOnly) conditions.push(`c.visibility = 'org'`);
+  if (viewer.orgVisibleOnly) conditions.push(`${a}.visibility = 'org'`);
   if (viewer.roles.isPlatformAdmin) return;
   const viewerParam = push(viewer.userId);
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
   const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
   conditions.push(
-    `(CASE WHEN c.status IN ('awaiting_triage','withdrawn')
-           THEN ${isChallengeMemberSql("c", viewerParam)} OR c.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
-           WHEN c.visibility = 'people'
-           THEN c.namespace_id = ANY(${push(reviewerNamespaceIds)}::uuid[]) OR c.assignee_id = ${viewerParam}
-                OR c.id = ANY(${push(viewer.roles.accessListChallenges())}::uuid[])
-           ELSE c.visibility = 'org' OR c.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
+    `(CASE WHEN ${a}.status IN ('awaiting_triage','withdrawn')
+           THEN ${isChallengeMemberSql(a, viewerParam)} OR ${a}.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
+           WHEN ${a}.visibility = 'people'
+           THEN ${a}.namespace_id = ANY(${push(reviewerNamespaceIds)}::uuid[]) OR ${a}.assignee_id = ${viewerParam}
+                OR ${a}.id = ANY(${push(viewer.roles.accessListChallenges())}::uuid[])
+           ELSE ${a}.visibility = 'org' OR ${a}.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
   );
 }
 
@@ -897,7 +996,14 @@ export interface SimilarCandidate extends SimilarChallenge {
 }
 
 /** findSimilarChallenges with the internal fields the explanation step needs. Same set, same order. */
-export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer, input: { title: string; description: string }): Promise<SimilarCandidate[]> {
+export async function findSimilarChallengeCandidates(
+  pool: Pool,
+  viewer: Viewer,
+  input: { title: string; description: string },
+  /** §42.3: the mark dialog asks for a few more, then keeps the eligible originals among them. */
+  limit: number = SIMILAR_LIMIT,
+): Promise<SimilarCandidate[]> {
+  const rowLimit = Math.max(1, Math.min(20, Math.floor(limit)));
   // Distinct stems, title first, capped — computed by Postgres's own English parser so the query
   // terms are exactly the lexemes stored in challenges.search_vector.
   const { rows: termRows } = await pool.query<{ term: string }>(
@@ -929,7 +1035,9 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
   // Each stem is quoted as a tsquery literal, so punctuation inside a lexeme can never be read
   // as tsquery syntax.
   const tsquery = `to_tsquery('simple', (select string_agg(quote_literal(t), ' | ') from unnest(${termsParam}::text[]) t))`;
-  const conditions: string[] = [`c.search_vector @@ ${tsquery}`, `c.status not in ('rejected', 'withdrawn')`];
+  // §6.1/§42.5: rejected, withdrawn and duplicate challenges are never candidates — a duplicate's
+  // original is one in its place.
+  const conditions: string[] = [`c.search_vector @@ ${tsquery}`, `c.status not in ('rejected', 'withdrawn', 'duplicate')`];
   pushChallengeVisibilityConditions(viewer, push, conditions);
 
   const { rows } = await pool.query<{
@@ -968,7 +1076,7 @@ export async function findSimilarChallengeCandidates(pool: Pool, viewer: Viewer,
      ) ranked
      where shared >= ${push(minShared)}
      order by rank desc
-     limit ${SIMILAR_LIMIT}`,
+     limit ${rowLimit}`,
     params,
   );
   return rows.map((r) => ({
@@ -1038,7 +1146,8 @@ export async function listChallenges(
     // §13.1 / §39.12: every item the viewer is a member of the team of.
     conditions.push(isChallengeMemberSql("c", push(viewer.userId)));
   } else {
-    conditions.push(`c.status IN ('solved','rejected')`);
+    // §13.1 Completed: solved, rejected and — beside them — duplicate (§42.5).
+    conditions.push(`c.status IN ('solved','rejected','duplicate')`);
   }
 
   if (filters.status) conditions.push(`c.status = ${push(filters.status)}`);
@@ -1071,7 +1180,13 @@ export async function listChallenges(
   const sql = `${CHALLENGE_SELECT.replaceAll("$viewer", viewerParam)} ${whereClause} order by ${orderBy} limit 100`;
 
   const { rows } = await pool.query<ChallengeRow>(sql, params);
-  return rows.map((row) => ({ ...toListItem(row), reach: row.reach }));
+  // §42.5: a duplicate's card names its original only to a viewer who can see it.
+  return attachDuplicateRefs(
+    pool,
+    viewer,
+    rows.map((row) => ({ ...toListItem(row), reach: row.reach })),
+    rows.map((row) => row.duplicate_of_id),
+  );
 }
 
 /** Folds "doesn't exist" and "exists but not visible" into the same null result — an
@@ -1393,7 +1508,9 @@ export type SetChallengeStatusResult =
   | { status: "own_item" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" }
-  | { status: "external_no_author" };
+  | { status: "external_no_author" }
+  /** §42.2: `duplicate` is set only by Mark as duplicate, never by a transition (→ 422). */
+  | { status: "use_mark_duplicate" };
 
 /** The actual mutation + audit, shared by the full (`setChallengeStatus`) and lean
  *  (`setChallengeStatusLean`, used by bulk actions) variants — a no-op when the status is
@@ -1413,7 +1530,18 @@ async function applyChallengeStatusChange(
   // §7.2: entering `solved` sets resolved_at; any transition out of `solved` clears it.
   const resolvedAtClause =
     newStatus === "solved" ? `, resolved_at = coalesce(resolved_at, now())` : current.status === "solved" ? `, resolved_at = null` : "";
-  await client.query(`update challenges set status = $2, updated_at = now(), status_changed_at = now()${resolvedAtClause} where id = $1`, [
+  // §42.7: any transition out of `duplicate` clears the link and the note; the audit row's `before`
+  // records which original it pointed to. Moved follows and copied marks stay where they are.
+  let leftDuplicateOf: string | null | undefined;
+  if (current.status === "duplicate") {
+    const { rows } = await client.query<{ number: string | null }>(
+      `select o.number::text from challenges c left join challenges o on o.id = c.duplicate_of_id where c.id = $1`,
+      [current.id],
+    );
+    leftDuplicateOf = rows[0]?.number ? formatChallengeNumber(rows[0].number) : null;
+  }
+  const duplicateClause = current.status === "duplicate" ? `, duplicate_of_id = null, duplicate_note = null` : "";
+  await client.query(`update challenges set status = $2, updated_at = now(), status_changed_at = now()${resolvedAtClause}${duplicateClause} where id = $1`, [
     current.id,
     newStatus,
   ]);
@@ -1426,7 +1554,7 @@ async function applyChallengeStatusChange(
     action: "challenge.status_changed",
     targetType: "challenge",
     targetId: current.id,
-    before: { status: current.status },
+    before: leftDuplicateOf === undefined ? { status: current.status } : { status: current.status, duplicateOf: leftDuplicateOf },
     after: { status: newStatus, override: mode === "override" },
   });
   // §23.2: entering valid/solved awards its milestones (first entry only — the award key), whether
@@ -1445,10 +1573,12 @@ async function loadChallengeForStatusChange(
   newStatus: string,
 ): Promise<
   | { status: "ok"; current: { id: string; namespace_id: string; status: string }; mode: TransitionMode }
-  | { status: "not_found" | "trashed" | "forbidden" | "own_item" | "illegal_transition" | "invalid_status" | "external_no_author" }
+  | { status: "not_found" | "trashed" | "forbidden" | "own_item" | "illegal_transition" | "invalid_status" | "external_no_author" | "use_mark_duplicate" }
 > {
   if (!isChallengeStatus(newStatus)) return { status: "invalid_status" };
   if (!isEntityNumber(number)) return { status: "not_found" };
+  // §42.2: refused for every caller before anything is read — the status needs an original.
+  if (!isSettableByTransition(newStatus)) return { status: "use_mark_duplicate" };
   const { rows } = await pool.query<ChallengeVisibilityColumns & { public_submission_id: string | null }>(
     `select ${CHALLENGE_VIS_COLS}, c.public_submission_id from challenges c where c.number = $1`,
     [number],
@@ -1515,7 +1645,8 @@ export type SetChallengeStatusLeanResult =
   | { status: "own_item" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" }
-  | { status: "external_no_author" };
+  | { status: "external_no_author" }
+  | { status: "use_mark_duplicate" };
 
 /** Same auth/audit semantics as `setChallengeStatus`, without the full challenge+solutions
  *  re-fetch — for bulk admin actions (§14.1) that only need the outcome, not the detail
@@ -2138,7 +2269,7 @@ export async function setChallengeVisibility(
 
 /** Re-load the full detail payload for a viewer (the CHALLENGE_SELECT + visible-solutions
  *  build several write paths need after they mutate). */
-async function reloadChallengeDetail(db: Pool | PoolClient, viewer: Viewer, challengeId: string): Promise<ChallengeDetail> {
+export async function reloadChallengeDetail(db: Pool | PoolClient, viewer: Viewer, challengeId: string): Promise<ChallengeDetail> {
   const { rows } = await db.query<ChallengeRow>(`${CHALLENGE_SELECT.replaceAll("$viewer", "$2")} where c.id = $1`, [challengeId, viewer.userId]);
   const row = rows[0]!;
   return buildDetailWithAttachments(db, viewer, row);
@@ -2379,6 +2510,8 @@ export async function withdrawChallenge(pool: Pool, author: Viewer, number: stri
   return inTransaction(pool, async (client) => {
     await unpinOnStatusChange(client, author.userId, cur.id, "withdrawn"); // §13.2 auto-unpin
     await client.query(`update challenges set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
+    // §42.6: a withdrawn original counts as closed without a solution for its duplicates' submitters.
+    await settleDuplicateOutcomes(client, cur.id, "withdrawn");
     // §22.7/§22.11: a withdrawn item keeps no AI output — its own, or its solutions'.
     await client.query(
       `delete from ai_results

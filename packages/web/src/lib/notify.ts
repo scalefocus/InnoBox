@@ -18,7 +18,10 @@ import {
   affectedEmailSubject,
   affectedNotificationMessage,
   applyPreferenceMute,
+  closedAsDuplicateMessage,
+  closedAsDuplicateSubject,
   commentNotificationMessage,
+  formatChallengeNumber,
   finalizeRecipients,
   hypeEmailSubject,
   hypeNotificationMessage,
@@ -701,6 +704,110 @@ export async function dispatchInAppEvent(
     JSON.stringify(withTarget(payload, visibilityScope)),
   ]);
   return recipients.length;
+}
+
+// ── §12.1 event 25: closed as a duplicate (§42.6) ────────────────────────────────────────
+
+/** What a mark hands event 25 — the duplicate, its original, and who to tell. */
+export interface ClosedAsDuplicateNotification {
+  duplicateId: string;
+  duplicateNumber: string;
+  duplicateTitle: string;
+  originalId: string;
+  originalNumber: string;
+  originalTitle: string;
+  note: string | null;
+  authorIds: readonly string[];
+  assigneeId: string | null;
+  /** The duplicate's followers before the move. */
+  followers: readonly string[];
+  /** Whose follow moved to the original — their e-mail adds "You now follow CH-12." */
+  moved: readonly string[];
+}
+
+/**
+ * Event 25 (§42.6), written instead of events 3 and 4 for a mark. Two routes: the duplicate's
+ * AUTHORS — actionable, immediate, never digested, not mutable (like event 4) — and its ASSIGNEE and
+ * FOLLOWERS as they were before the move — follower-type: held for a digest, and muted by "Status
+ * changes on items I follow" for followers (never for the assignee, whose duty it is, as for event 3).
+ * Every row is about the DUPLICATE (the §12.1 read-time gate), and is rendered per recipient: the
+ * original is named only to those who can see it now; anyone else reads the second form. The inbox
+ * re-resolves the original at read time (api/notifications/store); the digest at send time.
+ */
+export async function dispatchClosedAsDuplicate(ctx: NotifyContext, n: ClosedAsDuplicateNotification): Promise<void> {
+  const scope: NotificationTarget = { parentType: "challenge", parentId: n.duplicateId };
+  const authorSet = new Set(n.authorIds);
+  const authors = await finalRecipients(ctx, scope, [...n.authorIds]);
+  const assignee = n.assigneeId && !authorSet.has(n.assigneeId) ? [n.assigneeId] : [];
+  const others = await finalRecipients(
+    ctx,
+    scope,
+    [...assignee, ...n.followers.filter((id) => !authorSet.has(id))],
+    { preference: "followedStatus", exempt: assignee },
+  );
+  const everyone = [...authors, ...others];
+  if (everyone.length === 0) return;
+
+  // Who can see the original right now (§42.5) — a trashed or deleted one, nobody.
+  const original = await loadParentVisibility(ctx.pool, "challenge", n.originalId);
+  const roles = await resolveAllRoles(ctx.resolveRoles, everyone);
+  const seesOriginal = new Set(original ? everyone.filter((userId) => parentAccessFor({ userId, roles: roles.get(userId)! }, original) === "live") : []);
+  const moved = new Set(n.moved);
+
+  // One write per rendering: (author?, sees the original?, follow moved?).
+  const groups = new Map<string, { author: boolean; sees: boolean; moved: boolean; userIds: string[] }>();
+  for (const [route, author] of [
+    [authors, true],
+    [others, false],
+  ] as const) {
+    for (const userId of route) {
+      const sees = seesOriginal.has(userId);
+      const didMove = sees && moved.has(userId);
+      const key = `${author}:${sees}:${didMove}`;
+      const group = groups.get(key) ?? { author, sees, moved: didMove, userIds: [] };
+      group.userIds.push(userId);
+      groups.set(key, group);
+    }
+  }
+
+  const dupLabel = formatChallengeNumber(n.duplicateNumber);
+  const origLabel = formatChallengeNumber(n.originalNumber);
+  for (const g of groups.values()) {
+    const message = closedAsDuplicateMessage({ number: n.duplicateNumber, original: g.sees ? { number: n.originalNumber } : null, author: g.author });
+    const detail = g.sees
+      ? [
+          `${dupLabel} — ${n.duplicateTitle}`,
+          `Original: ${origLabel} — ${n.originalTitle}`,
+          ...(n.note ? [`Why: ${n.note}`] : []),
+          ...(g.moved ? [`You now follow ${origLabel}.`] : []),
+        ]
+      : [`${dupLabel} — ${n.duplicateTitle}`];
+    const payload: NotificationPayload = {
+      message,
+      link: g.sees ? `/challenges/${n.originalNumber}` : `/challenges/${n.duplicateNumber}`,
+      subject: closedAsDuplicateSubject({ number: n.duplicateNumber, author: g.author }),
+      emailDetail: detail.join("\n"),
+      // The inbox re-renders from these at read time (§42.6): the original only while visible.
+      number: n.duplicateNumber,
+      originalNumber: g.sees ? n.originalNumber : null,
+      author: g.author,
+      noteIncluded: g.sees && n.note !== null,
+    };
+    // Authors: actionable, never held. Assignee and followers: follower-type, held for a digest.
+    const hold: DigestHold | undefined = g.author
+      ? undefined
+      : {
+          event: 25,
+          facts: {
+            kind: "duplicate",
+            challengeNumber: n.duplicateNumber,
+            challengeTitle: n.duplicateTitle,
+            originalId: g.sees ? n.originalId : null,
+            originalNumber: g.sees ? n.originalNumber : null,
+          },
+        };
+    await writeNotifications(ctx.pool, g.userIds, "closed_as_duplicate", withTarget(payload, scope), hold);
+  }
 }
 
 /** Single-recipient events (assignment) skip the visibility check — the assignee is, by

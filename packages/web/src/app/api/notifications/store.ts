@@ -4,7 +4,56 @@
 // unread count and mark-all-read also apply the §4.3 visibility gate at read time — a row about
 // a challenge the viewer can no longer see is kept but hidden, and returns with access.
 import type { Pool } from "pg";
-import { pushChallengeVisibilityConditions, type Viewer } from "../challenges/store";
+import { closedAsDuplicateMessage } from "@innobox/shared";
+import { CHALLENGE_VIS_COLS, isChallengeRowVisible, pushChallengeVisibilityConditions, type ChallengeVisibilityColumns, type Viewer } from "../challenges/store";
+
+interface InboxRow {
+  id: string;
+  type: string;
+  payload: { message: string; link: string; detail?: unknown; number?: unknown; originalNumber?: unknown; author?: unknown };
+  read_at: Date | null;
+  created_at: Date;
+}
+
+/**
+ * §42.6 event 25 is rendered at READ time: the row stores the original's number only, and the bell
+ * names it — and links to it — only while the reader can still see it; otherwise the second form
+ * ("CH-30 was closed as a duplicate"), linking to the duplicate. `canSee` decides per original;
+ * every other row passes through unchanged.
+ */
+async function renderInboxRows(pool: Pool, rows: InboxRow[], canSee: (row: ChallengeVisibilityColumns) => boolean): Promise<InboxRow[]> {
+  const numbers = [
+    ...new Set(
+      rows
+        .filter((r) => r.type === "closed_as_duplicate" && typeof r.payload.originalNumber === "string")
+        .map((r) => r.payload.originalNumber as string),
+    ),
+  ];
+  if (numbers.length === 0) return rows;
+  const { rows: originals } = await pool.query<ChallengeVisibilityColumns & { number: string }>(
+    `select ${CHALLENGE_VIS_COLS}, c.number::text from challenges c where c.number::text = any($1::text[])`,
+    [numbers],
+  );
+  const visible = new Set(originals.filter((o) => !o.trashed && canSee(o)).map((o) => o.number));
+  return rows.map((r) => {
+    if (r.type !== "closed_as_duplicate" || typeof r.payload.number !== "string") return r;
+    const original = typeof r.payload.originalNumber === "string" && visible.has(r.payload.originalNumber) ? r.payload.originalNumber : null;
+    return {
+      ...r,
+      payload: {
+        ...r.payload,
+        message: closedAsDuplicateMessage({ number: r.payload.number, original: original ? { number: original } : null, author: r.payload.author === true }),
+        link: `/challenges/${original ?? r.payload.number}`,
+      },
+    };
+  });
+}
+
+/** §25.6: the agent's inbox has no role set to judge by — an original is named only when every
+ *  signed-in person could see it (org-wide, past triage, not withdrawn). */
+function visibleToEveryone(row: ChallengeVisibilityColumns): boolean {
+  return row.visibility === "org" && row.status !== "awaiting_triage" && row.status !== "withdrawn";
+}
 
 export interface NotificationItem {
   id: string;
@@ -79,20 +128,14 @@ export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
   // LIMIT, so the list and its unread count come from the same pass (§12.2 — the list response
   // carries `unreadCount`, which the shell adopts).
   const list = inboxScope(viewer);
-  const { rows } = await pool.query<{
-    id: string;
-    type: string;
-    payload: { message: string; link: string; detail?: unknown };
-    read_at: Date | null;
-    created_at: Date;
-    unread_count: string;
-  }>(
+  const { rows: raw } = await pool.query<InboxRow & { unread_count: string }>(
     `select n.id, n.type, n.payload, n.read_at, n.created_at,
             (count(*) filter (where n.read_at is null) over ())::text as unread_count
        from notifications n
       where ${list.where} order by n.created_at desc limit ${INBOX_LIMIT}`,
     list.params,
   );
+  const rows = await renderInboxRows(pool, raw, (o) => isChallengeRowVisible(viewer, o));
 
   return {
     notifications: rows.map((r) => ({
@@ -104,7 +147,7 @@ export async function getInbox(pool: Pool, viewer: Viewer): Promise<Inbox> {
       read: r.read_at !== null,
       createdAt: r.created_at.toISOString(),
     })),
-    unreadCount: Number(rows[0]?.unread_count ?? 0),
+    unreadCount: Number(raw[0]?.unread_count ?? 0),
   };
 }
 
@@ -134,12 +177,13 @@ export async function listInboxPage(
       select 1 from challenges c
        where c.id = n.challenge_id and c.visibility <> 'org')`);
   }
-  const { rows } = await pool.query<{ id: string; type: string; payload: { message: string; link: string; detail?: unknown }; read_at: Date | null; created_at: Date }>(
+  const { rows: raw } = await pool.query<InboxRow>(
     `select n.id, n.type, n.payload, n.read_at, n.created_at from notifications n
       where ${conditions.join(" and ")}
       order by n.created_at desc limit ${opts.limit + 1} offset ${opts.offset}`,
     [userId],
   );
+  const rows = await renderInboxRows(pool, raw, visibleToEveryone);
   return {
     notifications: rows.slice(0, opts.limit).map((r) => ({
       id: r.id,

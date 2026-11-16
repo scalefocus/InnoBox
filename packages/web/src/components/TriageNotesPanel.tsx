@@ -31,8 +31,18 @@ interface TriageView {
 const POLL_MS = 10_000;
 const MAX_POLLS = 60;
 
-/** `version` changes whenever the challenge is re-read (status, edits) so the panel refetches. */
-export function TriageNotesPanel({ challengeNumber, version }: { challengeNumber: string; version: string }) {
+/** `version` changes whenever the challenge is re-read (status, edits) so the panel refetches.
+ *  `onMarkDuplicate` — set while the viewer may mark this challenge (§42.3) — adds "Mark as
+ *  duplicate of this" to each possible duplicate. */
+export function TriageNotesPanel({
+  challengeNumber,
+  version,
+  onMarkDuplicate,
+}: {
+  challengeNumber: string;
+  version: string;
+  onMarkDuplicate?: (originalNumber: string) => void;
+}) {
   const fmt = useDateFmt();
   const digits = challengeNumber.replace("CH-", "");
   const [view, setView] = useState<TriageView | null>(null);
@@ -150,6 +160,15 @@ export function TriageNotesPanel({ challengeNumber, version }: { challengeNumber
                       <span className="mono">{d.number}</span> {d.title}
                     </Link>
                     {d.reason && <span className="sub"> — {d.reason}</span>}
+                    {/* §42.3: opens the mark dialog with this original picked; the dialog's own checks decide. */}
+                    {onMarkDuplicate && (
+                      <>
+                        {" "}
+                        <button type="button" className="btn btn-sm btn-ghost" data-testid="mark-duplicate-of-this" onClick={() => onMarkDuplicate(d.number)}>
+                          Mark as duplicate of this
+                        </button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.28 — draft for review** (2026-11-09; v0.2 added the UI and CI/CD
+> Status: **v0.29 — draft for review** (2026-11-16; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -101,7 +101,15 @@
 > people affected* and the public list of who said so, the triage queue gains a sortable
 > Reach column, the gallery a *Widest reach* sort, and the duplicate warning a way to
 > mark the match instead of submitting; the authors hear of each new marker once
-> (event 24), with no points and no switch (§41)).
+> (event 24), with no points and no switch (§41); v0.29 (2026-11-16) specified **mark
+> as duplicate** as a new-feature gap — a new terminal `duplicate` status that only
+> admins (from any open status) and the committee or assignee (from review) set, through
+> one dialog that picks an original at least as visible as the duplicate; the duplicate's
+> followers move to the original, its "affects me too" marks and its authors' estimate
+> count toward the original's reach, its comments close, chains are re-pointed so none
+> ever forms, every pointer is filtered per viewer, its authors, assignee and followers
+> are told (event 25), and an outside submitter's outcome mail follows the original
+> (§42)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -288,7 +296,8 @@ including theme-aware scrollbars and form controls. Pinned values:
 
 - **Status colors** map to the semantic tokens — `--ok` for valid/implemented,
   `--warn` for in-review/needs-improvement, `--danger` for rejected, `--accent` for
-  informational states. The legacy Power Apps hex palette is not carried over.
+  informational states (a `duplicate` challenge among them — it is no judgement on the
+  idea, §42.2). The legacy Power Apps hex palette is not carried over.
 - **Dropdowns (`<select>`)** are de-chromed (`appearance: none`, native `::-ms-expand`
   hidden) and given a single custom down-chevron drawn as a background-image SVG on
   `select.field`, so every dropdown looks the same in both themes rather than falling
@@ -1027,7 +1036,7 @@ Entra runbook); on conflict this document wins.
   ("Reassign open assignments to"). When it does, the following happens inside the
   **same transaction** as the scrub (all-or-nothing):
   - **What moves:** every challenge whose `assignee_id` is the erased user and whose
-    status is **non-terminal** (not `solved`, `rejected`, `withdrawn`, §7.1), locked
+    status is **non-terminal** (not `solved`, `rejected`, `withdrawn`, `duplicate`, §7.1), locked
     `FOR UPDATE` against a concurrent assignment. Terminal challenges keep the erased
     row as their historical assignee.
   - **Visibility gate:** a challenge moves only if the successor **can see it** under
@@ -1235,6 +1244,10 @@ bounded:
     see the challenge; excluded from solution counts and galleries. The detail page's
     `Solutions (n)` heading counts only the open list above that section, consistent
     with the gallery's solution count, which likewise leaves closed solutions out.
+  - `duplicate` challenges (§42) have **no state rule of their own**: they stay readable
+    to everyone who could see them. What a duplicate says about its original — the
+    number, the title, the note — is shown only to a viewer who can see the original
+    (§42.5).
 - Search, autocomplete, KPIs, counts, and leaderboards are computed strictly within
   the viewer's visibility (invariant 2). Leaderboards additionally count **org-visible
   content only**, so a public leaderboard never hints at restricted work.
@@ -1327,6 +1340,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   `public_submission_id` to be non-null, so every other challenge keeps a real author.
   **affected_estimate** (nullable smallint, 1–1,000 — the authors' answer to *"How many
   people does this affect?"*, §41.2; content, edited as any author field).
+  **duplicate_of_id** (nullable self-FK, `ON DELETE SET NULL`) + **duplicate_note**
+  (nullable text ≤ 500) — the §42 link to the original and the marker's note, each null
+  unless the status is `duplicate` (DB-checked); not content, so writing them bumps
+  neither `updated_at` nor `edited_at`.
   A platform admin may **hard-delete** a challenge, cascading to every child row
   (§10.3); that is the only path that removes the row.
 - **`challenge_access`** — the §4.3 `people` access list: id, challenge_id (FK,
@@ -1379,7 +1396,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   (`people | teams | org`, not null, default `org` — the submitter's *Who should see
   this?* choice, §24.3), **requested_emails** (text[], ≤ 20, lower-cased; non-empty iff
   `people`) and **requested_teams** (text[], ≤ 10; non-empty iff `teams`). Both arrays
-  are contact-adjacent data and are emptied by the §24.8 erasure. **Not** a challenge:
+  are contact-adjacent data and are emptied by the §24.8 erasure. **merge_mailed_at**
+  (nullable timestamptz) stamps the §42.6 merge mail, sent at most once. **Not** a challenge:
   it carries no number, no namespace and no **effective** visibility — the requested one
   is a request the admin settles on accept — and it is never read by any surface except
   the platform-admin review queue (§24.5).
@@ -1537,7 +1555,8 @@ ranks the caller's **visible** challenges — the same visibility predicate as s
 (invariant 2), so another author's `awaiting_triage` item is never a candidate (an
 accepted gap: two people submitting the same idea in the same hour will not see each
 other; the triage queue is where that surfaces) — with the §13.4 full-text index over
-title + description, **excluding `rejected` and `withdrawn`** and keeping `solved` (a
+title + description, **excluding `rejected`, `withdrawn` and `duplicate`** (a
+duplicate's original is itself a candidate, §42.5) and keeping `solved` (a
 solved duplicate is the most useful hit), and returns at most **5** matches above a
 minimum rank, each as number, title, status and the author **masked per §9**. With
 matches, the form shows an advisory banner (*"These challenges look similar — is yours
@@ -1640,17 +1659,24 @@ existing `busy` disabling is unchanged).
 | `solved` | Solved | solved |
 | `rejected` | Rejected | reject |
 | `withdrawn` | Withdrawn | — (new) |
+| `duplicate` | Duplicate | — (new, §42) |
 
 ### §7.2 Enforced state machine (committee & assignee)
 
 ```
-awaiting_triage → in_review | rejected
-in_review       → valid | needs_improvement | meeting_scheduled | rejected
-meeting_scheduled → in_review | valid | needs_improvement | rejected
+awaiting_triage → in_review | rejected | duplicate
+in_review       → valid | needs_improvement | meeting_scheduled | rejected | duplicate
+meeting_scheduled → in_review | valid | needs_improvement | rejected | duplicate
 needs_improvement → in_review           (author resubmit §10.1, or committee/assignee)
 valid           → solved                (automatic §8.3; manual only via admin override)
-solved, rejected, withdrawn = terminal  (exit only via admin override)
+solved, rejected, withdrawn, duplicate = terminal  (exit only via admin override)
 ```
+
+**`duplicate` is reached only through Mark as duplicate** (§42.3), which picks the
+original and checks its own conditions — never through the transition endpoint, the
+dropdowns or the bulk status set (§42.2). Its arrows above are the enforced ones;
+admins mark from `needs_improvement` and `valid` as well, as their override. Any
+transition out of `duplicate` clears the link (§42.7).
 
 Namespace/platform admins may set any status at any time (invariant 6); every
 transition is audited with actor and `from → to`, and override transitions are
@@ -1816,8 +1842,8 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
      the actor's one action, so an admin override that set `implemented` writes them
      with `override: true`, and an enforced move with `override: false`.
 - A `solved` challenge accepts no new solutions, and comments stay open.
-- **Likes freeze while the challenge is closed** — status `solved`, `rejected` or
-  `withdrawn`. Nobody can like or unlike the challenge **or any of its solutions**;
+- **Likes freeze while the challenge is closed** — status `solved`, `rejected`,
+  `withdrawn` or `duplicate` (§42). Nobody can like or unlike the challenge **or any of its solutions**;
   existing counts stay displayed, the like buttons render disabled with the tooltip
   *"Likes are closed for this challenge"*, and the API refuses a toggle (like or
   unlike) with **409** and a message that names no particular status. The challenge
@@ -1943,6 +1969,11 @@ check, which refuses a save made from a stale copy (§39.5).
 - Comment deletion is **soft in every standalone path** — no control anywhere
   hard-deletes a single comment. Comment rows disappear only as part of the §10.3
   parent-delete cascade.
+- **Closed on a duplicate.** A challenge in `duplicate` (§42) takes no new comment or
+  reply, on itself or on any of its solutions (**409**); the composer and the **Reply**
+  actions give way to a notice pointing to the original (§42.5). Existing comments stay
+  readable, and the owner's 15-minute edit and delete and the moderators' delete still
+  work. Every other status, terminal or not, keeps comments open.
 
 #### Replies (one level)
 
@@ -2064,6 +2095,12 @@ rather than erroring (the verdict handler is shared, §11).
 - Nothing else about the parent changes, in any case, beyond the cascade itself.
 - The revert is written as a `status_changed` audit row inside the same transaction,
   `override: true`, `trigger: "solution_deleted"`, actor = the deleting admin.
+
+**Effect on duplicates when a challenge is deleted.** Challenges marked as duplicates of
+the deleted one (§42) are not part of its subtree. They stay `duplicate` and their link
+becomes null (`ON DELETE SET NULL`); the confirm dialog says how many there are, the
+audit row lists them as `duplicatesUnlinked`, and each of their outside submissions
+without an outcome starts its erasure clock (§42.7).
 
 **Notifications: none.** A delete fires no e-mail and no in-app item — not to the
 author, not to the assignee, not to followers, not to other admins (§12.1) — and no
@@ -2627,7 +2664,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 12 | Open assignments transferred on erasure (§3) | The successor — **one** summary item per erasure |
 | 13 | Achievement earned — a badge, a badge tier or a level (§23.7) | The earner — **in-app only**: no outbox row, so no e-mail; gated by the *Achievements* preference; not written while gamification is off |
 | 14 | Public submission confirmed and awaiting review (§24.5) | All platform admins — an admin attention event: never mutable, never digested |
-| 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn`); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
+| 15 | Challenge shared with you (`people` visibility, §4.3) | Each access-list user newly able to see the challenge: every bound, not-yet-notified entry when the challenge **leaves `awaiting_triage`** (to any status but `withdrawn` or `duplicate` — a mark tells its people through event 25, §42.6); an entry **added**, or **bound** from a pending e-mail (§4.3), while the challenge is past triage and not withdrawn. The recipient is **auto-followed** (§12.3) at the same moment. At most once per entry (`challenge_access.notified_at`); never for an entry added by assignment (event 7 covers it). Never digested |
 | 16 | Hyped (§26.6) | The item's author only — never the hyper, followers, admins or the assignee. Coalesced per item in the inbox like event 6; the e-mail honors the opt-out and the digest choice |
 | 18 | New challenge in a topic you follow (§34.5) | Followers of the challenge's topics who can see it and have not been told about it before — on its first entry into `valid`, on a topic added while it is `valid`, or on a widening of its visibility while it is `valid`. Never its author (any member of its team, §39.12) or the person who caused it; at most once per person per challenge (event 15 counts); never coalesced |
 | 19 | Feature idea reviewed — approved, declined or merged (§38.8) | The proposer only. Immediate, never digested, not mutable |
@@ -2636,6 +2673,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 22 | Invited to propose a solution (§40.6) | The invitee only — not written after their *Not for me* on that challenge or while their *Invitations* preference is off. Actionable: immediate, never digested; at most one e-mail per person per challenge per UTC day, the in-app line always |
 | 23 | Invitation paid off (§40.6) | The inviter only — **in-app only**: no outbox row, so no e-mail; no preference; written whether or not gamification is on |
 | 24 | Affects them too (§41.6) | The challenge's authors only — never the marker, followers, admins or the assignee; nobody on an external challenge. Written on a person's **first** mark of the challenge only, never on a change, removal or re-mark. Coalesced per challenge in the inbox like events 6 and 16; the e-mail honors the opt-out and the digest choice |
+| 25 | Closed as a duplicate (§42.6) | The duplicate's authors — actionable: immediate, never digested, not mutable; and its assignee and followers as they were before the move — follower-type (digestable; the status-change preference mutes followers, never the assignee). Never the marker or the original's side. Written **instead of** events 3 and 4 for the mark; rendered per recipient, naming the original only to those who can see it |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2703,10 +2741,12 @@ a day or a week.
   challenge author and followers, not the admin and committee route), 3 (status
   changed), 6 (comments, including replies), 8 (solution implemented), 16 (hyped,
   §26.6), 18 (new challenge in a topic you follow, §34.5), 20 (feature now
-  available, §38.8) and 24 (affects them too, §41.6). Everything
+  available, §38.8), 24 (affects them too, §41.6) and 25 (closed as a duplicate, §42.6
+  — for the assignee and followers). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 21, 22, and 19 to a proposer). Events 13 and 23 have no e-mail at all.
+  12, 21, 22, 25 to an author, and 19 to a proposer). Events 13 and 23 have no e-mail
+  at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
   and the dispatcher skips it until then. The inbox row is written and shown exactly as
@@ -2755,9 +2795,11 @@ true; existing users backfilled on):
   (item author, other commenters, followers). A mute is a mute: an author who turns
   it off hears no comments on their own item either.
 - *Status changes on items I follow* — gates **event 3** for followers **and**
-  authors. It does **not** touch the actionable author/assignee events — 4 (rejected),
+  authors, and **event 25** for followers (§42.6). It does **not**
+  touch the actionable author/assignee events — 4 (rejected),
   5 (needs improvement), 7 (assigned), 8 (implemented), 11 (scan failed), 12
-  (assignments transferred), 21 (co-author added or removed) — which stay non-mutable.
+  (assignments transferred), 21 (co-author added or removed), 25 to an author — which
+  stay non-mutable.
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
   and followers; the admin/committee recipients of event 2 are unaffected.
 
@@ -2891,7 +2933,12 @@ Any user may follow/unfollow any challenge or solution they can see. Authors (ev
 member of a co-author team, including one who joins later, §39.8) and
 assignees are auto-followed to their items (can unfollow), and so is anyone the first
 time they mark a challenge as affecting them (§41.3; removing the mark does not
-unfollow). Followers receive events 3, 6, 8 (and 2 for challenge followers).
+unfollow). Followers receive events 3, 6, 8 (and 2 and 25 for challenge followers).
+
+**Marking a duplicate moves follows** (§42.4): each follower of the duplicate challenge
+who can see the original follows the original instead, and their follow of the
+duplicate is removed; a follower who cannot see the original keeps theirs. Nobody who
+was not following is added, and an override out of `duplicate` moves nobody back.
 
 A user may also follow a **topic** (§34.4): any active one, from `/topics`, the filtered
 gallery or their profile. A topic follow is not a follow of any item. It delivers only
@@ -3176,8 +3223,8 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 **List (gallery):**
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
   **Mine** (own items incl. `awaiting_triage` — every item the viewer is a co-author
-  of, §39), **Completed** (`solved` +
-  `rejected`). Filters: status, impact area, **topic** (§34.6 — with its filtered
+  of, §39), **Completed** (`solved`, `rejected` and
+  `duplicate`, §42.5). Filters: status, impact area, **topic** (§34.6 — with its filtered
   header and Follow button), namespace, author name (matching any
   member of a co-author team, §39); sort: newest
   (default), most liked, most solutions, most hyped (while hype is on, §26.5) and
@@ -3187,7 +3234,9 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
   date, impact area, **topic chips** (each a link that filters by the topic, §34.6),
   status, like count, the hype number while hype is on (§26.5), the reach (*about N
   people affected*, §41.5), and
-  a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`.
+  a solution count that excludes `rejected`/`not_selected`/`withdrawn`/`proposed`. A
+  duplicate's card adds a muted *"Duplicate of CH-12"* line for a viewer who can see
+  the original (§42.5).
 - **Cards / List view toggle.** A two-option segmented control (**Cards** | **List**,
   the existing `.sort-toggle` look, each option `aria-pressed`, §2.2) at the end of the
   filter row switches the gallery's presentation. It is a **pure presentation choice**:
@@ -3272,6 +3321,8 @@ whole visit, and the next visit flags only genuinely newer items.
   - `solved` — *"This challenge is solved, so it no longer accepts solutions."*
   - `rejected` or `withdrawn` — *"This challenge is closed, so it does not accept
     solutions."*
+  - `duplicate` — *"This challenge was closed as a duplicate, so it does not accept
+    solutions."*
   - any other status — *"Solutions can be proposed once the challenge has been
     validated."*
 
@@ -3296,6 +3347,13 @@ whole visit, and the next visit flags only genuinely newer items.
     each viewer's allowed transitions so the control renders exactly the permitted
     moves.
   - A viewer who is both admin and committee sees the admin override (the superset).
+  - Neither control offers `duplicate` (§42.2).
+- **Mark as duplicate** (§42.3): beside the status control, rendered from
+  `canMarkDuplicate`, opening the dialog that picks the original, takes an optional
+  note and previews the effect. On a duplicate, a banner under the header points to the
+  original and the comment composer gives way to a notice; on an original, a muted
+  *"Also raised as CH-30, CH-31"* line lists its duplicates — both filtered per viewer
+  (§42.5).
 - **Feature on Home** (platform admin only, §13.2 *Featured challenges*): pins or unpins
   the challenge on the Home dashboard. It is rendered from `canFeature` and offered only
   while the status is `valid` or `solved`.
@@ -3325,8 +3383,8 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
   Featured, when the viewer can see no eligible item.
 - **KPI tiles** (visibility-filtered, correctly labeled — the legacy app's
   swapped/mislabeled counters are not reproduced): challenges by status
-  (in review / valid / solved / rejected) and solutions by status
-  (in review / valid / in implementation / implemented).
+  (in review / valid / solved / rejected — a `duplicate` is in none of them, §42.5) and
+  solutions by status (in review / valid / in implementation / implemented).
 - **Spotlight cards:** most recently `implemented` solution; most recent
   `in_implementation` solution.
 - Both apply the **full** §4.3 predicate per viewer: a solution counts, or can be a
@@ -3359,7 +3417,8 @@ are unchanged and keep their own place below the KPI tiles.
   `solved → valid` move (the §10.3 revert) keep the pin.
 - **Automatic unpin.** Any other status change clears the pin in the **same transaction**
   as the transition. That covers an override to `rejected`, `withdrawn`, or any other
-  status, bulk status set (§14.1), and the author's Withdraw (§10.1). The unpin writes a
+  status, bulk status set (§14.1), the author's Withdraw (§10.1), and Mark as duplicate
+  (§42.4). The unpin writes a
   `challenge.unfeatured` audit row with
   `after: { trigger: "status_changed", status: <new status> }`. Its actor is the actor of
   the transition: the admin, the committee member, the assignee, or the withdrawing author.
@@ -3431,7 +3490,8 @@ and window hold its leader badge (§23.5). Ranked by count descending; ties go t
 creation (a submitted challenge, a proposed solution, a like), except for a solution
 implemented, which counts from the moment it became `implemented` — its
 `status_changed_at` — for both the 30-day window and the tie-break.
-Computed over org-visible, non-anonymous, non-rejected contributions (§4.3, §9).
+Computed over org-visible, non-anonymous contributions that are neither rejected nor a
+duplicate (§4.3, §9, §42.5).
 "Org-visible" is the same test as the public profile's (§13.5): a challenge counts only
 if it is `org`-visible and not `awaiting_triage`/`withdrawn`; a solution only if it is
 not `proposed`/`withdrawn` and its parent passes the challenge test. Likes count only
@@ -4736,7 +4796,9 @@ renders in an overlay layer positioned to its field and stacked above the queue,
 results are never clipped by, nor pushed under the edge of, the surrounding list/card.
 
 **Bulk actions** over a selection: bulk assign,
-bulk status set (admin override semantics, each item audited individually, and each
+bulk status set (admin override semantics — every status but `duplicate`, which needs an
+original and is marked one challenge at a time from its detail page, §42.3 — each item
+audited individually, and each
 item firing exactly the §12.1 notifications its single-item equivalent fires — events
 3–5 for a status change, event 7 for an assignment, event 18 for a first entry into
 `valid` — one per item, after commit), and **Add topic** / **Remove topic** (§34.6 —
@@ -4749,8 +4811,10 @@ the detail page. **CSV
 export** of the current filtered view — identities of anonymous authors are masked in
 the export, and a co-author team fills the author cell with every member in order,
 separated by `; ` (§39.7); a **Topics** column carries the topic names joined by `; `
-(§34.6); a **Reach** column after it carries the reach (§41.5); the rows follow the
-queue's current sort; every export is audited (who, filter, row count).
+(§34.6); a **Reach** column after it carries the reach (§41.5); a **Duplicate of**
+column after that carries a duplicate's original, when the exporter can see it (§42.5);
+the rows follow the queue's current sort; every export is audited (who, filter, row
+count).
 
 **CSV formula neutralization.** Every exported cell is user- or directory-supplied text
 (titles, names, impact areas), and spreadsheet applications run a cell that begins with
@@ -5876,7 +5940,13 @@ anomalies. Since v0.10 also:
   (actor the marker, or the person who changed the team for a removal with `trigger:
   "joined_team"`; target the challenge; the headcount before and after; under All only,
   as `like.*`). The authors' estimate is part of `challenge.created` and
-  `challenge.edited`. The auto-follow and event 24 are not audited (§41.10).
+  `challenge.edited`. The auto-follow and event 24 are not audited (§41.10);
+- **duplicates** — a mark is a `challenge.status_changed` row with `trigger:
+  "marked_duplicate"`, the original's number, whether a note was given and the counts
+  of follows moved, marks copied and challenges re-pointed — **never the note**; each
+  re-pointed challenge writes `challenge.duplicate_repointed`; `challenge.deleted` lists
+  the duplicates it unlinked (§42.9). Event 25, the follow moves, the copied marks and
+  the submitter mails are not audited on their own.
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6129,6 +6199,15 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `sort=widest_reach`; triage rows carry `reach` and `affectedPeople`, and the triage
   list and export accept `sort=newest | widest_reach`; `challenges/similar` matches carry
   `canMarkAffected` and `affectedMine`
+- duplicates (§42.9): `challenges/:number/duplicate` (`POST { original, note? }` — 404
+  on an invisible challenge, 403 for an actor who may not mark, 409 when trashed, in the
+  wrong status or with an open solution, 422 for an ineligible original or a long
+  note), `challenges/:number/duplicate/candidates?q=` and
+  `challenges/:number/duplicate/preview?original=` (`GET`, the dialog's search and dry
+  run); the transition `PATCH` and the bulk status set refuse `duplicate`; a comment on a
+  duplicate or its solutions is 409; the detail payload carries `canMarkDuplicate`,
+  `duplicateOf`, `duplicateNote`, `duplicates` and `commentsClosed`, and gallery,
+  search and triage rows carry `duplicateOf`
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -7031,7 +7110,8 @@ transitions, assigns, rejects or notifies (invariant 6).
   active topics** (§34.2 — platform-curated, never restricted), and — for
   duplicate hints — the **titles** of up to 20 other challenges in the **same namespace**
   that are `org`-visible (or restricted, when the switch allows) and not
-  `awaiting_triage` or `withdrawn` (the set visible to every viewer of the note).
+  `awaiting_triage`, `withdrawn` or `duplicate` (the set visible to every viewer of the
+  note; a duplicate's original is a candidate in its place).
 - **Output** (JSON, rendered as plain text): a **summary** (≤ 400 characters), **missing
   information** (a short list — problem, impact, workaround, measurable outcome), a
   **suggested impact area**, up to 3 **suggested topics** (§34.6 — names mapped to
@@ -7039,7 +7119,9 @@ transitions, assigns, rejects or notifies (invariant 6).
   since been retired or deleted is not shown), **questions to ask the author**, and
   **possible duplicates** (numbers from the candidate set only, each with a one-line
   reason). Suggestions are advisory text: applying one is an ordinary **Edit topics**
-  by an admin (§34.3).
+  by an admin (§34.3). Each possible duplicate carries **Mark as duplicate of this** for
+  a viewer who may mark the challenge (§42.3); it opens the mark dialog with that
+  original picked, and the dialog's own checks decide.
 - **Who sees it.** Namespace admins and platform admins always; committee members and
   the assignee once the challenge is past `awaiting_triage`. **Never the author** (no
   member of a co-author team, §39.12) in v1 —
@@ -7174,7 +7256,8 @@ solved assignment. Weights (fixed, in `@innobox/shared/gamification`):
   **0 points**, so badges that count events (§23.4) still see it.
 - **Never points for:** giving a like or a hype, marking a challenge as affecting you
   or having one marked (§41), following, editing, attaching a file, a comment
-  on a deleted thread, a `not_selected` or `rejected` outcome, or liking your own item
+  on a deleted thread, a `not_selected`, `rejected` or `duplicate` outcome (nor when a
+  duplicate's original is later solved, §42.1 decision 17), or liking your own item
   (no row at all). Withdrawing or deleting an item, deleting a comment, and unliking
   deduct nothing (decision 3).
 - **Anonymous items.** While a challenge or solution is anonymous, none of its
@@ -7753,11 +7836,16 @@ erased.
 | Declined | *About your submission* | The title as submitted, that it will not be taken further, and the admin's note when there is one |
 | The challenge first reaches `solved` | *Your submission has been solved* | The title as submitted, and that a solution has been put in place |
 | The challenge first reaches `rejected` | *An update on your submission* | The title as submitted, and that it has been closed without a solution |
+| The challenge is marked as a duplicate (§42.6) | *Your submission joins an existing challenge* | The title as submitted, and that the same problem had already been raised, so it will be taken forward there and they will hear how it ends |
 
 The outcome mail is sent **at most once per submission**, on the challenge's first
 transition into `solved` or `rejected`. A flag on the row enforces this, and a later
 status change does not re-arm it. A challenge that is trashed or deleted (§10.3,
-§10.4) sends nothing.
+§10.4) sends nothing. **While the challenge is a duplicate, its outcome follows its
+original** (§42.6): the mail goes when the original first reaches `solved` or
+`rejected`, or at the mark when the original already has (in place of the merge mail),
+and a withdrawn original sends *"An update on your submission"*. The merge mail is sent
+at most once per submission (`merge_mailed_at`).
 
 ### §24.8 Retention and erasure
 
@@ -7768,7 +7856,9 @@ A daily worker job enforces:
   `requested_emails` and `requested_teams` emptied, 90 days after `decided_at`.
 - **Accepted** rows are erased the same way 90 days after the challenge **first**
   reaches `solved` or `rejected`; that transition sets `contact_erase_due_at`. A
-  challenge that never closes keeps its contact details while it is open.
+  challenge that never closes keeps its contact details while it is open. For a
+  duplicate (§42.6) the clock starts with its outcome mail — when its original first
+  closes or is withdrawn — or, with no mail, when its original is deleted.
 - **Discarded** rows were already deleted (§24.5). A purged challenge (§10.3) takes its
   submission row with it.
 
@@ -8077,7 +8167,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | Tool | Behavior |
 |---|---|
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
-| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, `reach` and `affectedPeople` (§41.8), whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
+| `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, `reach` and `affectedPeople` (§41.8), `duplicateOf`, `duplicateNote` and `duplicates` (§42.8), whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§39.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
 | `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
@@ -8118,6 +8208,9 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
 - **Invitations to propose a solution** (§40.9) — sending one and *Not for me*.
 - **Marking a challenge as affecting you** (§41.8). `get_challenge` reads the reach and
   the people count; no tool adds, changes or removes a mark.
+- **Marking a duplicate** (§42.8). `get_challenge` reads `duplicateOf`, `duplicateNote`
+  and `duplicates`, filtered per caller; `post_comment` on a duplicate returns the
+  API's refusal.
 - **Profiles, leaderboards and gamification.**
 
 **15 is the ceiling.** A sixteenth tool is a spec change, and the first answer to
@@ -8392,7 +8485,7 @@ only 6 fails. Everything the button shows comes from the item's payload (`hype`,
 nothing.
 
 **On close.** When an item leaves the open set — any transition to `solved`,
-`rejected`, `withdrawn`, `implemented`, `not_selected`, or a challenge's close freezing
+`rejected`, `withdrawn`, `duplicate` (§42), `implemented`, `not_selected`, or a challenge's close freezing
 its solutions — the hypes it holds **stay on the item** as history: the number keeps
 showing on its card and detail, and the hypers list stays. The item **leaves the Home
 board** because the board lists open items only (§26.5). A later move back to an open
@@ -9877,7 +9970,9 @@ member alike:
   member may mark the challenge as affecting them (a marker who joins loses the mark),
   and event 24 goes to every member.
 - §4.2, §7.2, §8.2, §13.1 — the committee bar (§39.5): a committee member moves no
-  item they are a member of.
+  item they are a member of, and marks none as a duplicate (§42.3).
+- §42.4, §42.6 — event 25 goes to every member of the duplicate's team, and the one
+  authors' mark copied to the original is made in the name of its first member.
 
 **Creator only (`author_id`):** the actor of `challenge.created` /
 `solution.created`; the §13.10 feature-use count for submitting and proposing; the
@@ -10439,7 +10534,7 @@ is decided by it.
 | 3 | **Two numbers: the reach** (the authors' estimate plus every mark's headcount) **and the people count** (the number of marks). Triage sorts by the reach. | People in one team may each count the whole team, so the sum can count someone twice. Showing the people count beside it, and calling the sum "about", keeps the estimate honest without a de-duplication rule nobody could apply. |
 | 4 | **Marks are public.** Anyone who can see the challenge sees who marked it and each person's headcount. | A mark is a real-name statement, like a like or a hype. A public number discourages inflation, and reviewers can follow up with the people affected. |
 | 5 | **The authors don't mark; they give an optional estimate on the submit form**, editable whenever the challenge is editable. Left empty, the authors count as 1. | The authors are affected by definition. One estimate for the team, set where the problem is described, counts them once, and a number names nobody, so it is safe on an anonymous challenge (invariant 3). |
-| 6 | **Marks open once the challenge is past triage and freeze when it closes.** `in_review`, `needs_improvement`, `meeting_scheduled` and `valid` take them; `solved`, `rejected` and `withdrawn` keep them, read-only. | An `awaiting_triage` challenge is visible only to its authors and admins (§4.3). A closed challenge's reach is history, as its likes are (§8.3). |
+| 6 | **Marks open once the challenge is past triage and freeze when it closes.** `in_review`, `needs_improvement`, `meeting_scheduled` and `valid` take them; `solved`, `rejected`, `withdrawn` and `duplicate` keep them, read-only. | An `awaiting_triage` challenge is visible only to its authors and admins (§4.3). A closed challenge's reach is history, as its likes are (§8.3). |
 | 7 | **A mark can be changed and taken back while marks are open.** | It is a statement of fact, not a scarce budget, and facts change. |
 | 8 | **A person's first mark auto-follows the challenge.** | Someone it affects wants to hear when it is solved or rejected. They can unfollow; removing the mark leaves the follow alone. |
 | 9 | **The authors hear of each new marker in-app and by e-mail (event 24)**, coalesced per challenge while unread and follower-type for the digest — **once per marker per challenge, ever.** | Knowing the problem is shared is worth a nudge. Once per person means a mark toggled on and off cannot spam the authors. |
@@ -10621,6 +10716,12 @@ affects them.
   but can no longer change it.
 - **Status moves.** A move back into the open set — an admin override, the §10.3 revert
   — reopens the marks for change. Nothing else changes.
+- **Marked as a duplicate (§42.4).** The duplicate's marks stay on it, frozen. While the
+  original takes marks, each of them whose maker can see the original, is not one of
+  its authors and has no row on it is copied there with the same headcount, and the
+  duplicate's first author adds one mark carrying its estimate (never on an anonymous
+  or external duplicate). Copies write no event 24, no auto-follow and no `affected.*`
+  audit row, and an override out of `duplicate` takes none of them back.
 - **Erasure (§3)** keeps the person's marks on the de-identified row, as it keeps their
   likes; the chip shows the scrubbed bubble. **Deactivation** keeps them and shows the
   greyed bubble.
@@ -10722,3 +10823,392 @@ affects them.
     queue the namespace admin sorts by **Reach** and the challenge moves up. On the
     submit form, a user whose draft matches an existing challenge marks it from the
     similar-challenges banner and sees the toast.
+
+## §42 Mark as duplicate
+
+The duplicate warning on submit (§6.1) is advisory, so duplicates still reach triage.
+**Mark as duplicate** closes one in a single step. The duplicate becomes a closed
+challenge that points to its original: its followers now follow the original, the
+people it affects count toward the original's reach, its authors are told where the
+discussion continues, and its comments close, so the conversation happens in one place.
+Nothing is merged. The duplicate's text, comments, likes and hypes stay where they are,
+read-only, and anyone who lands on it is sent on.
+
+### §42.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **A new terminal challenge status, `duplicate`** (shown as *Duplicate*), with a link to the original — not `rejected` with a link. | `rejected` judges the idea: its own template to the author, rejected metrics, *"closed without a solution"* to an outside submitter. A duplicate raised a real problem that someone else raised first. `not_selected` set the precedent for a no-blame close (§8.3). |
+| 2 | **Who may mark mirrors who may reject.** Namespace and platform admins from any open status, triage included; committee members and the assignee from `in_review` and `meeting_scheduled`. | Duplicates surface at triage and in review, and the people who may close a challenge as rejected may close it as a duplicate. The committee bar on one's own items applies (§39.5). |
+| 3 | **Only through Mark as duplicate.** The status dropdown, the enforced control and the bulk status set never offer `duplicate`. | The status means nothing without its original, and none of those controls can pick one. |
+| 4 | **Refused while the duplicate has an open solution.** | A mark is a close-and-redirect. Closing or moving someone's solution as a side effect would lose or misplace work; closing it first is a visible decision of its own. Duplicates are usually caught before any solution exists. |
+| 5 | **The original must be at least as visible as the duplicate:** organization-wide, or namespace-only in the same namespace as a namespace-only duplicate. | Everyone sent on from the duplicate must be able to open the original, and its title on the duplicate must leak nothing (invariant 2). |
+| 6 | **Still filtered per viewer.** Visibility can change after the mark, so the link, the note and the follow move are checked against each person; anyone who cannot see the original sees *"Closed as a duplicate"* and nothing more. | Decision 5 holds at the mark; invariant 2 holds always. |
+| 7 | **The original is past triage and neither withdrawn nor a duplicate.** `in_review` through `valid`, `solved` and `rejected` qualify. | A hidden original sends people nowhere. A solved or rejected original is a legitimate answer: the problem was already decided. |
+| 8 | **No chains.** A duplicate is never an original, and marking a challenge that has duplicates re-points them to its own original in the same step. | One hop for every reader, and one place for every follower. |
+| 9 | **Followers move.** Each follower who can see the original follows it instead; nobody new is added. | The duplicate's audience wanted to hear about this problem, and the original is where it now lives. |
+| 10 | **"This affects me too" marks are copied to the original, and the duplicate's first author adds one mark carrying the team's estimate** — never on an anonymous or external duplicate. Likes and hypes stay on the duplicate. | Reach is a fact about the problem, and a duplicate is evidence that it is wider (§41). Likes and hypes endorse an item: one per person per item, with points already paid. |
+| 11 | **Comments close on the duplicate and on its solutions.** Existing comments stay readable; nothing is copied. | One conversation. Copied comments would lose their context and their edit and notification rules. |
+| 12 | **An optional note (≤ 500 characters) explains the mark.** It shows on the duplicate and in its authors' notification and never names the marker. | The author deserves a reason; the marker's name adds nothing the audit log does not hold. |
+| 13 | **Event 25 tells the duplicate's authors (actionable) and its assignee and followers (follower-type). The original's side is told nothing.** | The authors must hear it, and followers hear it as they hear any status change. Pinging the original's followers on every triage dedupe would be noise. |
+| 14 | **The original lists its duplicates** — *"Also raised as CH-30, CH-31"* — filtered per viewer. No count anywhere else. | Readers and reviewers see the history; a demand counter would be a second reach number. |
+| 15 | **Undo is an admin override out of `duplicate`.** It clears the link and reopens comments and likes; moved follows and copied marks stay. | Rare enough not to need a tracked rollback, and each follow and mark can be undone by its owner. |
+| 16 | **An outside submitter hears that their submission joins an existing challenge, and their one outcome mail follows the original.** | They can open neither challenge; what they want to know is how the problem ends. |
+| 17 | **Nothing new in the ledger.** No deduction, no award, no credit when the original is solved. On the leaderboard a duplicate counts exactly as a rejected challenge does — not among *challenges submitted*, and its likes not among *likes received*. | The ledger never deducts (§23 decision 3), and an award for a duplicate would reward not searching. |
+| 18 | **No MCP marking.** `get_challenge` reads the link and the duplicates. Still 15 tools. | Every status change but the author's resubmit is web-only (§25.6). |
+| 19 | **No platform switch and no channel webhook.** | A core moderation action, like assignment; a duplicate is none of the three webhook events (§12.4). |
+
+### §42.2 The status and the link
+
+- **Status.** `duplicate` joins §7.1 as a **terminal** challenge status: display
+  *Duplicate*, its status pill in the informational `--accent` colour (§2.2), never
+  `--danger`. It is closed in every sense the other terminal statuses are: no new
+  solutions (the §13.1 hint *"This challenge was closed as a duplicate, so it does not
+  accept solutions."*), likes frozen on it and its solutions (§8.3), no hypes (§26.3),
+  marks frozen (§41.1 decision 6), invitations paused (§40.8), no assignment (§7.3), the
+  team closed to additions and removals (§39.4), off the §14.4 badge and out of the
+  §22.11 subjects (an existing triage note stays readable). Leaving `valid` for it
+  clears a Home pin (§7.2).
+- **The link.** `challenges.duplicate_of_id` names the original and `duplicate_note`
+  holds the optional note. Only the mark (§42.4), the re-pointing of a chain (§42.4) and
+  a transition out of `duplicate` (which clears both) write them. They are not content:
+  writing them bumps neither `updated_at` nor `edited_at`. A duplicate may have a
+  **null** link — its original was deleted (§42.7) — and still be a duplicate.
+- **Entry.** Only `POST /api/challenges/:number/duplicate` (§42.9) sets the status.
+  `PATCH /api/challenges/:number` with `status: "duplicate"` is refused (**422**, *"Use
+  Mark as duplicate to choose the original."*), and the §14.1 bulk status set does not
+  accept it as a target (**400**). The admin free-set dropdown and the enforced control
+  never list it; on a duplicate the dropdown shows *Duplicate* as its current value.
+- **Exit.** As for every terminal status: admin override only (§7.2, §42.7).
+
+### §42.3 Marking
+
+A person may mark a challenge — *the duplicate* — as a duplicate of another — *the
+original* — when **all** of the following hold. The detail payload's
+`canMarkDuplicate` carries rules 1–3 per viewer; the API checks every rule again,
+inside the transaction.
+
+1. **The actor and the duplicate's status.**
+   - A **namespace admin** of the duplicate's namespace, or a **platform admin**, while
+     the duplicate is `awaiting_triage`, `in_review`, `needs_improvement`,
+     `meeting_scheduled` or `valid`. Audited `override: true`.
+   - A **committee member** of its namespace, or its **assignee**, while it is
+     `in_review` or `meeting_scheduled` — the statuses from which they may reject
+     (§7.2). A committee member who is an author of the duplicate is barred, as for any
+     transition (§39.5). Audited `override: false`.
+
+   A viewer who is both gets the admin's wider window. Whether either namespace is
+   archived does not matter.
+2. **The duplicate is not trashed** (§10.4).
+3. **The duplicate has no open solution.** Every solution under it, `proposed`
+   included, is `implemented`, `rejected`, `not_selected` or `withdrawn`. A solution in
+   the trash (§10.4) does not count: it is gone for everyone.
+4. **The original is another challenge the actor can see** (§4.3), and it is not
+   trashed.
+5. **The original's status** is `in_review`, `needs_improvement`, `meeting_scheduled`,
+   `valid`, `solved` or `rejected` — not `awaiting_triage`, `withdrawn` or `duplicate`.
+6. **The original is at least as visible as the duplicate:** the original is `org`, or
+   both are `namespace` in the same namespace. Every other pair is refused, including
+   every `people` original and a `namespace` original for a `people` duplicate.
+7. **The note**, when given, is at most **500** characters after trimming; a blank note
+   is stored as none.
+
+Because an original can never be a duplicate (rule 5) and marking re-points every
+challenge that points to the duplicate (§42.4), no chain and no cycle can form.
+
+**The mark dialog.** The detail page shows **Mark as duplicate** beside the status
+control, rendered from `canMarkDuplicate`. It opens a dialog:
+
+- The heading *"Mark CH-30 as a duplicate"*.
+- **Original** — a search field over **eligible originals only** (rules 4–6, for this
+  duplicate and this actor), matching a number (`CH-12` or `12`) or title words, at
+  most **10** results, each with its number, title, status pill and namespace. Before
+  anything is typed it lists up to **5** eligible originals under *"Similar
+  challenges"* — the §6.1 ranking run on the duplicate's own title and description.
+  No author is shown, so nothing needs masking.
+- **Note** — optional: *"Why is this a duplicate? (optional)"*, with the hint *"Shown
+  on this challenge and in the author's notification. Your name isn't."* and a live
+  count to 500.
+- **What happens** — once an original is picked, the preview read (§42.9) fills a short
+  list: *"CH-30 closes, and so do its comments."* · *"3 followers will follow CH-12
+  instead."* · *"2 people's marks and the author's estimate will count toward CH-12's
+  reach."* · *"The author is told where the discussion continues."* · *"1 challenge
+  marked as a duplicate of CH-30 will point to CH-12."* · *"The outside submitter is
+  told their submission joins an existing challenge."* A line with nothing to report is
+  left out. A pick the preview refuses shows the refusal inline and disables the
+  button.
+- **Mark as duplicate** (primary) and **Cancel**. The primary button locks while the
+  request is in flight (§6.4). On success the dialog closes, the page re-reads the
+  challenge and the toast reads *"CH-30 marked as a duplicate of CH-12."*
+
+**From the triage notes.** Each *possible duplicate* in the §22.11 notes panel carries
+a small **Mark as duplicate of this** action for a viewer with `canMarkDuplicate`. It
+opens the same dialog with that original picked, so the preview runs at once and any
+refusal shows there.
+
+**Nowhere else.** No row action or bulk mark in the triage queue (§14.1), and no MCP
+tool (§25.6).
+
+### §42.4 What a mark does
+
+In **one transaction**, with the duplicate, the original and every challenge pointing to
+the duplicate locked `FOR UPDATE` in id order, after §42.3 is checked again:
+
+1. **The close.** The duplicate's status becomes `duplicate`, `status_changed_at` is
+   bumped, and `duplicate_of_id` and `duplicate_note` are set. A Home pin is cleared
+   with `challenge.unfeatured` (`trigger: "status_changed"`, §13.2).
+2. **Re-pointing.** Every challenge whose `duplicate_of_id` is the duplicate is
+   re-pointed to the original, each with its own audit row (§42.9). Nothing else about
+   them changes — their remaining follows, their marks and their notes stay — and
+   nobody is notified. Their outside submitters' outcome now follows the new original
+   (§42.6).
+3. **Follows move.** For every follow of the duplicate challenge whose follower can see
+   the original (§4.3, at that moment), a follow of the original is inserted unless one
+   exists, and the follow of the duplicate is deleted. A follower who cannot see the
+   original keeps their follow of the duplicate. Nobody who was not following is added,
+   so an author or assignee who had unfollowed stays unfollowed. Follows of the
+   duplicate's solutions are untouched.
+4. **Marks are copied** — only while the original takes marks (§41.3 rule 3); a
+   `solved` or `rejected` original keeps its reach as history and gets none. Every
+   current mark on the duplicate whose maker can see the original, is not an author of
+   it, and has no mark row of their own on it (current or removed) becomes a mark on the
+   original with the same headcount. The marks on the duplicate stay as they are.
+5. **The authors' mark.** Under the same conditions, and only on a duplicate that is
+   neither anonymous nor external: one mark on the original by the duplicate's **first
+   author** (the §39.7 order), with the duplicate's `affected_estimate` as its
+   headcount, or **1** when the estimate is empty. It speaks for the team, as the
+   estimate does.
+6. **Event 25** (§42.6) and the outside submitter's mail (§42.6) are written after
+   commit, from the follower set as it was **before** step 3.
+7. **Audit** (§42.9).
+
+Copied marks and the authors' mark write no event 24, no auto-follow and no
+`affected.*` audit row; the mark's own audit row counts them. A later change or removal
+by their owner is an ordinary §41.3 action. Nothing is copied from the duplicate's
+likes, hypes, comments, attachments, topics, invitations or access list.
+
+A mark that loses a race — the duplicate or the original changed status, or the
+original was itself marked a duplicate — fails its re-check and is refused with the
+matching message. Nothing is half-applied.
+
+### §42.5 What people see
+
+**The duplicate's detail page**, for a viewer who can see the original:
+
+- a banner under the header: *"Closed as a duplicate of CH-12 — <title>"*, the number
+  and title linking to the original; under it the note, when there is one, as a muted
+  quotation; and for the duplicate's authors only, *"Think this is a mistake? Say so on
+  CH-12, or ask an admin to reopen this challenge."*;
+- in place of the comment composer and every **Reply** action, on the challenge and on
+  its solutions: *"Comments are closed. The discussion continues on CH-12."*
+
+For a viewer who **cannot** see the original, and whenever the link is null (§42.7),
+the banner reads *"Closed as a duplicate."* with no number, title or note (the note may
+name the original), the authors' line reads *"Ask an admin if you think this is a
+mistake."*, and the comments notice reads *"Comments are closed on this challenge."*
+
+**The original's detail page** carries a muted line under the header meta: *"Also
+raised as CH-30, CH-31"*, each number linking to that duplicate with its title as the
+tooltip — only the duplicates the viewer can see, lowest number first, all of them. It
+is absent when the viewer can see none.
+
+**Lists.**
+- **Gallery (§13.1).** Duplicates belong to the **Completed** tab, beside `solved` and
+  `rejected`, and to **Mine**; the status filter offers *Duplicate*. A duplicate's card
+  shows the *Duplicate* pill and, for a viewer who can see the original, a muted line
+  *"Duplicate of CH-12"*; the list view renders the same line under the title (the
+  card-badges rule).
+- **Search (§13.4)** finds duplicates, with their pill, so a search lands on the
+  redirect.
+- **Left out:** the §6.1 similarity check (and with it the §41.5 banner and §22.12),
+  the §22.11 candidate titles, the §13.2 challenge KPI tiles (a duplicate is in none of
+  the four), and the Home featured and hyped sections (it is closed). On the §13.3
+  leaderboard a duplicate counts exactly as a rejected challenge does: not among
+  *challenges submitted*, and its likes not among *likes received*.
+- **Triage queue (§14.1).** The status filter offers *Duplicate*. The CSV export gains
+  a **Duplicate of** column after **Reach**: the original's number when the exporter
+  can see it, otherwise empty.
+
+**Anonymity (invariant 3).** Nothing here names an author: the banner, the card line,
+the *Also raised as* line, the dialog and event 25 carry numbers and titles only. An
+anonymous duplicate gets no authors' mark (§42.4 step 5), because a public mark would
+name its author.
+
+### §42.6 Notifications — event 25 and the outside submitter
+
+**Event 25, "Closed as a duplicate"** — a new row of the §12.1 matrix. A mark writes it
+**instead of** events 3 and 4.
+
+- **Recipients:** (a) the duplicate's **authors** — every member of its team (§39.8),
+  none on an external challenge; (b) its **assignee** and its **followers** as they
+  were before the move. Never the marker. Deduplicated, with the author route winning;
+  the §12.1 drops apply (outside the duplicate's visibility, deactivated, erased).
+- **Class.** For the authors it is **actionable**: immediate, never digested and not
+  mutable, like event 4. For the assignee and followers it is **follower-type**: held
+  for a digest, like event 3, and — for followers, never the assignee, whose duty it is,
+  as for event 3 — gated by *Status changes on items I follow*.
+- **Rendering, per recipient.** A recipient who can see the original reads *"CH-30 was
+  closed as a duplicate of CH-12 — the discussion continues there"* (an author: *"Your
+  challenge CH-30 was closed …"*), linking to the original; the e-mail body adds both
+  titles, the note when there is one, and *"You now follow CH-12."* when their follow
+  moved. Anyone else reads *"CH-30 was closed as a duplicate"*, linking to CH-30, with
+  no original and no note.
+- **The inbox row** is about the duplicate (its `challenge_id`, for the §12.1 read-time
+  gate) and stores the original's number only. The inbox resolves the original's title
+  and link as it renders, through the same visibility check, and falls back to the
+  second form once the reader can no longer see the original. A digest renders the same
+  way at its send time. One row per mark, never coalesced.
+- **E-mail subject:** *"Your challenge CH-30 was closed as a duplicate"* for an author,
+  *"CH-30 was closed as a duplicate"* otherwise. The digest line reads *"Closed as a
+  duplicate of CH-12"*, or *"Closed as a duplicate"*.
+- **Not written** for a re-pointed chain (§42.4 step 2) or for copied marks, and never
+  to the original's authors or followers.
+
+**The outside submitter (§24.7)** of a duplicate accepted from the public form:
+
+- **The merge mail.** On the mark, unless the original is already `solved` or
+  `rejected`: *"Your submission joins an existing challenge"* — the title as submitted,
+  and that the team found the same problem had already been raised, so it will be taken
+  forward there and they will hear how it ends. No link, number or name, like every
+  submitter mail. **At most once per submission** (`merge_mailed_at`).
+- **The outcome follows the original.** While the challenge is a duplicate, its
+  submission's single outcome mail (§24.7) goes when the **original** first reaches
+  `solved` (*"Your submission has been solved"*) or `rejected` (*"An update on your
+  submission"*), and the 90-day erasure clock (§24.8) starts then. If the original is
+  already `solved` or `rejected` at the mark, that outcome mail goes at once, in place
+  of the merge mail. A **withdrawn** original counts as closed without a solution, so its
+  duplicates' submitters get *"An update on your submission"*. A **deleted** original
+  sends nothing but starts the clock (§42.7).
+- The original's transition writes these outcome rows in its own transaction, for every
+  duplicate pointing to it whose submission has no outcome yet.
+
+### §42.7 Undo, deletion and the original's later life
+
+- **Undo.** A namespace or platform admin moves the duplicate out with the free-set
+  dropdown (§7.2), to any status but `duplicate`. The transition clears
+  `duplicate_of_id` and `duplicate_note`, fires event 3 like any override, and reopens
+  whatever the new status opens — comments, likes, hypes, marks. Moved follows and
+  copied marks stay where they are (decision 15). To change the original, an admin
+  moves the challenge out and marks it again. The outside submitter's outcome follows
+  the challenge itself again; a merge mail already sent is not sent again.
+- **The original is trashed (§10.4).** It drops out for everyone, so its duplicates
+  show the *"Closed as a duplicate."* form until a restore brings it back. Nothing is
+  rewritten.
+- **The original is deleted (§10.3).** The link becomes null (`ON DELETE SET NULL`).
+  The duplicates stay `duplicate`, in the *"Closed as a duplicate."* form, until an
+  admin moves one out. The **Delete permanently** dialog adds *"N challenges are marked
+  as duplicates of this one. They stay closed and lose their link."*, and the
+  `challenge.deleted` audit row lists their numbers as `duplicatesUnlinked`. Nobody is
+  notified (§12.1); each of their outside submissions without an outcome gets its
+  `contact_erase_due_at` set, with no mail.
+- **The original is withdrawn (§10.1).** Allowed, as always. Its duplicates' pointers go
+  dark for everyone but its authors and admins, who still see its *Also raised as* line
+  and may reopen a duplicate whose problem is still live. Outside submitters: §42.6.
+- **The original changes visibility, status or namespace,** or a viewer loses access:
+  nothing is rewritten; the per-viewer filter does the rest (decision 6).
+- **The original is itself marked a duplicate:** §42.4 step 2.
+
+### §42.8 Agents (MCP)
+
+- `get_challenge` gains **`duplicateOf`** (`{ number, title, url }`, or null when the
+  caller cannot see the original or the link is null), **`duplicateNote`** (only beside
+  a non-null `duplicateOf`) and **`duplicates`** (`[{ number, title, url }]`, the ones
+  the caller can see).
+- `post_comment` on a duplicate, or on one of its solutions, returns the API's refusal.
+- `find_similar_challenges` leaves duplicates out (§6.1); `search_challenges` accepts
+  `duplicate` as a status; `get_reference_data` lists it among the statuses.
+- `list_my_notifications` renders event 25 with the original only when every signed-in
+  person could see it (organization-wide, past triage, not withdrawn) — the agent's view
+  has no role set to judge by — and in the second form otherwise.
+- No tool marks a duplicate (§25.6), so there are still 15 tools.
+
+### §42.9 Data model, API, audit, tests
+
+- **Migration 0060** (`0060_duplicates.sql`):
+  - the `challenges.status` check gains `duplicate`;
+  - **`challenges.duplicate_of_id`** (uuid, nullable, FK `challenges` **`ON DELETE SET
+    NULL`**) and **`challenges.duplicate_note`** (text, nullable, ≤ 500), each checked
+    to be null unless `status = 'duplicate'`, with `duplicate_of_id <> id`; a partial
+    index on `duplicate_of_id WHERE duplicate_of_id IS NOT NULL` serves the *Also raised
+    as* line, the re-pointing, the outcome fan-out and the delete warning;
+  - **`public_submissions.merge_mailed_at`** (timestamptz, nullable);
+  - `notifications.type` gains **`closed_as_duplicate`** (payload: the duplicate as its
+    target, `number`, `originalNumber` or null, `noteIncluded`).
+
+  No new grant: a mark is UPDATEs on `challenges`, INSERT and DELETE on `follows` and
+  INSERT on `challenge_affected`, all already held. `@innobox/shared` gains the status
+  (in `challenges`) and, client-safe at `@innobox/shared/duplicates`, the eligibility
+  rules, the visibility-pair test, the note validator and every string of §42.
+- **API (§16).**
+  - `POST /api/challenges/:number/duplicate { original, note? }` — session, `mutation`
+    bucket, `Origin`-checked. Order of checks: **404** for a malformed number or a
+    duplicate the caller cannot see; the shared **409** when it is trashed; **403** for
+    an actor rule 1 does not admit (the committee bar with its own message, §7.2);
+    **409** *"This challenge can't be marked as a duplicate in its current status."*;
+    **409** *"Close this challenge's open solutions first."*; then **422** for the
+    original — *"There is no challenge CH-n that you can see."* (missing, invisible and
+    trashed alike), *"A challenge can't be a duplicate of itself."*, *"CH-n can't be the
+    original while it is awaiting triage or withdrawn."*, *"CH-n is itself a duplicate
+    of CH-m. Choose CH-m."* (or *"CH-n is itself closed as a duplicate."* when the caller
+    cannot see CH-m), *"Everyone who can see CH-30 must be able to see the original.
+    Choose an organization-wide challenge, or a namespace-only one in the same
+    namespace."* — and **422** *"Keep the note to 500 characters or fewer."* Success
+    **200** with the refreshed detail payload.
+  - `GET /api/challenges/:number/duplicate/candidates?q=` — the dialog's search: up to
+    10 eligible originals matching `q`, or up to 5 similar ones when `q` is empty —
+    `{ similar, candidates: [{ number, title, status, namespace }] }`. The duplicate-side
+    refusals as above (404, 409 trashed, 403, 409); it shares the search rate limit (§2.4).
+  - `GET /api/challenges/:number/duplicate/preview?original=` — a dry run of §42.3 and
+    §42.4 that writes nothing: `{ ok: true, original, followersToMove, marksToCopy,
+    authorsMark, repointed, outsideSubmitter, hasAuthors }`, or `{ ok: false, message }`
+    with the refusal text above. The same access as the candidates.
+  - `PATCH /api/challenges/:number` refuses `status: "duplicate"` (**422**) and clears
+    the link on any transition out; the §14.1 bulk status set refuses it as a target
+    (**400**).
+  - A comment or reply on a duplicate or on one of its solutions: **409** *"This
+    challenge was closed as a duplicate, so it takes no new comments."* Edits and
+    deletes inside the owner's 15-minute window, and moderator deletes, still work
+    (§10.2).
+  - The detail payload carries `canMarkDuplicate`, `duplicateOf: { number, title } |
+    null` and `duplicateNote` (per §42.5), `duplicates: [{ number, title }]` and
+    `commentsClosed`. Gallery, list, search and triage rows carry `duplicateOf: { number,
+    title } | null` per viewer, and the triage export its **Duplicate of** column.
+- **Audit (§15).**
+  - The mark is a **`challenge.status_changed`** row: `before: { status }`, `after: {
+    status: "duplicate", duplicateOf: <number>, withNote }`, `override` per §42.3,
+    `trigger: "marked_duplicate"`, and the counts `followersMoved`, `marksCopied`,
+    `authorsMark` and `repointed: [numbers]`. **No row carries the note.**
+  - Each re-pointed challenge writes **`challenge.duplicate_repointed`** (`before: {
+    duplicateOf }`, `after: { duplicateOf }`, `trigger: "chain"`), with the marker as
+    actor.
+  - A transition out of `duplicate` is an ordinary `status_changed` row whose `before`
+    also carries `duplicateOf`.
+  - `challenge.deleted` gains `duplicatesUnlinked: [numbers]` (§42.7).
+  - Event 25, the follow moves, the copied marks and the submitter mails are not
+    audited beyond the counts above.
+- **Tests.**
+  - *Unit:* the arrows and `canMarkDuplicate` for every actor and status, the committee
+    bar included; the visibility-pair test over all nine pairs; the original-status
+    rule; the note validator; event 25's class per route and both renderings; the
+    outside submitter's mail choice (merge, immediate outcome, withdrawn, deleted); the
+    banner and card-line copy for both kinds of viewer.
+  - *Integration:* a mark moves exactly the followers who can see the original and
+    keeps the rest; copies marks with every skip (an existing row, an author of the
+    original, no sight, a closed original) and adds the authors' mark except on
+    anonymous and external duplicates; re-points a chain in the same transaction;
+    writes one event 25 per recipient with the right class, none to the marker or the
+    original's side, with the preference and the digest applying to the follower route
+    only; refuses every §42.3 case with its status and message; refuses `duplicate` on
+    `PATCH` and in bulk; refuses a comment or reply on the duplicate and its solutions;
+    leaves duplicates out of the similarity check, the triage candidates, the KPI tiles
+    and the leaderboard; returns the link, the note and the *Also raised as* list only
+    to viewers who can see the other side; an override out clears the link and reopens
+    comments; a deleted original nulls the link, audits `duplicatesUnlinked` and starts
+    the submitter's clock; a withdrawn original sends the closed mail; an original's
+    first `solved` sends its duplicates' outcome mails once; two concurrent marks
+    crossing the same pair leave no chain; `get_challenge` carries the three fields.
+  - *E2e:* a namespace admin opens a challenge in `in_review`, picks a similar
+    challenge in **Mark as duplicate**, reads the preview and confirms; the duplicate
+    shows the banner and the closed-comments notice, the original shows *Also raised
+    as*, a follower of the duplicate now follows the original, and the duplicate's
+    author's bell shows *"Your challenge CH-… was closed as a duplicate of CH-…"*.

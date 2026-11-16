@@ -141,7 +141,8 @@ export async function getTriageNotes(pool: Pool, ai: AiClient, viewer: Viewer, n
       const c = dupRows.find((x) => x.number === String(d.number));
       if (!c) continue; // deleted or trashed since
       if (!canSeeChallenge(viewer, { id: c.id, namespaceId: c.namespace_id, visibility: c.visibility, status: c.status as ChallengeStatus, authorIds: c.author_ids, assigneeId: c.assignee_id, trashed: false })) continue;
-      if (c.status === "withdrawn") continue;
+      // §42.5: a candidate since withdrawn or closed as a duplicate is no longer offered.
+      if (c.status === "withdrawn" || c.status === "duplicate") continue;
       duplicates.push({ number: `CH-${c.number}`, title: c.title, reason: d.reason });
     }
     // §34.6: a suggested topic that has since been retired or deleted is not shown.

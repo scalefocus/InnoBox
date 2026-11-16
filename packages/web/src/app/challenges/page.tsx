@@ -42,6 +42,8 @@ interface ChallengeListItem {
   hype?: number;
   /** §41.4: about how many people it affects. */
   reach: number;
+  /** §42.5: a duplicate's original — only when the viewer can see it. */
+  duplicateOf?: { number: string; title: string } | null;
 }
 
 type Tab = "open" | "mine" | "completed";

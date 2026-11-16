@@ -54,6 +54,7 @@ export function CommentThread({
   parentNumber,
   authoredAnonymously = false,
   readOnly = false,
+  closedNotice = null,
 }: {
   parentType: "challenge" | "solution";
   parentId: string;
@@ -64,7 +65,11 @@ export function CommentThread({
   authoredAnonymously?: boolean;
   /** §10.4: the item is in the trash — no composer, no reply, edit or delete, no AI summary. */
   readOnly?: boolean;
+  /** §10.2 / §42.5: comments are closed (a duplicate, or a solution under one) — no composer and no
+   *  Reply; this notice stands in their place. Edit and delete keep their own windows. */
+  closedNotice?: string | null;
 }) {
+  const closed = closedNotice !== null;
   const fmt = useDateFmt();
   const [comments, setComments] = useState<CommentRecord[] | null>(null);
   const [draft, setDraft] = useState("");
@@ -244,9 +249,11 @@ export function CommentThread({
         {/* A removed comment can't be answered, edited or deleted again. */}
         {!c.deleted && !readOnly && editingId !== c.id && (
           <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => openReply(c)}>
-              Reply
-            </button>
+            {!closed && (
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => openReply(c)}>
+                Reply
+              </button>
+            )}
             {c.canEdit && (
               <button
                 type="button"
@@ -292,7 +299,7 @@ export function CommentThread({
                     </button>
                   </div>
                 )}
-                {reply?.rootId === root.id && !readOnly && (
+                {reply?.rootId === root.id && !readOnly && !closed && (
                   <form key={`composer-${reply.replyToId}`} className="row comment-reply" onSubmit={postReply} style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
                     <span className="sub">Replying to {reply.replyToName}</span>
                     <div style={{ display: "flex", gap: 8 }}>
@@ -328,12 +335,17 @@ export function CommentThread({
           })}
         </div>
       )}
-      {authoredAnonymously && !readOnly && (
+      {closed && !readOnly && (
+        <p className="muted comments-closed" data-testid="comments-closed" style={{ margin: 0, fontSize: 13.5 }}>
+          {closedNotice}
+        </p>
+      )}
+      {authoredAnonymously && !readOnly && !closed && (
         <p className="sub" style={{ margin: "0 0 8px", color: "var(--warn, var(--faint))" }}>
           You submitted this anonymously. Commenting won&apos;t reveal you as the author, but your name is shown on the comment itself (comments are never anonymous).
         </p>
       )}
-      {!readOnly && (
+      {!readOnly && !closed && (
         <form onSubmit={post} style={{ display: "flex", gap: 8 }}>
           <input
             className="field"

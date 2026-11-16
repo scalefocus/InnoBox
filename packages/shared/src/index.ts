@@ -123,6 +123,10 @@ export * from "./invitations.js";
 // §41 "this affects me too": the headcount bounds and parsers, the eligibility matrix, the reach
 // arithmetic and its SQL twin, and the copy (client-safe, also at `@innobox/shared/affected`).
 export * from "./affected.js";
+// §42 mark as duplicate: who may mark and from which status, which challenge may be the original,
+// the note's validation and every string the feature shows (client-safe, also at
+// `@innobox/shared/duplicates`).
+export * from "./duplicates.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the

@@ -3,7 +3,7 @@
 // Deleted comments (self or moderator) always render as "Comment removed by a moderator",
 // preserving thread continuity, per spec. Every write is audited atomically. Replies are one level
 // deep (§10.2 "Replies"): a reply files under its thread's top-level comment.
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { canEditOwnComment, resolveReplyTarget, validateCommentBody, viaAgentOf, type ViaAgent } from "@innobox/shared";
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
@@ -127,9 +127,22 @@ export type CreateCommentResult =
   | { status: "not_found" }
   /** §10.4: the item is in the trash (only a platform admin can see it there) — answered as 409. */
   | { status: "trashed" }
+  /** §10.2 / §42.5: the item is a duplicate, or a solution under one — no new comment or reply (409). */
+  | { status: "closed" }
   | { status: "invalid"; error: string }
   /** §10.2: the reply target is missing, on another item, or soft-deleted — answered as 422. */
   | { status: "unprocessable"; error: string };
+
+/** §10.2 / §42.5: comments close on a duplicate and on every solution under it. */
+async function isCommentingClosed(db: Pool | PoolClient, parentType: "challenge" | "solution", parentId: string): Promise<boolean> {
+  const { rows } = await db.query<{ status: string }>(
+    parentType === "challenge"
+      ? `select c.status from challenges c where c.id = $1`
+      : `select c.status from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+    [parentId],
+  );
+  return rows[0]?.status === "duplicate";
+}
 
 interface ReplyTargetRow {
   id: string;
@@ -154,6 +167,7 @@ export async function createComment(
   // trashed item takes no comment or reply (§10.4).
   const access = await getParentAccess(pool, viewer, parentType, parentId);
   if (access !== "live") return { status: access };
+  if (await isCommentingClosed(pool, parentType, parentId)) return { status: "closed" };
   const validated = validateCommentBody(rawBody);
   if (!validated.ok) return { status: "invalid", error: validated.error };
 

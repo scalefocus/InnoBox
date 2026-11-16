@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.27.0",
+    date: "2026-11-16",
+    summary:
+      "New: Mark as duplicate. Admins, and reviewers on a challenge in review, can close a challenge as a duplicate of an existing one in one step, with an optional note. Its followers then follow the original, the people it affects count toward the original's reach, its comments close, and its author is told where the discussion continues. The original lists the challenges raised again as duplicates of it.",
+  },
+  {
     version: "1.26.0",
     date: "2026-11-09",
     summary:

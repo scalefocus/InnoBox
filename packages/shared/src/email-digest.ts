@@ -5,6 +5,7 @@
 // the hold at insert time lives in the web tier (lib/notify.ts) and the send in the worker.
 import { topicDigestLine } from "./topics.js";
 import { affectedDigestLine } from "./affected.js";
+import { closedAsDuplicateDigestLine } from "./duplicates.js";
 
 export const EMAIL_DELIVERY_MODES = ["immediate", "daily", "weekly"] as const;
 export type EmailDelivery = (typeof EMAIL_DELIVERY_MODES)[number];
@@ -24,21 +25,23 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25;
 
 /** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
  *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable), 18 (a new
  *  challenge in a topic the recipient follows, §34.5), 20 (a feature you proposed or upvoted is
- *  now available, §38.8) and 24 (someone said your challenge affects them too, §41.6). Event 19, a
- *  review of your own proposal, is actionable and always immediate. */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20, 24]);
+ *  now available, §38.8), 24 (someone said your challenge affects them too, §41.6) and 25 (closed as
+ *  a duplicate, §42.6 — for the assignee and followers; its authors are on the never-held route).
+ *  Event 19, a review of your own proposal, is actionable and always immediate. */
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20, 24, 25]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
  * recipient on the ADMIN route (namespace admins and the committee on a new solution) is an
  * attention event and always immediate, as are the actionable author/assignee events (4, 5, 7,
- * 11, 12, 19, 21, and 22 — an invitation to propose, §40.6), the admin events (1, 9, 10, 14) and
- * events 13 and 23, which have no e-mail at all.
+ * 11, 12, 19, 21, 22 — an invitation to propose, §40.6 — and 25 to an author, §42.6, whose route the
+ * caller passes as `onAdminRoute`), the admin events (1, 9, 10, 14) and events 13 and 23, which have
+ * no e-mail at all.
  */
 export function isDigestableEvent(event: NotificationEventNumber, onAdminRoute = false): boolean {
   return DIGESTABLE_EVENTS.has(event) && !onAdminRoute;
@@ -66,7 +69,7 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature" | "affected";
+export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature" | "affected" | "duplicate";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
@@ -86,6 +89,10 @@ export interface DigestFacts {
   /** §41.6 event 24: the challenge's reach when the row was written — the digest prefers the
    *  coalesced inbox row's latest figure. */
   reach?: number | null;
+  /** §42.6 event 25: the original — its id for the send-time visibility check (never rendered), and
+   *  its number, which the digest job blanks when the recipient can no longer see it. */
+  originalId?: string | null;
+  originalNumber?: string | null;
 }
 
 /** One held row, as the digest job hands it to the renderer. */
@@ -112,6 +119,12 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  *  challenge's, then each solution's), comments. Status lines name the latest status. */
 function itemLines(updates: readonly DigestUpdate[]): string[] {
   const lines: string[] = [];
+  // §42.6: a challenge closed as a duplicate says so first — the rest of its block is history.
+  const duplicate = updates.filter((u) => u.kind === "duplicate");
+  if (duplicate.length > 0) {
+    const latest = duplicate.reduce((a, b) => (b.at.getTime() >= a.at.getTime() ? b : a));
+    lines.push(closedAsDuplicateDigestLine(latest.originalNumber ? digitsOf(latest.originalNumber) : null));
+  }
   // §34.5: a challenge new in a followed topic leads its block — it is why the item is there.
   const topics = new Set(updates.filter((u) => u.kind === "topic").flatMap((u) => u.topics ?? []));
   if (topics.size > 0) lines.push(topicDigestLine([...topics]));
