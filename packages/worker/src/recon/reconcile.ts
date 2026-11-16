@@ -5,9 +5,32 @@
 // (structured JSON) and audited as scim.anomaly, then the pass CONTINUES with the next
 // item — a partial pass must never abort. DB failures do propagate; the caller wraps
 // each scheduled run. Actor is null (system) on every audit entry, per spec §15.
+//
+// The FIRST DIRECTORY SYNC (INNOBOX_SPEC.md §3, runFirstSync below) runs the pass's per-user step
+// once, early, for each new row, so a new colleague's directory profile and photo do not wait
+// for the hourly pass. It shares refreshUser with the pass; it never deactivates, and its Graph
+// failures are logged but not audited.
 import { appendAudit, bindPendingAccess, revokeUserGrants, type DbClient, type DbPool } from "@innobox/shared";
-import { computeMembershipDiff, computeUserHeal, type GraphUser, type UserFieldPatch } from "./diff.js";
+import {
+  computeFirstSyncHeal,
+  computeMembershipDiff,
+  computeUserHeal,
+  type GraphUser,
+  type LocalUserAttrs,
+  type UserFieldPatch,
+} from "./diff.js";
 import { createGraphClient, GraphRequestError, type GraphClient, type GraphEnv, type GraphGroup } from "./graph.js";
+
+/** §3: how long a new row stays the first sync's — and out of the hourly pass's user list. */
+export const FIRST_SYNC_WINDOW_MINUTES = 5;
+/** §3: rows one first-sync sweep takes, newest first. */
+export const FIRST_SYNC_BATCH = 20;
+
+/** `users` predicate: the row is new and no pass has read it yet. Built from a constant only. */
+const IN_FIRST_SYNC_WINDOW = `first_synced_at is null and created_at > now() - interval '${FIRST_SYNC_WINDOW_MINUTES} minutes'`;
+
+const USER_COLUMNS =
+  "id, external_id, user_name, display_name, email, department, job_title, office_location, photo_etag, first_synced_at";
 
 export interface ReconciliationSummary {
   usersChecked: number;
@@ -29,6 +52,20 @@ interface ActiveUserRow {
   job_title: string | null;
   office_location: string | null;
   photo_etag: string | null;
+  first_synced_at: Date | null;
+}
+
+export interface FirstSyncSummary {
+  /** Rows the sweep picked up. */
+  taken: number;
+  /** Rows read from Graph without a failure, and stamped. */
+  synced: number;
+  /** Rows whose attributes or photo changed (audited `recon.user_refreshed`). */
+  refreshed: number;
+  /** Rows Graph reported missing or disabled — left untouched for the hourly pass. */
+  absent: number;
+  /** Graph failures; the row stays pending and is retried while inside the window. */
+  errors: number;
 }
 
 interface GroupRow {
@@ -59,6 +96,153 @@ async function atomically(pool: DbClient, fn: (db: DbClient) => Promise<void>): 
   }
 }
 
+function localAttrs(u: ActiveUserRow): LocalUserAttrs {
+  return {
+    userName: u.user_name,
+    displayName: u.display_name,
+    email: u.email,
+    department: u.department,
+    jobTitle: u.job_title,
+    officeLocation: u.office_location,
+  };
+}
+
+function errorText(err: unknown): string {
+  return String((err as Error).message ?? err).slice(0, 500);
+}
+
+/** A present, enabled user's decision from diff.ts — never the deactivate / absent branch. */
+type LiveHeal = { action: "refresh"; patch: UserFieldPatch } | { action: "none" };
+
+/**
+ * Step 1 for one user Graph reports as present and enabled: write the drifted attributes, sync
+ * the photo by etag, and audit `recon.user_refreshed` when anything changed. The hourly pass and
+ * the first directory sync both call this, so the two cannot drift apart (INNOBOX_SPEC.md §3).
+ * A photo failure is returned, not thrown: the attribute refresh before it stands and is audited,
+ * and each caller reports the failure its own way.
+ */
+async function refreshUser(
+  pool: DbClient,
+  graph: GraphClient,
+  u: ActiveUserRow,
+  heal: LiveHeal,
+): Promise<{ refreshed: boolean; photoFailure: { error: unknown } | null }> {
+  let before: Record<string, unknown> | undefined;
+  if (heal.action === "refresh") {
+    // Column names come from the fixed UserFieldPatch key set, never from input.
+    // scim_synced is deliberately untouched: recon refreshes attributes but a JIT stub
+    // (scim_synced=false) stays claims-refreshable until SCIM itself writes it.
+    const cols = Object.keys(heal.patch) as (keyof UserFieldPatch)[];
+    const sets = cols.map((c, i) => `${c} = $${i + 2}`).join(", ");
+    await pool.query(`update users set ${sets}, updated_at = now() where id = $1`, [
+      u.id,
+      ...cols.map((c) => heal.patch[c] ?? null),
+    ]);
+    // §4.3: a changed address or user name may match a pending access-list entry.
+    if (heal.patch.email !== undefined || heal.patch.user_name !== undefined) await bindPendingAccess(pool, u.id);
+    const current: Record<keyof UserFieldPatch, unknown> = {
+      user_name: u.user_name,
+      display_name: u.display_name,
+      email: u.email,
+      department: u.department,
+      job_title: u.job_title,
+      office_location: u.office_location,
+    };
+    before = {};
+    for (const c of cols) before[c] = current[c];
+  }
+
+  let photo: "updated" | "removed" | null = null;
+  let photoFailure: { error: unknown } | null = null;
+  try {
+    const p = await graph.getUserPhoto240(u.external_id, u.photo_etag);
+    if (p.changed) {
+      photo = p.bytes ? "updated" : "removed";
+      await pool.query(`update users set photo = $2, photo_etag = $3, updated_at = now() where id = $1`, [
+        u.id,
+        p.bytes ?? null,
+        p.etag ?? null,
+      ]);
+    }
+  } catch (error) {
+    photoFailure = { error };
+  }
+
+  const refreshed = heal.action === "refresh" || photo !== null;
+  if (refreshed) {
+    await appendAudit(pool, {
+      actorUserId: null,
+      action: "recon.user_refreshed",
+      targetType: "user",
+      targetId: u.id,
+      before,
+      after: { ...(heal.action === "refresh" ? heal.patch : {}), ...(photo !== null ? { photo } : {}) },
+    });
+  }
+  return { refreshed, photoFailure };
+}
+
+/** Records the row's first successful Graph read (INNOBOX_SPEC.md §3). Guarded on NULL, so a row
+ *  the other path reached first keeps its original instant. `updated_at` is left alone — this is
+ *  bookkeeping, not a change to the user. */
+async function stampFirstSync(pool: DbClient, userId: string): Promise<void> {
+  await pool.query(`update users set first_synced_at = now() where id = $1 and first_synced_at is null`, [userId]);
+}
+
+/**
+ * One first-directory-sync sweep (INNOBOX_SPEC.md §3): up to FIRST_SYNC_BATCH new rows no pass has
+ * read yet, newest first — the person who signed in a moment ago goes ahead of a bulk SCIM load.
+ * Each gets the pass's step 1 (refreshUser) and, on success, its `first_synced_at` stamp.
+ *
+ * It NEVER deactivates: a missing or disabled account is left unchanged and unstamped for the
+ * hourly pass, because an account created minutes ago may not be readable through Graph yet. A
+ * Graph failure is logged, NOT audited (the hourly pass already audits a persistent one as
+ * `scim.anomaly`), leaves the row pending for the next sweep, and never stops the sweep.
+ */
+export async function runFirstSync(pool: DbClient, graph: GraphClient): Promise<FirstSyncSummary> {
+  const summary: FirstSyncSummary = { taken: 0, synced: 0, refreshed: 0, absent: 0, errors: 0 };
+  const { rows } = await pool.query(
+    `select ${USER_COLUMNS}
+       from users
+      where active = true and scrubbed_at is null and ${IN_FIRST_SYNC_WINDOW}
+      order by created_at desc, id
+      limit $1`,
+    [FIRST_SYNC_BATCH],
+  );
+
+  for (const u of rows as ActiveUserRow[]) {
+    summary.taken += 1;
+    const failed = (err: unknown): void => {
+      summary.errors += 1;
+      log("warn", "first directory sync graph failure", { userId: u.id, error: errorText(err) });
+    };
+
+    let gu: GraphUser;
+    try {
+      gu = await graph.getUser(u.external_id);
+    } catch (err) {
+      failed(err);
+      continue;
+    }
+
+    const heal = computeFirstSyncHeal(localAttrs(u), gu);
+    if (heal.action === "absent") {
+      summary.absent += 1;
+      continue;
+    }
+
+    const { refreshed, photoFailure } = await refreshUser(pool, graph, u, heal);
+    if (refreshed) summary.refreshed += 1;
+    if (photoFailure) {
+      failed(photoFailure.error);
+      continue;
+    }
+    await stampFirstSync(pool, u.id);
+    summary.synced += 1;
+  }
+  return summary;
+}
+
 export async function runReconciliation(
   pool: DbClient,
   graphEnv: GraphEnv,
@@ -77,7 +261,7 @@ export async function runReconciliation(
 
   async function anomaly(targetType: "user" | "group", targetId: string, err: unknown): Promise<void> {
     summary.errors += 1;
-    const error = String((err as Error).message ?? err).slice(0, 500);
+    const error = errorText(err);
     log("error", "reconciliation graph failure", { targetType, targetId, error });
     await appendAudit(pool, {
       actorUserId: null,
@@ -89,10 +273,13 @@ export async function runReconciliation(
   }
 
   // ── Pass 1: every local active user vs the tenant ────────────────────────────────────
+  // §3: a row still inside the first-sync window is left out — the first directory sync runs
+  // alongside this pass, and no row may be handled by both at once. If that sync never completes
+  // for a row, the row has aged out of the window by the next pass, which takes it then.
   const { rows: activeUsers } = await pool.query(
-    `select id, external_id, user_name, display_name, email, department, job_title, office_location, photo_etag
+    `select ${USER_COLUMNS}
        from users
-      where active = true and scrubbed_at is null
+      where active = true and scrubbed_at is null and not (${IN_FIRST_SYNC_WINDOW})
       order by external_id`,
   );
 
@@ -106,17 +293,7 @@ export async function runReconciliation(
       continue;
     }
 
-    const heal = computeUserHeal(
-      {
-        userName: u.user_name,
-        displayName: u.display_name,
-        email: u.email,
-        department: u.department,
-        jobTitle: u.job_title,
-        officeLocation: u.office_location,
-      },
-      gu,
-    );
+    const heal = computeUserHeal(localAttrs(u), gu);
 
     if (heal.action === "deactivate") {
       // §3.1: drop the cached photo on deactivation — the user renders as a greyed initials
@@ -144,57 +321,12 @@ export async function runReconciliation(
       continue;
     }
 
-    let before: Record<string, unknown> | undefined;
-    if (heal.action === "refresh") {
-      // Column names come from the fixed UserFieldPatch key set, never from input.
-      // scim_synced is deliberately untouched: recon refreshes attributes but a JIT stub
-      // (scim_synced=false) stays claims-refreshable until SCIM itself writes it.
-      const cols = Object.keys(heal.patch) as (keyof UserFieldPatch)[];
-      const sets = cols.map((c, i) => `${c} = $${i + 2}`).join(", ");
-      await pool.query(`update users set ${sets}, updated_at = now() where id = $1`, [
-        u.id,
-        ...cols.map((c) => heal.patch[c] ?? null),
-      ]);
-      // §4.3: a changed address or user name may match a pending access-list entry.
-      if (heal.patch.email !== undefined || heal.patch.user_name !== undefined) await bindPendingAccess(pool, u.id);
-      const current: Record<keyof UserFieldPatch, unknown> = {
-        user_name: u.user_name,
-        display_name: u.display_name,
-        email: u.email,
-        department: u.department,
-        job_title: u.job_title,
-        office_location: u.office_location,
-      };
-      before = {};
-      for (const c of cols) before[c] = current[c];
-    }
-
-    let photo: "updated" | "removed" | null = null;
-    try {
-      const p = await graph.getUserPhoto240(u.external_id, u.photo_etag);
-      if (p.changed) {
-        photo = p.bytes ? "updated" : "removed";
-        await pool.query(`update users set photo = $2, photo_etag = $3, updated_at = now() where id = $1`, [
-          u.id,
-          p.bytes ?? null,
-          p.etag ?? null,
-        ]);
-      }
-    } catch (err) {
-      await anomaly("user", u.external_id, err);
-    }
-
-    if (heal.action === "refresh" || photo !== null) {
-      summary.refreshed += 1;
-      await appendAudit(pool, {
-        actorUserId: null,
-        action: "recon.user_refreshed",
-        targetType: "user",
-        targetId: u.id,
-        before,
-        after: { ...(heal.action === "refresh" ? heal.patch : {}), ...(photo !== null ? { photo } : {}) },
-      });
-    }
+    const { refreshed, photoFailure } = await refreshUser(pool, graph, u, heal);
+    if (refreshed) summary.refreshed += 1;
+    if (photoFailure) await anomaly("user", u.external_id, photoFailure.error);
+    // §3: the first Graph read that went through end to end stamps the marker, so it stays
+    // truthful for rows this pass reached before (or instead of) the first directory sync.
+    else if (u.first_synced_at === null) await stampFirstSync(pool, u.id);
   }
 
   // ── Pass 2: group set = local groups ∪ role_mappings targets ∪ bootstrap group ───────

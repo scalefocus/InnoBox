@@ -171,11 +171,13 @@ TypeScript monorepo (pnpm workspaces — `@innobox/shared`, `@innobox/web`,
   reconciliation, ClamAV scan pipeline, notification dispatch (outbox), channel-webhook
   delivery (§12.4). **Singleton, leader-locked** via Postgres advisory lock. Its
   leader-only sweeps include the notification and webhook-delivery sweeps (every 30 s),
+  the first directory sync for new users (every 30 s, §3),
   the system-log alert (every 5 min, §14.7), and the **hourly housekeeping sweep**
   (presence rollup and daily snapshot §14.5, system-log trim §14.7, webhook-delivery trim §12.4, stale
   upload sessions §11, the real-user-monitoring rollup and trims §14.12). Pure-DB sweeps are scheduled before the Entra-credential check,
   so a missing Graph/S3 configuration never skips them. Only work that calls Microsoft
-  Graph (reconciliation, photo sync, the Graph mail transport) depends on the Entra
+  Graph (reconciliation and its first directory sync, photo sync, the Graph mail
+  transport) depends on the Entra
   credentials; the notification sweep (SMTP needs no Entra), the ClamAV scan sweep, and
   the draft and upload-session GC run regardless.
 - **`packages/shared`** — domain types, RBAC resolution, state-machine logic,
@@ -963,7 +965,8 @@ Entra runbook); on conflict this document wins.
   job title and office location are the **directory profile** — display-only data
   behind the profile page (§13.5) and the directory hover card (§13.8). **Nothing in
   RBAC, visibility or governance reads them** (invariant 1 unaffected).
-- **Directory profile sourcing.** Reconciliation is the **only** automatic writer and
+- **Directory profile sourcing.** Reconciliation — its hourly pass and its first
+  directory sync (below) — is the **only** automatic writer and
   it **overwrites unconditionally** — a promotion, a re-org or an office move must
   propagate, and a Graph value that is absent or empty writes NULL so clearing the
   attribute upstream clears it here too. Its hourly pass already visits **every local
@@ -972,12 +975,78 @@ Entra runbook); on conflict this document wins.
   on the `GET /users/{oid}` `$select` the pass already issues — **no extra Graph
   request and no new application permission** (all three are default properties of the
   user resource, covered by the granted application `User.Read.All`). Sign-in still
-  fetches nothing from Graph (§3.1); a JIT stub therefore shows no office location for
-  at most one reconciliation interval, exactly as it shows no photo.
+  fetches nothing from Graph (§3.1); a JIT stub therefore shows no directory profile
+  and no photo until its **first directory sync** (below), normally well under a
+  minute after the row is created.
 - **SCIM stays unmapped for office location.** The SCIM payload carries `title` and the
   enterprise `department` as today, but **no** office attribute — SCIM writes must never
   touch `office_location` (leaving it to reconciliation), so **no Entra provisioning
   attribute-mapping change is required in the tenant**.
+- **First directory sync (new users).** A user row is created with only part of what
+  Entra knows. A JIT sign-in writes the token's name and e-mail and nothing else; a
+  SCIM create adds department and job title but no office and no photo; a stub the
+  hourly pass creates for an unknown group member has no photo. Left to the hourly
+  pass, a new colleague shows an initials bubble and "No directory information"
+  (§13.8) for up to an hour. So the worker runs reconciliation's per-user step
+  **once, early, for each new row**:
+  - **Marker.** `users.first_synced_at` (nullable `timestamptz`, migration 0061) is
+    when reconciliation first read the row from Microsoft Graph successfully; `NULL`
+    means not yet. Every way a row is created leaves it `NULL` by default, so no
+    insert path changes. It is never shown, and nothing outside reconciliation reads
+    it. A partial index on the pending rows keeps the sweep's query cheap.
+  - **Sweep.** Leader-only, every **30 s**, scheduled behind the same Entra-credential
+    check as the hourly pass (§2): a deployment without Graph credentials runs
+    neither. Each sweep takes up to **20** rows with `first_synced_at IS NULL`,
+    `active = true`, `scrubbed_at IS NULL` and `created_at` within the last
+    **5 minutes**, newest first, so the person who signed in a moment ago goes ahead
+    of a bulk SCIM load. A tick that finds the previous sweep still running is
+    skipped.
+  - **Per row** it does exactly what step 1 of the hourly pass does for one user
+    (`ENTRA_AUTH_SPEC.md` §5): `GET /users/{oid}`, refresh the drifted attributes
+    (display name, e-mail, user name and the directory profile, overwriting
+    unconditionally as above), then the photo by etag (§3.1). Same writes, the same
+    `recon.user_refreshed` audit row when something changed, the same access-list
+    binding when the e-mail or user name changed (§4.3); `scim_synced` stays
+    untouched. On success it stamps `first_synced_at = now()`. **No new Graph request
+    type and no new permission.**
+  - **It never deactivates.** When Graph answers that the account is missing or
+    disabled, the first sync changes nothing and leaves the marker `NULL`. An account
+    created minutes ago may not be readable through Graph yet, and deactivating
+    someone seconds after their first sign-in on that evidence would be wrong.
+    Deactivation stays with the hourly pass.
+  - **Failures are retried briefly and never abort the sweep.** A Graph failure on a
+    row (the user read or the photo) is logged (structured JSON), the row keeps its
+    `NULL` marker, and the sweep moves on to the next row. The row is tried again on
+    each sweep until it succeeds or is 5 minutes old; after that the hourly pass owns
+    it, exactly as before this sync existed. These failures are **not audited**: the
+    hourly pass already records a persistent Graph failure as `scim.anomaly`, and a
+    deployment that never granted the Graph permission must not gain up to ten extra
+    audit rows per new user.
+  - **Independent of the hourly pass.** The sweep does not wait for the hourly pass,
+    which can take minutes in a large tenant. So that no row is handled by both at
+    once, the hourly pass **leaves out rows still inside the first-sync window**
+    (`first_synced_at IS NULL` and created within the last 5 minutes) when it reads
+    its user list; if the first sync never completes for such a row, the next hourly
+    pass takes it. When the hourly pass reads any other user successfully and that
+    row's marker is `NULL`, it stamps it, which keeps the marker truthful. Rows that
+    existed before migration 0061 are stamped by the first pass after the upgrade;
+    there is no backfill, and the 5-minute window keeps the sweep away from them.
+  - **What a user sees.** Job title, department and office are stored within about
+    30 s of the row's creation, plus Graph's response time. The hover card caches
+    per page session (§13.8), so a card opened before the sync shows the profile
+    after the next page load. The photo is stored in the same step; a browser that
+    already asked for it keeps the no-photo answer for up to 5 minutes (§3.1), so
+    the bubble can lag that long.
+  - **Not covered.** A reactivated user is not a new row: the photo dropped at
+    deactivation (§3.1) returns with the next hourly pass, as today.
+  - **Tests.** Unit: a missing or disabled Graph account yields "no change" for the
+    first sync and "deactivate" for the hourly pass. DB-backed, against a fake Graph
+    client: a new row gets its profile and photo and is stamped; stamped, inactive,
+    scrubbed and older-than-5-minutes rows are not taken; the batch is the newest 20;
+    a missing or disabled account leaves the row active, unchanged and unstamped; a
+    Graph failure leaves the row unstamped, writes no audit row and does not stop
+    the next row; the hourly pass leaves out rows inside the window and stamps the
+    `NULL` markers of the users it reads.
 - **GDPR erasure:** "Delete user info" scrubs the `users` row and personal data and
   de-identifies the user's comments/challenges/solutions to "Deleted User";
   `audit_log` is deliberately exempt (invariant 5) and retains actor identity for
@@ -1093,7 +1162,9 @@ shown (§13.6).
 - **Sync: reconciliation-owned** (deliberate — sign-in fetches no photo). The hourly
   pass checks every active user's photo metadata and downloads only on etag change;
   Graph 404 ("no photo") clears any cached copy. A brand-new user shows the initials
-  bubble for at most one reconciliation interval. Corrupt or unreadable image data
+  bubble until their **first directory sync** (§3), normally well under a minute; if
+  that sync cannot complete inside its 5-minute window, for at most one
+  reconciliation interval, as before. Corrupt or unreadable image data
   is treated as absent — the UI falls back to initials silently.
 - **Serving:** **only** through the authenticated `GET /api/users/:id/photo`
   gateway — session-required; responses carry an `ETag` and `Cache-Control` with
@@ -1101,8 +1172,8 @@ shown (§13.6).
   the initials bubble). That `404` is itself cacheable for **5 minutes**
   (`Cache-Control: private, max-age=300`), so a screen full of photo-less users does not
   re-ask the gateway on every render and navigation; a photo synced inside that window
-  appears up to 5 minutes later, well within the one-reconciliation-interval bound
-  above. The endpoint exposes **no other profile data** and never
+  appears up to 5 minutes later. For a new user that is up to 5 minutes after their
+  first directory sync (§3). The endpoint exposes **no other profile data** and never
   serves a photo for content whose author is masked (§9 — the client never learns
   an anonymous author's id in the first place, invariant 3). The response's
   `Content-Type` is the stored image's real type (JPEG or PNG, sniffed from the leading
@@ -1269,6 +1340,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **scrubbed_at** (the GDPR erasure marker, §3), department, job title,
   **office_location** (nullable text — the directory profile's third field, mirroring
   the Entra `officeLocation` attribute; §3, §13.8),
+  **first_synced_at** (nullable timestamptz; when reconciliation first read the row
+  from Microsoft Graph — the §3 first-directory-sync marker, `NULL` until then),
   photo (cached 240×240 bytes) + photo_etag (§3.1), email_notifications_enabled
   (default true), triage_seen_at (nullable; last time the user opened the triage
   queue — drives the §14.4 attention badge),

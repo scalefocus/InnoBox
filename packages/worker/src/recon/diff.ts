@@ -89,6 +89,23 @@ export function computeUserHeal(local: LocalUserAttrs, graph: GraphUser): UserHe
   return Object.keys(patch).length > 0 ? { action: "refresh", patch } : { action: "none" };
 }
 
+/** The first directory sync's decision: the hourly pass's, minus deactivation. */
+export type FirstSyncHeal =
+  | { action: "absent" }
+  | { action: "refresh"; patch: UserFieldPatch }
+  | { action: "none" };
+
+/**
+ * Decide the first directory sync for one new local user (INNOBOX_SPEC.md §3). Same refresh as
+ * computeUserHeal, but a missing or disabled account is `absent` — nothing changes and the row
+ * stays the sweep's. An account created minutes ago may not be readable through Graph yet, so
+ * the first sync never deactivates; that stays with the hourly pass.
+ */
+export function computeFirstSyncHeal(local: LocalUserAttrs, graph: GraphUser): FirstSyncHeal {
+  const heal = computeUserHeal(local, graph);
+  return heal.action === "deactivate" ? { action: "absent" } : heal;
+}
+
 /**
  * Set difference for group membership healing: `add` = in Graph but not local,
  * `remove` = local but not in Graph. Duplicates are ignored; input order is preserved.

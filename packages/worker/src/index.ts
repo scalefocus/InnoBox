@@ -24,7 +24,8 @@ import { createScimRouter } from "./scim/router.js";
 import { createScimLastRequestStamper } from "./scim/last-request.js";
 import { checkScimBearerToken, scimTokenFatalLog, scimTokenLoadedLog } from "./scim/token.js";
 import { startLeaderElection } from "./leader.js";
-import { runReconciliation } from "./recon/reconcile.js";
+import { runFirstSync, runReconciliation } from "./recon/reconcile.js";
+import { createGraphClient } from "./recon/graph.js";
 import { runNotificationSweep } from "./notifications/dispatch.js";
 import { runDigestSweep } from "./notifications/digest.js";
 import { createClamavScanner, createWorkerS3Client, runScanSweep, type ScanDeps, type WorkerS3Client } from "./attachments/scan.js";
@@ -165,6 +166,7 @@ function buildScanDeps(): (ScanDeps & { s3: WorkerS3Client }) | null {
 // Leader election + reconciliation + notification dispatch loops (phase 1/3).
 const WORKER_LEADER_LOCK_KEY = 0x696e6e6f626f78n; // "innobox" in hex, from leader.ts.
 let reconciliationInterval: NodeJS.Timeout | null = null;
+let firstSyncInterval: NodeJS.Timeout | null = null;
 let notificationInterval: NodeJS.Timeout | null = null;
 let scanInterval: NodeJS.Timeout | null = null;
 let housekeepingInterval: NodeJS.Timeout | null = null;
@@ -377,8 +379,9 @@ const leaderElection = startLeaderElection(dbUrl, {
       scanInterval = setInterval(runScan, 15_000);
     }
 
-    // Entra reconciliation — the only sweep that needs the OIDC app's Graph credentials, so the
-    // credential check lives here, after everything else has been scheduled.
+    // Entra reconciliation (the hourly pass and the §3 first directory sync) — the only sweeps that
+    // need the OIDC app's Graph credentials, so the credential check lives here, after everything
+    // else has been scheduled.
     const tenantId = process.env.ENTRA_TENANT_ID;
     const clientId = process.env.ENTRA_CLIENT_ID;
     const clientSecret = process.env.ENTRA_CLIENT_SECRET;
@@ -401,6 +404,27 @@ const leaderElection = startLeaderElection(dbUrl, {
         console.error(JSON.stringify({ level: "error", msg: "reconciliation failed", error: String(err) }));
       }
     }, 60 * 60 * 1000); // 1 hour
+
+    // §3 first directory sync: every 30 s, a new user's directory profile and photo, so they do
+    // not wait for the hourly pass. Scheduled BEFORE the initial pass below is awaited — the two
+    // run independently (the pass leaves out the rows this sweep owns), and a pass can take
+    // minutes in a large tenant. One long-lived Graph client, so its token is reused across ticks.
+    const firstSyncGraph = createGraphClient(graphEnv);
+    let firstSyncRunning = false;
+    const runFirstSyncTick = async () => {
+      if (firstSyncRunning) return; // a slow Graph must never stack sweeps
+      firstSyncRunning = true;
+      try {
+        const summary = await runFirstSync(pool, firstSyncGraph);
+        if (summary.taken) console.log(JSON.stringify({ level: "info", msg: "first directory sync", ...summary }));
+      } catch (err) {
+        console.error(JSON.stringify({ level: "error", msg: "first directory sync failed", error: String(err) }));
+      } finally {
+        firstSyncRunning = false;
+      }
+    };
+    void runFirstSyncTick();
+    firstSyncInterval = setInterval(runFirstSyncTick, 30_000);
 
     // Run reconciliation immediately on leadership acquisition.
     try {
@@ -430,6 +454,10 @@ const leaderElection = startLeaderElection(dbUrl, {
     if (reconciliationInterval) {
       clearInterval(reconciliationInterval);
       reconciliationInterval = null;
+    }
+    if (firstSyncInterval) {
+      clearInterval(firstSyncInterval);
+      firstSyncInterval = null;
     }
     if (notificationInterval) {
       clearInterval(notificationInterval);
@@ -463,6 +491,7 @@ const leaderElection = startLeaderElection(dbUrl, {
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, async () => {
     if (reconciliationInterval) clearInterval(reconciliationInterval);
+    if (firstSyncInterval) clearInterval(firstSyncInterval);
     if (notificationInterval) clearInterval(notificationInterval);
     if (scanInterval) clearInterval(scanInterval);
     if (housekeepingInterval) clearInterval(housekeepingInterval);
