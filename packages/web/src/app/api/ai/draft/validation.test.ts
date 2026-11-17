@@ -19,3 +19,14 @@ test("solution: challenge number, description, cost vs benefits", () => {
   assert.equal(parseDraftRequest({ kind: "solution", challengeNumber: "12", description: "" }).ok, false);
   assert.equal(parseDraftRequest({ kind: "comment" }).ok, false);
 });
+
+test("solution: the form's picked people ride along, so their names can be swapped out (§43.9)", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const ok = parseDraftRequest({ kind: "solution", challengeNumber: "12", description: "Ask @Ana Petrova", mentions: [{ userId: id, name: "Ana Petrova" }] });
+  assert.deepEqual(ok, {
+    ok: true,
+    value: { kind: "solution", challengeNumber: "12", description: "Ask @Ana Petrova", costVsBenefits: "", mentions: [{ userId: id, name: "Ana Petrova" }] },
+  });
+  assert.equal(parseDraftRequest({ kind: "solution", challengeNumber: "12", description: "D", mentions: "everyone" }).ok, false);
+  assert.equal(parseDraftRequest({ kind: "solution", challengeNumber: "12", description: "D", mentions: [{ userId: "nope", name: "X" }] }).ok, false);
+});

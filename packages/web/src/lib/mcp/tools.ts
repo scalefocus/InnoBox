@@ -31,6 +31,7 @@ import {
   parseTopicIds,
   AFFECTED_HEADCOUNT_MAX,
   AFFECTED_HEADCOUNT_MIN,
+  MENTION_MESSAGES,
   TEAM_MESSAGES,
   type AttachmentView,
   type McpSettings,
@@ -68,6 +69,7 @@ import {
   notifyChallengeResubmitted,
   notifyChallengeSubmitted,
   notifyCommentPosted,
+  notifyMentioned,
   notifySolutionProposed,
   notifySolutionResubmitted,
 } from "../notify-events";
@@ -672,6 +674,10 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(409, "attachments can only be added in the browser");
         case "ineligible_coauthor": // §39.10: an agent adds no co-authors, so this cannot occur
           return fail(422, TEAM_MESSAGES.ineligible);
+        case "ineligible_mention": // §43.9: an agent's create has no mentions, so neither can occur
+          return fail(422, MENTION_MESSAGES.ineligible);
+        case "mention_cap":
+          return fail(409, result.reason === "solution_cap" ? MENTION_MESSAGES.solutionCap : MENTION_MESSAGES.dailyCap);
         case "invalid":
           return fail(400, result.error);
       }
@@ -788,6 +794,9 @@ export const TOOLS: readonly ToolDef[] = [
       );
       switch (result.status) {
         case "ok":
+          // §43.9: the edit sent no list, so it kept the mentions whose text it left alone and added
+          // none; the check still ran, and may have settled one whose person can see the solution now.
+          await notifyMentioned(notifyCtx(ctx), result.solution.id, result.mentioned).catch(logNotifyFailure("mention notification failed"));
           return {
             ok: true,
             data: { number: result.solution.number, status: result.solution.status, editedAt: result.solution.editedAt, url: solutionUrl(ctx, current.challenge.number, number) },
@@ -801,6 +810,10 @@ export const TOOLS: readonly ToolDef[] = [
           return fail(409, "this solution is not editable in its current status");
         case "stale":
           return fail(409, TEAM_MESSAGES.staleEdit);
+        case "ineligible_mention": // §43.9: an agent's edit names nobody new, so neither can occur
+          return fail(422, MENTION_MESSAGES.ineligible);
+        case "mention_cap":
+          return fail(409, result.reason === "solution_cap" ? MENTION_MESSAGES.solutionCap : MENTION_MESSAGES.dailyCap);
         case "invalid":
           return fail(400, result.error);
       }
@@ -835,6 +848,8 @@ export const TOOLS: readonly ToolDef[] = [
       const result = await resubmitSolution(ctx.pool, ctx.viewer, number, via(ctx));
       if (result.status === "ok") {
         await notifySolutionResubmitted(notifyCtx(ctx), number, result).catch(logNotifyFailure("solution resubmit notification failed"));
+        // §43.4: a resubmit is a status change, so the mention check ran.
+        await notifyMentioned(notifyCtx(ctx), result.solutionId, result.mentioned).catch(logNotifyFailure("mention notification failed"));
         return { ok: true, data: { number: `SOL-${number}`, status: "in_review", url: solutionUrl(ctx, result.challengeNumber, number) } };
       }
       if (result.status === "not_found") return NOT_FOUND("solution");

@@ -2,10 +2,13 @@
 // task's egress names are accepted — a client name or anonymity flag in the body is ignored, so
 // it can never reach a prompt.
 import { AI_DRAFT_COST_MAX, AI_DRAFT_DESCRIPTION_MAX, AI_DRAFT_TITLE_MAX } from "@innobox/shared/ai";
+import { parseMentionsInput, type MentionCandidate } from "@innobox/shared/mentions";
 
 export type DraftRequest =
   | { kind: "challenge"; title: string; description: string; visibility: "org" | "namespace" }
-  | { kind: "solution"; challengeNumber: string; description: string; costVsBenefits: string };
+  /** `mentions` (§43.9): the people the solution form has picked — their names are swapped for
+   *  placeholders before the prompt is built, so no person's name reaches the provider (§22.7). */
+  | { kind: "solution"; challengeNumber: string; description: string; costVsBenefits: string; mentions?: MentionCandidate[] };
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -34,7 +37,12 @@ export function parseDraftRequest(body: Record<string, unknown>): Parsed<DraftRe
     const cost = text(body.costVsBenefits, AI_DRAFT_COST_MAX, "costVsBenefits");
     if (!cost.ok) return cost;
     if (!description.value.trim() && !cost.value.trim()) return { ok: false, error: "write a description first" };
-    return { ok: true, value: { kind: "solution", challengeNumber: num, description: description.value, costVsBenefits: cost.value } };
+    const mentions = parseMentionsInput(body.mentions);
+    if (!mentions.ok) return mentions;
+    return {
+      ok: true,
+      value: { kind: "solution", challengeNumber: num, description: description.value, costVsBenefits: cost.value, ...(mentions.value ? { mentions: mentions.value } : {}) },
+    };
   }
   return { ok: false, error: "kind must be challenge or solution" };
 }

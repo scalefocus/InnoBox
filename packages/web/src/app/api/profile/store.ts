@@ -21,6 +21,7 @@ import {
   type SolutionStatus,
 } from "@innobox/shared";
 import { pushChallengeVisibilityConditions, pushSolutionVisibilityConditions, type Viewer } from "../challenges/store";
+import { displayTextFields } from "../../../lib/mentions";
 
 /** §39.12: "authored by $1" — a member of the item's team, co-authored items included. */
 const CHALLENGE_MEMBER = isChallengeMemberSql("c", "$1");
@@ -99,11 +100,13 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
     notify_followed_status: boolean;
     notify_followed_solutions: boolean;
     notify_invitations: boolean;
+    notify_mentions: boolean;
     surveys_enabled: boolean;
     feature_ideas_named: boolean;
   }>(
     `select id, display_name, email, department, job_title, office_location, email_notifications_enabled, email_delivery,
-            notify_followed_comments, notify_followed_status, notify_followed_solutions, notify_invitations, surveys_enabled, feature_ideas_named
+            notify_followed_comments, notify_followed_status, notify_followed_solutions, notify_invitations, notify_mentions,
+            surveys_enabled, feature_ideas_named
        from users where id = $1`,
     [userId],
   );
@@ -148,6 +151,8 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
         [userId],
       ),
     ]);
+  // §43.2: solution text leaves the server as display text — a mention reads as a name, never a token.
+  await displayTextFields<{ description: string }>(pool, [...followedSolutions.rows, ...recentSolutions.rows], ["description"]);
 
   const challengesByStatus: Record<string, number> = {};
   for (const row of challengeStatusRows.rows) challengesByStatus[row.status] = Number(row.count);
@@ -191,6 +196,7 @@ export async function getOwnProfile(pool: Pool, viewer: Viewer): Promise<OwnProf
       followedStatus: userRow.notify_followed_status,
       followedSolutions: userRow.notify_followed_solutions,
       invitations: userRow.notify_invitations, // §40.6
+      mentions: userRow.notify_mentions, // §43.6
     },
     surveysEnabled: userRow.surveys_enabled,
     featureIdeasNamed: userRow.feature_ideas_named,
@@ -240,7 +246,7 @@ export async function setEmailDelivery(pool: Pool, userId: string, delivery: Ema
   }
 }
 
-/** §12.1: writes any subset of the three per-event toggles. Silent (not audited, like the e-mail
+/** §12.1: writes any subset of the per-event toggles. Silent (not audited, like the e-mail
  *  switch) and forward-only — nothing already delivered is deleted, nothing missed is replayed. */
 export async function setNotificationPreferences(pool: Pool, userId: string, prefs: Partial<NotificationPreferences>): Promise<void> {
   const sets: string[] = [];
@@ -342,6 +348,7 @@ export async function getPublicProfile(pool: Pool, userId: string): Promise<Publ
       [userId],
     ),
   ]);
+  await displayTextFields(pool, solutionRows.rows, ["description"]); // §43.2
 
   return {
     user: {

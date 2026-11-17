@@ -8,6 +8,8 @@ import type { Pool, PoolClient } from "pg";
 import {
   addAccessForAssignment,
   areLikesFrozen,
+  auditMentions,
+  bindMentions,
   blocksAcceptedInternally,
   clearAccessList,
   deliverShareNotifications,
@@ -52,11 +54,13 @@ import {
   isSolutionMemberSql,
   maskAuthor,
   maskTeam,
+  mentionedUserIds,
   sameEditSql,
   siblingsToAutoClose,
   solutionAuthorIdsSql,
   solutionEnforcedTargets,
   solutionTeamJsonSql,
+  stripMentionMarks,
   trashPurgesOn,
   validateChallengeFields,
   validateSolutionFields,
@@ -67,6 +71,7 @@ import {
   type ChallengeVisibility,
   type ChallengeVisibilityInput,
   type MaskedAuthor,
+  type MentionCandidate,
   type RoleSet,
   type SolutionStatus,
   type TeamAuthor,
@@ -91,6 +96,18 @@ import {
   writeLiveAwards,
 } from "../../../lib/gamification";
 import { recordInvitationPayoffs, type InvitationPayoff } from "../../../lib/invitation-payoffs";
+import {
+  MentionCapError,
+  areEligibleForMention,
+  currentMentionCandidates,
+  lockMentionSaver,
+  mentionRowUserIds,
+  serializeSolutionTexts,
+  settlePendingMentions,
+  syncMentionRows,
+  type MentionView,
+  type SettledMention,
+} from "../../../lib/mentions";
 import { getAttachmentLimits } from "../admin/settings/store";
 import { bindStagedAttachments, claimStagedAttachments, listAttachmentsForParent } from "../attachments/store";
 import { isEntityNumber, isUuid, type ChallengeListFilters } from "./validation";
@@ -166,8 +183,14 @@ export interface DuplicateRef {
 export interface SolutionListItem {
   id: string;
   number: string;
+  /** §43.2: display text — a mention reads `@` and the person's current name, never a token. */
   description: string;
   costVsBenefits: string | null;
+  /** §43.11: where each mention sits in the display text of its field, and whom it names. */
+  mentions: MentionView[];
+  /** §43.11: the room left under the per-solution cap — set by the detail route for a solution the
+   *  viewer may edit, null otherwise. */
+  mentionsLeft: number | null;
   /** The first member of the team (§39.7). */
   author: MaskedAuthor;
   /** §39.7: every member in team order, each with its `creator` flag — or the anonymous shape. */
@@ -377,8 +400,11 @@ interface SolutionRow {
   id: string;
   number: string;
   challenge_id: string;
+  /** §43.2: display text once fetchSolutionRows has run the serializer — never the stored form. */
   description: string;
   cost_vs_benefits: string | null;
+  /** §43.11: set by the serializer in fetchSolutionRows. */
+  mentions?: MentionView[];
   status: string;
   author_id: string;
   author_display_name: string;
@@ -793,6 +819,8 @@ function toSolutionItem(
     number: formatSolutionNumber(row.number),
     description: row.description,
     costVsBenefits: row.cost_vs_benefits,
+    mentions: row.mentions ?? [],
+    mentionsLeft: null,
     author: firstAuthor(authors),
     authors,
     isMine,
@@ -864,6 +892,8 @@ async function fetchSolutionRows(db: Pool | PoolClient, challengeId: string, vie
       order by s.created_at asc`,
     [challengeId, viewerId],
   );
+  // §43.2 "one serializer": every detail read hands out display text and the mentions' ranges.
+  await serializeSolutionTexts(db, rows);
   return rows;
 }
 
@@ -1419,8 +1449,33 @@ export async function createChallenge(
   });
 }
 
+/** §43.2: the mentions a save names — the form's list, each with the name as it stands in the text —
+ *  and the role resolver for the §43.5 eligibility check (invariant 1). `candidates: null` is "no
+ *  list": a create then has no mentions, an edit binds the current ones. */
+export interface SaveMentions {
+  candidates: MentionCandidate[] | null;
+  resolveRoles: ResolveAssigneeRoles;
+}
+
+/** §43.2: a submitted text with any mention mark removed — the first thing done to it, before
+ *  validation, so the length limits are checked on what the author typed. */
+function stripMarks(value: unknown): unknown {
+  return typeof value === "string" ? stripMentionMarks(value) : value;
+}
+
+/** §43.2: a solution's two validated texts as stored text, and the people they name. */
+function bindSolutionTexts(
+  fields: { description: string; costVsBenefits: string | null },
+  candidates: readonly MentionCandidate[],
+): { description: string; costVsBenefits: string | null; userIds: string[] } {
+  const description = bindMentions(fields.description, candidates).text;
+  const costVsBenefits = fields.costVsBenefits === null ? null : bindMentions(fields.costVsBenefits, candidates).text;
+  return { description, costVsBenefits, userIds: mentionedUserIds(description, costVsBenefits) };
+}
+
 export type CreateSolutionResult =
-  | { status: "ok"; solution: SolutionListItem }
+  /** `mentioned`: §43.4 — the mentions the create settled, for event 26 after the commit. */
+  | { status: "ok"; solution: SolutionListItem; mentioned: SettledMention[] }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "namespace_archived" }
@@ -1429,13 +1484,17 @@ export type CreateSolutionResult =
   | { status: "attachments_over_limit" }
   /** §39.2: a picked co-author can't see the challenge (→ 422). */
   | { status: "ineligible_coauthor" }
+  /** §43.5: a mentioned person can't be mentioned here (→ 422). */
+  | { status: "ineligible_mention" }
+  /** §43.5: the mentions break the per-solution or the daily cap (→ 409). */
+  | { status: "mention_cap"; reason: "solution_cap" | "daily_cap" }
   | { status: "invalid"; error: string };
 
 export async function createSolution(
   pool: Pool,
   author: Viewer,
   challengeNumber: string,
-  input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown; coAuthors?: CreateCoAuthors },
+  input: { description: unknown; costVsBenefits: unknown; isAnonymous: unknown; draftKey?: unknown; coAuthors?: CreateCoAuthors; mentions?: SaveMentions },
   via?: AgentSource,
 ): Promise<CreateSolutionResult> {
   if (!isEntityNumber(challengeNumber)) return { status: "not_found" };
@@ -1453,7 +1512,8 @@ export async function createSolution(
   // §6.2: proposing is allowed ONLY while the challenge is `valid`.
   if (challenge.status !== "valid") return { status: "not_valid_status" };
 
-  const validated = validateSolutionFields(input);
+  // §43.2: marks are removed before validation, so the limits apply to the text as typed.
+  const validated = validateSolutionFields({ ...input, description: stripMarks(input.description), costVsBenefits: stripMarks(input.costVsBenefits) });
   if (!validated.ok) return { status: "invalid", error: validated.error };
   // §39.3: an anonymous item has exactly one member; §39.2: a solution's team is joined by whoever
   // can see its challenge under the full §4.3 predicate.
@@ -1462,6 +1522,17 @@ export async function createSolution(
   const coAuthorIds = await eligibleCoAuthors(pool, input.coAuthors, (candidate) => canSeeChallenge(candidate, parent));
   if (!coAuthorIds) return { status: "ineligible_coauthor" };
 
+  // §43.2 / §43.5: the texts as stored text; everyone they name is new, so everyone is checked — the
+  // same full §4.3 predicate as a co-author. A create with no list has no mentions.
+  const mentions = input.mentions;
+  const bound = bindSolutionTexts(validated.value, mentions?.candidates ?? []);
+  if (
+    bound.userIds.length > 0 &&
+    !(await areEligibleForMention(pool, bound.userIds, author.userId, async (userId) => canSeeChallenge({ userId, roles: await mentions!.resolveRoles(userId) }, parent)))
+  ) {
+    return { status: "ineligible_mention" };
+  }
+
   // §11 staging: bind any files staged during the propose form to this solution (in-transaction).
   const draftKey = typeof input.draftKey === "string" && isUuid(input.draftKey) ? input.draftKey : null;
   // §11 scan gate + cap re-check (see createChallenge): block submit on unclean staged files when
@@ -1469,31 +1540,52 @@ export async function createSolution(
   const requireClean = draftKey ? await isScanAvailable() : false;
   const maxPerItem = draftKey ? (await getAttachmentLimits(pool)).maxPerItem : 0;
 
-  return inTransaction(pool, async (client): Promise<CreateSolutionResult> => {
-    const staged = draftKey ? await claimStagedAttachments(client, author, "solution", draftKey, { maxPerItem, requireClean }) : null;
-    if (staged && staged.status !== "ok") return staged;
-    const { rows: inserted } = await client.query<{ id: string }>(
-      `insert into solutions (challenge_id, description, cost_vs_benefits, is_anonymous, author_id, mcp_client_name)
-       values ($1, $2, $3, $4, $5, $6)
-       returning id`,
-      [challenge.id, validated.value.description, validated.value.costVsBenefits, validated.value.isAnonymous, author.userId, via?.clientName ?? null],
-    );
-    const id = inserted[0]!.id;
-    await appendAudit(client, {
-      actorUserId: author.userId,
-      action: "solution.created",
-      targetType: "solution",
-      targetId: id,
-      after: { challengeId: challenge.id, isAnonymous: validated.value.isAnonymous, ...agentAuditFields(via) },
+  try {
+    return await inTransaction(pool, async (client): Promise<CreateSolutionResult> => {
+      // §43.5: the daily cap's lock, ahead of every write and of the audit chain's lock.
+      if (bound.userIds.length > 0) await lockMentionSaver(client, author.userId);
+      const staged = draftKey ? await claimStagedAttachments(client, author, "solution", draftKey, { maxPerItem, requireClean }) : null;
+      if (staged && staged.status !== "ok") return staged;
+      const { rows: inserted } = await client.query<{ id: string }>(
+        `insert into solutions (challenge_id, description, cost_vs_benefits, is_anonymous, author_id, mcp_client_name)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id`,
+        [challenge.id, bound.description, bound.costVsBenefits, validated.value.isAnonymous, author.userId, via?.clientName ?? null],
+      );
+      const id = inserted[0]!.id;
+      // §43.4: one row per mentioned person; over a cap, the whole create rolls back.
+      if (bound.userIds.length > 0) await syncMentionRows(client, id, author.userId, bound.userIds);
+      await appendAudit(client, {
+        actorUserId: author.userId,
+        action: "solution.created",
+        targetType: "solution",
+        targetId: id,
+        after: {
+          challengeId: challenge.id,
+          isAnonymous: validated.value.isAnonymous,
+          ...(bound.userIds.length > 0 ? { mentions: bound.userIds } : {}),
+          ...agentAuditFields(via),
+        },
+      });
+      await insertCoAuthors(client, "solution", id, author.userId, coAuthorIds);
+      // §23.2 / §39.9: solution_proposed for every member (none while anonymous).
+      await awardItemCreated(client, "solution", { id, authorIds: [author.userId, ...coAuthorIds], isAnonymous: validated.value.isAnonymous });
+      if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
+      // §43.4: the check — a `proposed` solution settles the mentioned people who can already see it
+      // (its co-authors, in silence; its reviewers, with event 26 after the commit).
+      const mentioned = await settlePendingMentions(client, id, mentions?.resolveRoles);
+      const solutionRows = await fetchSolutionRows(client, challenge.id, author.userId);
+      const row = solutionRows.find((s) => s.id === id)!;
+      return {
+        status: "ok",
+        solution: toSolutionItem(row, author, { namespaceId: challenge.namespace_id, assigneeId: challenge.assignee_id, trashed: false }),
+        mentioned,
+      };
     });
-    await insertCoAuthors(client, "solution", id, author.userId, coAuthorIds);
-    // §23.2 / §39.9: solution_proposed for every member (none while anonymous).
-    await awardItemCreated(client, "solution", { id, authorIds: [author.userId, ...coAuthorIds], isAnonymous: validated.value.isAnonymous });
-    if (draftKey && staged) await bindStagedAttachments(client, author, "solution", id, draftKey, staged.ids);
-    const solutionRows = await fetchSolutionRows(client, challenge.id, author.userId);
-    const row = solutionRows.find((s) => s.id === id)!;
-    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: challenge.namespace_id, assigneeId: challenge.assignee_id, trashed: false }) };
-  });
+  } catch (err) {
+    if (err instanceof MentionCapError) return { status: "mention_cap", reason: err.reason };
+    throw err;
+  }
 }
 
 // ── Status transitions: admin override + committee/assignee enforced (§7.2/§8.2, invariant 6) ─
@@ -1673,6 +1765,9 @@ export type SetSolutionStatusResult =
       /** §40.5: the invitations this move paid off — the solution's own, and any sibling the §8.3
        *  auto-close took out of `proposed`. Event 23 goes out after the commit. */
       payoffs: InvitationPayoff[];
+      /** §43.4: the mentions this move settled — everyone still pending once the solution is open
+       *  to all who can see the challenge. Event 26 goes out after the commit. */
+      mentioned: SettledMention[];
     }
   | { status: "not_found" }
   | { status: "trashed" }
@@ -1687,11 +1782,14 @@ export type SetSolutionStatusResult =
  *  just the application pre-check) catches a concurrent race on the §8.3 gate. */
 class SingleWinnerRaceError extends Error {}
 
+/** `resolveRoles` (§43.4): lets the mention check tell which pending people can already see a
+ *  solution an override has moved back to `proposed`; every other target status needs none. */
 export async function setSolutionStatus(
   pool: Pool,
   actor: Viewer,
   number: string,
   newStatus: string,
+  resolveRoles?: ResolveAssigneeRoles,
 ): Promise<SetSolutionStatusResult> {
   if (!isSolutionStatus(newStatus)) return { status: "invalid_status" };
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -1827,6 +1925,9 @@ export async function setSolutionStatus(
         }
         await writeLiveAwards(client, awards);
       }
+      // §43.4: every status change runs the check on the solution that moved. A sibling the §8.3
+      // auto-close just closed as not_selected is closed, so it settles nobody.
+      const mentioned = current.status !== newStatus ? await settlePendingMentions(client, current.id, resolveRoles) : [];
       const solutionRows = await fetchSolutionRows(client, current.challenge_id, actor.userId);
       const row = solutionRows.find((s) => s.id === current.id)!;
       return {
@@ -1836,6 +1937,7 @@ export async function setSolutionStatus(
         previousStatus: current.status,
         autoClose,
         payoffs,
+        mentioned,
       };
     });
   } catch (err) {
@@ -2419,22 +2521,33 @@ function sameTopicSet(a: readonly string[], b: readonly string[]): boolean {
 }
 
 export type EditSolutionResult =
-  | { status: "ok"; solution: SolutionListItem }
+  /** `mentioned`: §43.4 — the mentions the save settled, for event 26 after the commit. */
+  | { status: "ok"; solution: SolutionListItem; mentioned: SettledMention[] }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
   | { status: "not_editable" }
   /** §39.5: `baseEditedAt` no longer matches (→ 409). */
   | { status: "stale" }
+  /** §43.5: a newly mentioned person can't be mentioned here (→ 422). */
+  | { status: "ineligible_mention" }
+  /** §43.5: the new mentions break the per-solution or the daily cap (→ 409). */
+  | { status: "mention_cap"; reason: "solution_cap" | "daily_cap" }
   | { status: "invalid"; error: string };
 
+/** §43.11: an audited text carries a mention as `@[user:<id>]` — an id, never a name. */
+function auditTextFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, typeof value === "string" ? auditMentions(value) : value]));
+}
+
 /** Author content edit of a solution (§10.1) — any member of its team (§39.5), inside the edit
- *  window, from a copy that is not stale. */
+ *  window, from a copy that is not stale. `mentions` (§43.2) is the form's list; without one — an
+ *  agent's edit — the solution's current mentions bind by their current names and nobody is added. */
 export async function editSolution(
   pool: Pool,
   author: Viewer,
   number: string,
-  input: { description: unknown; costVsBenefits: unknown; baseEditedAt: string | null },
+  input: { description: unknown; costVsBenefits: unknown; baseEditedAt: string | null; mentions?: SaveMentions },
   via?: AgentSource,
 ): Promise<EditSolutionResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
@@ -2451,38 +2564,92 @@ export async function editSolution(
 
   // isAnonymous is not editable here; pass the field through validation with a fixed value it
   // won't apply (self-reveal owns anonymity, §9).
-  const validated = validateSolutionFields({ description: input.description, costVsBenefits: input.costVsBenefits, isAnonymous: false });
+  // §43.2: marks are removed before validation, so the limits apply to the text as typed.
+  const validated = validateSolutionFields({ description: stripMarks(input.description), costVsBenefits: stripMarks(input.costVsBenefits), isAnonymous: false });
   if (!validated.ok) return { status: "invalid", error: validated.error };
 
+  // §43.2: the form's list, or — with none — the people the stored text already names. `cur` holds
+  // STORED text, so the diff below compares like with like and sees a mention added or removed even
+  // when the words around it did not change.
+  const mentions = input.mentions;
+  const candidates = mentions?.candidates ?? (await currentMentionCandidates(pool, [cur.description, cur.cost_vs_benefits]));
+  const bound = bindSolutionTexts(validated.value, candidates);
+  const namedBefore = mentionedUserIds(cur.description, cur.cost_vs_benefits);
+  const mentionsAdded = bound.userIds.filter((id) => !namedBefore.includes(id));
+  const mentionsRemoved = namedBefore.filter((id) => !bound.userIds.includes(id));
+
+  // §43.5: only a person who would get a NEW row is checked; one who already has a row — still
+  // mentioned, or settled and now mentioned again — stays, whatever became of their access since.
+  const withRow = new Set(await mentionRowUserIds(pool, cur.id));
+  const fresh = bound.userIds.filter((id) => !withRow.has(id));
+  if (fresh.length > 0) {
+    const parent: ChallengeVisibilityInput = {
+      id: cur.challenge_id,
+      namespaceId: cur.namespace_id,
+      visibility: cur.visibility,
+      status: cur.challenge_status as ChallengeStatus,
+      authorIds: cur.challenge_author_ids,
+      assigneeId: cur.assignee_id,
+      trashed: cur.challenge_trashed,
+    };
+    const eligible =
+      mentions !== undefined &&
+      (await areEligibleForMention(pool, fresh, author.userId, async (userId) => canSeeChallenge({ userId, roles: await mentions.resolveRoles(userId) }, parent)));
+    if (!eligible) return { status: "ineligible_mention" };
+  }
+
   const diff = diffFields([
-    { key: "description", before: cur.description, after: validated.value.description },
-    { key: "costVsBenefits", before: cur.cost_vs_benefits, after: validated.value.costVsBenefits },
+    { key: "description", before: cur.description, after: bound.description },
+    { key: "costVsBenefits", before: cur.cost_vs_benefits, after: bound.costVsBenefits },
   ]);
 
-  return inTransaction(pool, async (client): Promise<EditSolutionResult> => {
-    if (diff.changed) {
-      // §39.5: the stale-copy check and the write are one statement; a refusal writes nothing.
-      const { rowCount } = await client.query(
-        `update solutions set description = $2, cost_vs_benefits = $3, edited_at = now(), updated_at = now()
-          where id = $1 and ${sameEditSql("edited_at", "$4")}`,
-        [cur.id, validated.value.description, validated.value.costVsBenefits, input.baseEditedAt],
-      );
-      if (!rowCount) return { status: "stale" };
-      await appendAudit(client, {
-        actorUserId: author.userId,
-        action: "solution.edited",
-        targetType: "solution",
-        targetId: cur.id,
-        before: diff.before,
-        after: { ...diff.after, ...agentAuditFields(via) },
-      });
-    } else if (await isStaleEdit(client, "solutions", cur.id, input.baseEditedAt)) {
-      return { status: "stale" };
-    }
-    const solutionRows = await fetchSolutionRows(client, cur.challenge_id, author.userId);
-    const row = solutionRows.find((s) => s.id === cur.id)!;
-    return { status: "ok", solution: toSolutionItem(row, author, { namespaceId: cur.namespace_id, assigneeId: cur.assignee_id, trashed: false }) };
-  });
+  try {
+    return await inTransaction(pool, async (client): Promise<EditSolutionResult> => {
+      let mentioned: SettledMention[] = [];
+      if (diff.changed) {
+        // §43.5: the daily cap's lock, ahead of every write and of the audit chain's lock.
+        if (fresh.length > 0) await lockMentionSaver(client, author.userId);
+        // §39.5: the stale-copy check and the write are one statement; a refusal writes nothing.
+        const { rowCount } = await client.query(
+          `update solutions set description = $2, cost_vs_benefits = $3, edited_at = now(), updated_at = now()
+            where id = $1 and ${sameEditSql("edited_at", "$4")}`,
+          [cur.id, bound.description, bound.costVsBenefits, input.baseEditedAt],
+        );
+        if (!rowCount) return { status: "stale" };
+        // §43.4: a pending mention taken out of the text is cancelled, a new one gets its row; over a
+        // cap, the whole save rolls back.
+        if (bound.userIds.length > 0 || withRow.size > 0) await syncMentionRows(client, cur.id, author.userId, bound.userIds);
+        await appendAudit(client, {
+          actorUserId: author.userId,
+          action: "solution.edited",
+          targetType: "solution",
+          targetId: cur.id,
+          before: auditTextFields(diff.before),
+          after: {
+            ...auditTextFields(diff.after),
+            ...(mentionsAdded.length > 0 ? { mentionsAdded } : {}),
+            ...(mentionsRemoved.length > 0 ? { mentionsRemoved } : {}),
+            ...agentAuditFields(via),
+          },
+        });
+        // §43.4: the check — at once for a solution open to everyone (`needs_improvement`), and for
+        // the people who can already see a `proposed` one.
+        mentioned = await settlePendingMentions(client, cur.id, mentions?.resolveRoles);
+      } else if (await isStaleEdit(client, "solutions", cur.id, input.baseEditedAt)) {
+        return { status: "stale" };
+      }
+      const solutionRows = await fetchSolutionRows(client, cur.challenge_id, author.userId);
+      const row = solutionRows.find((s) => s.id === cur.id)!;
+      return {
+        status: "ok",
+        solution: toSolutionItem(row, author, { namespaceId: cur.namespace_id, assigneeId: cur.assignee_id, trashed: false }),
+        mentioned,
+      };
+    });
+  } catch (err) {
+    if (err instanceof MentionCapError) return { status: "mention_cap", reason: err.reason };
+    throw err;
+  }
 }
 
 export type WithdrawChallengeResult =
@@ -2585,6 +2752,8 @@ export async function withdrawSolution(pool: Pool, author: Viewer, number: strin
     });
     const payoff = cur.status === "proposed" ? await recordInvitationPayoffs(client, cur.id) : { payoffs: [], awards: [] };
     await writeLiveAwards(client, payoff.awards);
+    // §43.4: a withdrawn solution is closed, so the check settles nobody — its pending mentions wait
+    // for an admin override that reopens it (decision 3).
     return {
       status: "ok",
       solutionId: cur.id,
@@ -2636,7 +2805,8 @@ export async function resubmitChallenge(pool: Pool, author: Viewer, number: stri
 }
 
 export type ResubmitSolutionResult =
-  | { status: "ok"; solutionId: string; namespaceId: string; challengeNumber: string; challengeTitle: string; assigneeId: string | null }
+  /** `mentioned`: §43.4 — the mentions the move to `in_review` settled, for event 26. */
+  | { status: "ok"; solutionId: string; namespaceId: string; challengeNumber: string; challengeTitle: string; assigneeId: string | null; mentioned: SettledMention[] }
   | { status: "not_found" }
   | { status: "trashed" }
   | { status: "forbidden" }
@@ -2665,7 +2835,17 @@ export async function resubmitSolution(pool: Pool, author: Viewer, number: strin
       before: { status: cur.status },
       after: { status: "in_review", override: false, trigger: "author_resubmit", ...agentAuditFields(via) },
     });
-    return { status: "ok", solutionId: cur.id, namespaceId: cur.namespace_id, challengeNumber: cur.challenge_number, challengeTitle: cur.challenge_title, assigneeId: cur.assignee_id };
+    // §43.4: a resubmit is a status change, so the check runs.
+    const mentioned = await settlePendingMentions(client, cur.id);
+    return {
+      status: "ok",
+      solutionId: cur.id,
+      namespaceId: cur.namespace_id,
+      challengeNumber: cur.challenge_number,
+      challengeTitle: cur.challenge_title,
+      assigneeId: cur.assignee_id,
+      mentioned,
+    };
   });
 }
 

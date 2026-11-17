@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.29 — draft for review** (2026-11-16; v0.2 added the UI and CI/CD
+> Status: **v0.30 — draft for review** (2026-11-17; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -109,7 +109,13 @@
 > count toward the original's reach, its comments close, chains are re-pointed so none
 > ever forms, every pointer is filtered per viewer, its authors, assignee and followers
 > are told (event 25), and an outside submitter's outcome mail follows the original
-> (§42)).
+> (§42); v0.30 (2026-11-17) specified **mentions** — typing `@` in
+> either text box of the solution form picks a colleague who can see the challenge; the
+> text stores a reference rather than a name, so a rename follows and an erased person
+> reads *Deleted User*; each mentioned person is told once (event 26), by e-mail and
+> in-app, at the first moment the solution is visible to them — never about a closed
+> solution, and never who wrote an anonymous one — with a mute, caps of 10 people per
+> solution and 30 a day, no follow, no points and no switch (§43)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -384,9 +390,9 @@ including theme-aware scrollbars and form controls. Pinned values:
     the account-menu look §7.3 already calls the standard popover chrome.
   - **In scope today:** the account menu, the notification panel (desktop), the §7.3
     assignee search on the challenge detail page, the §14.1 triage assignee pickers
-    (filter-by-assignee, bulk-assign, per-row assign), the §13.8 directory card, and the
-    **topbar search autocomplete** (§13.4). Any future popover joins this list by
-    construction.
+    (filter-by-assignee, bulk-assign, per-row assign), the §13.8 directory card, the
+    **topbar search autocomplete** (§13.4), and the §43.3 **mention list** under a
+    solution's text boxes. Any future popover joins this list by construction.
   - **Explicit exceptions:** native `<select>` lists and `window.confirm` dialogs
     (OS-drawn), the mobile nav drawer, and the mobile full-screen notification
     **sheet**, the §13.9 **update notice** (a floating status card anchored to no
@@ -793,7 +799,8 @@ these rules close the generic web-platform paths by which it could.
   - starting an upload (single-shot or chunked initiate; parts are bounded by the
     declared size instead) — **60 per hour**;
   - search, autocomplete — the topbar search **and** the user-directory search behind
-    every assignee/successor picker (`GET /api/users?q=`) — and the §6.1 similarity
+    every assignee/successor picker and the §43.3 mention list (`GET /api/users?q=`) —
+    and the §6.1 similarity
     check — **120 per minute** (a limited read: each is a query a script could
     hammer, and the directory search could otherwise enumerate every user);
   - downloading an attachment through the §11 gateway — **120 per minute** (the
@@ -1081,10 +1088,12 @@ Entra runbook); on conflict this document wins.
   so the entry still counts as proposed, §38.12)
   and resets `feature_ideas_named` to its default — their votes stay and are counted
   unnamed (§38.12) — deletes the user's §40 invitations, sent and received, and their
-  invitation dismissals, and resets the notification preferences
-  (`email_notifications_enabled` to false, since no address is left; the three
-  `notify_followed_*` columns and `notify_invitations`, which are `NOT NULL`, to their
-  default). Everything runs
+  invitation dismissals, deletes the user's §43 `solution_mentions` rows and nulls
+  `mentioned_by` where they were the sender (no solution text is rewritten: a mention of
+  them reads *"@Deleted User"* from then on, §43.8), and resets the notification
+  preferences (`email_notifications_enabled` to false, since no address is left; the
+  three `notify_followed_*` columns, `notify_invitations` and `notify_mentions`, which
+  are `NOT NULL`, to their default). Everything runs
   in **one transaction**. In the same transaction the erasure also:
   - **leaves the row unrelinkable** — `scim_synced` is set to `false` and `user_name` is
     rewritten to `deleted-<id>`, so a scrubbed row can never be a sign-in relink
@@ -1217,7 +1226,7 @@ shown (§13.6).
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
-| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
+| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), mention colleagues in a solution (§43), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
 
 A user may hold different roles in different namespaces. Roles are additive.
 
@@ -1358,7 +1367,8 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **notify_followed_comments** /
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
   default true — the §12.1 per-event preferences), **notify_invitations** (boolean,
-  not null, default true — the §40.6 invitation preference), **email_delivery** (`immediate |
+  not null, default true — the §40.6 invitation preference), **notify_mentions** (boolean,
+  not null, default true — the §43.6 mention preference), **email_delivery** (`immediate |
   daily | weekly`, not null, default `immediate` — the §12.1 digest choice),
   **gamification_public** /
   **notify_achievements** / **achievements_seen_at** (the §23 opt-out, achievement
@@ -1431,6 +1441,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   cost_vs_benefits (≤ 5 000, optional), is_anonymous, author_id, status (§8.1),
   status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at,
   trashed_at + trashed_by + trash_reason (as challenges, §10.4).
+  The two text columns hold **stored text**: a §43 mention is a token carrying the
+  person's id, never their name; every response carries the display text instead, and
+  the length limits are checked on that (§43.2).
   Hard-deletable by a platform admin on the same terms (§10.3), and removed with its
   parent challenge when that is deleted.
 - **`challenge_authors`** / **`solution_authors`** — the §39 co-author teams:
@@ -1448,6 +1461,10 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   the payoff's `paid_off_at` / `paid_off_solution_id`; unique per inviter, invitee and
   challenge) and the invitee's quiet *Not for me* per challenge (§40.10). Both are
   private to the two people involved and removed with the challenge.
+- **`solution_mentions`** — the §43 mentions: one row per solution and mentioned
+  person, with who mentioned them, when, and `settled_at` — null while the person is
+  still to be told, stamped once they have been told or passed over (§43.4, §43.10).
+  Never returned by the API; removed with the solution.
 - **`challenge_affected`** — the §41 "this affects me too" marks: challenge, user,
   headcount (1–1,000), created_at, updated_at and `removed_at` (a taken-back mark keeps
   its row); unique per person and challenge, public to anyone who can see the challenge,
@@ -1654,14 +1671,16 @@ action otherwise; the API enforces it).
 Form: description, cost vs benefits (optional), attachments (**staged inline via a
 `draftKey`**, §11 — picked, dropped, or pasted, §11 *Drop and paste*), "Submit
 anonymously", co-authors (up to four colleagues who can see the challenge; never
-together with "Submit anonymously", §39.2, §39.3).
+together with "Submit anonymously", §39.2, §39.3). Typing `@` in either text box
+mentions a colleague who can see the challenge (§43.3).
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
 **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — every author (the proposer and any
-co-authors, §39) auto-follows it, notifications fire (§12.1 event 2, and event 21 to
-each co-author), audit entry. The form locks
+co-authors, §39) auto-follows it, notifications fire (§12.1 event 2, event 21 to
+each co-author, and event 26 to each mentioned person who can already see the
+solution — the others are told later, §43.4), audit entry. The form locks
 while the request is in flight and closes only once the challenge has re-rendered
 (§6.4).
 
@@ -1894,7 +1913,9 @@ only. The §8.3 single-winner gate and the `implemented` auto-close cascade appl
 **enforced and override transitions alike** (setting `valid → accepted_internally`
 is refused while a sibling is at or past that status; `→ implemented` solves the
 challenge and closes siblings as `not_selected`). Controls live on the §13.1 detail
-page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
+page per solution; the endpoint is shared (`PATCH /api/solutions/:number`). Every
+status change of a solution, by any path, also runs the §43.4 check, which tells the
+people its text mentions once they can see it.
 
 ### §8.3 Single accepted solution & auto-close
 
@@ -1960,6 +1981,9 @@ page per solution; the endpoint is shared (`PATCH /api/solutions/:number`).
 - **No co-authors on an anonymous item** (§39.3): an anonymous challenge or solution
   always has exactly one author. The author self-reveals before anyone can join it, so
   masking only ever hides one person.
+- **Mentions on an anonymous solution** (§43) are allowed, and their notice names no
+  sender: *"You were mentioned in SOL-34 …"*. The mentions are in the text the author
+  chose to write, and the form warns that they can hint at who wrote it (§43.3, §43.6).
 - **Leaderboard exclusion:** contributions made anonymously do not count toward any
   leaderboard (challenges submitted, solutions proposed/implemented, likes received
   on anonymous items). After self-reveal, they count.
@@ -2006,7 +2030,9 @@ check, which refuses a save made from a stale copy (§39.5).
     topics at any time; that is curation, not a content edit, §34.3.) **Not** editable here: `visibility` (namespace/platform-admin only,
     §4.3), anonymity (removed only via one-way self-reveal, §9), and namespace.
   - Every edit stamps `edited_at` and writes an audit row carrying a **field-level
-    diff** (only the changed fields, before → after). Edits fire no notification.
+    diff** (only the changed fields, before → after). Edits fire no notification, with
+    one exception: a person newly mentioned in a solution's text is told once they can
+    see it (§43.4).
   - Endpoints: `PUT /api/challenges/:number` · `PUT /api/solutions/:number`.
 - **Resubmit:** while `needs_improvement`, the author's explicit **"Resubmit"**
   action moves the item to `in_review` and notifies the reviewers (§12.1 event 9).
@@ -2133,9 +2159,10 @@ those solutions — tombstones included; and every `notifications` inbox row and
 `notification_outbox` row targeting any of them; every `webhook_deliveries` row
 (§12.4) targeting any of them; every §22 `ai_results` row (triage notes, discussion
 summaries) of any of them; the challenge's §34 `challenge_topics` and
-`topic_notices` rows; its §41 `challenge_affected` rows; and its §40 `challenge_invitations` and
+`topic_notices` rows; its §41 `challenge_affected` rows; its §40 `challenge_invitations` and
 `challenge_invitation_dismissals` rows (deleting a solution instead nulls the
-`paid_off_solution_id` that points at it, §40.8). Before the row goes, if the challenge was featured, the
+`paid_off_solution_id` that points at it, §40.8); and the §43 `solution_mentions` rows
+of every solution that goes. Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
 a **solution** removes the same subtree rooted at that solution and leaves the parent
 challenge standing. Any
@@ -2747,6 +2774,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 23 | Invitation paid off (§40.6) | The inviter only — **in-app only**: no outbox row, so no e-mail; no preference; written whether or not gamification is on |
 | 24 | Affects them too (§41.6) | The challenge's authors only — never the marker, followers, admins or the assignee; nobody on an external challenge. Written on a person's **first** mark of the challenge only, never on a change, removal or re-mark. Coalesced per challenge in the inbox like events 6 and 16; the e-mail honors the opt-out and the digest choice |
 | 25 | Closed as a duplicate (§42.6) | The duplicate's authors — actionable: immediate, never digested, not mutable; and its assignee and followers as they were before the move — follower-type (digestable; the status-change preference mutes followers, never the assignee). Never the marker or the original's side. Written **instead of** events 3 and 4 for the mark; rendered per recipient, naming the original only to those who can see it |
+| 26 | Mentioned in a solution (§43.6) | The mentioned person only — once per person per solution, at the first moment they can see it, and never while it is `rejected`, `not_selected` or `withdrawn`; not written for a member of the solution's team or while their *Mentions* preference is off. Names the sender unless the solution is anonymous. Actionable: immediate, never digested |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2818,7 +2846,7 @@ a day or a week.
   — for the assignee and followers). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 21, 22, 25 to an author, and 19 to a proposer). Events 13 and 23 have no e-mail
+  12, 21, 22, 25 to an author, 26, and 19 to a proposer). Events 13 and 23 have no e-mail
   at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
@@ -2877,8 +2905,10 @@ true; existing users backfilled on):
   and followers; the admin/committee recipients of event 2 are unaffected.
 
 A fourth toggle, *Invitations to propose a solution* (`notify_invitations`, default
-**on**, §40.6), gates **event 22** the same row-level way. It is the one actionable
-event a person can mute, because anyone who can see a challenge may send one.
+**on**, §40.6), gates **event 22** the same row-level way, and a fifth, *Mentions in
+solutions* (`notify_mentions`, default **on**, §43.6), gates **event 26**. They are the
+two actionable events a person can mute, because anyone who can see a challenge may
+send one.
 
 These are **row-level, applied at insert time**: an opted-out recipient is removed
 from the recipient set before either the inbox row or the outbox row is written — no
@@ -2904,8 +2934,8 @@ author stays masked per §9). **Read actions:** opening the inbox row, mark-all-
 **or opening the item's detail page** all mark that item's row read. **Only events 6,
 16 (hyped, §26.6) and 24 (affects them too, §41.6) coalesce**; every other event
 remains one row per occurrence.
-Opening a challenge's detail page also reads its event-18 row (§34.5) and the viewer's
-event-22 rows about it (§40.6).
+Opening a challenge's detail page also reads its event-18 row (§34.5), the viewer's
+event-22 rows about it (§40.6) and their event-26 rows about its solutions (§43.6).
 
 **Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
 (§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
@@ -3382,11 +3412,14 @@ whole visit, and the next visit flags only genuinely newer items.
   (a `proposed` solution is hidden except to its author, the challenge's assignee,
   and the namespace's committee/admins), with `rejected`/`not_selected` ones in the
   collapsed "Closed solutions" section (§4.3). Each solution shows its own like button.
+  A mention in a solution's text is a link to the person that opens the directory card
+  (§43.7).
 - **Propose a solution** (§6.2): visible to anyone who can see the challenge,
   enabled only while status = `valid` **and the challenge's namespace is not archived**
   (§4.1 — the detail payload's `canPropose` carries both conditions, so the button
   never opens a form the API would refuse with 409 `namespace_archived`); opens the
-  solution form (description, cost vs benefits, "Submit anonymously"). While disabled it
+  solution form (description, cost vs benefits, "Submit anonymously"; `@` in either text
+  box mentions a colleague, §43.3). While disabled it
   carries a hint; an archived namespace takes precedence over every status, otherwise
   the hint depends on the status:
   - namespace archived (any status) — *"This challenge's namespace is archived, so it
@@ -3579,7 +3612,9 @@ they joined, so a late joiner is never backdated into a window (§39.9).
 
 Postgres `tsvector` full-text search over challenge
 title/description/client name and solution description/cost-vs-benefits, plus exact
-lookup by number (`CH-123`, `SOL-456`). Strictly visibility-filtered including
+lookup by number (`CH-123`, `SOL-456`). A §43 mention in a solution's text adds nothing
+to the index, so a solution is not found by a mentioned person's name (§43.7).
+Strictly visibility-filtered including
 autocomplete and result counts (invariant 2). §13.1's gallery filters
 (status/impact area/topic/namespace/author — the author filter matching any member of a
 co-author team, §39) narrow the list alongside it: the `/search`
@@ -3657,7 +3692,8 @@ under it naming the next send (*"Next digest: 13/10/2026 09:00"* — the 06:00 U
 in the viewer's local time, through `useDateFmt()`), disabled while the e-mail switch is off
 — followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
-follow* — and the §40.6 *Invitations to propose a solution* toggle, all rendered as the
+follow* — the §40.6 *Invitations to propose a solution* toggle and the §43.6 *Mentions
+in solutions* toggle, all rendered as the
 same pill switch with the same on-left travel, optimistic flip and inline-error
 revert), then the §34.6 **Topics** section (a pill switch of the
 same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
@@ -3839,13 +3875,16 @@ Of the three directory fields, department and job title already exist (§3, §5)
 - **Every avatar bubble that carries a real user id**, across the app: challenge and
   solution cards and detail headers, comment threads, assignee chips, the leaderboard,
   triage-queue rows, the admin users list, search results and profile pages.
+- **A mention's name** in a solution's text on the challenge detail page (§43.7) — the
+  one trigger that is a name rather than a bubble. It opens the same card on hover,
+  keyboard focus, or press-and-hold; an erased person's *"@Deleted User"* opens none.
 - **Excluded, deliberately:**
   - the **sidebar account-menu trigger** (your own bubble) — that element already opens
     the account menu on click, and a hover card fighting a menu on the same target is
     hostile;
-  - bubbles **inside an already-open popover** — the §7.3 assignee-search result rows
-    and the §14.1 inline assignee editor — where a card would nest a popover in a
-    popover;
+  - bubbles **inside an already-open popover** — the §7.3 assignee-search result rows,
+    the §14.1 inline assignee editor and the §43.3 mention list — where a card would
+    nest a popover in a popover;
   - the **reveal dialog** (§9) — it already names the revealed person, so the
     card adds nothing to the one surface where anonymity is deliberately lifted, and
     the reveal flow stays untouched.
@@ -6045,7 +6084,11 @@ anomalies. Since v0.10 also:
   of follows moved, marks copied and challenges re-pointed — **never the note**; each
   re-pointed challenge writes `challenge.duplicate_repointed`; `challenge.deleted` lists
   the duplicates it unlinked (§42.9). Event 25, the follow moves, the copied marks and
-  the submitter mails are not audited on their own.
+  the submitter mails are not audited on their own;
+- **mentions** — no action of their own: `solution.created` gains `mentions` and
+  `solution.edited` gains `mentionsAdded` and `mentionsRemoved` (user ids), and a
+  mention inside an audited text is written as `@[user:<id>]`, **never as a name**. The
+  settling of a mention, event 26 and the preference are not audited (§43.11).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6307,6 +6350,12 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   duplicate or its solutions is 409; the detail payload carries `canMarkDuplicate`,
   `duplicateOf`, `duplicateNote`, `duplicates` and `commentsClosed`, and gallery,
   search and triage rows carry `duplicateOf`
+- mentions (§43.11): the solution create and `PUT` accept `mentions: [{ userId, name }]`
+  (422 for an ineligible person, 409 at the per-solution or the daily cap); every
+  solution payload carries display text, and on the challenge detail also `mentions`
+  (where each one sits in the text and whom it names), `mentionsLeft` and the viewer's
+  `mentionsLeftToday`; `users?q=&canSee=` is the mention list's search; `ai/draft`
+  accepts `mentions`
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
@@ -6342,7 +6391,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   JSON, **204**, never a row with a user id), `profile` (own and other users'
   profiles, §13.5, each with its §23 gamification block; `PATCH` carries the e-mail switch, the §12.1
   `emailDelivery` choice, the three §12.1 per-event
-  toggles, the §40.6 `notifyInvitations` toggle, the §13.10 `surveysEnabled` switch and
+  toggles, the §40.6 `notifyInvitations` toggle, the §43.6 `mentions` toggle, the §13.10
+  `surveysEnabled` switch and
   the §23 `gamificationPublic` and `notifyAchievements` switches)
 - `users/:id/photo` (authenticated avatar image gateway, §3.1),
   `users/:id/card` (directory hover card — any authenticated user; 404 on unknown or
@@ -6522,6 +6572,13 @@ no note on a mark, no headcount bands and no de-duplication of overlapping headc
 no mark before triage or after a close, no admin edit of someone else's mark, no points,
 badge or platform switch, no marking through MCP, no reach on Home, the profile, search
 results, the leaderboard, webhooks or AI prompts, and no reach total across challenges;
+for mentions (§43): no mentions in challenge descriptions, comments or invitation notes,
+no group or role mentions (a namespace, the committee, everyone), no mention that widens
+visibility or follows anything, no list or count of a person's mentions for anyone, no
+*told*, *pending* or *muted* state for the author, no second notice, no notice about a
+closed solution, no excerpt of the solution in the e-mail, no search by a mentioned
+person's name, no rich text or highlighting inside the text box, no points, badge or
+platform switch, and no new mentions through MCP;
 no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
@@ -7086,7 +7143,8 @@ encrypted-token pattern. Platform admins only.
   department, job title, office, photos — for authors, assignees, commenters or actors,
   **and the anonymity flag itself**; attachments and their file names; `client_name`;
   audit rows; the system log; credentials and URLs. Stripping identity always, rather
-  than masking it per item, makes anonymity (invariant 3) structural.
+  than masking it per item, makes anonymity (invariant 3) structural. A §43 mention is
+  person data too: a task is given a placeholder in its place, never the name (§43.9).
 - **Each task states its egress** — exactly which fields it sends — in its section below
   and in its registry entry; the card shows it.
 - **Restricted content** (`visibility` `namespace` or `people`, §4.3) is sent **only** while the
@@ -7169,7 +7227,9 @@ treated differently from text the author typed.
 - **Egress:** the form's **title and description** (challenge) or **description and cost
   vs benefits** (solution, plus the parent challenge's title and description as context —
   the author can see it by definition), and the names of the active impact areas. Never
-  the client name, the anonymity choice, attachments, or anything about the author.
+  the client name, the anonymity choice, attachments, or anything about the author. A
+  mention in the solution's text is sent as a numbered placeholder and put back in the
+  result (§43.9).
 - **What it writes.** A clearer **title** (≤ 120 characters) and a structured
   **description** — problem, who is affected, impact, current workaround, desired
   outcome — in plain text within the field's limit; for a challenge, a **suggested impact
@@ -8305,6 +8365,9 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
   log, the system log, presence, webhooks, the AI card, public submissions.
 - **AI tasks** (§22) — drafting, triage assist, summaries.
 - **Invitations to propose a solution** (§40.9) — sending one and *Not for me*.
+- **Mentioning people** (§43.9). Solution text is returned with each mention as `@` and
+  the person's name; `propose_solution` creates none, and `edit_solution` keeps the
+  ones whose text it leaves alone and adds none.
 - **Marking a challenge as affecting you** (§41.8). `get_challenge` reads the reach and
   the people count; no tool adds, changes or removes a mark.
 - **Marking a duplicate** (§42.8). `get_challenge` reads `duplicateOf`, `duplicateNote`
@@ -10406,8 +10469,9 @@ an invitation adds no points for them.
 - **The preference** — *Invitations to propose a solution* (`notify_invitations`,
   default on), a pill switch on the own profile after the three follower toggles
   (§13.5). Row-level and applied at insert time, as the §12.1 toggles are: off writes
-  neither row. It is the one actionable event a person can mute, because anyone who can
-  see a challenge may send one. Silent (not audited) and forward-only.
+  neither row. With event 26 (§43.6) it is one of the two actionable events a person
+  can mute, because anyone who can see a challenge may send one. Silent (not audited)
+  and forward-only.
 - **Read.** Opening the challenge's detail page marks the viewer's event-22 rows for it
   read, as for events 6, 16 and 18; so does *Not for me*. The §12.1 read-time gate hides
   a row whose challenge the recipient can no longer see.
@@ -11311,3 +11375,422 @@ name its author.
     shows the banner and the closed-comments notice, the original shows *Also raised
     as*, a follower of the duplicate now follows the original, and the duplicate's
     author's bell shows *"Your challenge CH-… was closed as a duplicate of CH-…"*.
+
+---
+
+## §43 Mentions
+
+The author of a solution often wants a particular colleague to read it — the owner of
+the system it touches, someone who tried it before, the person whose budget it needs. A
+**mention** does that from the text: typing **`@`** in either text box of the solution
+form opens a list of the colleagues who can see the challenge, and picking one puts
+their name in the text. Each mentioned person is told once — by e-mail and in-app — at
+the first moment the solution is visible to them, and readers see the name as a link to
+that person. A mention is a pointer between people and nothing more: it widens no
+visibility, follows nothing, earns nothing and decides nothing about review.
+
+"Tagging" already means topics (§34.3), so this feature is a *mention* everywhere — in
+this document, in the code and in the interface.
+
+### §43.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Solutions only, in both text fields** — the description and *Cost vs. benefits*. Not challenge descriptions, comments or invitation notes. | Where it was asked for. Comments are high-volume and already notify the other commenters (§10.2); each further surface needs its own noise and visibility rules. |
+| 2 | **A person is told at the first moment they can see the solution** — at the save for those who can already see a `proposed` solution, and for everyone else when it is first open to all who can see the challenge. | A `proposed` solution is hidden from most people (§4.3). A notice about something its reader cannot open would reveal a hidden solution and break the §12.1 visibility drop. |
+| 3 | **A closed solution tells nobody.** While it is `rejected`, `not_selected` or `withdrawn`, pending mentions wait; they go out only if an admin reopens it. | Telling a colleague they were named in a solution that was turned down or taken back is noise for them and no favour to its author. |
+| 4 | **Only people who can already see the challenge can be mentioned.** A mention never widens visibility. | Widening stays with the namespace and platform admins (§4.3), as for co-authors (§39.2) and invitations (§40 decision 2). |
+| 5 | **The text stores a reference to the person, not their name;** the API writes the current name in on every read. | A rename follows; an erased person reads *Deleted User* with no rewrite of anyone's text; and an AI task can be given a placeholder, since no person's name may reach the provider (§22.7). |
+| 6 | **Allowed on an anonymous solution; the notice then names no sender.** The form warns that mentions can hint at the author. | Refusing would protect little: the author could type the same name as plain text. What must not happen is a notice that says who wrote an anonymous solution (invariant 3). |
+| 7 | **Told once per person per solution, ever.** A mention added in an edit notifies like one made on the form; removing it before its notice cancels it; removing it afterwards, or adding it again, sends nothing. | An edit must not become a way to nudge the same person repeatedly. |
+| 8 | **E-mail and in-app (event 26), immediate, never in a digest; a profile toggle mutes it.** | A personal pointer is worth a prompt notice, but since anyone who can see a challenge may mention you, a person must be able to switch them off — the same reasoning as for invitations (§40 decision 6). |
+| 9 | **At most 10 people per solution, and at most 30 newly mentioned people per author per UTC day.** Fixed in code. | Room for a real list of stakeholders; not enough to mass-mail the organization. |
+| 10 | **Nothing but the notice.** No auto-follow, no access, no credit, no points or badge, no list of where a person is mentioned. | A mention must not be a way to subscribe someone to updates they did not ask for, and a list would be one more per-viewer surface to filter (invariant 2). |
+| 11 | **The author's own team is never notified by a mention.** | A co-author can already see and edit the solution and was told when they joined (event 21). |
+| 12 | **The author is told nothing about a mention's fate** — no *told*, *pending* or *muted* state anywhere. | A state would reveal a colleague's preference, or that they lost access to the challenge (§40.4 reasons the same way). |
+| 13 | **A plain text box, with a *Mentioned* row of chips under it.** No rich text and no highlighting inside the box. | The text boxes keep their paste, file-drop, accessibility and drafting-aid behaviour, and the row is the certain record of who will be told. |
+| 14 | **Not found by a mentioned person's name in search.** | The stored text holds no name (decision 5), and a search by name would be the list decision 10 rules out. |
+| 15 | **No new mentions through MCP.** Still 15 tools. | MCP has no people lookup (§39 decision 13). An agent's edit keeps the mentions whose text it leaves alone. |
+| 16 | **No platform switch.** | A core way of working together, like co-authors and invitations; the caps and the mute handle the noise. |
+
+### §43.2 Display text, stored text and binding
+
+- **Display text** is the text as people read and write it: a mention is **`@`** followed
+  by the person's display name — *"@Ana Petrova"*.
+- **Stored text** is what `solutions.description` and `solutions.cost_vs_benefits` hold:
+  the display text with each mention replaced by a **mention token** — the character
+  U+E000, the person's user id, and the character U+E001. The API removes both
+  characters from every submitted text before anything else, so nothing a person types
+  or pastes can be read back as a mention.
+- **One serializer.** Everything that leaves the server — the detail payload, the edit
+  form, search hits, triage rows, MCP tool results — carries **display text**, with each
+  token written as `@` and the person's **current** display name, or *"@Deleted User"*
+  for an erased person (§3). No response ever carries a token. The two exceptions write
+  something else in the token's place, never a name: an AI task (§43.9) and an audit
+  payload (§43.11).
+- **Binding** turns submitted display text into stored text. It takes the text and a
+  list of people, each with the name to look for, and replaces every occurrence of
+  `@<name>` that:
+  - begins at the start of the text or right after a character that is neither a letter
+    nor a digit — so *"me@Ana Petrova"* binds nothing; and
+  - ends at the end of the text or right before a character that is neither a letter
+    nor a digit — so *"@Ana Petrovas"* binds nothing.
+
+  The comparison is exact, case included. Longer names bind first, so *"@Ana Petrova"*
+  never takes the start of *"@Ana Petrova-Ilieva"* when both are listed. When two listed
+  people share a name, its occurrences bind to them in turn — the first to the person
+  listed first, the second to the next, and any further ones to the last. A listed
+  person whose name occurs nowhere is ignored. Binding is a pure function in
+  `@innobox/shared/mentions`, shared by the server and the form, so the *Mentioned* row
+  (§43.3) shows exactly the people a save will bind.
+- **Who is on the list.**
+  - **The web forms** send `mentions: [{ userId, name }]` — the people on the
+    *Mentioned* row, each with the name as it stands in the text. The name only finds
+    the text: what is stored is the id, and what is shown later is that person's own
+    name.
+  - **A save that sends no `mentions`** — an agent's `edit_solution` (§43.9) — binds
+    the solution's current mentions (the people its stored text names) by their current
+    display names, and nobody else.
+    A create that sends none has no mentions.
+- **The length limits** (§5) are checked on the display text as submitted — what the
+  author typed. A text that a colleague's rename has since pushed over the limit is
+  still shown in full, and is shortened by its author at the next edit.
+- **An erased person's mention** arrives in the edit form as the plain text *"@Deleted
+  User"*. It is on no list, so the next save stores it as ordinary text.
+
+### §43.3 Writing a mention — the composer
+
+On the propose form (§6.2) and the solution edit form (§10.1), in both text boxes. The
+propose form's description box says so in its placeholder: *"Describe your solution —
+type @ to mention a colleague"*.
+
+- **Opening the list.** Typing `@` at the start of the text or after a character that
+  is neither a letter nor a digit, followed by at least **2** characters with no line
+  break, opens the **mention list** for the text between the `@` and the caret (at most
+  40 characters, spaces included, so *"@Ana Pe"* works). It searches
+  `GET /api/users?q=&canSee=<CH-n>` — the §39.2 picker of the people who can see the
+  challenge, unchanged — after a 200 ms pause in typing. The list closes when the
+  search finds nobody, on **Escape**, on a line break, when the caret leaves the query
+  and when the box loses focus. Closing never changes the text: an `@` that picks nobody
+  stays an ordinary character.
+- **The list** shows up to 8 people as the §7.3 result rows (bubble, name, dimmed
+  e-mail). It is anchored to the bottom-left corner of the text box — not to the caret
+  — at most 320 px wide, and spans the box's width on a phone. It uses the shared
+  popover treatment (§2.2), and its bubbles open no hover card (§13.8). **↑** and **↓**
+  move through it, **Enter** or **Tab** picks the highlighted person, and a click or
+  tap picks a row; while the list is open, Enter does not break the line. The text box
+  is a `combobox` carrying `aria-autocomplete="list"`, `aria-controls`, `aria-expanded`
+  and `aria-activedescendant`, and the list is a `listbox` of `option`s.
+- **Picking** replaces the `@` and the query with `@`, the person's display name and a
+  space, leaves the caret after it, and remembers the person as **picked** for this
+  form. The caller is never offered (§39.2). People already mentioned and members of the
+  solution's team are offered like anyone else.
+- **The *Mentioned* row** sits directly under the two text boxes and is shown while it
+  has at least one chip. Each chip is a small bubble, the name and a
+  **✕**, with the look of the §4.3 access-list tags. A person has a chip exactly while
+  they are picked **and** binding (§43.2) finds their name in either box — so changing
+  or deleting the inserted name drops the chip, and typing it back restores it. **✕**
+  un-picks the person: the chip goes and the name stays in the text as ordinary words.
+  The edit form starts with the solution's current mentions picked.
+- **Under the row**, one muted line:
+  - on the propose form, and on an edit while the solution is `proposed` — *"They'll be
+    told once they can see this solution — for most, after a reviewer picks it up."*;
+  - on an edit while it is open to everyone (§43.4) — *"They'll be told when you
+    save."*
+
+  The row shows nothing about what became of a mention (decision 12): a person already
+  told, one still waiting and one who has muted mentions look the same.
+- **With *Submit anonymously* ticked** and at least one chip, a second line reads
+  *"Mentions are part of the text everyone can read, and may hint at who wrote this.
+  The people you mention aren't told who mentioned them."* Nothing is disabled.
+- **At a cap** (§43.5) the mention list does not open, and the line under the row — shown
+  then even with no chip — reads *"A solution can mention at most 10 people."* or
+  *"You've mentioned 30 people today. You can mention more tomorrow."*
+- **The submission lock** (§6.4) covers the row and closes the list.
+
+### §43.4 What a save writes, and when people are told
+
+**The rows.** `solution_mentions` (§43.10) holds one row per person and solution: who
+mentioned them, when, and `settled_at`. A mention is **pending** while `settled_at` is
+null and **settled** once it is stamped. A settled mention never notifies again.
+
+In the transaction of a create or an edit, after binding:
+
+- a person with a token in the stored text and **no row** gets one, with the saver as
+  `mentioned_by` — after the eligibility and cap checks of §43.5;
+- a **pending** row whose person no longer has a token is **deleted**: the mention is
+  cancelled, and its place under the daily cap is free again;
+- a **settled** row is never deleted or changed by a save. It stays as the marker that
+  this person has had their one notice for this solution, whether or not the text still
+  mentions them.
+
+**The check** settles pending mentions. It runs after:
+
+- a **create or edit** that leaves at least one pending mention; and
+- **every status change** of the solution, by any path — an enforced transition, an
+  admin override, the author's resubmit, the §8.3 auto-close.
+
+What it does depends on the solution's status at that moment:
+
+| The solution is | The check |
+|---|---|
+| **open to everyone** who can see the challenge — any status but `proposed`, `rejected`, `not_selected` and `withdrawn` | settles **every** pending mention |
+| **`proposed`** | settles only the pending people who can already see it under §4.3 — its reviewers and the challenge's assignee, and its own team, who are settled silently (below); the others wait |
+| **closed** — `rejected`, `not_selected` or `withdrawn` | settles nobody (decision 3) |
+
+So a mention made on the propose form reaches a reviewer at once and everyone else when
+a reviewer first takes the solution out of `proposed`; a mention added while the
+solution is `needs_improvement` reaches its person when the edit is saved; and a
+solution rejected or withdrawn straight from `proposed` tells nobody unless an admin
+override later reopens it. A solution in the trash takes no save and no status change
+(§10.4), so nothing is settled there, and a restore sends nothing.
+
+**Settling one mention** stamps `settled_at` in the triggering transaction (`… WHERE
+settled_at IS NULL`, which is what keeps the notice to one per person per solution) and
+then, after commit, writes event 26 (§43.6) — **unless**, at that moment, the person:
+
+- is a member of the solution's team (decision 11);
+- cannot see the solution under the full §4.3 predicate — they left the namespace, came
+  off a `people` access list, or the challenge itself is hidden or in the trash;
+- is deactivated or erased (§12.1); or
+- has *Mentions in solutions* switched off (§43.6).
+
+Such a mention is **settled silently**: stamped, with no inbox row and no e-mail, and
+never revisited. Nobody is told that it was (decision 12).
+
+**Nothing else.** A mention follows nothing for anyone, adds nobody to a `people` access
+list, bumps neither `updated_at` nor `edited_at` beyond what the save itself does, and
+writes no points.
+
+### §43.5 Who can be mentioned, and how many
+
+**Eligibility** is checked for each person a save would give a **new** row — all of:
+
+- **active** and not erased, with a display name that is not empty;
+- **not the saver**;
+- able to **see the challenge** under the full §4.3 predicate (the `canSee` rule of
+  §39.2).
+
+Anyone else — an unknown id included — refuses the whole save with the same **422**,
+*"This person can't be mentioned in this solution."*, so the API reveals no more than
+the list already shows. People who already have a row are not checked again: a mention
+of someone who has since been deactivated or lost access stays in the text, and an edit
+that keeps it is not refused.
+
+**The caps** (decision 9), fixed in `@innobox/shared/mentions` as
+`MENTIONS_PER_SOLUTION = 10` and `MENTIONS_PER_DAY = 30`:
+
+- **per solution** — after a save, a solution has at most **10** rows: the people its
+  text mentions, plus anyone already settled and since taken out of it. Over that, the
+  save is refused (**409**, *"A solution can mention at most 10 people."*);
+- **per day** — at most **30** rows with one person as `mentioned_by` are created per
+  UTC day, across all solutions. Nothing is scheduled: the count is taken from the
+  rows' `created_at`. Over that, the save is refused (**409**, *"You've mentioned 30
+  people today. You can mention more tomorrow."*).
+
+The cap checks and the inserts run in one transaction under a transaction-scoped
+advisory lock per saver (as §40.2), so two concurrent saves can never both take the
+last place. A refused save writes nothing — not the text, not the rows.
+
+### §43.6 Notifications — event 26
+
+**Event 26 — "Mentioned in a solution."** A new row of the §12.1 matrix.
+
+- **Recipient:** the mentioned person only — never the solution's team, the challenge's
+  authors, followers, admins or the assignee as such.
+- **When:** after commit of the transaction that settled the mention (§43.4). At most
+  one per person per solution, by construction. **Never coalesced.**
+- **The sender** is the person in `mentioned_by` — the team member whose save added the
+  mention — and is the event's actor, whoever moved the solution. The notice names them
+  **only while the solution is not anonymous**; for an anonymous solution, and for a
+  sender who has since been erased, it names nobody. A solution that was anonymous when
+  the mention was written and has been self-revealed by the time it is settled is an
+  ordinary named solution, and its notice names the sender.
+- **In-app:** *"Ana Petrova mentioned you in SOL-34 on CH-412 Reduce invoice matching
+  time"*, or without a sender *"You were mentioned in SOL-34 on CH-412 Reduce invoice
+  matching time"*; linked to `/challenges/412#SOL-34`.
+- **E-mail:** subject *"Ana Petrova mentioned you in SOL-34"* / *"You were mentioned in
+  SOL-34"*; the body carries the solution's number, the challenge's number, title and
+  namespace, the sender's name when there is one, and the link. It **never quotes the
+  solution's text**. The §12.1 content-safety rules apply.
+- **Actionable:** always immediate, never held for a digest; the e-mail switch applies.
+- **The preference** — *Mentions in solutions* (`notify_mentions`, default on), a pill
+  switch on the own profile after *Invitations to propose a solution* (§13.5).
+  Row-level and applied when the mention is settled: off settles it silently (§43.4).
+  With event 22 it is one of the two actionable events a person can mute, for the same
+  reason: anyone who can see a challenge may send one. Silent (not audited) and
+  forward-only — switching it back on brings back nothing already settled.
+- **Read.** Opening the challenge's detail page marks the viewer's event-26 rows about
+  its solutions read, as for events 6, 16, 18 and 22. The §12.1 read-time gate hides a
+  row whose challenge the recipient can no longer see, and the trash filter one whose
+  solution is in the trash.
+- **No channel webhook** (§12.4 is unchanged).
+
+### §43.7 Reading a mention
+
+- **On the detail page** (§13.1) each mention in a solution's description and cost vs
+  benefits is the person's name, `@` included, as an inline link in `--accent-2` to
+  their profile. Hovering, focusing or pressing and holding it opens the §13.8 directory
+  card — the one trigger of that card that is a name rather than a bubble. A
+  **deactivated** person's mention is `--muted` and still links; an **erased** person's
+  reads *"@Deleted User"* in `--muted`, with no link and no card. The text around it
+  stays plain text with its line breaks (§5).
+- **Everywhere else** solution text appears — a search hit, a triage row, the *Closed
+  solutions* list, an MCP tool result — a mention is its display text, with no link.
+- **Who sees it.** A mention is part of the solution's text and is seen exactly where
+  and by whom that text is seen (invariant 2). It appears nowhere else: not on a card,
+  a profile, the leaderboard, a webhook or any count.
+- **Search (§13.4).** A token adds nothing to the search vector, so a solution is not
+  found by a mentioned person's name (decision 14); the words around the mention match
+  as before.
+
+### §43.8 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** Only people who can see the challenge can be mentioned, a mention
+  adds nobody to a `people` access list (contrast assignment, §7.3), and a notice is
+  written only for someone who can see the solution at that moment. A mention does show
+  its readers that the person can see the challenge — no more than a co-author's name
+  on the same solution does (§39.6), and no more than the list already tells the
+  author.
+- **Invariant 3.** On an anonymous solution the notice names no sender (§43.6), and
+  `mentioned_by` is never returned by any API. The mentions themselves are in the text,
+  which the author chose to write; the form says so (§43.3). The challenge's author
+  stays masked per §9 in every notice.
+- **Self-reveal (§9)** sends nothing. Mentions settled after it name the sender.
+- **Team changes (§39).** Whoever saves is the sender of the mentions that save adds.
+  A member who is mentioned and later leaves the team is not told afterwards if their
+  mention was already settled silently.
+- **Closing and reopening.** A solution that leaves the open list keeps its mentions in
+  the text and its pending rows. An override back to an open status is a status change,
+  so the check runs and settles them (§43.4).
+- **Trash (§10.4).** A trashed solution, or a solution under a trashed challenge, shows
+  nothing and takes no save; its rows are kept and come back with a restore, which
+  sends nothing.
+- **Delete (§10.3).** The cascade removes the solution's `solution_mentions` rows and
+  its event-26 inbox and unsent outbox rows.
+- **Visibility narrowed.** A mentioned person who can no longer see the challenge keeps
+  their name in the text, loses their event-26 row through the §12.1 read-time gate,
+  and, if still pending, is settled silently at the next check.
+- **Deactivation.** A deactivated person cannot be newly mentioned and receives nothing
+  (§12.1); a mention of them stays, muted (§43.7).
+- **Erasure (§3)** deletes the person's `solution_mentions` rows, nulls `mentioned_by`
+  where they were the sender, and resets `notify_mentions` to its default. No solution
+  text is rewritten: their tokens stay and read *"@Deleted User"* from then on.
+- **Duplicates (§42), invitations (§40) and hype (§26)** are unaffected: a mention
+  answers no invitation and is copied nowhere.
+- **Public submissions (§24.6).** A solution on a challenge accepted from the public
+  form takes mentions like any other.
+
+### §43.9 The drafting aid and agents
+
+- **Improve with AI (§22.10).** A person's name is never sent to the provider (§22.7).
+  The solution form sends its picked people with the draft request; before the prompt
+  is built, binding replaces each mention with a numbered placeholder — `@[1]`, `@[2]`,
+  … — and the prompt tells the model to keep placeholders exactly as they are. In the
+  returned text each known placeholder becomes the person's name again and any other is
+  removed. A mention the model left out is simply no longer in the text, so its chip
+  goes (§43.3); **Undo** restores the text and with it the chip. Names an author typed
+  without picking anyone are ordinary text, as they are today.
+- **Any AI task that reads stored solution text** receives *"@colleague"* in place of
+  each token. No task does today; the rule is here so that one added later cannot
+  resolve a token to a name.
+- **Agents (MCP, §25.6).** The surface stays at **15** tools.
+  - `get_solution`, and the solution summaries of `get_challenge`, carry display text;
+    there is no `mentions` field.
+  - `propose_solution` creates no mention: an `@` in its text is plain text.
+  - `edit_solution` sends no list, so the solution's current mentions bind by their
+    current names (§43.2): a mention whose text the agent left alone is kept, one whose
+    text it changed or removed is dropped — cancelled if still pending — and nobody new
+    is mentioned. The check after an agent's edit resolves no roles: on a `proposed`
+    solution it settles only the solution's team and the challenge's assignee, and a
+    mentioned reviewer is told when the solution leaves `proposed`.
+  - Event 26 rows appear in `list_my_notifications` like any inbox row.
+
+### §43.10 Data model (migration 0062)
+
+- **`solution_mentions`** — solution_id (FK `solutions`, `ON DELETE CASCADE`), user_id
+  (FK `users`), mentioned_by (nullable FK `users`; null once the sender is erased;
+  check `<> user_id`), created_at (timestamptz, default `now()`), settled_at (nullable
+  timestamptz). Primary key `(solution_id, user_id)`; an index on `(mentioned_by,
+  created_at)` for the daily cap. Grants: SELECT and INSERT; UPDATE on `settled_at` and
+  `mentioned_by` only; DELETE for a cancelled pending mention, the §10.3 cascade and
+  the §3 erasure.
+- **`users`** gains **`notify_mentions`** (boolean, not null, default true; existing
+  users on).
+- **`solutions.search_vector`** is regenerated from `description` and
+  `cost_vs_benefits` with every mention token replaced by a space, so a token indexes
+  nothing. `description` and `cost_vs_benefits` keep their types; from this migration
+  on they hold stored text (§43.2). Existing rows contain no token and are untouched.
+- **`notifications.type`** gains **`mentioned`** (payload: the solution as its
+  `parentType` / `parentId` target, `challengeId`, `challengeNumber`, `solutionNumber`,
+  `title`, `mentionerId` and `mentionerName` — both null when the notice names no
+  sender — and the e-mail's `subject`); the §5 trigger sets `challenge_id` and
+  `solution_id` from the target as for every row. No coalescing index.
+- No column on `challenges`, and no points, badge or ledger reason.
+
+### §43.11 API, audit, tests
+
+- **API (§16).**
+  - `POST /api/challenges/:number/solutions` and `PUT /api/solutions/:number` accept
+    **`mentions: [{ userId, name }]`** (optional; at most 10 entries with distinct
+    ids, `name` 1–200 characters). Their existing checks come first and are unchanged. Then: **400** for a
+    malformed `mentions`; **422** for an ineligible person (the one §43.5 message);
+    **409** for the per-solution cap and **409** for the daily cap (§43.5). A refusal
+    writes nothing. On the `PUT`, an absent `mentions` binds the current mentions
+    (§43.2) and `mentions: []` removes them all.
+  - Every solution payload carries **display text** in `description` and
+    `costVsBenefits`, and on the challenge detail also **`mentions: [{ field, start,
+    length, user: { id, displayName, active } | null }]`** — where each mention sits in
+    the display text of `field` (`"description"` or `"costVsBenefits"`), in UTF-16 code
+    units, with `user` null for an erased person. An empty array when there are none.
+  - The challenge detail payload carries, per viewer, **`mentionsLeftToday`**; a
+    solution the viewer may edit carries **`mentionsLeft`** (its room under the
+    per-solution cap), `null` otherwise.
+  - `GET /api/users?q=&canSee=<CH-n>` is the mention list's search, unchanged (§39.2),
+    under the existing `search` bucket (§2.4).
+  - `POST /api/ai/draft` accepts the same `mentions` for a solution draft (§43.9).
+  - `GET` and `PATCH /api/profile` carry the preference as **`mentions`**, beside the
+    other §12.1 per-event toggles (`notificationPreferences.mentions` on the read).
+- **Audit (§15).** No new action. `solution.created` gains `mentions: [userId]` when
+  there are any; `solution.edited` gains `mentionsAdded` and `mentionsRemoved`. In an
+  audit payload a token is written as `@[user:<id>]`, so the append-only log holds ids
+  and never a mentioned person's name. The check, event 26 and the preference are not
+  audited.
+- **Tests.**
+  - *Unit:* binding — the boundary rule on both sides, exact case, longest name first,
+    two people with one name, a listed person whose name is absent, text that contains
+    U+E000 or U+E001, and the round trip from stored text to display text and back; the
+    serializer for a renamed, a deactivated and an erased person; the ranges in
+    `mentions` for both fields, with characters outside the basic plane before a
+    mention; the status table of §43.4; each reason for settling silently; the caps —
+    the 10th person on a solution allowed and the 11th refused, a settled-and-removed
+    person still counting, the 30th of a UTC day allowed and the 31st refused, the day
+    boundary at 00:00:00 UTC; event 26's two renderings and its actionable,
+    non-digestable class; the placeholder swap and restore, a placeholder the model
+    dropped and one it invented; the audit form of a token.
+  - *Integration:* a create with mentions writes the rows, stores tokens and returns
+    display text with ranges; a reviewer mentioned on a `proposed` solution gets event
+    26 at once and another person gets none until it moves to `in_review`, then exactly
+    one; `proposed → rejected` settles nobody and a later override to `in_review`
+    settles them; an edit in `needs_improvement` notifies a newly mentioned person on
+    save; removing a pending mention deletes its row and frees the daily cap; removing
+    and re-adding a settled one sends nothing; an ineligible id refuses the whole save
+    and writes no text; a mention that already exists survives its person's
+    deactivation and loss of access through a later edit; a `people` challenge's access
+    list is unchanged; a co-author, a muted person, a deactivated one and one who lost
+    sight of the challenge are settled silently; an anonymous solution's notice names
+    nobody, in the inbox row, the payload and the e-mail, and names the sender after a
+    self-reveal; event 26 is never held for a digest; opening the challenge reads the
+    row; the read-time gate hides it after a narrowing; concurrent saves cannot exceed
+    either cap; search does not find a solution by a mentioned name and still finds it
+    by the words around it; erasure deletes the person's rows, nulls `mentioned_by` and
+    turns the name into *"@Deleted User"* without touching the stored text; the §10.3
+    cascade removes the rows; `edit_solution` keeps an untouched mention, drops a
+    changed one and adds none; `propose_solution` creates none; no response and no
+    prompt contains a token, and no prompt contains a mentioned person's name.
+  - *E2e:* on a `valid` challenge, user A opens **Propose a solution**, types `@` and
+    the start of user B's name, picks B from the list and sees B's chip in the
+    *Mentioned* row; A submits; B's bell shows nothing yet; a reviewer moves the
+    solution to `in_review`; B's bell shows *"… mentioned you in SOL-…"*, and the link
+    opens the challenge at that solution, where B's name is a link that opens the
+    directory card.

@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.29.0",
+    date: "2026-11-17",
+    summary:
+      "New: mention a colleague in a solution. Type @ in a solution's description or cost vs. benefits and pick someone who can see the challenge. They are told once, by e-mail and in-app, as soon as they can see the solution, which for most people is after a reviewer picks it up. Their name in the text links to their profile. You can switch these notices off under Mentions in solutions on your profile.",
+  },
+  {
     version: "1.28.1",
     date: "2026-11-16",
     summary:

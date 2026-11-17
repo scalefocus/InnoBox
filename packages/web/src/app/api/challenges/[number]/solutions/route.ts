@@ -2,10 +2,12 @@
 // Allowed only while the challenge is `valid` — enforced here, not just hidden in the UI.
 // Auto-follows the proposer and every co-author (§12.3, §39.8), notifies admins/committee/the
 // challenge's team/followers (§12.1 event 2), and tells each co-author they were added (event 21).
-import { parseCoAuthorIds, TEAM_MESSAGES } from "@innobox/shared";
+// `mentions` (§43) names the colleagues the text mentions; those who can already see the new
+// solution are told at once (event 26), the others once it leaves `proposed`.
+import { MENTION_MESSAGES, parseCoAuthorIds, parseMentionsInput, TEAM_MESSAGES } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { logNotifyFailure, notifyCoAuthorsAdded, notifySolutionProposed } from "@/lib/notify-events";
+import { logNotifyFailure, notifyCoAuthorsAdded, notifyMentioned, notifySolutionProposed } from "@/lib/notify-events";
 import { autoFollow } from "../../../follows/store";
 import { createSolution } from "../../store";
 import { readJsonObject, trashedResponse } from "@/lib/http";
@@ -27,6 +29,9 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
   // §6.2 / §39: up to four co-authors who can see the challenge.
   const coAuthorIds = parseCoAuthorIds(body.coAuthorIds, gate.user.id);
   if (!coAuthorIds.ok) return Response.json({ error: coAuthorIds.error }, { status: 400 });
+  // §43.11: the people on the form's Mentioned row, each with the name as it stands in the text.
+  const mentions = parseMentionsInput(body.mentions);
+  if (!mentions.ok) return Response.json({ error: mentions.error }, { status: 400 });
 
   const result = await createSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     description: body.description,
@@ -34,6 +39,7 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
     isAnonymous: body.isAnonymous,
     draftKey: body.draftKey,
     coAuthors: { ids: coAuthorIds.value, resolveRoles: resolveRolesForUser },
+    mentions: { candidates: mentions.value, resolveRoles: resolveRolesForUser },
   });
 
   switch (result.status) {
@@ -46,10 +52,16 @@ async function handlePOST(req: Request, context: { params: Promise<{ number: str
       await notifyCoAuthorsAdded(ctx, { parentType: "solution", parentId: result.solution.id }, coAuthorIds.value).catch(
         logNotifyFailure("co-author notification failed"),
       );
+      // §12.1 event 26: the mentioned people who can already see a `proposed` solution.
+      await notifyMentioned(ctx, result.solution.id, result.mentioned).catch(logNotifyFailure("mention notification failed"));
       return Response.json({ solution: result.solution }, { status: 201 });
     }
     case "ineligible_coauthor":
       return Response.json({ error: TEAM_MESSAGES.ineligible }, { status: 422 });
+    case "ineligible_mention":
+      return Response.json({ error: MENTION_MESSAGES.ineligible }, { status: 422 });
+    case "mention_cap":
+      return Response.json({ error: result.reason === "solution_cap" ? MENTION_MESSAGES.solutionCap : MENTION_MESSAGES.dailyCap, code: result.reason }, { status: 409 });
     case "not_found":
       return Response.json({ error: "challenge not found" }, { status: 404 });
     case "trashed":

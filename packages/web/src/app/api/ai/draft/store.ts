@@ -10,7 +10,16 @@
 //
 // Relative imports only (no `@/`) so the gated .dbtest.ts suite runs under the plain node runner.
 import type { Pool } from "pg";
-import { canSeeChallenge, challengeAuthorIdsSql, isRestrictedVisibility, type ChallengeStatus, type ChallengeVisibility } from "@innobox/shared";
+import {
+  canSeeChallenge,
+  challengeAuthorIdsSql,
+  isRestrictedVisibility,
+  maskMentionsForAi,
+  stripMentionMarks,
+  unmaskMentionsFromAi,
+  type ChallengeStatus,
+  type ChallengeVisibility,
+} from "@innobox/shared";
 import {
   AI_DRAFT_LIMITS,
   AI_SETTING_KEYS,
@@ -93,10 +102,19 @@ export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: Dr
 
   const areas = await listActiveImpactAreas(pool);
   const impactAreaNames = promptImpactAreaNames(areas);
+  // §43.9 / §22.7: a mention is person data — the picked people's names are swapped for numbered
+  // placeholders before the prompt is built, and put back in the result below.
+  const masked = req.kind === "solution" && req.mentions && req.mentions.length > 0 ? maskMentionsForAi([req.description, req.costVsBenefits], req.mentions) : null;
   const prompt =
     req.kind === "challenge"
       ? buildChallengeDraftPrompt({ title: req.title, description: req.description, impactAreaNames })
-      : buildSolutionDraftPrompt({ description: req.description, costVsBenefits: req.costVsBenefits, challenge: challenge!, impactAreaNames });
+      : buildSolutionDraftPrompt({
+          description: masked ? masked.texts[0]! : stripMentionMarks(req.description),
+          costVsBenefits: masked ? masked.texts[1]! : stripMentionMarks(req.costVsBenefits),
+          challenge: challenge!,
+          impactAreaNames,
+          mentionPlaceholders: masked !== null && masked.names.length > 0,
+        });
 
   try {
     const result = await ai.complete({
@@ -114,7 +132,16 @@ export async function runDraft(pool: Pool, ai: AiClient, viewer: Viewer, req: Dr
       return draft ? { status: "ok", kind: "challenge", draft } : { status: "failed" };
     }
     const draft = processSolutionDraft(result.json);
-    return draft ? { status: "ok", kind: "solution", draft } : { status: "failed" };
+    if (!draft) return { status: "failed" };
+    // §43.9: each known placeholder becomes the person's name again; any other is removed. A mention
+    // the model left out is simply gone from the text — the form then drops its chip.
+    return {
+      status: "ok",
+      kind: "solution",
+      draft: masked
+        ? { description: unmaskMentionsFromAi(draft.description, masked.names), costVsBenefits: unmaskMentionsFromAi(draft.costVsBenefits, masked.names) }
+        : draft,
+    };
   } catch (err) {
     if (isAiError(err) && err.code === "ai_restricted_content") return { status: "restricted" };
     if (isAiError(err) && (err.code === "ai_disabled" || err.code === "ai_not_configured")) return { status: "unavailable" };

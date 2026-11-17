@@ -276,6 +276,7 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
               notify_followed_status = default,
               notify_followed_solutions = default,
               notify_invitations = default,    -- §40.6
+              notify_mentions = default,       -- §43.6
               -- §13.10: the per-user survey state goes too. Responses are untouched — they
               -- reference no one, so there is nothing of this user in them to erase.
               surveys_enabled = default,
@@ -331,6 +332,11 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // Payoffs other inviters already earned stay in their ledger.
     await client.query(`delete from challenge_invitations where inviter_id = $1 or invitee_id = $1`, [userId]);
     await client.query(`delete from challenge_invitation_dismissals where user_id = $1`, [userId]);
+    // §43.8: the rows that name the person go, and the rows they wrote lose their sender — a later
+    // notice then names nobody. No solution text is rewritten: their tokens stay and, the row being
+    // scrubbed, read "@Deleted User" from now on (§43.2).
+    await client.query(`delete from solution_mentions where user_id = $1`, [userId]);
+    await client.query(`update solution_mentions set mentioned_by = null where mentioned_by = $1`, [userId]);
     // §25.13: the person's AI agent grants are revoked (audited, reason "erased") and deleted —
     // their tokens and pending authorizations cascade. mcp_client_name is not personal data.
     await eraseUserGrants(client, userId, adminUserId);

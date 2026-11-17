@@ -2134,6 +2134,23 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* The access-list editor: the tag field plus a muted line under it. */
 .access-editor-hint { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
 
+/* ── Mentions (INNOBOX_SPEC.md §43.3, §43.7) ──────────────────────────────────────────────────
+   A mention in a solution's text: the person's name as an inline link in the accent ink — muted
+   for a deactivated person, muted and unlinked for an erased one. The composer's list rides on the
+   shared popover (FloatingResults → .menu-pop); the *Mentioned* row reuses the access-list tags.
+   Theme-safe: tokens only. */
+.mention { color: var(--accent-2); font-weight: 500; text-decoration: none; border-radius: 4px; }
+a.mention:hover { text-decoration: underline; }
+a.mention:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mention.mention-off, .mention.mention-deleted { color: var(--muted); font-weight: 400; }
+.mention-options { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow-y: auto; }
+.mention-option.is-active { background: var(--accent-soft); }
+.mentioned-row { display: flex; flex-direction: column; min-width: 0; }
+.mentioned-row-people { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.mentioned-row-label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.tag.mention-chip { padding-left: 3px; }
+.mention-anonymous-warning { color: var(--warn); }
+
 /* ── AI agents (INNOBOX_SPEC.md §25.8–§25.10) ─────────────────────────────────────────────────
    The "via agent" tag: small, muted, inline beside an author line — quieter than a .chip so it
    reads as provenance, not as a status. Theme-safe: tokens only. */

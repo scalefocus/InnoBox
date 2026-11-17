@@ -35,6 +35,7 @@ import {
   type TeamMemberRow,
   type TopicRef,
 } from "@innobox/shared";
+import { displayTextFields } from "../../../lib/mentions";
 import {
   CHALLENGE_SELECT,
   pushChallengeVisibilityConditions,
@@ -251,6 +252,9 @@ async function solutionCandidates(pool: Pool, viewer: Viewer, match: Match, filt
       limit ${CANDIDATE_LIMIT}`,
     params,
   );
+  // §43.7: a hit shows display text. The search itself never matched a mentioned person's name —
+  // the search column holds no token (migration 0062).
+  await displayTextFields(pool, rows, ["description"]);
   return rows;
 }
 
