@@ -1,12 +1,13 @@
 // Per-event notification preferences (INNOBOX_SPEC.md §12.1) — pure and CLIENT-SAFE (also
-// exposed at `@innobox/shared/notification-preferences` for the profile page). Four toggles,
+// exposed at `@innobox/shared/notification-preferences` for the profile page). Five toggles,
 // default on, that remove a recipient from an event before any row is written: the three
-// follower-derived ones, and §40.6's invitations to propose a solution — the one actionable event a
-// person can mute, since anyone who can see a challenge may send one. The admin attention events
-// and the other actionable author/assignee events are never mutable.
+// follower-derived ones, §40.6's invitations to propose a solution and §43.6's mentions in
+// solutions — the two actionable events a person can mute, since anyone who can see a challenge
+// may send one. The admin attention events and the other actionable author/assignee events are
+// never mutable.
 import { EMAIL_DELIVERY_MODES, isEmailDelivery, type EmailDelivery } from "./email-digest.js";
 
-export const NOTIFICATION_PREFERENCES = ["followedComments", "followedStatus", "followedSolutions", "invitations"] as const;
+export const NOTIFICATION_PREFERENCES = ["followedComments", "followedStatus", "followedSolutions", "invitations", "mentions"] as const;
 export type NotificationPreference = (typeof NOTIFICATION_PREFERENCES)[number];
 
 /** The users column behind each toggle — a fixed map, so it is safe to interpolate. */
@@ -15,6 +16,7 @@ export const NOTIFICATION_PREFERENCE_COLUMN: Record<NotificationPreference, stri
   followedStatus: "notify_followed_status",
   followedSolutions: "notify_followed_solutions",
   invitations: "notify_invitations",
+  mentions: "notify_mentions",
 };
 
 export const NOTIFICATION_PREFERENCE_LABEL: Record<NotificationPreference, { title: string; sub: string }> = {
@@ -33,6 +35,10 @@ export const NOTIFICATION_PREFERENCE_LABEL: Record<NotificationPreference, { tit
   invitations: {
     title: "Invitations to propose a solution",
     sub: "When a colleague invites you to propose a solution to a challenge.",
+  },
+  mentions: {
+    title: "Mentions in solutions",
+    sub: "When a colleague mentions you in the text of a solution you can see.",
   },
 };
 
@@ -58,7 +64,7 @@ export interface EmailPreferencePatch {
   emailDelivery?: EmailDelivery;
 }
 
-/** Parses a PATCH body: any subset of the four toggles plus the e-mail switch, each a boolean,
+/** Parses a PATCH body: any subset of the five toggles plus the e-mail switch, each a boolean,
  *  and the digest choice. Unknown keys are ignored; at least one recognised key is required. */
 export function parsePreferencePatch(
   body: unknown,

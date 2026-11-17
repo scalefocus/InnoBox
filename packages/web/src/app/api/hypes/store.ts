@@ -37,6 +37,7 @@ import {
 import { appendAudit } from "../../../lib/audit";
 import { inTransaction } from "../../../lib/db";
 import { awardHypeReceived } from "../../../lib/gamification";
+import { displayTextFields } from "../../../lib/mentions";
 import {
   getParentAccess,
   pushChallengeVisibilityConditions,
@@ -374,6 +375,7 @@ export async function getHypedBoard(db: Db, viewer: Viewer): Promise<HypedBoard>
       limit ${HYPE_BOARD_SIZE}`,
     so.params,
   );
+  await displayTextFields(db, solutionRows, ["description"]); // §43.2: display text, never a token
 
   const ranked: { item: HypedBoardItem; firstAt: number }[] = [
     ...challengeRows.map((r) => {

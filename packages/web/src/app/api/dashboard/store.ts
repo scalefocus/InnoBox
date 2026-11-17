@@ -25,6 +25,7 @@ import {
 } from "../challenges/store";
 import { listFeaturedForViewer } from "../challenges/featured";
 import { getHypeEnabled } from "../../../lib/hype-settings";
+import { displayTextFields } from "../../../lib/mentions";
 import { getHypedBoard, withHypePoints, type HypedBoard } from "../hypes/store";
 
 export const CHALLENGE_KPI_STATUSES: ChallengeStatus[] = ["in_review", "valid", "solved", "rejected"];
@@ -137,6 +138,7 @@ export async function getDashboard(pool: Pool, viewer: Viewer): Promise<Dashboar
         limit 1`,
       params,
     );
+    await displayTextFields(pool, rows, ["description"]); // §43.2: display text, never a token
     const row = rows[0];
     if (!row) return null;
     const authors = maskTeam(

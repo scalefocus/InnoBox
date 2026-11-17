@@ -134,6 +134,9 @@ export interface SolutionDraftInput {
   costVsBenefits: string;
   challenge: { title: string; description: string };
   impactAreaNames: string[];
+  /** §43.9: the draft's mentions were swapped for numbered placeholders (`@[1]`, `@[2]`, …) — never
+   *  names — and the model is told to keep them exactly as they are. */
+  mentionPlaceholders?: boolean;
 }
 
 export function buildChallengeDraftPrompt(input: ChallengeDraftInput): AiPrompt {
@@ -161,6 +164,9 @@ export function buildSolutionDraftPrompt(input: SolutionDraftInput): AiPrompt {
     '"description": plain text (no Markdown) — what the solution is, how it addresses the challenge, and what it needs;',
     '"costVsBenefits": plain text outlining the costs and the benefits the draft states, or an empty string when it states none.',
     "The challenge is context only — do not rewrite it. Keep every fact from the draft and add none.",
+    ...(input.mentionPlaceholders
+      ? ["The draft contains markers such as @[1] and @[2]; each stands for a colleague. Keep every marker exactly as written, in a place where it still makes sense, and add none."]
+      : []),
     AI_DATA_RULES,
   ].join("\n");
   const user = [

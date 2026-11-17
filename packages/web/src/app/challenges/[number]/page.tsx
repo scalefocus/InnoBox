@@ -42,6 +42,8 @@ import { InvitationBanner, InviteSolverButton, type InvitationsSent, type Invite
 import { OWN_ITEM_REVIEW_HINT } from "@innobox/shared/coauthors";
 import { duplicateCommentsNotice } from "@innobox/shared/duplicates";
 import { AlsoRaisedAs, DuplicateBanner, MarkDuplicateButton, type DuplicateRef } from "@/components/MarkDuplicate";
+import { MentionText, MentionTextarea, MentionedRow, mentionedPeople, useMentions, type MentionView } from "@/components/Mentions";
+import type { SolutionStatus } from "@innobox/shared";
 
 interface MaskedAuthor {
   userId: string | null;
@@ -76,8 +78,13 @@ interface AttachmentItem {
 interface SolutionItem extends Partial<HypeFields> {
   id: string;
   number: string;
+  /** §43.2: display text — each mention reads `@` and the person's current name. */
   description: string;
   costVsBenefits: string | null;
+  /** §43.11: where each mention sits in the display text, and whom it names. */
+  mentions?: MentionView[];
+  /** §43.11: the room under the per-solution cap — set on a solution the viewer may edit. */
+  mentionsLeft?: number | null;
   author: MaskedAuthor;
   /** §39.7: every member in order (the creator flagged) — or the single anonymous shape. */
   authors?: TeamMember[];
@@ -198,6 +205,8 @@ interface ChallengeDetail extends Partial<HypeFields>, AffectedBlock {
   duplicates?: DuplicateRef[];
   /** §42.5: a duplicate takes no new comment or reply, on itself or its solutions. */
   commentsClosed?: boolean;
+  /** §43.11: how many more people the viewer may newly mention today, across every solution. */
+  mentionsLeftToday?: number;
 }
 
 export default function ChallengeDetailPage() {
@@ -646,10 +655,13 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           )}
         </div>
       )}
-      <p style={{ whiteSpace: "pre-wrap", fontSize: 14, margin: 0 }}>{s.description}</p>
+      {/* §43.7: a mention is the person's name as a link that opens the directory card. */}
+      <p style={{ whiteSpace: "pre-wrap", fontSize: 14, margin: 0 }}>
+        <MentionText text={s.description} mentions={s.mentions} field="description" />
+      </p>
       {s.costVsBenefits && (
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-          <strong>Cost vs. benefits:</strong> {s.costVsBenefits}
+          <strong>Cost vs. benefits:</strong> <MentionText text={s.costVsBenefits} mentions={s.mentions} field="costVsBenefits" />
         </p>
       )}
       {s.canOverrideStatus && (
@@ -706,7 +718,14 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
           </div>
           {editingSolution === s.id && s.canEdit && (
             <div inert={resubmitLock.lockedFor(s.id)}>
-              <SolutionEditForm solution={s} onDone={() => setEditingSolution(null)} onSaved={onChanged} onError={notify} />
+              <SolutionEditForm
+                solution={s}
+                challengeNumber={challenge.number}
+                mentionsLeftToday={challenge.mentionsLeftToday}
+                onDone={() => setEditingSolution(null)}
+                onSaved={onChanged}
+                onError={notify}
+              />
             </div>
           )}
           <FormLockOverlay locked={resubmitLock.lockedFor(s.id)} />
@@ -1113,6 +1132,7 @@ function ChallengeDetailView({ challenge, onChanged }: { challenge: ChallengeDet
             challengeNumber={challenge.number}
             disabledReason={challenge.canPropose ? null : proposeDisabledReason(challenge.status, challenge.namespaceArchived)}
             restricted={challenge.visibility !== "org"}
+            mentionsLeftToday={challenge.mentionsLeftToday}
             onProposed={onChanged}
             openRequest={proposeRequest}
             beside={
@@ -1313,11 +1333,13 @@ function ResubmitButton({ locked, busy, label, onClick }: { locked: boolean; bus
 // §6.2 propose form. §6.4: locked while the create is in flight; on error it releases with the
 // fields and staged files intact; on success it stays locked until the parent challenge has been
 // re-read AND re-rendered, and only then closes. Improve with AI (§22.10) drafts the description
-// and cost vs benefits from the author's text, with the challenge as context.
+// and cost vs benefits from the author's text, with the challenge as context. Typing `@` in either
+// text box mentions a colleague who can see the challenge (§43.3).
 function ProposeSolutionForm({
   challengeNumber,
   disabledReason,
   restricted,
+  mentionsLeftToday,
   onProposed,
   openRequest = 0,
   beside = null,
@@ -1325,6 +1347,8 @@ function ProposeSolutionForm({
   challengeNumber: string;
   /** The parent challenge is namespace-only — restricted content for the AI draft (§22.7). */
   restricted: boolean;
+  /** §43.5: how many more people the viewer may newly mention today. */
+  mentionsLeftToday?: number;
   /** §13.1: the button is visible to every viewer but enabled only while `valid`; a non-null
    *  reason disables it and is shown beside it. The server refuses a proposal off `valid` anyway. */
   disabledReason: string | null;
@@ -1358,10 +1382,13 @@ function ProposeSolutionForm({
   const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const lock = useFormLock();
   const [error, setError] = useState<string | null>(null);
+  // §43.3: the people picked from the mention list, and which of them the two texts still name.
+  const mentions = useMentions({ texts: [description, costVsBenefits], leftToday: mentionsLeftToday });
   const ai = useImproveWithAi({
     kind: "solution",
     fields: { description: [description, setDescription], costVsBenefits: [costVsBenefits, setCostVsBenefits] },
-    body: () => ({ kind: "solution", challengeNumber, description, costVsBenefits }),
+    // §43.9: the picked people go along so their names are swapped for placeholders before the prompt.
+    body: () => ({ kind: "solution", challengeNumber, description, costVsBenefits, mentions: mentions.payload() }),
     restricted,
   });
 
@@ -1397,7 +1424,14 @@ function ProposeSolutionForm({
       const res = await fetch(`/api/challenges/${challengeNumber.replace("CH-", "")}/solutions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, isAnonymous, draftKey, coAuthorIds: coAuthors.map((u) => u.id) }),
+        body: JSON.stringify({
+          description,
+          costVsBenefits: costVsBenefits || null,
+          isAnonymous,
+          draftKey,
+          coAuthorIds: coAuthors.map((u) => u.id),
+          mentions: mentions.payload(),
+        }),
       });
       const json = await readJson(res);
       if (!res.ok) throw new Error(json.error ?? "Could not propose solution");
@@ -1414,6 +1448,7 @@ function ProposeSolutionForm({
     setCostVsBenefits("");
     setIsAnonymous(false);
     setCoAuthors([]);
+    mentions.reset();
     setOpen(false);
     lock.reset();
   };
@@ -1431,33 +1466,39 @@ function ProposeSolutionForm({
     >
       <div className="form-lock-body" inert={lock.locked}>
         <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>Propose a solution</h3>
-        <textarea
+        <MentionTextarea
           className="field"
           style={{ minHeight: 100, resize: "vertical" }}
-          placeholder="Describe your solution"
+          placeholder="Describe your solution — type @ to mention a colleague"
           aria-label="Solution description"
           value={description}
-          onChange={(e) => {
-            setDescription(e.target.value);
+          onChange={(next) => {
+            setDescription(next);
             ai.noteEdit("description");
           }}
+          mentions={mentions}
+          challengeNumber={challengeNumber}
           readOnly={ai.busy}
           maxLength={10000}
           required
         />
-        <textarea
+        <MentionTextarea
           className="field"
           style={{ minHeight: 60, resize: "vertical" }}
           placeholder="Cost vs. benefits (optional)"
           aria-label="Cost vs. benefits"
           value={costVsBenefits}
-          onChange={(e) => {
-            setCostVsBenefits(e.target.value);
+          onChange={(next) => {
+            setCostVsBenefits(next);
             ai.noteEdit("costVsBenefits");
           }}
+          mentions={mentions}
+          challengeNumber={challengeNumber}
           readOnly={ai.busy}
           maxLength={5000}
         />
+        {/* §43.3: who a submit will mention, and when they are told. */}
+        <MentionedRow mentions={mentions} status={null} anonymous={isAnonymous} disabled={lock.locked} />
         <ImproveWithAiBar ai={ai} disabled={lock.locked} />
         <AttachmentControl
           parentType="solution"
@@ -1731,14 +1772,21 @@ function ChallengeEditForm({
   );
 }
 
-// §10.1 author edit of a solution's content (description / cost vs benefits).
+// §10.1 author edit of a solution's content (description / cost vs benefits). The form starts with
+// the solution's current mentions picked (§43.3); a mention added here is the one thing an edit
+// notifies anyone about (§43.4).
 function SolutionEditForm({
   solution,
+  challengeNumber,
+  mentionsLeftToday,
   onDone,
   onSaved,
   onError,
 }: {
   solution: SolutionItem;
+  /** "CH-12" — the mention list offers the people who can see this challenge. */
+  challengeNumber: string;
+  mentionsLeftToday?: number;
   onDone: () => void;
   onSaved: () => void;
   onError: (m: string) => void;
@@ -1748,6 +1796,12 @@ function SolutionEditForm({
   const [submitting, setSubmitting] = useState(false);
   // §39.5: a save from a stale copy is refused; the form keeps the text so it can be copied.
   const [stale, setStale] = useState<string | null>(null);
+  const mentions = useMentions({
+    texts: [description, costVsBenefits],
+    initial: mentionedPeople(solution.mentions),
+    left: solution.mentionsLeft ?? undefined,
+    leftToday: mentionsLeftToday,
+  });
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1756,7 +1810,7 @@ function SolutionEditForm({
       const res = await fetch(`/api/solutions/${solution.number.replace("SOL-", "")}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, baseEditedAt: solution.editedAt }),
+        body: JSON.stringify({ description, costVsBenefits: costVsBenefits || null, baseEditedAt: solution.editedAt, mentions: mentions.payload() }),
       });
       const json = await readJson(res);
       if (res.status === 409 && json.code === "stale_edit") {
@@ -1775,15 +1829,30 @@ function SolutionEditForm({
 
   return (
     <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: 10, alignSelf: "stretch" }}>
-      <textarea className="field" style={{ minHeight: 90, resize: "vertical" }} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={10000} required />
-      <textarea
+      <MentionTextarea
+        className="field"
+        style={{ minHeight: 90, resize: "vertical" }}
+        aria-label="Solution description"
+        value={description}
+        onChange={setDescription}
+        mentions={mentions}
+        challengeNumber={challengeNumber}
+        maxLength={10000}
+        required
+      />
+      <MentionTextarea
         className="field"
         style={{ minHeight: 50, resize: "vertical" }}
         placeholder="Cost vs. benefits (optional)"
+        aria-label="Cost vs. benefits"
         value={costVsBenefits}
-        onChange={(e) => setCostVsBenefits(e.target.value)}
+        onChange={setCostVsBenefits}
+        mentions={mentions}
+        challengeNumber={challengeNumber}
         maxLength={5000}
       />
+      {/* §43.3: who the save will mention; a solution open to everyone tells them at the save. */}
+      <MentionedRow mentions={mentions} status={solution.status as SolutionStatus} anonymous={solution.author.anonymous} disabled={submitting} />
       {stale && (
         <StaleEditNotice
           message={stale}

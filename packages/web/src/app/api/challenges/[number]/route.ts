@@ -7,6 +7,7 @@ import { DUPLICATE_MESSAGES, isChallengeStatus, parseAffectedEstimate, parseBase
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { markCommentNotificationsReadForChallenge } from "@/lib/notify";
+import { mentionRoomFor } from "@/lib/mentions";
 import { getHypeEnabled } from "@/lib/hype-settings";
 import { decorateDetailWithHype } from "../../hypes/store";
 import { invitationDetailFields } from "../invitations";
@@ -42,7 +43,15 @@ async function handleGET(_req: Request, context: { params: Promise<{ number: str
   const affected = await affectedDetailFields(pool, viewer, challenge);
   // §26.11: the hype fields ride on this payload only, and only while hype is on.
   const detail = (await getHypeEnabled(pool)) ? await decorateDetailWithHype(pool, viewer, challenge) : challenge;
-  return Response.json({ challenge: { ...detail, ...invitations, ...affected } });
+  // §43.11: the viewer's room for mentions — today across every solution, and on each solution they
+  // may edit — rides on this payload only.
+  const room = await mentionRoomFor(
+    pool,
+    viewer.userId,
+    detail.solutions.filter((s) => s.canEdit).map((s) => s.id),
+  );
+  const solutions = detail.solutions.map((s) => (s.canEdit ? { ...s, mentionsLeft: room.left.get(s.id) ?? null } : s));
+  return Response.json({ challenge: { ...detail, solutions, ...invitations, ...affected, mentionsLeftToday: room.leftToday } });
 }
 
 async function handlePATCH(req: Request, context: { params: Promise<{ number: string }> }): Promise<Response> {

@@ -29,6 +29,7 @@ import {
   similarExplainInput,
   type ImpactAreaOption,
 } from "./ai-tasks.js";
+import { maskMentionsForAi } from "./mentions.js";
 
 const AREAS: ImpactAreaOption[] = [
   { id: "a1", name: "Finance", active: true },
@@ -96,6 +97,23 @@ test("solution draft prompt: its own text plus the challenge as context, nothing
   const text = promptText(buildSolutionDraftPrompt(leaky));
   for (const leaked of ["ACME", "u-123", "anonymous"]) assert.ok(!text.includes(leaked), leaked);
   for (const kept of ["Use OCR to pre-match.", "Two weeks of work.", "Slow invoice matching", "Finance matches invoices by hand."]) assert.ok(text.includes(kept), kept);
+  assert.ok(!text.includes("@[1]"), "no placeholder rule without mentions");
+});
+
+test("solution draft prompt: a mention travels as a placeholder the model is told to keep (§43.9)", () => {
+  const masked = maskMentionsForAi(["Ask @Ana Petrova for the API."], [{ userId: "11111111-1111-4111-8111-111111111111", name: "Ana Petrova" }]);
+  const text = promptText(
+    buildSolutionDraftPrompt({
+      description: masked.texts[0]!,
+      costVsBenefits: "",
+      challenge: { title: "Slow invoice matching", description: "Finance matches invoices by hand." },
+      impactAreaNames: [],
+      mentionPlaceholders: true,
+    }),
+  );
+  assert.ok(text.includes("Ask @[1] for the API."));
+  assert.ok(text.includes("Keep every marker exactly as written"));
+  assert.ok(!text.includes("Petrova"), "the name never reaches the prompt");
 });
 
 test("challenge draft output: caps, plain text, hint mapping", () => {

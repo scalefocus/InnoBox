@@ -5,10 +5,10 @@
 // parent challenge's assignee traverse the enforced §8.2 graph (illegal moves → 422). NOT
 // exempt from §8.3 either way: the store enforces the single-winner gate and the implemented
 // auto-close cascade. A real transition fires event 3/4/5, and `implemented` also fires event 8.
-import { isSolutionStatus, parseBaseEditedAt, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
+import { isSolutionStatus, MENTION_MESSAGES, parseBaseEditedAt, parseMentionsInput, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { logNotifyFailure, notifyInvitationPayoffs, notifySolutionStatusChanged } from "@/lib/notify-events";
+import { logNotifyFailure, notifyInvitationPayoffs, notifyMentioned, notifySolutionStatusChanged } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
 import { isEntityNumber, parseStatusOverride } from "../../challenges/validation";
 import { deleteSolution } from "../../challenges/delete";
@@ -45,7 +45,7 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
   const parsed = parseStatusOverride(body, (s) => isSolutionStatus(s));
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
 
-  const result = await setSolutionStatus(pool, { userId: gate.user.id, roles: gate.user.roles }, number, parsed.value);
+  const result = await setSolutionStatus(pool, { userId: gate.user.id, roles: gate.user.roles }, number, parsed.value, resolveRolesForUser);
   switch (result.status) {
     case "ok": {
       if (result.changed) {
@@ -59,6 +59,10 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
       // §40.6 event 23: a move out of `proposed` may have paid off invitations to the solution's team.
       await notifyInvitationPayoffs({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.payoffs).catch(
         logNotifyFailure("invitation payoff notification failed"),
+      );
+      // §43.6 event 26: a solution that just became open to everyone tells the people it mentions.
+      await notifyMentioned({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.solution.id, result.mentioned).catch(
+        logNotifyFailure("mention notification failed"),
       );
       return Response.json({ solution: result.solution });
     }
@@ -96,15 +100,28 @@ async function handlePUT(req: Request, context: { params: Promise<{ number: stri
   // §39.5: the editedAt the editor loaded — a save from a stale copy is refused.
   const baseEditedAt = parseBaseEditedAt(body.baseEditedAt);
   if (!baseEditedAt.ok) return Response.json({ error: baseEditedAt.error }, { status: 400 });
+  // §43.11: the form's Mentioned row. Absent binds the solution's current mentions; `[]` removes them.
+  const mentions = parseMentionsInput(body.mentions);
+  if (!mentions.ok) return Response.json({ error: mentions.error }, { status: 400 });
 
   const result = await editSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number, {
     description: body.description,
     costVsBenefits: body.costVsBenefits,
     baseEditedAt: baseEditedAt.value,
+    mentions: { candidates: mentions.value, resolveRoles: resolveRolesForUser },
   });
   switch (result.status) {
     case "ok":
+      // §43.6 event 26: an edit is the one save that notifies (§10.1) — a newly mentioned person who
+      // can see the solution now.
+      await notifyMentioned({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.solution.id, result.mentioned).catch(
+        logNotifyFailure("mention notification failed"),
+      );
       return Response.json({ solution: result.solution });
+    case "ineligible_mention":
+      return Response.json({ error: MENTION_MESSAGES.ineligible }, { status: 422 });
+    case "mention_cap":
+      return Response.json({ error: result.reason === "solution_cap" ? MENTION_MESSAGES.solutionCap : MENTION_MESSAGES.dailyCap, code: result.reason }, { status: 409 });
     case "not_found":
       return Response.json({ error: "solution not found" }, { status: 404 });
     case "trashed":

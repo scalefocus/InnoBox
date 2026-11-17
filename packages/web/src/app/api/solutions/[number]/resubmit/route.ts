@@ -4,7 +4,7 @@
 // followers).
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
-import { logNotifyFailure, notifySolutionResubmitted } from "@/lib/notify-events";
+import { logNotifyFailure, notifyMentioned, notifySolutionResubmitted } from "@/lib/notify-events";
 import { resubmitSolution } from "../../../challenges/store";
 import { rateLimit } from "@/lib/rate-limit";
 import { isEntityNumber } from "../../../challenges/validation";
@@ -24,9 +24,10 @@ async function handlePOST(_req: Request, context: { params: Promise<{ number: st
   const result = await resubmitSolution(pool, { userId: gate.user.id, roles: gate.user.roles }, number);
   switch (result.status) {
     case "ok": {
-      await notifySolutionResubmitted({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, number, result).catch(
-        logNotifyFailure("solution resubmit notification failed"),
-      );
+      const ctx = { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser };
+      await notifySolutionResubmitted(ctx, number, result).catch(logNotifyFailure("solution resubmit notification failed"));
+      // §43.4: a resubmit is a status change, so the check ran — event 26 for what it settled.
+      await notifyMentioned(ctx, result.solutionId, result.mentioned).catch(logNotifyFailure("mention notification failed"));
       return Response.json({ ok: true });
     }
     case "not_found":

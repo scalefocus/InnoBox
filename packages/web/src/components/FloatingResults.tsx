@@ -2,7 +2,8 @@
 // Floating user-search results (INNOBOX_SPEC.md §14.1, §4.3): a portaled, fixed-positioned panel
 // anchored to its input so the list is never clipped by, nor pushed under the edge of, the
 // surrounding list, card or dialog (`.rows`/`.card` are `overflow: hidden`). Shared by the triage
-// page's assign controls and the §4.3 access-list editor. Follows the input on scroll/resize,
+// page's assign controls, the §4.3 access-list editor and the §43.3 mention list, which hangs under
+// a solution's text box. Follows the input on scroll/resize,
 // closes on an outside click, and preventDefaults its own mousedown so a pick never blurs the
 // input first. Inside a modal <dialog> (the top layer) the panel is portaled into the dialog
 // instead: portaled to <body>, it would sit underneath it.
@@ -13,10 +14,14 @@ export function FloatingResults({
   anchorRef,
   onClose,
   children,
+  maxWidth = 360,
 }: {
-  anchorRef: RefObject<HTMLInputElement | null>;
+  /** The input — or, for the §43.3 mention list, the text box — the panel hangs under. */
+  anchorRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
+  /** The panel is as wide as its anchor, up to this many pixels. */
+  maxWidth?: number;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -47,7 +52,7 @@ export function FloatingResults({
   }, [anchorRef, onClose]);
 
   if (!rect) return null;
-  const width = Math.min(360, Math.max(rect.width, 220));
+  const width = Math.min(maxWidth, Math.max(rect.width, 220));
   const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
   return createPortal(
     <div

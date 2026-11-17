@@ -14,6 +14,8 @@ import {
   invitationMessage,
   invitationPaidOffMessage,
   invitationSubject,
+  mentionedMessage,
+  mentionedSubject,
   solutionAuthorIdsSql,
   teamChangeMessage,
   teamDisplayText,
@@ -25,6 +27,7 @@ import {
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
 import { itemHref } from "./deep-link";
 import type { InvitationPayoff } from "./invitation-payoffs";
+import type { SettledMention } from "./mentions";
 import {
   dispatchClosedAsDuplicate,
   dispatchCoalescedAffected,
@@ -33,6 +36,7 @@ import {
   dispatchEvent,
   dispatchInAppEvent,
   dispatchInvitation,
+  dispatchMention,
   dispatchTeamChange,
   dispatchTopicNotices,
   dispatchToUser,
@@ -724,6 +728,62 @@ export async function notifyInvitationPayoffs(ctx: NotifyContext, payoffs: reado
       inviteeName: f.invitee_name,
       challengeNumber: formatChallengeNumber(f.challenge_number),
       solutionNumber: formatSolutionNumber(f.solution_number),
+    });
+  }
+}
+
+/**
+ * §12.1 event 26 (§43.6): each mention a save or a status change just settled, to its person — "Ana
+ * Petrova mentioned you in SOL-34 on CH-412 …", or "You were mentioned in …" when the notice names
+ * no sender: the solution is anonymous (invariant 3), or the sender has been erased. A member of the
+ * solution's team is passed over (§43 decision 11); the other silent cases — deactivated, erased,
+ * out of sight, muted — are dispatchMention's drops. The e-mail adds the namespace and never quotes
+ * the solution's text. Called after the triggering transaction committed.
+ */
+export async function notifyMentioned(ctx: NotifyContext, solutionId: string, settled: readonly SettledMention[]): Promise<void> {
+  if (settled.length === 0) return;
+  const { rows } = await ctx.pool.query<{
+    solution_number: string;
+    is_anonymous: boolean;
+    author_ids: string[];
+    challenge_id: string;
+    challenge_number: string;
+    challenge_title: string;
+    slug: string;
+  }>(
+    `select s.number::text as solution_number, s.is_anonymous, ${solutionAuthorIdsSql("s")} as author_ids,
+            c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, ns.slug
+       from solutions s
+       join challenges c on c.id = s.challenge_id
+       join namespaces ns on ns.id = c.namespace_id
+      where s.id = $1`,
+    [solutionId],
+  );
+  const solution = rows[0];
+  if (!solution) return;
+  const senderIds = [...new Set(settled.map((m) => m.mentionedBy).filter((id): id is string => id !== null))];
+  const { rows: senders } =
+    solution.is_anonymous || senderIds.length === 0
+      ? { rows: [] as { id: string; display_name: string }[] }
+      : await ctx.pool.query<{ id: string; display_name: string }>(`select id, display_name from users where id = any($1::uuid[]) and scrubbed_at is null`, [senderIds]);
+  const senderNames = new Map(senders.map((r) => [r.id, r.display_name]));
+  for (const mention of settled) {
+    if (solution.author_ids.includes(mention.userId)) continue;
+    const senderName = mention.mentionedBy ? (senderNames.get(mention.mentionedBy) ?? null) : null;
+    await dispatchMention(ctx, mention.userId, mention.mentionedBy, solutionId, {
+      message: mentionedMessage(senderName, solution.solution_number, solution.challenge_number, solution.challenge_title),
+      subject: mentionedSubject(senderName, solution.solution_number),
+      emailDetail: `In /${solution.slug}`,
+      link: itemHref(solution.challenge_number, solution.solution_number),
+      parentType: "solution",
+      parentId: solutionId,
+      challengeId: solution.challenge_id,
+      challengeNumber: formatChallengeNumber(solution.challenge_number),
+      solutionNumber: formatSolutionNumber(solution.solution_number),
+      title: solution.challenge_title,
+      // Both null when the notice names no sender — the payload never holds what the line hides.
+      mentionerId: senderName ? mention.mentionedBy : null,
+      mentionerName: senderName,
     });
   }
 }

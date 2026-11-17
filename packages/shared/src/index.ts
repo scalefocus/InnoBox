@@ -127,6 +127,10 @@ export * from "./affected.js";
 // the note's validation and every string the feature shows (client-safe, also at
 // `@innobox/shared/duplicates`).
 export * from "./duplicates.js";
+// §43 mentions: the token, binding and the serializer, the drafting aid's placeholders, the caps,
+// the settling check's status table, the composer's query rule and the copy of the form and event
+// 26 (client-safe, also at `@innobox/shared/mentions`).
+export * from "./mentions.js";
 
 // §14.12 real user monitoring: the route registry, beacon validation, error fingerprints, the INP
 // rule, thresholds and the rollup arithmetic (client-safe, also at `@innobox/shared/rum`), and the

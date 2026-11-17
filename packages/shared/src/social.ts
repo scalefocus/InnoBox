@@ -98,6 +98,10 @@ export const NOTIFICATION_TYPES = [
   // immediate) and its assignee and followers (follower-type, digestable). Rendered per recipient:
   // the original is named only to those who can see it, and the inbox resolves it at read time.
   "closed_as_duplicate",
+  // §12.1 event 26 / §43.6: you were mentioned in a solution's text — the mentioned person only,
+  // once per solution, at the first moment they can see it. Immediate, never digested, muted by the
+  // Mentions preference; names the sender unless the solution is anonymous.
+  "mentioned",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
