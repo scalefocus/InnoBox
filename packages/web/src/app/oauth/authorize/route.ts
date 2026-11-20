@@ -4,7 +4,9 @@
 // client_id or redirect_uri is read, with the non-redirecting error page, as are an unknown client
 // and an unregistered redirect URI; every other problem goes back to the client's redirect URI.
 // The validated request is stored in oauth_pending_authorizations and the form carries only that
-// row's id. This page's CSP widens form-action to the client redirect shapes (the middleware).
+// row's id. The page carries the base CSP like every other: its form posts to 'self' and is
+// answered with a forwarding page, not a redirect. (The 303 below answers a plain navigation, not
+// a form submission — sign-in is started by script — so form-action does not apply to it.)
 import { publicBaseUrl } from "@innobox/shared/public-url";
 import { getSessionUser } from "@/lib/auth";
 import { pool } from "@/lib/db";

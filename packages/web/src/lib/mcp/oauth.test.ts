@@ -1,7 +1,7 @@
 // Pins the pure rules of the agent-access OAuth server (INNOBOX_SPEC.md §25.3): PKCE S256, redirect
 // URI shapes and matching (loopback on any port incl. localhost, exact https, custom schemes, no
 // wildcards), duplicate-parameter rejection before the client is read, registration validation,
-// the authorization-request check, the consent page's widened form-action, and the metadata.
+// the authorization-request check, and the metadata.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -10,7 +10,6 @@ import {
   bearerChallenge,
   checkAuthorizeRequest,
   classifyRedirectUri,
-  consentFormActionSources,
   duplicateParameter,
   hashToken,
   matchRedirectUri,
@@ -169,13 +168,6 @@ test("consent form: approve needs the confirmation tick, deny does not, malforme
   assert.equal(parseConsentForm(new URLSearchParams("")).ok, false);
   const refused = parseConsentForm(new URLSearchParams("decision=approve"));
   assert.ok(refused.ok === false && !refused.message.includes("§"));
-});
-
-test("consent page CSP: loopback shapes and https always; a custom scheme only when used", () => {
-  assert.deepEqual(consentFormActionSources(null), ["http://127.0.0.1:*", "http://localhost:*", "https:"]);
-  assert.deepEqual(consentFormActionSources("myapp:/done"), ["http://127.0.0.1:*", "http://localhost:*", "https:", "myapp:"]);
-  assert.ok(consentFormActionSources("http://[::1]:5/cb").includes("http://[::1]:*"));
-  assert.deepEqual(consentFormActionSources("javascript:alert(1)"), ["http://127.0.0.1:*", "http://localhost:*", "https:"]);
 });
 
 test("metadata, challenge header and redirect builder", () => {

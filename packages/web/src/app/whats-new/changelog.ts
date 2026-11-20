@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.29.2",
+    date: "2026-11-20",
+    summary:
+      "Connecting an AI agent now also works where the network in front of InnoBox adds its own browser security rules. After you choose Approve or Deny, a short page takes you back to your AI tool, with a Continue button in case it does not move on its own. If a connection failed with \"This approval has expired or was already used\", start it again from your AI tool.",
+  },
+  {
     version: "1.29.1",
     date: "2026-11-20",
     summary:

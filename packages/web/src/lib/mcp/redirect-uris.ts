@@ -1,6 +1,5 @@
 // Redirect-URI rules for the agent-access OAuth server (INNOBOX_SPEC.md §25.3): which shapes
-// registration accepts, how a presented URI matches a registered one, and the consent page's
-// widened CSP form-action. Pure and dependency-free — the edge middleware imports it for the CSP.
+// registration accepts and how a presented URI matches a registered one. Pure and dependency-free.
 
 /** The loopback hosts that match on any port — 127.0.0.1 and [::1] (RFC 8252), and localhost,
  *  which MCP clients such as Claude Code register. */
@@ -45,21 +44,4 @@ export function matchRedirectUri(registered: readonly string[], presented: unkno
     if (r.hostname === p.hostname && r.pathname === p.pathname && r.search === p.search) return presented;
   }
   return null;
-}
-
-/**
- * §25.3: the consent page's `form-action` additions — approving is a form POST answered with a 303
- * to the client, and browsers apply form-action across that redirect. The loopback shapes on any
- * port and `https:` always; a custom scheme or the IPv6 loopback only when the request's redirect
- * uses it (a scheme source cannot be wildcarded). The CSP is a filter: the redirect target is
- * still checked against the client's registration before any redirect happens.
- */
-export function consentFormActionSources(redirectUri: string | null): string[] {
-  const sources = ["http://127.0.0.1:*", "http://localhost:*", "https:"];
-  if (redirectUri) {
-    const kind = classifyRedirectUri(redirectUri);
-    if (kind === "custom") sources.push(`${new URL(redirectUri).protocol}`);
-    if (kind === "loopback" && new URL(redirectUri).hostname === "[::1]") sources.push("http://[::1]:*");
-  }
-  return sources;
 }
