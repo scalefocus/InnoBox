@@ -476,7 +476,11 @@ The delivery pipeline, pinned:
   — the repository pins no host. The OIDC and e-mail-consent redirect URIs, the SCIM
   `documentationUri`, the Open Graph `metadataBase`, and all notification deep links
   derive from it. TLS terminates at the org reverse proxy in front of the compose
-  stack (which serves internally on :8080).
+  stack (which serves internally on :8080). That proxy passes the web tier's response
+  headers through unchanged: it sets no `Content-Security-Policy` of its own (§2.4,
+  *A proxy in front of the stack*) and does not rewrite `Cache-Control` — the hashed
+  `/_next/static/*` assets are served immutable, and a proxy that turns that into
+  `no-store` makes every page load download them again.
 - **No organization-specific value lives in the repository** (open-source
   readiness, §2.2 attribution rule). Concretely:
   - **No org-specific fallbacks in code.** Web and worker read the canonical URL
@@ -743,6 +747,32 @@ these rules close the generic web-platform paths by which it could.
     camera, microphone, geolocation, payment, and USB.
   - No `X-Powered-By` (web or worker).
   - Attachment downloads add their own stricter policy (§11 *Download gateway*).
+  - **A proxy in front of the stack passes these headers through.** The web tier is
+    the only author of the headers in this list: the bundled Caddy sets none of them,
+    and an org reverse proxy in front of it (§2.3) must not **hide**, **replace** or
+    **duplicate** any of them. `Strict-Transport-Security` is the one exception
+    (above). The policy is decided per request and per page — the nonce, the consent
+    page's widened `form-action` (§25.3), the attachment-download `sandbox` policy
+    (§11) — and a static policy written at a proxy can carry none of that:
+    - where it **replaces** the app's header, pages run under whatever the proxy
+      allows instead of the nonce policy, the per-page policies are gone, and
+      violation reports go where the proxy's policy sends them, not to the report
+      sink above — so `innobox_csp_violations_total` stays at zero while the browser
+      is blocking things;
+    - where it is sent **alongside** the app's header, the browser enforces both, so
+      every per-page widening is cancelled by the proxy's narrower directive.
+
+    Either way the first visible symptom is an agent connection that cannot be
+    approved (§25.3): the redirect that answers **Approve** is blocked by the proxy's
+    `form-action` after the code has been minted, the person stays on the consent
+    page, and a second click answers *"This approval has expired or was already
+    used."* A proxy that wants a fallback policy for responses that carry none may add
+    one **only when the upstream response has no `Content-Security-Policy`**. Headers
+    the app does not send are the deployment's own business.
+    **Check:** `curl -s -o /dev/null -D - <PUBLIC_BASE_URL>/` must show exactly one
+    `Content-Security-Policy` (`Content-Security-Policy-Report-Only` in `report-only`
+    mode), beginning `default-src 'self'; script-src 'self' 'nonce-…'` and naming
+    `report-uri /api/csp-report`.
 - **Cross-site request forgery.** Session cookies are `SameSite=Lax`, which stops other
   sites but not a sibling sub-domain of the same registrable domain. So every
   state-changing API request (`POST`/`PUT`/`PATCH`/`DELETE` under `/api/*`, except the
@@ -8238,7 +8268,11 @@ expired rows (§25.13).
   registration accepts (loopback on any port, `https:`, and the client's registered
   custom scheme): approving is a form POST answered with a 303 to another origin, and
   browsers apply `form-action` across redirects. The redirect target is still checked
-  against the client's registration — the CSP is a filter, not the control.
+  against the client's registration — the CSP is a filter, not the control. The
+  widening reaches the browser only if nothing in front of the web tier replaces or
+  adds a `Content-Security-Policy` (§2.4, *A proxy in front of the stack*): a proxy
+  policy with the base `form-action` blocks the 303 after the pending row is consumed
+  and the code minted, so the connection fails and the retry answers **400**.
 - **`POST /oauth/consent` keeps the §2.4 `Origin` check.** `/mcp`,
   `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt from it, like the
   CSP report sink: they are called by programs, carry no cookie and never read a
