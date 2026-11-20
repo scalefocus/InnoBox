@@ -43,8 +43,16 @@ a{color:var(--anchor)}
 .error{color:var(--danger);font-weight:600}
 `;
 
+/** §25.3: the referrer policy of both pages. The approval is a plain form POST — a navigation —
+ *  and for a navigation a browser derives `Origin` from the page's referrer policy: under
+ *  `no-referrer` it sends `Origin: null`, which the §2.4 check on POST /oauth/consent refuses with
+ *  403 (the page shipped that way from v1.6 and no browser could approve). `same-origin` sends the
+ *  real Origin on the POST to InnoBox and still no Referer on the 303 to the client's redirect
+ *  URI, so the authorization request's query never reaches another origin. Never `no-referrer`. */
+export const REFERRER_POLICY = "same-origin";
+
 function page(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main><p class="brand">InnoBox</p>${body}</main></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="${REFERRER_POLICY}"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main><p class="brand">InnoBox</p>${body}</main></body></html>`;
 }
 
 export interface ConsentPageInput {

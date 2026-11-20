@@ -7,7 +7,7 @@
 // every interpolated value. Also the non-redirecting error page.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeDestination, escapeHtml, renderConsentPage, renderErrorPage, UNVERIFIED_CLIENT_MINUTES, type ConsentPageInput } from "./consent-page";
+import { describeDestination, escapeHtml, REFERRER_POLICY, renderConsentPage, renderErrorPage, UNVERIFIED_CLIENT_MINUTES, type ConsentPageInput } from "./consent-page";
 
 const base: ConsentPageInput = {
   clientName: "Claude Code",
@@ -90,6 +90,19 @@ test("the confirmation checkbox is in the form, required, and gates Approve's pr
   assert.ok(form.indexOf('id="confirm"') < form.indexOf('class="actions"'));
   assert.ok(form.includes(`<input type="hidden" name="request_id" value="${base.requestId}">`));
   assert.ok(form.includes('action="/oauth/consent"') && form.includes('method="post"'));
+});
+
+test("§25.3 referrer policy: both pages are same-origin and never no-referrer", () => {
+  // Under no-referrer a browser sends `Origin: null` on the approval's form POST, and the §2.4
+  // check on POST /oauth/consent refuses it — nobody could approve a connection.
+  assert.equal(REFERRER_POLICY, "same-origin");
+  for (const html of [render(), renderErrorPage("x")]) {
+    const metas = html.match(/<meta name="referrer"[^>]*>/g) ?? [];
+    assert.deepEqual(metas, [`<meta name="referrer" content="same-origin">`], "exactly one referrer meta, same-origin");
+    assert.ok(!html.includes("no-referrer"));
+    // In the head, before any content: a policy declared after the form would not govern it.
+    assert.ok(html.indexOf('<meta name="referrer"') < html.indexOf("</head>"));
+  }
 });
 
 test("grant wording, the restricted-content note and the revoke pointer", () => {
