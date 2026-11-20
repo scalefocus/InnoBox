@@ -169,9 +169,9 @@ everything else to the web app.
 **Let the app's response headers through.** The web app writes its own security headers,
 including a per-request `Content-Security-Policy`. Your proxy must not hide, replace or
 add to them (`Strict-Transport-Security` aside), and must not rewrite `Cache-Control`. A
-static policy at the proxy replaces the app's, and the first thing it breaks is approving
-an AI agent connection: the redirect after **Approve** is blocked, and a second click says
-the approval has expired. To check, look at what a browser actually receives:
+static policy at the proxy replaces the app's per-request one — and nothing visibly breaks
+when it does, so the loss is easy to miss. To check, look at what a browser actually
+receives:
 
 ```bash
 curl -s -o /dev/null -D - https://innobox.example.com/ | grep -i content-security-policy

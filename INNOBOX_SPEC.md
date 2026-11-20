@@ -751,24 +751,25 @@ these rules close the generic web-platform paths by which it could.
     the only author of the headers in this list: the bundled Caddy sets none of them,
     and an org reverse proxy in front of it (§2.3) must not **hide**, **replace** or
     **duplicate** any of them. `Strict-Transport-Security` is the one exception
-    (above). The policy is decided per request and per page — the nonce, the consent
-    page's widened `form-action` (§25.3), the attachment-download `sandbox` policy
-    (§11) — and a static policy written at a proxy can carry none of that:
+    (above). The policy is decided per request and per page — the nonce, the
+    attachment-download `sandbox` policy (§11) — and a static policy written at a
+    proxy can carry none of that:
     - where it **replaces** the app's header, pages run under whatever the proxy
       allows instead of the nonce policy, the per-page policies are gone, and
       violation reports go where the proxy's policy sends them, not to the report
       sink above — so `innobox_csp_violations_total` stays at zero while the browser
       is blocking things;
     - where it is sent **alongside** the app's header, the browser enforces both, so
-      every per-page widening is cancelled by the proxy's narrower directive.
+      every directive is held to the narrower of the two.
 
-    Either way the first visible symptom is an agent connection that cannot be
-    approved (§25.3): the redirect that answers **Approve** is blocked by the proxy's
-    `form-action` after the code has been minted, the person stays on the consent
-    page, and a second click answers *"This approval has expired or was already
-    used."* A proxy that wants a fallback policy for responses that carry none may add
-    one **only when the upstream response has no `Content-Security-Policy`**. Headers
-    the app does not send are the deployment's own business.
+    **An override is silent.** No flow in the app depends on a per-page loosening of
+    the policy, so nothing visibly breaks. (Approving an agent connection once did:
+    its answer was a redirect, which a proxy's `form-action` blocked. It is now
+    answered with a forwarding page that no policy governs — §25.3.) The loss shows
+    only in the response headers, so run the check below after any change to a proxy.
+    A proxy that wants a fallback policy for responses that carry none may add one
+    **only when the upstream response has no `Content-Security-Policy`**. Headers the
+    app does not send are the deployment's own business.
     **Check:** `curl -s -o /dev/null -D - <PUBLIC_BASE_URL>/` must show exactly one
     `Content-Security-Policy` (`Content-Security-Policy-Report-Only` in `report-only`
     mode), beginning `default-src 'self'; script-src 'self' 'nonce-…'` and naming
@@ -793,9 +794,10 @@ these rules close the generic web-platform paths by which it could.
   outside `/api/*`: `POST /oauth/consent` carries this same `Origin` check, while
   `/mcp`, `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt — they are
   called by programs, carry no cookie and never read a session (§25.3). The consent
-  page alone widens `form-action` to the client redirect shapes (§25.3), and alone
-  narrows the referrer policy to `same-origin` — never `no-referrer`, under which a
-  browser sends `Origin: null` on a form POST and this check refuses it (§25.3).
+  page carries the base `form-action` like every other page — its approval is
+  answered with a forwarding page, not a redirect (§25.3) — and alone narrows the
+  referrer policy to `same-origin`: never `no-referrer`, under which a browser sends
+  `Origin: null` on a form POST and this check refuses it (§25.3).
 - **Substring filters are literal.** Every free-text "contains" filter that reaches a
   `LIKE`/`ILIKE` — the §13.1 gallery and §13.4 search *author name* filters, the §14.1
   triage *author name* filter, the §7.3 directory search `GET /api/users?q=`, the §15
@@ -8179,7 +8181,7 @@ expired rows (§25.13).
 | `GET /.well-known/oauth-authorization-server` | none | RFC 8414 server metadata |
 | `POST /oauth/register` | none | RFC 7591 dynamic client registration |
 | `GET /oauth/authorize` | session | Validates the request, then shows the consent page (signed out → Entra sign-in, then back) |
-| `POST /oauth/consent` | session | Approve or deny; answers **303** to the client's `redirect_uri` |
+| `POST /oauth/consent` | session | Approve or deny; answers with the forwarding page that sends the browser on to the client's `redirect_uri` (§25.3) |
 | `POST /oauth/token` | none (PKCE) | Code exchange and refresh-token rotation |
 | `POST /oauth/revoke` | none | RFC 7009 token revocation |
 | `POST /mcp` | bearer | The MCP endpoint (Streamable HTTP) |
@@ -8234,7 +8236,7 @@ expired rows (§25.13).
   administer."* — plus, while §25.5 hides restricted content, *"Namespace-restricted
   challenges are not shared with agents."* It says the connection can be revoked on
   **AI agents** (§25.9). **Approve** writes or refreshes the `oauth_grants` row;
-  **Deny** redirects with `access_denied`.
+  **Deny** returns the person to the client with `access_denied`.
   **Against consent phishing (added in v1.16)** — registration is open, so a
   look-alike `client_name` costs an attacker nothing; the page therefore makes the
   *destination* the thing the person reads, not the name:
@@ -8264,32 +8266,74 @@ expired rows (§25.13).
   a double submit cannot mint two codes. Anything else fails closed with **400**. (Not
   in memory: the render and the submit are separate entry points and need not share a
   process.)
-- **The consent page's CSP** widens `form-action` for that page only, to the shapes
-  registration accepts (loopback on any port, `https:`, and the client's registered
-  custom scheme): approving is a form POST answered with a 303 to another origin, and
-  browsers apply `form-action` across redirects. The redirect target is still checked
-  against the client's registration — the CSP is a filter, not the control. The
-  widening reaches the browser only if nothing in front of the web tier replaces or
-  adds a `Content-Security-Policy` (§2.4, *A proxy in front of the stack*): a proxy
-  policy with the base `form-action` blocks the 303 after the pending row is consumed
-  and the code minted, so the connection fails and the retry answers **400**.
+- **Approve and Deny are answered with a forwarding page, never a redirect.**
+  `POST /oauth/consent` answers **200** with a small standalone page — the consent
+  page's shell: outside AppShell, §2.2 tokens, no script — that sends the browser on
+  to the client's redirect URI with exactly the parameters a redirect would carry:
+  `code`, `state` and `iss` for an approval; `error=access_denied`, `state` and `iss`
+  for a denial.
+  **Why not a 303.** Approving is a form POST, and a browser applies the page's CSP
+  `form-action` to **every redirect that follows a form submission**. A 303 to the
+  client's origin is therefore blocked by any policy whose `form-action` does not
+  name that origin — and blocked *after* the handler has consumed the pending
+  authorization and minted the code, so the person stays on the consent page and a
+  second click answers 400 *"This approval has expired or was already used."* The
+  app's own policy used to be widened on this one page to let the redirect through.
+  That held only while nothing in front of the web tier replaced or added a policy
+  (§2.4, *A proxy in front of the stack*), and a deployment behind such a proxy could
+  not connect an agent at all. A page that forwards starts a new navigation that is
+  not part of the form submission; no CSP directive governs it, so it behaves the
+  same under any policy. (Checked in Chromium both ways: under a proxy-style policy
+  the 303 is blocked and the forwarding page reaches the client; under the base
+  policy the forwarding page reaches the client too.)
+  - **How it forwards.** `<meta http-equiv="refresh" content="0;url=…">` — at once,
+    with no click. A declarative refresh *replaces* the page in the session history,
+    so **Back** from the client returns to the consent page, never to this one. Below
+    it, a **Continue** link to the same URL, for a browser that does not move on its
+    own (a custom-scheme target that wants a click, a browser set to block
+    refreshes).
+  - **What it says.** After an approval, *"Approved. Returning to
+    **<destination>**…"*; after a denial, *"Declined. Returning to
+    **<destination>**…"* — `<destination>` worded as in the consent page's heading
+    (*this computer*, the host, or *<scheme>://*). Then *"If nothing happens, select
+    Continue."* and the **Continue** link, styled as the primary button. Nothing else.
+  - **The target is the redirect URI validated at `/oauth/authorize`**, read from the
+    pending row — never from the form — and HTML-escaped wherever it is written. The
+    page is `Cache-Control: no-store` and carries the `same-origin` referrer policy
+    (below), so the navigation to the client sends no `Referer`.
+  - **The code travels in the page body instead of a `Location` header.** Either way
+    it reaches only the person's own browser, and it stays single-use, 60 seconds and
+    PKCE-bound (below). A person who waits longer than that before selecting
+    **Continue** sends an expired code; the client reports the failure and they start
+    the connection again.
+  - **Reloading the page** re-submits the form (the browser asks first), finds the
+    pending row consumed and answers 400 — a reload can neither mint a second code nor
+    send the first one again.
+  - **The 303 that `GET /oauth/authorize` itself sends** — an error returned to a
+    registered redirect URI — is unchanged. It answers a plain navigation, not a form
+    submission (sign-in is started by script, not by a form), so `form-action` does not
+    apply to it.
+  - **The consent page's CSP is the base policy (§2.4).** The widening of
+    `form-action` to the registered redirect shapes is removed, and with it the last
+    page-specific loosening of the policy.
 - **`POST /oauth/consent` keeps the §2.4 `Origin` check.** `/mcp`,
   `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt from it, like the
   CSP report sink: they are called by programs, carry no cookie and never read a
   session.
 - **The consent page's referrer policy is `same-origin`**, set by a `<meta
-  name="referrer">` on the page (and on the non-redirecting error page, which shares
-  its shell); it overrides the §2.4 header for these two pages only. The approval is a
+  name="referrer">` on the page (and on the forwarding page and the non-redirecting
+  error page, which share its shell); it overrides the §2.4 header for these three
+  pages only. The approval is a
   plain form POST — a navigation, not a `fetch` — and for a navigation a browser
   derives the `Origin` header from the page's referrer policy: under `no-referrer` it
   sends **`Origin: null`**, which the check above refuses with 403. The page shipped
   with `no-referrer` from v1.6, so **no browser could approve or deny a connection**
   until this was corrected; it must never carry that value again. `same-origin` keeps
   what `no-referrer` was there for: the POST to InnoBox itself carries the real
-  `Origin` (and a `Referer` InnoBox already knows), while the 303 to the client's
-  redirect URI carries **no `Referer` at all**, so the authorization request's query
-  never reaches another origin. The Origin check itself is unchanged — an opaque
-  `Origin: null` stays refused.
+  `Origin` (and a `Referer` InnoBox already knows), while the navigation from the
+  forwarding page to the client's redirect URI carries **no `Referer` at all**, so
+  nothing about the authorization request reaches another origin through it. The
+  Origin check itself is unchanged — an opaque `Origin: null` stays refused.
 - **One scope, `mcp`.** The boundary is the person's role, re-resolved on every call
   from SCIM-synced groups and `role_mappings` (invariant 1). A token carries only
   `user_id`, `client_id` and `grant_id` — never a role or a namespace.
@@ -8598,12 +8642,21 @@ issue and rotation (they are metrics), and follows (as on the web).
   self-reveal and the `agent_connected` ledger check; `client_uri`/`logo_uri` must be
   `https`; the consent page's destination heading, loopback wording and unverified
   notice (never approved / under 24 h) and the approve checkbox requirement; the
-  consent and error pages carry the `same-origin` referrer policy and never
-  `no-referrer`.
+  consent, forwarding and error pages carry the `same-origin` referrer policy and
+  never `no-referrer`; the forwarding page's refresh target and its **Continue** link
+  are one and the same HTML-escaped URL (a redirect URI and a `state` full of markup
+  characters stay inert), it says *Approved* or *Declined*, words the destination as
+  the consent page does, and carries no script; **no page's policy widens
+  `form-action`** — the consent page's is the base directive.
 - *Integration (v1.16 additions):* a second exchange of a used code revokes the grant
   and the first exchange's tokens stop working; a refresh rotation ends the grant's
   earlier access tokens; a refresh with a different `resource` is `invalid_grant`; an
   approve without the checkbox is 400.
+- *Integration (the forwarding page):* `POST /oauth/consent` answers **200** with the
+  forwarding page and **no `Location` header**, for an approval and for a denial; the
+  target is the pending row's redirect URI with `code`/`state`/`iss` or
+  `error=access_denied`/`state`/`iss`; a second submit of the same form is 400 and
+  carries no target.
 - *Integration:* register → authorize → consent → token → `/mcp` → refresh → revoke;
   the pending authorization is single-use, expires and is bound to its person; a
   session cookie on `/mcp` is ignored; every tool's RBAC and visibility, **including
@@ -8623,7 +8676,9 @@ issue and rotation (they are metrics), and follows (as on the web).
   adds one to every request so that API fixtures pass the §2.4 check, which also
   overwrote the browser's own header on the form POST and hid the `Origin: null`
   failure above) — so the approval is sent with exactly the header a real browser
-  produces.
+  produces. The approval then reaches the client's redirect URI **through the
+  forwarding page, with the policy enforced** — the base `form-action`, which names
+  no client origin, so a regression to a redirect fails this step.
 
 ---
 

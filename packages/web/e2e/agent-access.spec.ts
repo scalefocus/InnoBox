@@ -58,8 +58,9 @@ test("connect from /agents through consent; the agent's challenge shows via agen
     for (const [k, v] of Object.entries({ response_type: "code", client_id: clientId, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: "S256", state: stamp, resource })) {
       authorize.searchParams.set(k, v);
     }
-    // The approval's 303 goes to the client's loopback redirect. Nothing listens there (the browser
-    // shows a connection error) — the redirected request itself carries the code and state.
+    // The approval is answered with the forwarding page, which sends the browser on to the client's
+    // loopback redirect. Nothing listens there (the browser shows a connection error) — the request
+    // itself carries the code and state.
     let callback: URL | null = null;
     page.on("request", (r) => {
       if (r.url().startsWith(REDIRECT)) callback = new URL(r.url());
@@ -75,7 +76,15 @@ test("connect from /agents through consent; the agent's challenge shows via agen
     await expect(page.getByText("Unverified application")).toBeVisible();
     await expect(page.getByText("It cannot like, change a status, assign, triage or administer.")).toBeVisible();
     await page.getByRole("checkbox", { name: "I started this connection from my own AI tool" }).check();
-    await page.getByRole("button", { name: "Approve" }).click();
+    // §25.13: the answer is a page, never a redirect. This runs with the policy enforced — the base
+    // form-action, which names no client origin — so a regression to a 303 would be blocked by the
+    // browser right here and the callback below would never arrive.
+    const [consentAnswer] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/oauth/consent"),
+      page.getByRole("button", { name: "Approve" }).click(),
+    ]);
+    expect(consentAnswer.status()).toBe(200);
+    expect(consentAnswer.headers()["location"]).toBeUndefined();
     await expect.poll(() => callback?.searchParams.get("code") ?? null).not.toBeNull();
     expect(callback!.searchParams.get("state")).toBe(stamp);
 

@@ -37,8 +37,8 @@ export const CSP_REPORT_GROUP = "csp";
  *  'unsafe-inline' script source. `dev` adds what `next dev` needs (React's eval-based debugging
  *  and the HMR websocket) and must never be true in a production build. `report` (the
  *  `enforce` and `report-only` modes, §2.4) appends `report-uri` + `report-to` naming the
- *  report sink. */
-export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean; report?: boolean; formAction?: readonly string[] }): string {
+ *  report sink. There is deliberately no per-page option: no page widens a directive (§25.3). */
+export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean; report?: boolean }): string {
   const scriptSrc = ["'self'"];
   if (opts.nonce) scriptSrc.push(`'nonce-${opts.nonce}'`, "'strict-dynamic'");
   if (opts.dev) scriptSrc.push("'unsafe-eval'");
@@ -56,8 +56,9 @@ export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean;
     ["object-src", ["'none'"]],
     ["base-uri", ["'none'"]],
     ["frame-ancestors", ["'none'"]],
-    // §25.3: the agent-access consent page alone widens this to the client redirect shapes.
-    ["form-action", ["'self'", OIDC_AUTHORITY_ORIGIN, ...(opts.formAction ?? [])]],
+    // The same on every page. §25.3: the agent-access consent form posts to 'self' and is answered
+    // with a forwarding page, not a redirect, so no client origin ever has to be named here.
+    ["form-action", ["'self'", OIDC_AUTHORITY_ORIGIN]],
   ];
   if (opts.report) {
     // Both, because browsers differ: report-to (the Reporting API) delivers only to https
@@ -66,9 +67,6 @@ export function buildContentSecurityPolicy(opts: { nonce?: string; dev: boolean;
   }
   return directives.map(([name, sources]) => `${name} ${sources.join(" ")}`).join("; ");
 }
-
-/** §25.3: the consent page (GET /oauth/authorize) — the one response whose form-action is widened. */
-export const CONSENT_PAGE_PATH = "/oauth/authorize";
 
 /** §11 download gateway: a served attachment can never run as script or style in our origin. */
 export const ATTACHMENT_DOWNLOAD_CSP = "sandbox; default-src 'none'";

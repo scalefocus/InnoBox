@@ -3,11 +3,13 @@
 // the static header set next.config.ts attaches to every response.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ATTACHMENT_DOWNLOAD_CSP,
   buildContentSecurityPolicy,
   CSP_REPORT_GROUP,
-  CONSENT_PAGE_PATH,
   CSP_REPORT_PATH,
   generateNonce,
   HSTS_VALUE,
@@ -123,13 +125,19 @@ test("attachment downloads get the sandbox CSP, nothing else does", () => {
   assert.equal(isAttachmentDownload("GET", "/challenges/12"), false);
 });
 
-test("§25.3: only the consent page widens form-action, and only by what it is given", () => {
-  assert.equal(CONSENT_PAGE_PATH, "/oauth/authorize");
-  assert.deepEqual(directives(buildContentSecurityPolicy({ nonce: "n", dev: false })).get("form-action"), ["'self'", "https://login.microsoftonline.com"]);
-  assert.deepEqual(directives(buildContentSecurityPolicy({ nonce: "n", dev: false, formAction: ["http://127.0.0.1:*", "https:"] })).get("form-action"), [
-    "'self'",
-    "https://login.microsoftonline.com",
-    "http://127.0.0.1:*",
-    "https:",
-  ]);
+test("§25.3: no page's policy widens form-action — the consent page's is the base directive", () => {
+  const base = ["'self'", "https://login.microsoftonline.com"];
+  // The builder has no per-page input, so every mode and environment yields the same directive.
+  for (const opts of [{ dev: false }, { dev: true }, { dev: false, report: true }, { dev: true, report: true }]) {
+    assert.deepEqual(directives(buildContentSecurityPolicy({ nonce: "n", ...opts })).get("form-action"), base);
+  }
+  // An option smuggled in is ignored: the old widening hook is gone, not merely unused.
+  const smuggled = { nonce: "n", dev: false, formAction: ["https:"] } as Parameters<typeof buildContentSecurityPolicy>[0];
+  assert.deepEqual(directives(buildContentSecurityPolicy(smuggled)).get("form-action"), base);
+  // And the middleware, which writes the header, builds one policy for every path: it never reads
+  // a redirect URI or passes a per-page source list.
+  const middleware = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "middleware.ts"), "utf8");
+  for (const gone of ["formAction", "redirect_uri", "consentFormActionSources"]) {
+    assert.ok(!middleware.includes(gone), `middleware.ts no longer mentions ${gone}`);
+  }
 });

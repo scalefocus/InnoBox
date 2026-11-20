@@ -1,9 +1,15 @@
-// The §25.3 consent page and the non-redirecting OAuth error page (INNOBOX_SPEC.md): standalone HTML
-// served by GET /oauth/authorize, outside AppShell, on the §2.2 tokens (light and dark follow the
-// OS). No script at all — the only interactive part is one form POST to /oauth/consent that
-// carries the pending-authorization handle, the choice and the "I started this connection"
+// The §25.3 consent page, the forwarding page that answers it, and the non-redirecting OAuth error
+// page (INNOBOX_SPEC.md): standalone HTML outside AppShell, on the §2.2 tokens (light and dark
+// follow the OS). No script at all — the only interactive part is one form POST to /oauth/consent
+// that carries the pending-authorization handle, the choice and the "I started this connection"
 // confirmation, nothing else. Every interpolated value is HTML-escaped. Pure, so the unit tests
 // render it directly.
+//
+// The forwarding page is how Approve and Deny reach the client: a 200 page that sends the browser
+// on, never a redirect. A browser applies the page's CSP form-action to every redirect that
+// follows a form submission, so a 303 to the client's origin is blocked by any policy that does
+// not name that origin (a proxy's, say) — after the code is already minted. A page that forwards
+// starts a new navigation, which no CSP directive governs.
 //
 // Against consent phishing (§25.3): registration is open, so a look-alike client_name costs an
 // attacker nothing. The page therefore makes the DESTINATION the thing the person reads — the
@@ -40,24 +46,27 @@ form.consent{display:grid;grid-template-columns:auto 1fr;gap:14px 10px;align-ite
 button{font:600 15px var(--font-display);border-radius:var(--radius-sm);padding:10px 18px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
 #confirm:checked~.actions .primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 a{color:var(--anchor)}
+a.go{display:inline-block;font:600 15px var(--font-display);border-radius:var(--radius-sm);padding:10px 18px;background:var(--accent);border:1px solid var(--accent);color:var(--accent-ink);text-decoration:none}
 .error{color:var(--danger);font-weight:600}
 `;
 
-/** §25.3: the referrer policy of both pages. The approval is a plain form POST — a navigation —
- *  and for a navigation a browser derives `Origin` from the page's referrer policy: under
- *  `no-referrer` it sends `Origin: null`, which the §2.4 check on POST /oauth/consent refuses with
- *  403 (the page shipped that way from v1.6 and no browser could approve). `same-origin` sends the
- *  real Origin on the POST to InnoBox and still no Referer on the 303 to the client's redirect
- *  URI, so the authorization request's query never reaches another origin. Never `no-referrer`. */
+/** §25.3: the referrer policy of all three pages. The approval is a plain form POST — a
+ *  navigation — and for a navigation a browser derives `Origin` from the page's referrer policy:
+ *  under `no-referrer` it sends `Origin: null`, which the §2.4 check on POST /oauth/consent refuses
+ *  with 403 (the page shipped that way from v1.6 and no browser could approve). `same-origin` sends
+ *  the real Origin on the POST to InnoBox and still no Referer on the forwarding page's navigation
+ *  to the client's redirect URI, so nothing about the authorization request reaches another origin
+ *  through it. Never `no-referrer`. */
 export const REFERRER_POLICY = "same-origin";
 
-function page(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="${REFERRER_POLICY}"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main><p class="brand">InnoBox</p>${body}</main></body></html>`;
+/** The shared shell. `head` is extra, already-escaped markup for the document head. */
+function page(title: string, body: string, head = ""): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="${REFERRER_POLICY}">${head}<title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main><p class="brand">InnoBox</p>${body}</main></body></html>`;
 }
 
 export interface ConsentPageInput {
   clientName: string;
-  /** The validated redirect URI the approval's 303 goes to — the page names its destination. */
+  /** The validated redirect URI the approval sends the person to — the page names its destination. */
   redirectUri: string;
   personName: string;
   /** The `oauth_pending_authorizations` id — the only thing the form carries besides the choice. */
@@ -124,6 +133,34 @@ ${notice}<form method="post" action="/oauth/consent" class="consent">
 <button type="submit" name="decision" value="deny" formnovalidate>Deny</button>
 </div>
 </form>`,
+  );
+}
+
+export interface ForwardPageInput {
+  outcome: "approved" | "denied";
+  /** The validated redirect URI from the pending row — the page names its destination. */
+  redirectUri: string;
+  /** That redirect URI with the answer's parameters: where the page sends the browser. */
+  target: string;
+}
+
+/**
+ * §25.3: the answer to Approve and Deny. It forwards at once with a declarative refresh — which
+ * replaces this page in the session history, so Back from the client returns to the consent page —
+ * and carries a Continue link to the same URL for a browser that does not move on its own (a
+ * custom-scheme target that wants a click, a browser set to block refreshes). The refresh URL
+ * starts with the redirect URI's scheme, never a quote, so the refresh parser reads all of it.
+ */
+export function renderForwardPage(input: ForwardPageInput): string {
+  const destination = describeDestination(input.redirectUri);
+  const target = escapeHtml(input.target);
+  const verdict = input.outcome === "approved" ? "Approved" : "Declined";
+  return page(
+    `Returning to ${destination.label}`,
+    `<h1>${verdict}. Returning to <span class="destination">${escapeHtml(destination.label)}</span>…</h1>
+<p class="muted">If nothing happens, select Continue.</p>
+<p><a class="go" href="${target}">Continue</a></p>`,
+    `<meta http-equiv="refresh" content="0;url=${target}">`,
   );
 }
 

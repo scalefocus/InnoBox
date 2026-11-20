@@ -8,7 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { MCP_PATH, MCP_SCOPE } from "@innobox/shared/mcp";
 import { classifyRedirectUri, matchRedirectUri } from "./redirect-uris";
 
-export { classifyRedirectUri, consentFormActionSources, matchRedirectUri, type RedirectKind } from "./redirect-uris";
+export { classifyRedirectUri, matchRedirectUri, type RedirectKind } from "./redirect-uris";
 
 // ── Tokens ───────────────────────────────────────────────────────────────────────────────
 
