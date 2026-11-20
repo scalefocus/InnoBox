@@ -88,7 +88,7 @@ click around a sandbox, this is not that project.
 | **PostgreSQL 16** | Bundled in the stack. Migrations are plain SQL in [`db/migrations/`](db/migrations/), applied automatically. |
 | **S3-compatible object storage** | Attachments. MinIO is bundled; point it at real S3 if you prefer. |
 | **ClamAV** | Bundled. Attachments are served only after a clean scan. |
-| **A TLS-terminating reverse proxy** | Yours. The stack serves plain HTTP on `:8080` behind it. |
+| **A TLS-terminating reverse proxy** | Yours. The stack serves plain HTTP on `:8080` behind it. It must pass the app's response headers through unchanged (see *Bring it up*). |
 | **A Microsoft 365 service mailbox** *(optional)* | Outbound e-mail through Microsoft Graph. Without it (or the SMTP fallback), the in-app inbox still works. |
 
 ---
@@ -165,6 +165,19 @@ The stack is **postgres · migrate · minio · clamav · web · worker · proxy*
 service applies every migration in order and exits 0 when done. Point your
 TLS-terminating proxy at port `8080`; the bundled Caddy routes `/scim/*` to the worker and
 everything else to the web app.
+
+**Let the app's response headers through.** The web app writes its own security headers,
+including a per-request `Content-Security-Policy`. Your proxy must not hide, replace or
+add to them (`Strict-Transport-Security` aside), and must not rewrite `Cache-Control`. A
+static policy at the proxy replaces the app's, and the first thing it breaks is approving
+an AI agent connection: the redirect after **Approve** is blocked, and a second click says
+the approval has expired. To check, look at what a browser actually receives:
+
+```bash
+curl -s -o /dev/null -D - https://innobox.example.com/ | grep -i content-security-policy
+```
+
+Expect exactly one line, starting `default-src 'self'; script-src 'self' 'nonce-`.
 
 ### 4. Operate it
 
