@@ -23,7 +23,12 @@ test("connect from /agents through consent; the agent's challenge shows via agen
   const stamp = uniqueStamp();
   const clientName = `E2E Agent ${stamp}`;
   const adminCtx = await browser.newContext();
-  const personCtx = await browser.newContext();
+  // §25.13: the person's browser sends exactly the headers a real browser produces. The suite's
+  // config adds an `Origin` to every request (so API fixtures pass the §2.4 check), and on a
+  // browser context that also overwrites the browser's OWN header — which hid a consent page whose
+  // referrer policy made Chromium send `Origin: null` on the approval's form POST (403 for every
+  // real person, green here). This context uses pages only, so it needs no forced header.
+  const personCtx = await browser.newContext({ extraHTTPHeaders: {} });
   // The agent is a program: its own request context, no browser cookies.
   const agent = await playwright.request.newContext();
   await signIn(adminCtx, { name: `E2E Agents Admin ${stamp}`, admin: true });

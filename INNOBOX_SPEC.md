@@ -763,7 +763,9 @@ these rules close the generic web-platform paths by which it could.
   outside `/api/*`: `POST /oauth/consent` carries this same `Origin` check, while
   `/mcp`, `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt — they are
   called by programs, carry no cookie and never read a session (§25.3). The consent
-  page alone widens `form-action` to the client redirect shapes (§25.3).
+  page alone widens `form-action` to the client redirect shapes (§25.3), and alone
+  narrows the referrer policy to `same-origin` — never `no-referrer`, under which a
+  browser sends `Origin: null` on a form POST and this check refuses it (§25.3).
 - **Substring filters are literal.** Every free-text "contains" filter that reaches a
   `LIKE`/`ILIKE` — the §13.1 gallery and §13.4 search *author name* filters, the §14.1
   triage *author name* filter, the §7.3 directory search `GET /api/users?q=`, the §15
@@ -8241,6 +8243,19 @@ expired rows (§25.13).
   `/oauth/register`, `/oauth/token` and `/oauth/revoke` are exempt from it, like the
   CSP report sink: they are called by programs, carry no cookie and never read a
   session.
+- **The consent page's referrer policy is `same-origin`**, set by a `<meta
+  name="referrer">` on the page (and on the non-redirecting error page, which shares
+  its shell); it overrides the §2.4 header for these two pages only. The approval is a
+  plain form POST — a navigation, not a `fetch` — and for a navigation a browser
+  derives the `Origin` header from the page's referrer policy: under `no-referrer` it
+  sends **`Origin: null`**, which the check above refuses with 403. The page shipped
+  with `no-referrer` from v1.6, so **no browser could approve or deny a connection**
+  until this was corrected; it must never carry that value again. `same-origin` keeps
+  what `no-referrer` was there for: the POST to InnoBox itself carries the real
+  `Origin` (and a `Referer` InnoBox already knows), while the 303 to the client's
+  redirect URI carries **no `Referer` at all**, so the authorization request's query
+  never reaches another origin. The Origin check itself is unchanged — an opaque
+  `Origin: null` stays refused.
 - **One scope, `mcp`.** The boundary is the person's role, re-resolved on every call
   from SCIM-synced groups and `role_mappings` (invariant 1). A token carries only
   `user_id`, `client_id` and `grant_id` — never a role or a namespace.
@@ -8548,7 +8563,9 @@ issue and rotation (they are metrics), and follows (as on the web).
   agent" masking on anonymous items; the four badges, including the replay on
   self-reveal and the `agent_connected` ledger check; `client_uri`/`logo_uri` must be
   `https`; the consent page's destination heading, loopback wording and unverified
-  notice (never approved / under 24 h) and the approve checkbox requirement.
+  notice (never approved / under 24 h) and the approve checkbox requirement; the
+  consent and error pages carry the `same-origin` referrer policy and never
+  `no-referrer`.
 - *Integration (v1.16 additions):* a second exchange of a used code revokes the grant
   and the first exchange's tokens stop working; a refresh rotation ends the grant's
   earlier access tokens; a refresh with a different `resource` is `invalid_grant`; an
@@ -8567,7 +8584,12 @@ issue and rotation (they are metrics), and follows (as on the web).
   tools/call) over Streamable HTTP.
 - *E2e:* connect from `/agents` through consent; an agent submits a challenge that
   appears with "via agent" in the triage queue; the person earns Plugged In and
-  Co-Pilot; revoking on `/agents` stops the next call.
+  Co-Pilot; revoking on `/agents` stops the next call. **The consent step runs in a
+  browser context without the suite's forced `Origin` header** (the Playwright config
+  adds one to every request so that API fixtures pass the §2.4 check, which also
+  overwrote the browser's own header on the form POST and hid the `Origin: null`
+  failure above) — so the approval is sent with exactly the header a real browser
+  produces.
 
 ---
 

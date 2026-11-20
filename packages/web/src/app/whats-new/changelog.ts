@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.29.1",
+    date: "2026-11-20",
+    summary:
+      "Connecting an AI agent now works. Approve and Deny on the connection page were refused with a \"forbidden\" error in every browser, so no AI tool could finish connecting. If you tried and it failed, start the connection again from your AI tool. Nothing else needs changing.",
+  },
+  {
     version: "1.29.0",
     date: "2026-11-17",
     summary:
