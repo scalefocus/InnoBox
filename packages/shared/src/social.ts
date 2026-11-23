@@ -3,6 +3,7 @@
 // caller. Comments/likes are never anonymous (§9); notifications must be anonymity-safe,
 // which callers satisfy by building `message` from already-masked display data.
 import { CHALLENGE_TERMINAL_STATUSES, type ChallengeStatus } from "./challenges.js";
+import { stripMentionMarks } from "./mentions.js";
 
 // ── Comments (§10.2) ─────────────────────────────────────────────────────────────────────
 
@@ -11,9 +12,16 @@ const COMMENT_EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 export type CommentResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
+/**
+ * A submitted comment as display text (§44.5): U+E000 and U+E001 are removed first, so nothing a
+ * person types or pastes can be read back as a mention; line breaks are stored as a single line
+ * feed; and the 5 000-character limit is checked on what is left after trimming — the text as its
+ * author typed it, before any mention becomes a token.
+ */
 export function validateCommentBody(body: unknown): CommentResult<string> {
-  if (typeof body !== "string" || body.trim() === "") return { ok: false, error: "comment body is required" };
-  const trimmed = body.trim();
+  if (typeof body !== "string") return { ok: false, error: "comment body is required" };
+  const trimmed = stripMentionMarks(body).replace(/\r\n?/g, "\n").trim();
+  if (trimmed === "") return { ok: false, error: "comment body is required" };
   if (trimmed.length > COMMENT_BODY_MAX) {
     return { ok: false, error: `comment must be at most ${COMMENT_BODY_MAX} characters` };
   }
@@ -102,6 +110,10 @@ export const NOTIFICATION_TYPES = [
   // once per solution, at the first moment they can see it. Immediate, never digested, muted by the
   // Mentions preference; names the sender unless the solution is anonymous.
   "mentioned",
+  // §12.1 event 27 / §44.6: you were mentioned in a comment — the mentioned person only, once per
+  // comment, at the save that mentions them, INSTEAD of event 6 for that comment. Immediate, never
+  // digested, muted by the same Mentions preference; always names the commenter (§9).
+  "mentioned_in_comment",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

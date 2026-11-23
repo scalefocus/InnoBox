@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { itemHref } from "./deep-link";
+import { commentHref, itemHref } from "./deep-link";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,4 +31,13 @@ test("comment notifications on a solution link with the #SOL anchor", () => {
   // The event 6 builder, shared by the comments route and the MCP post_comment tool.
   const source = readFileSync(path.join(here, "notify-events.ts"), "utf8");
   assert.match(source, /link: itemHref\(item\.challengeNumber, item\.solutionNumber\)/);
+});
+
+test("commentHref: a comment links to its challenge's page at the comment (§44.6)", () => {
+  const id = "3f2b6c1e-0000-4000-8000-000000000001";
+  assert.equal(commentHref("CH-42", id), `/challenges/42#comment-${id}`);
+  assert.equal(commentHref(42, id), `/challenges/42#comment-${id}`);
+  // Event 27 uses it for both kinds of thread: a solution's comment still opens its challenge.
+  const source = readFileSync(path.join(here, "notify-events.ts"), "utf8");
+  assert.match(source, /link: commentHref\(item\.challenge_number, comment\.id\)/);
 });

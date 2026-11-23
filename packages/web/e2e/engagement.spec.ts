@@ -31,7 +31,7 @@ test("engagement: comment (post + edit), like, and follow a challenge", async ({
   const editedBody = `Edited comment ${stamp}`;
   const commentList = page.locator(".rows");
   await commentList.getByRole("button", { name: "Edit" }).click();
-  await commentList.locator("input.field").fill(editedBody); // the inline edit input (no placeholder)
+  await commentList.getByLabel("Edit comment").fill(editedBody); // the §44.2 comment box, open on the comment
   await commentList.getByRole("button", { name: "Save", exact: true }).click(); // exact → not "Save changes"
   await expect(page.getByText(editedBody)).toBeVisible();
   await expect(commentList.locator(".chip", { hasText: "edited" })).toBeVisible();

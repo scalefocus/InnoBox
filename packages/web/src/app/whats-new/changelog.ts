@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.30.0",
+    date: "2026-11-23",
+    summary:
+      "New: richer comments. Comments now keep their line breaks and support Markdown (bold, italic, lists, quotes, code and links) with a Preview tab, and web addresses open in a new tab. Type @ to mention a colleague who can read the thread; they are told at once. Enter makes a new line and Ctrl+Enter posts. The profile switch is now called Mentions and covers solutions and comments.",
+  },
+  {
     version: "1.29.2",
     date: "2026-11-20",
     summary:

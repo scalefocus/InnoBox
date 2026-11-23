@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  aiSafeMentions,
   canSeeChallenge,
   canSeeSolution,
   challengeAuthorIdsSql,
@@ -122,7 +123,9 @@ async function visibleComments(
     [parentType, parentId],
   );
   const threaded = threadOrder(rows.map((row) => ({ id: row.id, threadRootId: row.thread_root_id, createdAt: row.sort_key, row })));
-  return threaded.map(({ row: r }) => ({ id: r.id, authorId: r.author_id, body: r.body, replyToId: r.reply_to_id }));
+  // §44.7 / §43.9: the text as written — its Markdown neither rendered nor stripped — with each
+  // mention as "@colleague". The stored text holds an id, never a name, and no name is put back.
+  return threaded.map(({ row: r }) => ({ id: r.id, authorId: r.author_id, body: aiSafeMentions(r.body), replyToId: r.reply_to_id }));
 }
 
 /** One thread state: the title plus each included comment's id and text (an edit changes it). */

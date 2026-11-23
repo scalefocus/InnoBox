@@ -7,7 +7,9 @@
 // caller cannot see or that does not exist, gets no users (§2.4 existence-not-disclosed).
 //
 // The §39.2 co-author pickers offer eligible people only, with one of `coAuthorFor=<CH-n | SOL-n>`
-// (the Team panel — a member of the item), `canSee=<CH-n>` (the solution form) or
+// (the Team panel — a member of the item), `canSee=<CH-n>` (the solution form, and the mention list
+// of a challenge's comment thread), `canSee=<SOL-n>` (the mention list of a solution's comment
+// thread, §44.5 — the people who can see that solution) or
 // `namespace=<slug>&visibility=org|namespace` (the challenge form). Every variant leaves out the
 // caller; a caller who may not use the variant gets no users.
 //

@@ -1,7 +1,11 @@
 // PATCH/DELETE /api/comments/:id (INNOBOX_SPEC.md §10.2): owner edit/delete within 15
-// minutes, or namespace/platform admin moderation (delete anytime, audited).
-import { requireUser } from "@/lib/auth";
+// minutes, or namespace/platform admin moderation (delete anytime, audited). §44: an edit takes
+// the box's `mentions` like a post; a person it newly mentions is told once, by event 27. Removing a
+// mention sends nothing and takes nothing back, and a delete removes the comment's mention notices.
+import { COMMENT_MENTION_MESSAGES, parseMentionsInput } from "@innobox/shared";
+import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
+import { logNotifyFailure, notifyCommentMentioned } from "@/lib/notify-events";
 import { deleteComment, editComment } from "../store";
 import { readJsonObject, trashedResponse } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -18,11 +22,26 @@ async function handlePATCH(req: Request, context: { params: Promise<{ id: string
   const read = await readJsonObject(req);
   if (!read.ok) return read.response;
   const body = read.value;
+  // §44.10: absent binds the comment's current mentions; `[]` removes them all from the text.
+  const mentions = parseMentionsInput(body.mentions);
+  if (!mentions.ok) return Response.json({ error: mentions.error }, { status: 400 });
 
-  const result = await editComment(pool, { userId: gate.user.id, roles: gate.user.roles }, id, body.body);
+  const result = await editComment(pool, { userId: gate.user.id, roles: gate.user.roles }, id, body.body, {
+    candidates: mentions.value,
+    resolveRoles: resolveRolesForUser,
+  });
   switch (result.status) {
     case "ok":
+      // §44.6 event 27: a mention added in an edit notifies like one made on the box. An edit writes
+      // no event 6, so there is nothing to leave anyone out of.
+      await notifyCommentMentioned({ pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser }, result.comment, result.mentioned).catch(
+        logNotifyFailure("comment mention notification failed"),
+      );
       return Response.json({ comment: result.comment });
+    case "ineligible_mention":
+      return Response.json({ error: COMMENT_MENTION_MESSAGES.ineligible }, { status: 422 });
+    case "mention_cap":
+      return Response.json({ error: result.reason === "comment_cap" ? COMMENT_MENTION_MESSAGES.commentCap : COMMENT_MENTION_MESSAGES.dailyCap, code: result.reason }, { status: 409 });
     case "not_found":
       return Response.json({ error: "comment not found" }, { status: 404 });
     case "trashed":
