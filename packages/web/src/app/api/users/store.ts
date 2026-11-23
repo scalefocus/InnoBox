@@ -356,6 +356,10 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // §44.8: the same for mentions in comments — no comment is rewritten either.
     await client.query(`delete from comment_mentions where user_id = $1`, [userId]);
     await client.query(`update comment_mentions set mentioned_by = null where mentioned_by = $1`, [userId]);
+    // §45.8: the person's own innovation board entry goes — an erased account reads nothing early
+    // and is told nothing — and the entries they added as an admin lose who added them.
+    const board = await client.query(`delete from innovation_board_members where user_id = $1`, [userId]);
+    await client.query(`update innovation_board_members set added_by = null where added_by = $1`, [userId]);
     // §25.13: the person's AI agent grants are revoked (audited, reason "erased") and deleted —
     // their tokens and pending authorizations cascade. mcp_client_name is not personal data.
     await eraseUserGrants(client, userId, adminUserId);
@@ -371,6 +375,8 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
         reassignedTo: reassignment?.successorId ?? null,
         reassignedCount: reassignment?.moved.length ?? 0,
         skippedCount: reassignment?.skipped.length ?? 0,
+        // §45.10: present only when the erasure took the person off the innovation board.
+        ...(board.rowCount ? { boardMember: true } : {}),
       },
     });
     return { status: "ok", reassignment };

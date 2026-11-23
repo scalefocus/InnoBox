@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildRoleSet, type RoleGrant } from "./rbac.js";
+import { buildRoleSet, withoutInnovationBoard, type RoleGrant } from "./rbac.js";
 
 const GLOBAL = "00000000-0000-0000-0000-000000000001";
 const NS_A = "aaaaaaaa-0000-0000-0000-000000000001";
@@ -114,4 +114,29 @@ test("platform admin: memberNamespaces still lists only granted namespaces plus 
   assert.deepEqual(rs.memberNamespaces(), [GLOBAL]);
   // ... while isMemberOf remains true everywhere (checked above); the list is what the
   // user belongs to, not what they can see.
+});
+
+// ── §45 the innovation board flag ─────────────────────────────────────────────────────────
+
+test("isInnovationBoardMember is false unless the caller says so — a forgotten option fails closed", () => {
+  assert.equal(buildRoleSet([], { globalNamespaceId: GLOBAL }).isInnovationBoardMember, false);
+  assert.equal(buildRoleSet([], { globalNamespaceId: GLOBAL, innovationBoardMember: false }).isInnovationBoardMember, false);
+  assert.equal(buildRoleSet([], { globalNamespaceId: GLOBAL, innovationBoardMember: true }).isInnovationBoardMember, true);
+});
+
+test("withoutInnovationBoard drops the exemption and nothing else (§45.3 — the assignee gate)", () => {
+  const rs = buildRoleSet([{ role: "namespace_admin", namespaceId: NS_A }], {
+    globalNamespaceId: GLOBAL,
+    accessListChallengeIds: ["cccccccc-0000-0000-0000-000000000001"],
+    innovationBoardMember: true,
+  });
+  const plain = withoutInnovationBoard(rs);
+  assert.equal(plain.isInnovationBoardMember, false);
+  assert.equal(plain.isNamespaceAdmin(NS_A), true);
+  assert.equal(plain.isOnAccessList("cccccccc-0000-0000-0000-000000000001"), true);
+  assert.deepEqual(plain.memberNamespaces().sort(), rs.memberNamespaces().sort());
+  assert.equal(rs.isInnovationBoardMember, true, "the original is untouched");
+  // A non-member's roles come back as they are.
+  const other = buildRoleSet([], { globalNamespaceId: GLOBAL });
+  assert.equal(withoutInnovationBoard(other), other);
 });

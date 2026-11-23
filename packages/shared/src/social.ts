@@ -114,6 +114,9 @@ export const NOTIFICATION_TYPES = [
   // comment, at the save that mentions them, INSTEAD of event 6 for that comment. Immediate, never
   // digested, muted by the same Mentions preference; always names the commenter (§9).
   "mentioned_in_comment",
+  // §12.1 event 28 / §45.6: a platform admin added you to the innovation board — the added person
+  // only, on every add, never on a removal. Immediate, never digested, not mutable; names no item.
+  "innovation_board_added",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

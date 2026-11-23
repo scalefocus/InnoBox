@@ -17,6 +17,7 @@ import { SURVEY_CHANGED_EVENT, announceSurveyChanged, requestSurveyOpen, request
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../challenges/status";
 import { AvatarBubble } from "@/components/AvatarBubble";
 import { Achievements, type EarnedBadgeData, type LevelData, type LockedBadgeData } from "@/components/Gamification";
+import { InnovationBoardProfileLine } from "@/components/InnovationBoardNote";
 import type { GamificationPreferences, LeaderBadge } from "@innobox/shared/gamification";
 import {
   NOTIFICATION_PREFERENCES,
@@ -280,6 +281,8 @@ export default function ProfilePage() {
       {g && <Achievements level={g} leading={g.leading} earned={g.earned} locked={g.locked} />}
 
       <div className="card card-pad reveal" style={{ marginBottom: 18 }}>
+        {/* §45.7: an innovation board member is told so, above their notification preferences. */}
+        <InnovationBoardProfileLine />
         <div className="row" style={{ border: 0, padding: 0 }}>
           <div className="grow">
             <div className="ttl">E-mail notifications</div>

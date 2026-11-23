@@ -17,6 +17,7 @@ import {
   resolveReplyTarget,
   validateCommentBody,
   viaAgentOf,
+  withoutInnovationBoard,
   type MentionCandidate,
   type ViaAgent,
 } from "@innobox/shared";
@@ -205,6 +206,9 @@ export interface CommentSaveMentions {
  * item's full §4.3 predicate with their own roles, which for a solution narrows while it is
  * `proposed` to its team, the challenge's assignee, the namespace's committee and admins, and
  * platform admins. Nobody waits, so no notice can reveal a hidden solution (§44 decision 8).
+ * §45.3: judged without the innovation board exemption, exactly as the mention list (its SQL twin,
+ * which knows nothing of the board) offers people — so a refused or accepted mention on a thread
+ * still in review never tells the commenter who is on the board.
  */
 async function canAllReadThread(
   db: Pool | PoolClient,
@@ -216,7 +220,12 @@ async function canAllReadThread(
 ): Promise<boolean> {
   if (userIds.length === 0) return true;
   const parent = await loadParentVisibility(db, parentType, parentId);
-  return areEligibleForMention(db, userIds, commenterId, async (userId) => parentAccessFor({ userId, roles: await resolveRoles(userId) }, parent) === "live");
+  return areEligibleForMention(
+    db,
+    userIds,
+    commenterId,
+    async (userId) => parentAccessFor({ userId, roles: withoutInnovationBoard(await resolveRoles(userId)) }, parent) === "live",
+  );
 }
 
 /** One comment as a record, read back inside the transaction that wrote it: display text, its

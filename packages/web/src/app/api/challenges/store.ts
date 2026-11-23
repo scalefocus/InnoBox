@@ -65,6 +65,7 @@ import {
   validateChallengeFields,
   validateSolutionFields,
   viaAgentOf,
+  withoutInnovationBoard,
   type AccessEntryView,
   type AttachmentView,
   type ChallengeStatus,
@@ -929,7 +930,9 @@ function namespacesWithRole(viewer: Viewer, roles: readonly string[]): string[] 
  *  member-only, or — for `people` — open to the access list, the namespace's admins and
  *  committee, and the assignee. Platform admins see everything — except the trash (§10.4): a trashed challenge
  *  is gone from every list for everyone, platform admins included (they reach it through the
- *  trash page instead). */
+ *  trash page instead). §45.3: an innovation board member is exempt from the state rule for
+ *  `awaiting_triage` (never `withdrawn`) — for them such a row is judged by the visibility rule
+ *  alone, exactly as `canSeeChallenge` does, so no restricted content opens. */
 export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[], alias = "c"): void {
   const a = alias;
   conditions.push(`${a}.trashed_at is null`);
@@ -941,13 +944,16 @@ export function pushChallengeVisibilityConditions(viewer: Viewer, push: (v: unkn
   const memberNamespaceIds = viewer.roles.memberNamespaces();
   const namespaceAdminIds = namespacesWithRole(viewer, ["namespace_admin"]);
   const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
-  conditions.push(
-    `(CASE WHEN ${a}.status IN ('awaiting_triage','withdrawn')
-           THEN ${isChallengeMemberSql(a, viewerParam)} OR ${a}.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])
-           WHEN ${a}.visibility = 'people'
+  // The §4.3 visibility rule alone — the ELSE arms below, and the board's whole test in triage.
+  const visibilityRule = `(CASE WHEN ${a}.visibility = 'people'
            THEN ${a}.namespace_id = ANY(${push(reviewerNamespaceIds)}::uuid[]) OR ${a}.assignee_id = ${viewerParam}
                 OR ${a}.id = ANY(${push(viewer.roles.accessListChallenges())}::uuid[])
-           ELSE ${a}.visibility = 'org' OR ${a}.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`,
+           ELSE ${a}.visibility = 'org' OR ${a}.namespace_id = ANY(${push(memberNamespaceIds)}::uuid[]) END)`;
+  const boardInTriage = viewer.roles.isInnovationBoardMember ? ` OR (${a}.status = 'awaiting_triage' AND ${visibilityRule})` : "";
+  conditions.push(
+    `(CASE WHEN ${a}.status IN ('awaiting_triage','withdrawn')
+           THEN ${isChallengeMemberSql(a, viewerParam)} OR ${a}.namespace_id = ANY(${push(namespaceAdminIds)}::uuid[])${boardInTriage}
+           ELSE ${visibilityRule} END)`,
   );
 }
 
@@ -971,10 +977,11 @@ export function pushTopicFilter(filters: { topicId?: string }, push: (v: unknown
  *  committee/admins. It narrows only — pair it with pushChallengeVisibilityConditions for the
  *  parent, exactly as the JS gate is paired with canSeeChallenge. Running it inside the query
  *  keeps hidden rows from filling a `limit` ahead of visible ones. Platform admins see all but
- *  the trash (§10.4): a trashed solution is gone from every list for everyone. */
+ *  the trash (§10.4): a trashed solution is gone from every list for everyone. An innovation board
+ *  member sees a `proposed` solution of any challenge they can see (§45.3), so nothing narrows. */
 export function pushSolutionVisibilityConditions(viewer: Viewer, push: (v: unknown) => string, conditions: string[]): void {
   conditions.push(`s.trashed_at is null`);
-  if (viewer.roles.isPlatformAdmin) return;
+  if (viewer.roles.isPlatformAdmin || viewer.roles.isInnovationBoardMember) return;
   const viewerParam = push(viewer.userId);
   const reviewerNamespaceIds = namespacesWithRole(viewer, ["committee", "namespace_admin"]);
   conditions.push(
@@ -2234,7 +2241,9 @@ async function loadChallengeForAssignment(
     if (!userRows[0]) return { status: "unknown_user" };
     // §7.3: the assignee must be able to see the challenge — checked at assignment time only,
     // with their roles resolved from SCIM-synced membership exactly as the §3 hand-over does.
-    if (!isChallengeRowVisible({ userId: assigneeUserId, roles: await resolveRoles(assigneeUserId) }, current)) {
+    // §45.3: judged without the innovation board exemption, like the picker (its SQL twin), so a
+    // refused or accepted assignment in triage never tells a namespace admin who is on the board.
+    if (!isChallengeRowVisible({ userId: assigneeUserId, roles: withoutInnovationBoard(await resolveRoles(assigneeUserId)) }, current)) {
       // A `people` challenge past triage relaxes the gate instead: the assignment puts them on
       // its access list. In triage the ordinary gate holds (only its namespace's admins).
       if (isPeopleAutoAddable(current)) return { status: "ok", current, addToAccessList: true };
@@ -2592,9 +2601,14 @@ export async function editSolution(
       assigneeId: cur.assignee_id,
       trashed: cur.challenge_trashed,
     };
+    // §45.3: judged without the innovation board exemption, like the mention list (its SQL twin) —
+    // it only matters once an admin has moved the challenge back into triage, and then neither
+    // answer may tell the author who is on the board.
     const eligible =
       mentions !== undefined &&
-      (await areEligibleForMention(pool, fresh, author.userId, async (userId) => canSeeChallenge({ userId, roles: await mentions.resolveRoles(userId) }, parent)));
+      (await areEligibleForMention(pool, fresh, author.userId, async (userId) =>
+        canSeeChallenge({ userId, roles: withoutInnovationBoard(await mentions.resolveRoles(userId)) }, parent),
+      ));
     if (!eligible) return { status: "ineligible_mention" };
   }
 
@@ -3252,7 +3266,9 @@ async function isEligibleCoAuthor(client: PoolClient, item: TeamItem, userId: st
     [userId, item.id],
   );
   if (!rows[0]?.ok) return false;
-  const candidate: Viewer = { userId, roles: await resolveRoles(userId) };
+  // §45.3: without the innovation board exemption, like the picker (its SQL twin) — for a solution
+  // whose challenge an admin moved back into triage, neither answer may tell the team who is on it.
+  const candidate: Viewer = { userId, roles: withoutInnovationBoard(await resolveRoles(userId)) };
   return item.entity === "challenge" ? canJoinChallengeTeam(candidate, item.challenge) : canSeeChallenge(candidate, item.challenge);
 }
 

@@ -48,6 +48,7 @@ import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker } from "@/components/TeamPa
 import type { UserResult } from "@/components/UserResultButton";
 import { readJson } from "@/lib/api-client";
 import { AffectedButton } from "@/components/Affected";
+import { InnovationBoardFormNote } from "@/components/InnovationBoardNote";
 import {
   AFFECTED_BANNER_LINE,
   AFFECTED_ESTIMATE_HINT,
@@ -516,6 +517,8 @@ export default function NewChallengePage() {
         </div>
 
         <div>
+          {/* §45.7: while the innovation board has a member, say it can read this before review. */}
+          <InnovationBoardFormNote form="challenge" restricted={visibility === "namespace"} />
           <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled || ai.busy}>
             <PrimaryButtonLabel state={button} />
           </button>

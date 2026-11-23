@@ -2,8 +2,9 @@
 // staleness"). Roles come from SCIM-synced group membership + role_mappings on every request, never
 // from token claims (invariant 1), and nothing here is cached across requests. What this module
 // bounds is the cost: the grants, the bootstrap-group implicit mapping, the §4.3 `people` access
-// list and the built-in `global` namespace id are read in a single round trip — as arrays on one
-// row per user — where they used to be three or four sequential queries.
+// list, the §45 innovation board membership and the built-in `global` namespace id are read in a
+// single round trip — as arrays (and one boolean) on one row per user — where they used to be
+// three or four sequential queries.
 //
 // Kept free of next/* and next-auth so the gated `.dbtest.ts` suites can run it under the plain
 // node test runner; lib/auth.ts is the session-facing wrapper.
@@ -32,6 +33,7 @@ function roleColumns(uid: string, bootstrap: string): string {
     coalesce((
       select array_agg(ca.challenge_id::text order by ca.challenge_id) from challenge_access ca where ca.user_id = ${uid}
     ), '{}'::text[]) as access,
+    exists (select 1 from innovation_board_members ib where ib.user_id = ${uid}) as board_member,
     (select ns.id from namespaces ns where ns.slug = 'global') as global_namespace_id`;
 }
 
@@ -39,6 +41,8 @@ interface RoleRow {
   grants: { role: Role; namespace_id: string | null }[];
   bootstrap_admin: boolean;
   access: string[];
+  /** §45: a row in `innovation_board_members` — a database grant, never a token claim. */
+  board_member: boolean;
   global_namespace_id: string | null;
 }
 
@@ -49,6 +53,7 @@ function toRoleSet(row: RoleRow): RoleSet {
     bootstrapPlatformAdmin: row.bootstrap_admin,
     globalNamespaceId: row.global_namespace_id,
     accessListChallengeIds: row.access,
+    innovationBoardMember: row.board_member,
   });
 }
 

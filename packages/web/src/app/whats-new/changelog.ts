@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.31.0",
+    date: "2026-11-23",
+    summary:
+      "New: the innovation board. Platform admins can add up to 100 people under Platform settings; they can read new challenges and solutions before review and are told about each one by e-mail and in-app, following their e-mail delivery choice. Submit forms say when the board can read what you submit. Anonymous submissions stay anonymous.",
+  },
+  {
     version: "1.30.0",
     date: "2026-11-23",
     summary:

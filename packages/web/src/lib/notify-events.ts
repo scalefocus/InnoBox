@@ -6,6 +6,10 @@
 // says. Messages never carry an author's identity, so anonymity (§9) cannot leak through them.
 // Relative imports only (no `@/`) so the gated .dbtest.ts suites run under the plain node runner.
 import {
+  BOARD_ADDED_SUBJECT,
+  boardAddedEmailText,
+  boardAddedMessage,
+  boardChallengeSubmittedMessage,
   challengeAuthorIdsSql,
   challengeTeamJsonSql,
   commentMentionedMessage,
@@ -44,6 +48,7 @@ import {
   dispatchTopicNotices,
   dispatchToUser,
   getFollowerUserIds,
+  getInnovationBoardUserIds,
   getNamespaceAdminUserIds,
   getNamespaceCommitteeUserIds,
   getOtherCommenterUserIds,
@@ -248,11 +253,34 @@ export async function notifyAssignmentChanged(
 }
 
 /**
+ * §45.5: the innovation board route of events 1 and 2 — everyone on the board, less the members of
+ * the new item's own team (they wrote it, or event 21 told them) and less `stronger`, the people a
+ * stronger route of the same event already reaches. The actor, the deactivated and anyone who cannot
+ * see the item are dropped by the dispatch, as for every recipient.
+ */
+async function boardRoute(ctx: NotifyContext, item: NotificationTarget, stronger: readonly string[] = []): Promise<string[]> {
+  const board = await getInnovationBoardUserIds(ctx.pool);
+  if (board.length === 0) return [];
+  const { rows } = await ctx.pool.query<{ author_ids: string[] }>(
+    item.parentType === "challenge"
+      ? `select ${challengeAuthorIdsSql("c")} as author_ids from challenges c where c.id = $1`
+      : `select ${solutionAuthorIdsSql("s")} as author_ids from solutions s where s.id = $1`,
+    [item.parentId],
+  );
+  const skip = new Set([...stronger, ...(rows[0]?.author_ids ?? [])]);
+  return board.filter((id) => !skip.has(id));
+}
+
+/**
  * §12.1 event 2 (solution proposed): namespace admins + committee, the challenge author and the
- * challenge's followers. Visible per the challenge (its followers hear about it), but ABOUT the
+ * challenge's followers, and the innovation board (§45.5). Visible per the challenge (its followers
+ * hear about it), but ABOUT the
  * new solution: the link scrolls to it (§12.1) and the row carries it as its target, so deleting
  * the solution takes the row with it (§10.3). Mutable for the author and followers; for admins
- * and the committee it is an attention event (triage is a duty), so they are exempt.
+ * and the committee it is an attention event (triage is a duty), so they are exempt — and so is the
+ * board route, which has no preference at all. A person on several routes gets one row, by the
+ * strongest: admin or committee (immediate), then the board (held for a digest, never muted), then
+ * author or follower (held, mutable).
  */
 export async function notifySolutionProposed(
   ctx: NotifyContext,
@@ -266,15 +294,16 @@ export async function notifySolutionProposed(
   );
   const challenge = rows[0];
   if (!challenge) return;
-  const [admins, committee, followers] = await Promise.all([
+  const [admins, committee, followers, board] = await Promise.all([
     getNamespaceAdminUserIds(ctx.pool, challenge.namespace_id),
     getNamespaceCommitteeUserIds(ctx.pool, challenge.namespace_id),
     getFollowerUserIds(ctx.pool, "challenge", challenge.id),
+    boardRoute(ctx, { parentType: "solution", parentId: solution.id }),
   ]);
   await dispatchEvent(
     ctx,
     { parentType: "challenge", parentId: challenge.id },
-    [...admins, ...committee, ...challenge.author_ids, ...followers],
+    [...admins, ...committee, ...challenge.author_ids, ...followers, ...board],
     "solution_proposed",
     {
       message: `A new solution was proposed on CH-${number} "${challenge.title}".`,
@@ -282,31 +311,70 @@ export async function notifySolutionProposed(
       parentType: "solution",
       parentId: solution.id,
     },
-    { preference: "followedSolutions", exempt: [...admins, ...committee] },
-    // Held for the author and followers only — to admins and the committee it is an attention event.
+    { preference: "followedSolutions", exempt: [...admins, ...committee, ...board] },
+    // Held for the author, followers and the board — to admins and the committee it is an attention event.
     { event: 2, adminRoute: [...admins, ...committee], facts: { kind: "solution", challengeNumber: number, challengeTitle: challenge.title } },
   );
 }
 
 /**
- * §12.1 event 1 (challenge submitted): the namespace's admins, to triage it. Shared by the submit
- * route and the §25 `submit_challenge` tool, so both fire the same event.
+ * §12.1 event 1 (challenge submitted): the namespace's admins, to triage it, and the innovation
+ * board members who can see it (§45.5), who are only told. Shared by the submit route, the §25
+ * `submit_challenge` tool and a public submission's Accept (§24.6), so all three fire the same event.
+ * Two routes, two wordings: an admin reads "needs triage" at once; a board member who is not also an
+ * admin reads "was submitted", held for their digest when they chose one.
  */
 export async function notifyChallengeSubmitted(
   ctx: NotifyContext,
   challenge: { id: string; number: string; title: string; namespaceId: string },
 ): Promise<void> {
+  // Every caller passes the display number ("CH-412"); normalize so it is prefixed exactly once.
+  const number = digitsOf(challenge.number);
+  const scope = { parentType: "challenge", parentId: challenge.id } as const;
+  const link = `/challenges/${number}`;
+  const admins = await getNamespaceAdminUserIds(ctx.pool, challenge.namespaceId);
+  await dispatchEvent(ctx, scope, admins, "challenge_submitted", {
+    message: `New challenge ${formatChallengeNumber(number)} "${challenge.title}" needs triage.`,
+    link,
+  });
+  const board = await boardRoute(ctx, scope, admins);
+  if (board.length === 0) return;
   await dispatchEvent(
     ctx,
-    { parentType: "challenge", parentId: challenge.id },
-    await getNamespaceAdminUserIds(ctx.pool, challenge.namespaceId),
+    scope,
+    board,
     "challenge_submitted",
-    {
-      // Both callers pass the display number ("CH-412"); normalize so it is prefixed exactly once.
-      message: `New challenge ${formatChallengeNumber(digitsOf(challenge.number))} "${challenge.title}" needs triage.`,
-      link: `/challenges/${digitsOf(challenge.number)}`,
-    },
+    { message: boardChallengeSubmittedMessage(number, challenge.title), link },
+    undefined,
+    { event: 1, facts: { kind: "challenge", challengeNumber: number, challengeTitle: challenge.title } },
   );
+}
+
+/**
+ * §12.1 event 28 (§45.6): each person a platform admin just added to the innovation board — never
+ * the admin themselves (the actor), never on a removal. Immediate, never digested, not mutable; the
+ * row names no item, so no visibility gate applies. Called after the add committed.
+ */
+export async function notifyBoardMembersAdded(ctx: NotifyContext, userIds: readonly string[]): Promise<void> {
+  if (!ctx.actorId || userIds.length === 0) return;
+  const { rows } = await ctx.pool.query<{ display_name: string }>(`select display_name from users where id = $1`, [ctx.actorId]);
+  const adminName = rows[0]?.display_name ?? "A platform admin";
+  for (const userId of userIds) {
+    await dispatchToUser(
+      ctx,
+      userId,
+      "innovation_board_added",
+      {
+        message: boardAddedMessage(adminName),
+        subject: BOARD_ADDED_SUBJECT,
+        emailText: boardAddedEmailText(adminName),
+        link: "/profile",
+        addedById: ctx.actorId,
+        addedByName: adminName,
+      },
+      null,
+    );
+  }
 }
 
 /** §12.1 event 9 (challenge resubmitted, §10.1): the namespace's admins + committee, the assignee

@@ -128,3 +128,84 @@ test(
     }
   },
 );
+
+test(
+  "digest job §45.5: an innovation board member's held notices pass the send-time check while the item is still in review — and are dropped once they leave the board",
+  { skip: url ? false : "DATABASE_URL not set — live-DB suite self-skips" },
+  async () => {
+    const { Pool } = await import("pg");
+    const { randomUUID } = await import("node:crypto");
+    const { runDigestSweep } = await import("./digest.js");
+
+    const pool = new Pool({ connectionString: url });
+    const onBoard: string[] = [];
+    try {
+      const stamp = randomUUID().slice(0, 8);
+      const transport = { graphEnv: null, smtpEnv: null, baseUrl: "https://innobox.example.com", batchSize: 1000, userBatch: 1000 };
+      const { rows: g } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
+      const { rows: ia } = await pool.query<{ id: string }>(`select id from impact_areas where active and name <> 'Client' limit 1`);
+      const mkUser = async (label: string) => {
+        const { rows } = await pool.query<{ id: string }>(
+          `insert into users (external_id, user_name, display_name, email, email_delivery) values ($1, $2, $3, $4, 'daily') returning id`,
+          [`dbtest-djb-${label}-${stamp}`, `dbtest-djb-${label}-${stamp}@example.test`, `Dbtest DJB ${label}`, `djb-${label}-${stamp}@example.test`],
+        );
+        return rows[0]!.id;
+      };
+      const author = await mkUser("author");
+      const staying = await mkUser("staying"); // on the board at the slot
+      const leaving = await mkUser("leaving"); // taken off the board before the slot
+      const outsider = await mkUser("outsider"); // never on the board — the control
+      await pool.query(`insert into innovation_board_members (user_id) select u from unnest($1::uuid[]) as u`, [[staying, leaving]]);
+      onBoard.push(staying, leaving);
+
+      // An org challenge still in triage, and a proposed solution on an open one.
+      const { rows: triage } = await pool.query<{ id: string; number: string }>(
+        `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
+         values ($1, 'org', $2, 'board digest', $3, $4, 'awaiting_triage') returning id, number::text`,
+        [g[0]!.id, `Board triage ${stamp}`, ia[0]!.id, author],
+      );
+      const { rows: open } = await pool.query<{ id: string; number: string }>(
+        `insert into challenges (namespace_id, visibility, title, description, impact_area_id, author_id, status)
+         values ($1, 'org', $2, 'board digest', $3, $4, 'valid') returning id, number::text`,
+        [g[0]!.id, `Board open ${stamp}`, ia[0]!.id, author],
+      );
+      const { rows: sol } = await pool.query<{ id: string }>(`insert into solutions (challenge_id, description, author_id, status) values ($1, 'board digest', $2, 'proposed') returning id`, [
+        open[0]!.id,
+        author,
+      ]);
+
+      /** A held row as lib/notify.ts writes it for the board route of events 1 and 2, already due. */
+      const hold = async (userId: string, type: string, kind: "challenge" | "solution", parentType: "challenge" | "solution", parentId: string, number: string) => {
+        const payload = { message: `${kind} ${stamp}`, link: `/challenges/${number}`, parentType, parentId };
+        const { rows: n } = await pool.query<{ id: string }>(`insert into notifications (user_id, type, payload) values ($1, $2, $3) returning id`, [userId, type, JSON.stringify(payload)]);
+        const { rows: o } = await pool.query<{ id: string }>(
+          `insert into notification_outbox (user_id, type, payload, digest_due_at) values ($1, $2, $3, now() - interval '1 second') returning id`,
+          [userId, type, JSON.stringify({ ...payload, notificationId: n[0]!.id, digest: { kind, challengeNumber: number, challengeTitle: "t" } })],
+        );
+        return o[0]!.id;
+      };
+      const rowsOf = async (userId: string) => ({
+        challenge: await hold(userId, "challenge_submitted", "challenge", "challenge", triage[0]!.id, triage[0]!.number),
+        solution: await hold(userId, "solution_proposed", "solution", "solution", sol[0]!.id, open[0]!.number),
+      });
+      const kept = await rowsOf(staying);
+      const lost = await rowsOf(leaving);
+      const never = await rowsOf(outsider);
+      await pool.query(`delete from innovation_board_members where user_id = $1`, [leaving]);
+
+      await runDigestSweep(pool, transport);
+      const status = async (id: string) => (await pool.query<{ status: string }>(`select status from notification_outbox where id = $1`, [id])).rows[0]!.status;
+      // No transport is configured, so a row that goes INTO a digest ends `failed` (one attempt,
+      // backed off); a row dropped by the send-time visibility check is marked `sent`.
+      assert.equal(await status(kept.challenge), "failed", "a member's new-challenge notice is kept while the challenge awaits triage");
+      assert.equal(await status(kept.solution), "failed", "and their new-solution notice while the solution is still proposed");
+      assert.equal(await status(lost.challenge), "sent", "dropped once the person is off the board");
+      assert.equal(await status(lost.solution), "sent");
+      assert.equal(await status(never.challenge), "sent", "the control: a non-member cannot see either");
+      assert.equal(await status(never.solution), "sent");
+    } finally {
+      if (onBoard.length > 0) await pool.query(`delete from innovation_board_members where user_id = any($1::uuid[])`, [onBoard]).catch(() => {});
+      await pool.end();
+    }
+  },
+);
