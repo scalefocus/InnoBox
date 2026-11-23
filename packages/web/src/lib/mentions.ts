@@ -3,11 +3,15 @@
 // and caps (§43.4, §43.5), and the check that settles pending mentions (§43.4). The pure rules — the
 // token, binding, the status table, the caps' arithmetic — live in @innobox/shared/mentions; event
 // 26 itself is written after the commit, by notifyMentioned (./notify-events).
+// The last section serves mentions in a COMMENT (§44): the same token and serializer, rows without
+// a pending state, and the daily cap as one budget across solution text and comments.
 // Relative imports only (no `@/`) so the gated dbtests can load the stores that call this.
 import type { Pool, PoolClient } from "pg";
 import {
   MENTION_DELETED_NAME,
   canSeeSolution,
+  commentMentionCapRefusal,
+  commentMentionRoom,
   displayMentions,
   hasMentions,
   mentionCapRefusal,
@@ -129,6 +133,21 @@ export async function currentMentionCandidates(db: Db, stored: readonly (string 
 // ── What a save writes (§43.4, §43.5) ────────────────────────────────────────────────────
 
 /**
+ * §43.5 / §44.5: the mention rows one person created as `mentioned_by` since UTC midnight — in
+ * solution text AND in comments. The daily cap is one budget across both tables, and every save
+ * that adds a row counts it under `lockMentionSaver`, so a solution save and a comment post can
+ * never both take the last place.
+ */
+export async function mentionsCreatedToday(db: Db, userId: string): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `select ((select count(*) from solution_mentions where mentioned_by = $1 and created_at >= $2)
+           + (select count(*) from comment_mentions where mentioned_by = $1 and created_at >= $2))::int as n`,
+    [userId, utcDayStart(new Date())],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+/**
  * §43.5: of `userIds`, whether every one may be given a NEW mention row by `saverId` — an active,
  * not-erased person with a display name, who is not the saver and passes `canSee` (the challenge's
  * full §4.3 predicate) with their own roles. One answer for every reason.
@@ -186,11 +205,7 @@ export async function syncMentionRows(client: PoolClient, solutionId: string, sa
   const existing = new Set(await mentionRowUserIds(client, solutionId));
   const added = namedUserIds.filter((id) => !existing.has(id));
   if (added.length === 0) return added;
-  const { rows } = await client.query<{ today: number }>(
-    `select count(*)::int as today from solution_mentions where mentioned_by = $1 and created_at >= $2`,
-    [saverId, utcDayStart(new Date())],
-  );
-  const refusal = mentionCapRefusal(existing.size + added.length, (rows[0]?.today ?? 0) + added.length);
+  const refusal = mentionCapRefusal(existing.size + added.length, (await mentionsCreatedToday(client, saverId)) + added.length);
   if (refusal) throw new MentionCapError(refusal);
   await client.query(`insert into solution_mentions (solution_id, user_id, mentioned_by) select $1, u, $2 from unnest($3::uuid[]) as u`, [solutionId, saverId, added]);
   return added;
@@ -270,11 +285,7 @@ export async function settlePendingMentions(
 /** §43.11: `mentionsLeftToday` for a viewer, and `mentionsLeft` for each of the given solutions —
  *  the room under the daily and the per-solution cap. */
 export async function mentionRoomFor(db: Db, userId: string, solutionIds: readonly string[]): Promise<{ leftToday: number; left: Map<string, number> }> {
-  const { rows: today } = await db.query<{ n: number }>(`select count(*)::int as n from solution_mentions where mentioned_by = $1 and created_at >= $2`, [
-    userId,
-    utcDayStart(new Date()),
-  ]);
-  const createdToday = today[0]?.n ?? 0;
+  const createdToday = await mentionsCreatedToday(db, userId);
   const left = new Map<string, number>(solutionIds.map((id) => [id, mentionRoom(0, createdToday).left]));
   if (solutionIds.length > 0) {
     const { rows } = await db.query<{ solution_id: string; n: number }>(
@@ -284,4 +295,84 @@ export async function mentionRoomFor(db: Db, userId: string, solutionIds: readon
     for (const r of rows) left.set(r.solution_id, mentionRoom(r.n, createdToday).left);
   }
   return { leftToday: mentionRoom(0, createdToday).leftToday, left };
+}
+
+// ── Mentions in a comment (§44) ──────────────────────────────────────────────────────────
+
+/** Where one mention sits in a comment's display text, and whom it names (§44.10). `user` is null
+ *  for an erased person: the thread then shows plain "@Deleted User", with no link and no card. */
+export interface CommentMentionView {
+  start: number;
+  length: number;
+  user: { id: string; displayName: string; active: boolean } | null;
+}
+
+/**
+ * §44.5 — the serializer for comments: each row's stored `body` becomes display text, in place, and
+ * the row gains `mentions` — where each mention sits in that display text and whom it names. Every
+ * read of a comment that leaves the server goes through this, so no response carries a token. Rows
+ * without a token get an empty list and cost no query.
+ */
+export async function serializeCommentBodies(db: Db, rows: readonly { body: string; mentions?: CommentMentionView[] }[]): Promise<void> {
+  const people = await loadMentionPeople(db, rows.map((r) => r.body));
+  const name = nameOf(people);
+  for (const row of rows) {
+    const { text, ranges } = renderMentions(row.body, name);
+    row.body = text;
+    row.mentions = ranges.map((r) => {
+      const person = people.get(r.userId);
+      return {
+        start: r.start,
+        length: r.length,
+        user: person && !person.scrubbed ? { id: person.id, displayName: person.displayName, active: person.active } : null,
+      };
+    });
+  }
+}
+
+/** The people a comment's rows name — everyone already told, or passed over, for this comment. */
+export async function commentMentionRowUserIds(db: Db, commentId: string): Promise<string[]> {
+  const { rows } = await db.query<{ user_id: string }>(`select user_id from comment_mentions where comment_id = $1`, [commentId]);
+  return rows.map((r) => r.user_id);
+}
+
+/** Thrown from inside a comment save's transaction when the mentions it would add break a cap
+ *  (§44.5), so the whole save rolls back — not the comment, not the rows. */
+export class CommentMentionCapError extends Error {
+  constructor(readonly reason: "comment_cap" | "daily_cap") {
+    super(reason);
+  }
+}
+
+/**
+ * §44.5: gives a row to every named person who has none, inside the comment save's transaction and
+ * under `lockMentionSaver`, with the commenter as `mentioned_by`. A row is never deleted or changed
+ * by an edit: it is the marker that this person has had their one notice for this comment
+ * (§44 decision 12), whether or not the text still mentions them. Breaking a cap throws
+ * `CommentMentionCapError`. The caller has already checked eligibility for the people it expects to
+ * be new. Returns the people who got a row — the ones event 27 is written for after the commit.
+ */
+export async function addCommentMentionRows(client: PoolClient, commentId: string, saverId: string, namedUserIds: readonly string[]): Promise<string[]> {
+  const existing = new Set(await commentMentionRowUserIds(client, commentId));
+  const added = namedUserIds.filter((id) => !existing.has(id));
+  if (added.length === 0) return added;
+  const refusal = commentMentionCapRefusal(existing.size + added.length, (await mentionsCreatedToday(client, saverId)) + added.length);
+  if (refusal) throw new CommentMentionCapError(refusal);
+  await client.query(`insert into comment_mentions (comment_id, user_id, mentioned_by) select $1, u, $2 from unnest($3::uuid[]) as u`, [commentId, saverId, added]);
+  return added;
+}
+
+/** §44.10: `mentionsLeftToday` for a viewer, and `mentionsLeft` for each of the given comments — the
+ *  room under the shared daily cap and the per-comment cap. */
+export async function commentMentionRoomFor(db: Db, userId: string, commentIds: readonly string[]): Promise<{ leftToday: number; left: Map<string, number> }> {
+  const createdToday = await mentionsCreatedToday(db, userId);
+  const left = new Map<string, number>(commentIds.map((id) => [id, commentMentionRoom(0, createdToday).left]));
+  if (commentIds.length > 0) {
+    const { rows } = await db.query<{ comment_id: string; n: number }>(
+      `select comment_id, count(*)::int as n from comment_mentions where comment_id = any($1::uuid[]) group by comment_id`,
+      [commentIds],
+    );
+    for (const r of rows) left.set(r.comment_id, commentMentionRoom(r.n, createdToday).left);
+  }
+  return { leftToday: commentMentionRoom(0, createdToday).leftToday, left };
 }

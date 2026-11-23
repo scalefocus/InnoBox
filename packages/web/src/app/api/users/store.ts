@@ -100,6 +100,21 @@ export interface CoAuthorAudience {
   full: boolean;
   exclude: readonly string[];
   callerId: string;
+  /** §44.5: the mention list of a `proposed` solution's comment thread — only the people who can
+   *  see that solution (`proposedSolutionCondition`), on top of the challenge's own predicate. */
+  proposedSolutionAuthorIds?: readonly string[];
+}
+
+/**
+ * §4.3 / §44.5: the SQL twin of `canSeeSolution` for a `proposed` solution, for every candidate at
+ * once — its team, the challenge's assignee, the namespace's committee and admins, and platform
+ * admins. It narrows the challenge's own predicate (most restrictive wins), so the caller ANDs the
+ * two. Pinned to the JS predicate by the comment-mentions dbtest.
+ */
+function proposedSolutionCondition(challenge: ChallengeVisibilityInput, authorIds: readonly string[], push: (v: unknown) => string): string {
+  return `(u.id = any(${push([...authorIds])}::uuid[])
+           or u.id = ${push(challenge.assigneeId)}::uuid
+           or ${grantCondition(`(rm.role in ('namespace_admin', 'committee') and rm.namespace_id = ${push(challenge.namespaceId)})`, push)})`;
 }
 
 /** The directory search. With `audience`, only users who can see that challenge (§7.3); with
@@ -114,6 +129,7 @@ export async function searchActiveUsers(pool: Pool, query: string, audience?: Ch
   const conditions = [audience ? canSeeChallengeCondition(audience, push) : "true"];
   if (coAuthors) {
     conditions.push(canJoinCondition(coAuthors.challenge, coAuthors.full, push));
+    if (coAuthors.proposedSolutionAuthorIds) conditions.push(proposedSolutionCondition(coAuthors.challenge, coAuthors.proposedSolutionAuthorIds, push));
     conditions.push(`u.scrubbed_at is null`, `u.id <> all(${push([coAuthors.callerId, ...coAuthors.exclude])}::uuid[])`);
   }
   const { rows } = await pool.query<{ id: string; display_name: string; email: string | null }>(
@@ -337,6 +353,9 @@ export async function scrubUser(pool: Pool, adminUserId: string, userId: string,
     // scrubbed, read "@Deleted User" from now on (§43.2).
     await client.query(`delete from solution_mentions where user_id = $1`, [userId]);
     await client.query(`update solution_mentions set mentioned_by = null where mentioned_by = $1`, [userId]);
+    // §44.8: the same for mentions in comments — no comment is rewritten either.
+    await client.query(`delete from comment_mentions where user_id = $1`, [userId]);
+    await client.query(`update comment_mentions set mentioned_by = null where mentioned_by = $1`, [userId]);
     // §25.13: the person's AI agent grants are revoked (audited, reason "erased") and deleted —
     // their tokens and pending authorizations cascade. mcp_client_name is not personal data.
     await eraseUserGrants(client, userId, adminUserId);

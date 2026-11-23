@@ -209,7 +209,7 @@ test(
 
       // ── comments and follows ──
       assert.ok(data(await call(ctx(outsider, true), "post_comment", { parentType: "challenge", number: aNum, body: "Agent comment" })).id);
-      const webComments = (await listComments(pool, member, "challenge", aId))!;
+      const webComments = (await listComments(pool, member, "challenge", aId))!.comments;
       assert.deepEqual(webComments.at(-1)!.viaAgent, { client: CLIENT });
       const toolComments = data(await call(ctx(member, true), "list_comments", { parentType: "challenge", number: aNum })).comments as {
         id: string;

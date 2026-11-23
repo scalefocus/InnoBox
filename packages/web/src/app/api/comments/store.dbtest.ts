@@ -79,7 +79,7 @@ test(
       assert.equal(c1.comment.authorDisplayName, "Dbtest commenter");
       await assertAudited(pool, "comment.posted", c1.comment.id);
 
-      const listed = await listComments(pool, author, "challenge", created.challenge.id);
+      const listed = (await listComments(pool, author, "challenge", created.challenge.id))?.comments;
       assert.equal(listed?.length, 1);
       assert.equal(listed![0]!.body, "First comment");
 
@@ -98,7 +98,7 @@ test(
       const modDeleted = await deleteComment(pool, admin, c1.comment.id);
       assert.equal(modDeleted.status, "ok");
       await assertAudited(pool, "comment.deleted", c1.comment.id);
-      const afterDelete = await listComments(pool, author, "challenge", created.challenge.id);
+      const afterDelete = (await listComments(pool, author, "challenge", created.challenge.id))?.comments;
       assert.equal(afterDelete![0]!.body, "Comment removed by a moderator");
       assert.equal(afterDelete![0]!.deleted, true);
 
@@ -275,7 +275,7 @@ test(
       assert.equal(r2.replyToAuthorId, ben.userId);
 
       // The list carries both ids.
-      const listed = (await listComments(pool, author, "challenge", itemId))!;
+      const listed = (await listComments(pool, author, "challenge", itemId))!.comments;
       const byId = new Map(listed.map((c) => [c.id, c]));
       assert.equal(byId.get(r2.comment.id)!.threadRootId, root.comment.id);
       assert.equal(byId.get(r2.comment.id)!.replyToId, r1.comment.id);
@@ -296,7 +296,7 @@ test(
       assert.equal((await deleteComment(pool, admin, root.comment.id)).status, "ok");
       assert.deepEqual(await createComment(pool, ben, "challenge", itemId, "x", undefined, root.comment.id), { status: "unprocessable", error: REPLY_TO_REMOVED });
       // The removed root keeps its replies underneath.
-      const afterDelete = (await listComments(pool, author, "challenge", itemId))!;
+      const afterDelete = (await listComments(pool, author, "challenge", itemId))!.comments;
       assert.equal(afterDelete.find((c) => c.id === root.comment.id)!.deleted, true);
       assert.equal(afterDelete.filter((c) => c.threadRootId === root.comment.id).length, 2);
 

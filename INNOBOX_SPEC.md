@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.30 — draft for review** (2026-11-17; v0.2 added the UI and CI/CD
+> Status: **v0.31 — draft for review** (2026-11-23; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -115,7 +115,15 @@
 > reads *Deleted User*; each mentioned person is told once (event 26), by e-mail and
 > in-app, at the first moment the solution is visible to them — never about a closed
 > solution, and never who wrote an anonymous one — with a mute, caps of 10 people per
-> solution and 30 a day, no follow, no points and no switch (§43)).
+> solution and 30 a day, no follow, no points and no switch (§43); v0.31 (2026-11-23)
+> specified **Markdown, links and mentions in comments** as a new-feature gap — every
+> comment thread gets a multi-line box with *Markdown* and *Preview* tabs; a comment
+> keeps its line breaks, renders a chat-sized subset of Markdown, old comments included,
+> and turns web addresses into links that open in a new tab; `@` mentions a colleague
+> who can read the thread right now, told at once (event 27) in place of the ordinary
+> comment notice, under one renamed *Mentions* switch and a daily budget shared with
+> solution text — lifting the "no rich text" and "no mentions in comments" non-goals
+> (§44)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -431,7 +439,7 @@ including theme-aware scrollbars and form controls. Pinned values:
   always-unauthenticated scraper can fetch it — a static brand asset, no data.
 - Dates/times render through the shared client-side formatter honoring the EU/US
   platform setting (§2); rich text is not required for v1 (plain text with line
-  breaks).
+  breaks) — except in comments, which render a small subset of Markdown (§44).
 
 **Attribution (removability rule).** InnoBox is released as open source under
 Apache-2.0 (§21). Apache-2.0 §6 grants no trademark rights, so the creating
@@ -1122,9 +1130,10 @@ Entra runbook); on conflict this document wins.
   so the entry still counts as proposed, §38.12)
   and resets `feature_ideas_named` to its default — their votes stay and are counted
   unnamed (§38.12) — deletes the user's §40 invitations, sent and received, and their
-  invitation dismissals, deletes the user's §43 `solution_mentions` rows and nulls
-  `mentioned_by` where they were the sender (no solution text is rewritten: a mention of
-  them reads *"@Deleted User"* from then on, §43.8), and resets the notification
+  invitation dismissals, deletes the user's §43 `solution_mentions` and §44
+  `comment_mentions` rows and nulls `mentioned_by` where they were the sender (no
+  solution or comment text is rewritten: a mention of them reads *"@Deleted User"* from
+  then on, §43.8, §44.8), and resets the notification
   preferences (`email_notifications_enabled` to false, since no address is left; the
   three `notify_followed_*` columns, `notify_invitations` and `notify_mentions`, which
   are `NOT NULL`, to their default). Everything runs
@@ -1260,7 +1269,7 @@ shown (§13.6).
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
-| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), mention colleagues in a solution (§43), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
+| **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), mention colleagues in a solution (§43) or a comment (§44), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
 
 A user may hold different roles in different namespaces. Roles are additive.
 
@@ -1402,7 +1411,7 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   **notify_followed_status** / **notify_followed_solutions** (boolean, not null,
   default true — the §12.1 per-event preferences), **notify_invitations** (boolean,
   not null, default true — the §40.6 invitation preference), **notify_mentions** (boolean,
-  not null, default true — the §43.6 mention preference), **email_delivery** (`immediate |
+  not null, default true — the *Mentions* preference of §43.6 and §44.6), **email_delivery** (`immediate |
   daily | weekly`, not null, default `immediate` — the §12.1 digest choice),
   **gamification_public** /
   **notify_achievements** / **achievements_seen_at** (the §23 opt-out, achievement
@@ -1504,7 +1513,13 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   its row); unique per person and challenge, public to anyone who can see the challenge,
   removed with it (§41.9). The authors' own estimate is
   `challenges.affected_estimate`.
-- **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000),
+- **`comment_mentions`** — the §44 mentions in comments: one row per comment and
+  mentioned person, with who mentioned them and when. A row exists only for someone
+  already told or passed over, so there is no pending state (§44.5, §44.9). Never
+  returned by the API; removed with the comment's parent.
+- **`comments`** — id, parent (challenge | solution), author_id, body (≤ 5 000 —
+  **stored text**: Markdown as written, with each §44 mention a token; every response
+  carries the display text, and the limit is checked on that, §44.5),
   **thread_root_id** (nullable self-FK — the top-level comment a reply belongs to; null
   for a top-level comment) and **reply_to_id** (nullable self-FK — the comment the
   reply answers: the root itself or another reply in the same thread), both null
@@ -2094,6 +2109,10 @@ check, which refuses a save made from a stale copy (§39.5).
 
 ### §10.2 Comments
 
+- **Text.** A comment is a short piece of Markdown: it keeps its line breaks, renders a
+  chat-sized set of formatting, links its web addresses and can mention colleagues who
+  can read the thread. It is written in a multi-line box with *Markdown* and *Preview*
+  tabs (§44).
 - Owner may **edit or delete** their comment within **15 minutes** of posting
   (`edited_at` stamped; delete is soft).
 - Namespace/platform admins may soft-delete any comment at any time (audited);
@@ -2147,7 +2166,9 @@ hangs under a **top-level** comment, never under another reply.
   payload also counts **`repliesToYou`**: the number of the coalesced comments that
   answer one of the recipient's own comments. The copy adds it when it is non-zero:
   *"3 new comments on CH-412, 1 reply to you — latest by Alice"*. A row opened by a single
-  reply to the recipient reads *"New reply to you on CH-412 — by Alice"*.
+  reply to the recipient reads *"New reply to you on CH-412 — by Alice"*. A person the
+  comment **mentions** is told by event 27 instead, and is left out of event 6 for that
+  comment (§44.6).
 - **Discussion summary.** The §22.13 summary reads the comments in thread order and
   marks each reply as one, so the model sees who answered whom.
 - **Audit.** `comment.posted` gains `replyTo` (the comment id answered), absent on a
@@ -2195,8 +2216,9 @@ those solutions — tombstones included; and every `notifications` inbox row and
 summaries) of any of them; the challenge's §34 `challenge_topics` and
 `topic_notices` rows; its §41 `challenge_affected` rows; its §40 `challenge_invitations` and
 `challenge_invitation_dismissals` rows (deleting a solution instead nulls the
-`paid_off_solution_id` that points at it, §40.8); and the §43 `solution_mentions` rows
-of every solution that goes. Before the row goes, if the challenge was featured, the
+`paid_off_solution_id` that points at it, §40.8); the §43 `solution_mentions` rows
+of every solution that goes; and the §44 `comment_mentions` rows of every comment that
+goes. Before the row goes, if the challenge was featured, the
 same transaction writes `challenge.unfeatured` (`trigger: "deleted"`, §13.2). Deleting
 a **solution** removes the same subtree rooted at that solution and leaves the parent
 challenge standing. Any
@@ -2789,7 +2811,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 3 | Status changed (challenge or solution) | Item author, assignee, followers |
 | 4 | Rejected | Item author (distinct template) |
 | 5 | Needs improvement | Item author (call-to-action: edit & resubmit) |
-| 6 | Comment posted | Item author, other commenters on the item, followers — **never the commenter** |
+| 6 | Comment posted | Item author, other commenters on the item, followers — **never the commenter**, and never a person the comment mentions, who gets event 27 instead (§44.6) |
 | 7 | Challenge assigned / unassigned | The assignee; on a reassignment also the previous assignee (unassigned, §7.3) |
 | 8 | Solution implemented (auto-close) | Challenge author, authors of `not_selected` siblings, followers of the challenge and its solutions |
 | 9 | Resubmitted (`needs_improvement` → `in_review` by the author, §10.1) | Namespace admins + committee, the assignee, followers |
@@ -2809,6 +2831,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 24 | Affects them too (§41.6) | The challenge's authors only — never the marker, followers, admins or the assignee; nobody on an external challenge. Written on a person's **first** mark of the challenge only, never on a change, removal or re-mark. Coalesced per challenge in the inbox like events 6 and 16; the e-mail honors the opt-out and the digest choice |
 | 25 | Closed as a duplicate (§42.6) | The duplicate's authors — actionable: immediate, never digested, not mutable; and its assignee and followers as they were before the move — follower-type (digestable; the status-change preference mutes followers, never the assignee). Never the marker or the original's side. Written **instead of** events 3 and 4 for the mark; rendered per recipient, naming the original only to those who can see it |
 | 26 | Mentioned in a solution (§43.6) | The mentioned person only — once per person per solution, at the first moment they can see it, and never while it is `rejected`, `not_selected` or `withdrawn`; not written for a member of the solution's team or while their *Mentions* preference is off. Names the sender unless the solution is anonymous. Actionable: immediate, never digested |
+| 27 | Mentioned in a comment (§44.6) | The mentioned person only — once per person per comment, at the save that mentions them; only someone who can read the thread at that moment can be mentioned. Written **instead of** event 6 for that person and that comment; not written while their *Mentions* preference is off, and event 6 then reaches them by its own rules. Always names the commenter. Actionable: immediate, never digested |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2880,7 +2903,7 @@ a day or a week.
   — for the assignee and followers). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 21, 22, 25 to an author, 26, and 19 to a proposer). Events 13 and 23 have no e-mail
+  12, 21, 22, 25 to an author, 26, 27, and 19 to a proposer). Events 13 and 23 have no e-mail
   at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
@@ -2939,10 +2962,10 @@ true; existing users backfilled on):
   and followers; the admin/committee recipients of event 2 are unaffected.
 
 A fourth toggle, *Invitations to propose a solution* (`notify_invitations`, default
-**on**, §40.6), gates **event 22** the same row-level way, and a fifth, *Mentions in
-solutions* (`notify_mentions`, default **on**, §43.6), gates **event 26**. They are the
-two actionable events a person can mute, because anyone who can see a challenge may
-send one.
+**on**, §40.6), gates **event 22** the same row-level way, and a fifth, *Mentions*
+(`notify_mentions`, default **on**, §43.6, §44.6), gates **events 26 and 27**. These
+three are the only actionable events a person can mute, because anyone who can see a
+challenge may send one.
 
 These are **row-level, applied at insert time**: an opted-out recipient is removed
 from the recipient set before either the inbox row or the outbox row is written — no
@@ -2969,7 +2992,8 @@ author stays masked per §9). **Read actions:** opening the inbox row, mark-all-
 16 (hyped, §26.6) and 24 (affects them too, §41.6) coalesce**; every other event
 remains one row per occurrence.
 Opening a challenge's detail page also reads its event-18 row (§34.5), the viewer's
-event-22 rows about it (§40.6) and their event-26 rows about its solutions (§43.6).
+event-22 rows about it (§40.6), their event-26 rows about its solutions (§43.6) and
+their event-27 rows about it and its solutions (§44.6).
 
 **Event 12 (assignments transferred)** replaces event 7 for the moves an erasure makes
 (§3): one item, not one per challenge. Message: *"N challenges were reassigned to you
@@ -3448,6 +3472,9 @@ whole visit, and the next visit flags only genuinely newer items.
   collapsed "Closed solutions" section (§4.3). Each solution shows its own like button.
   A mention in a solution's text is a link to the person that opens the directory card
   (§43.7).
+- **Comments**, under the challenge and under each solution, render as Markdown with
+  their links and mentions (§44.7), and are written in the §44.2 comment box. A
+  `#comment-<id>` address opens the page at that comment (§44.6).
 - **Propose a solution** (§6.2): visible to anyone who can see the challenge,
   enabled only while status = `valid` **and the challenge's namespace is not archived**
   (§4.1 — the detail payload's `canPropose` carries both conditions, so the button
@@ -3726,8 +3753,8 @@ under it naming the next send (*"Next digest: 13/10/2026 09:00"* — the 06:00 U
 in the viewer's local time, through `useDateFmt()`), disabled while the e-mail switch is off
 — followed by the three §12.1 per-event toggles — *Comments on items
 I follow*, *Status changes on items I follow*, *New solutions on challenges I
-follow* — the §40.6 *Invitations to propose a solution* toggle and the §43.6 *Mentions
-in solutions* toggle, all rendered as the
+follow* — the §40.6 *Invitations to propose a solution* toggle and the *Mentions*
+toggle (§43.6, §44.6: mentions in solutions and in comments), all rendered as the
 same pill switch with the same on-left travel, optimistic flip and inline-error
 revert), then the §34.6 **Topics** section (a pill switch of the
 same kind per active topic: follow or unfollow it), followed by the §13.10 **Feedback** section (*Ask me for
@@ -3909,8 +3936,8 @@ Of the three directory fields, department and job title already exist (§3, §5)
 - **Every avatar bubble that carries a real user id**, across the app: challenge and
   solution cards and detail headers, comment threads, assignee chips, the leaderboard,
   triage-queue rows, the admin users list, search results and profile pages.
-- **A mention's name** in a solution's text on the challenge detail page (§43.7) — the
-  one trigger that is a name rather than a bubble. It opens the same card on hover,
+- **A mention's name** in a solution's text (§43.7) or in a comment (§44.7) on the
+  challenge detail page — the one trigger that is a name rather than a bubble. It opens the same card on hover,
   keyboard focus, or press-and-hold; an erased person's *"@Deleted User"* opens none.
 - **Excluded, deliberately:**
   - the **sidebar account-menu trigger** (your own bubble) — that element already opens
@@ -6122,7 +6149,10 @@ anomalies. Since v0.10 also:
 - **mentions** — no action of their own: `solution.created` gains `mentions` and
   `solution.edited` gains `mentionsAdded` and `mentionsRemoved` (user ids), and a
   mention inside an audited text is written as `@[user:<id>]`, **never as a name**. The
-  settling of a mention, event 26 and the preference are not audited (§43.11).
+  settling of a mention, event 26 and the preference are not audited (§43.11). For a
+  comment, `comment.posted` gains `mentions` and `comment.edited` gains `mentionsAdded`
+  and `mentionsRemoved`; comment rows carry no body, and event 27 is not audited
+  (§44.10).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6391,7 +6421,11 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `mentionsLeftToday`; `users?q=&canSee=` is the mention list's search; `ai/draft`
   accepts `mentions`
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
-  `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2); `likes`, `follows` (one
+  `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2; create and edit
+  accept `mentions: [{ userId, name }]` — 422 for an ineligible person, 409 at the
+  per-comment or the daily cap — list rows carry display text with `mentions` and
+  `mentionsLeft`, the list carries `mentionsLeftToday`, and `users?q=&canSee=<SOL-n>`
+  is the mention list's search on a solution's thread, §44.10); `likes`, `follows` (one
   **toggle** `POST` each, on either parent type — the response carries the new state;
   a like toggle on a closed challenge is **409**, §8.3); `hypes` (`POST` only — no
   take-backs; 404 while hype is off or on an invisible item, 409 for a closed or own
@@ -6574,8 +6608,14 @@ published copy, and nothing through MCP; for §23 gamification: no
 redeemable rewards (points buy and unlock nothing), no admin-tunable weights, caps or
 level curve, no custom or manually granted or revoked badges, no point deductions, no
 per-namespace boards, and no e-mail for achievements; for comment replies (§10.2): no
-nesting deeper than one level, no @mentions that notify anyone other than the person
-replied to, and no rich text; for e-mail digests (§12.1): no per-user send time or time
+nesting deeper than one level; for comment formatting, links and mentions (§44): no
+headings, tables, images, task lists or raw HTML, no formatting toolbar and no syntax
+colouring, no link previews, click tracking or leaving-the-app warning, no links from
+`CH-`/`SOL-` numbers, e-mail addresses or schemes other than `http` and `https`, no
+Markdown or links in challenge text, solution text or invitation notes, no fold of a
+long comment, no group or role mentions, no mention of someone who cannot read the
+thread and none that waits, no quote of a comment in any e-mail, no second notice, no
+points, badge or platform switch, and no new mentions through MCP; for e-mail digests (§12.1): no per-user send time or time
 zone, and no digest of the admin attention or actionable events; for the trash (§10.4):
 no namespace-admin trash, no configurable retention window, and no trash for comments or
 attachments; for public submissions (§24): no accounts, sign-in or status page for
@@ -6606,7 +6646,8 @@ no note on a mark, no headcount bands and no de-duplication of overlapping headc
 no mark before triage or after a close, no admin edit of someone else's mark, no points,
 badge or platform switch, no marking through MCP, no reach on Home, the profile, search
 results, the leaderboard, webhooks or AI prompts, and no reach total across challenges;
-for mentions (§43): no mentions in challenge descriptions, comments or invitation notes,
+for mentions (§43): no mentions in challenge descriptions or invitation notes (comments
+have their own, §44),
 no group or role mentions (a namespace, the committee, everyone), no mention that widens
 visibility or follows anything, no list or count of a person's mentions for anyone, no
 *told*, *pending* or *muted* state for the author, no second notice, no notice about a
@@ -7371,7 +7412,8 @@ transitions, assigns, rejects or notifies (invariant 6).
   (each reply marked with the participant it answers), each labelled by a pseudonym — *Participant A*, *Participant B* … assigned by first
   appearance — **never** marking which participant is the item's author (or any member
   of its co-author team, §39.12), and never a
-  name. Soft-deleted comments are excluded.
+  name. Soft-deleted comments are excluded. The text is sent as written — its Markdown
+  neither rendered nor stripped — with each mention as *"@colleague"* (§44.7).
 - **Output:** a short summary (≤ 600 characters) and up to 5 open questions, as plain
   text, headed *"Summary by {name}"* with the time it was made and *"May be inaccurate."*
 - **Caching:** one result per thread state (a hash of the included comments); a new or
@@ -8421,7 +8463,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `search_challenges` | The §13.4 full-text search plus the §13.1 filters (status, namespace, impact area, topic, mine, following). Paginated (≤ 25 per page). Each hit: number, title, status, namespace, impact area, topic names, author (masked), like and solution counts, `url`. |
 | `get_challenge` | The §13.1 detail: title, description, status, namespace, visibility, impact area, topics, client name, author (masked) and `authors` (§39.10), assignee, dates (including `editedAt`), like count, `reach` and `affectedPeople` (§41.8), `duplicateOf`, `duplicateNote` and `duplicates` (§42.8), whether the caller follows it, attachment metadata (§25.7), its solutions as summaries (number, status, author masked, first 280 characters), `canPropose`, `canEdit`, `canResubmit`, `url`. |
 | `get_solution` | One solution in full: description, cost vs benefits, status, author (masked) and `authors` (§39.10), dates (including `editedAt`), attachment metadata, `canEdit`, `canResubmit`, `url`. |
-| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. |
+| `list_comments` | Comments on a challenge or a solution, oldest first, paginated; each row carries its §10.2 thread fields. Deleted comments appear as the web shows them. The text is the comment's Markdown as written, with each mention as `@` and the person's name (§44.7). |
 | `find_similar_challenges` | The §6.1 duplicate check: up to 5 visible matches for a title and description. |
 | `list_my_items` | The caller's own challenges and solutions (every item they are a co-author of, §39.10) with status and `canEdit` / `canResubmit` — including their `awaiting_triage` items, but never an item in the trash (§10.4), neither a trashed challenge nor a solution trashed on its own under a live one: the trash does not exist to an agent, the caller's own items included. |
 | `list_my_notifications` | The caller's §12.2 inbox, newest first, paginated, with read state. Read-only: nothing is marked read. |
@@ -8436,7 +8478,7 @@ carry `readOnlyHint: false`, so clients ask the person before running them.
 | `edit_challenge` | §10.1 author edit — title, description, impact area, topics, `affectedEstimate` (§41.2) — inside the author's edit window only. Requires `baseEditedAt` from `get_challenge`; a stale copy is refused (§39.5). |
 | `edit_solution` | §10.1 author edit — description, cost vs benefits — inside the edit window only. Requires `baseEditedAt` from `get_solution`; a stale copy is refused (§39.5). |
 | `resubmit` | §10.1 resubmit of the caller's own challenge or solution from `needs_improvement` to `in_review`. |
-| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. |
+| `post_comment` | §10.2 comment on a challenge or a solution the caller can see (with an optional `replyTo`). Never anonymous, as on the web. The text is Markdown (§44.3); an `@` in it is plain text and mentions nobody (§44.7). |
 | `set_follow` | §12.3: follow or unfollow a challenge or solution. Takes the wanted state (`true` / `false`) rather than toggling, so a retried call is harmless. |
 
 Errors are MCP tool errors carrying the same plain message the API returns (§21.9 — no
@@ -8460,7 +8502,8 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
 - **Invitations to propose a solution** (§40.9) — sending one and *Not for me*.
 - **Mentioning people** (§43.9). Solution text is returned with each mention as `@` and
   the person's name; `propose_solution` creates none, and `edit_solution` keeps the
-  ones whose text it leaves alone and adds none.
+  ones whose text it leaves alone and adds none. Comment text is returned the same
+  way, and `post_comment` creates none (§44.7).
 - **Marking a challenge as affecting you** (§41.8). `get_challenge` reads the reach and
   the people count; no tool adds, changes or removes a mark.
 - **Marking a duplicate** (§42.8). `get_challenge` reads `duplicateOf`, `duplicateNote`
@@ -9955,7 +9998,11 @@ on the team of (§39.5).
     current members, and everyone who left it, are left out;
   - `canSee=<CH-n>` — the solution form: the people who can see that challenge under
     the full §4.3 predicate (unlike the §7.3 `challenge=` search, which relaxes for a
-    `people` challenge);
+    `people` challenge); also the mention list of a challenge's comment thread (§44.5);
+  - `canSee=<SOL-n>` — the mention list of a solution's comment thread (§44.5): the
+    people who can see that solution — those who can see its challenge, narrowed while
+    the solution is `proposed` to its team, the challenge's assignee, the namespace's
+    committee and admins, and platform admins (§4.3);
   - `namespace=<slug>&visibility=org|namespace` — the challenge form, where the item
     does not exist yet; it follows the form's namespace and visibility fields, and
     changing either drops any picked co-author who no longer qualifies, with a note.
@@ -11507,7 +11554,7 @@ this document, in the code and in the interface.
 
 | # | Decision | Why |
 |---|---|---|
-| 1 | **Solutions only, in both text fields** — the description and *Cost vs. benefits*. Not challenge descriptions, comments or invitation notes. | Where it was asked for. Comments are high-volume and already notify the other commenters (§10.2); each further surface needs its own noise and visibility rules. |
+| 1 | **A solution's two text fields** — the description and *Cost vs. benefits*. Not challenge descriptions or invitation notes. Comments have mentions of their own, with simpler rules (§44). | Where it was asked for. Each further surface needs its own noise and visibility rules; comments got theirs in §44. |
 | 2 | **A person is told at the first moment they can see the solution** — at the save for those who can already see a `proposed` solution, and for everyone else when it is first open to all who can see the challenge. | A `proposed` solution is hidden from most people (§4.3). A notice about something its reader cannot open would reveal a hidden solution and break the §12.1 visibility drop. |
 | 3 | **A closed solution tells nobody.** While it is `rejected`, `not_selected` or `withdrawn`, pending mentions wait; they go out only if an admin reopens it. | Telling a colleague they were named in a solution that was turned down or taken back is noise for them and no favour to its author. |
 | 4 | **Only people who can already see the challenge can be mentioned.** A mention never widens visibility. | Widening stays with the namespace and platform admins (§4.3), as for co-authors (§39.2) and invitations (§40 decision 2). |
@@ -11586,7 +11633,10 @@ type @ to mention a colleague"*.
   stays an ordinary character.
 - **The list** shows up to 8 people as the §7.3 result rows (bubble, name, dimmed
   e-mail). It is anchored to the bottom-left corner of the text box — not to the caret
-  — at most 320 px wide, and spans the box's width on a phone. It uses the shared
+  — at most 320 px wide, and spans the box's width on a phone. When it does not fit
+  under the box and there is more room above — the new-comment box is the last thing on
+  a challenge's page (§44.2) — it opens above the box instead, and on either side its
+  rows scroll inside it rather than run off the screen. It uses the shared
   popover treatment (§2.2), and its bubbles open no hover card (§13.8). **↑** and **↓**
   move through it, **Enter** or **Tab** picks the highlighted person, and a click or
   tap picks a row; while the list is open, Enter does not break the line. The text box
@@ -11664,7 +11714,7 @@ then, after commit, writes event 26 (§43.6) — **unless**, at that moment, the
 - cannot see the solution under the full §4.3 predicate — they left the namespace, came
   off a `people` access list, or the challenge itself is hidden or in the trash;
 - is deactivated or erased (§12.1); or
-- has *Mentions in solutions* switched off (§43.6).
+- has *Mentions* switched off (§43.6).
 
 Such a mention is **settled silently**: stamped, with no inbox row and no e-mail, and
 never revisited. Nobody is told that it was (decision 12).
@@ -11695,7 +11745,8 @@ that keeps it is not refused.
   text mentions, plus anyone already settled and since taken out of it. Over that, the
   save is refused (**409**, *"A solution can mention at most 10 people."*);
 - **per day** — at most **30** rows with one person as `mentioned_by` are created per
-  UTC day, across all solutions. Nothing is scheduled: the count is taken from the
+  UTC day, across all solutions **and all comments** — one budget for `solution_mentions`
+  and `comment_mentions` together (§44.5). Nothing is scheduled: the count is taken from the
   rows' `created_at`. Over that, the save is refused (**409**, *"You've mentioned 30
   people today. You can mention more tomorrow."*).
 
@@ -11725,11 +11776,13 @@ last place. A refused save writes nothing — not the text, not the rows.
   namespace, the sender's name when there is one, and the link. It **never quotes the
   solution's text**. The §12.1 content-safety rules apply.
 - **Actionable:** always immediate, never held for a digest; the e-mail switch applies.
-- **The preference** — *Mentions in solutions* (`notify_mentions`, default on), a pill
-  switch on the own profile after *Invitations to propose a solution* (§13.5).
+- **The preference** — *Mentions* (`notify_mentions`, default on), a pill switch on
+  the own profile after *Invitations to propose a solution* (§13.5). It covers
+  mentions in comments too (event 27, §44.6); it was labelled *Mentions in solutions*
+  before §44, and each person's choice carries over.
   Row-level and applied when the mention is settled: off settles it silently (§43.4).
-  With event 22 it is one of the two actionable events a person can mute, for the same
-  reason: anyone who can see a challenge may send one. Silent (not audited) and
+  With events 22 and 27 it is one of the three actionable events a person can mute, for
+  the same reason: anyone who can see a challenge may send one. Silent (not audited) and
   forward-only — switching it back on brings back nothing already settled.
 - **Read.** Opening the challenge's detail page marks the viewer's event-26 rows about
   its solutions read, as for events 6, 16, 18 and 22. The §12.1 read-time gate hides a
@@ -11905,3 +11958,366 @@ last place. A refused save writes nothing — not the text, not the rows.
     solution to `in_review`; B's bell shows *"… mentioned you in SOL-…"*, and the link
     opens the challenge at that solution, where B's name is a link that opens the
     directory card.
+
+---
+
+## §44 Comments: Markdown, links and mentions
+
+A comment used to be one line of plain text. It is now a short piece of **Markdown**: it
+keeps its line breaks, renders a chat-sized set of formatting, turns web addresses into
+links that open in a new tab, and can **mention** a colleague who can read the thread.
+The box it is written in has a *Markdown* and a *Preview* tab. All of this applies to
+every comment thread — under a challenge and under each solution — and to every
+comment, including those posted before it shipped.
+
+### §44.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **Every comment thread** — under a challenge and under each solution; new comments, replies and edits. | One component, one API and one table (§10.2). Two behaviours for the same box would have to be explained to everyone who uses it. |
+| 2 | **A chat-sized subset of Markdown:** bold, italic, strikethrough, inline code, code blocks, bullet and numbered lists, quotes and links. Headings, tables, images, rules and raw HTML are not Markdown here and stay as typed. | A comment is a remark in a narrow thread, not a document. An image would make every reader's browser call another host. |
+| 3 | **A line break is a line break.** | That is what the plain-text thread showed, and what a person who presses Enter expects. |
+| 4 | **Enter makes a new line; Ctrl+Enter (⌘+Enter) or the button posts.** | The same as every other multi-line box in the app. A list or a second paragraph types naturally, and half a comment is never posted by accident. |
+| 5 | **Every comment renders as Markdown, old ones included.** No format marker on the row. | Comments were already being typed with `**bold**` and numbered lists. A marker would keep those as literal characters forever. |
+| 6 | ***Markdown* and *Preview* tabs, no formatting toolbar.** | The toggle that was asked for. A row of buttons is more interface than a comment box warrants; one line under the box names the syntax. |
+| 7 | **Web addresses become links that open in a new tab** — bare ones and labelled ones (`[text](address)`), `http` and `https` only. | Following a link must not lose the reader's place in the thread. A label can hide an address, but a comment always carries its author's real name (§9), a moderator can remove it (§10.2), and the browser shows the address on hover. |
+| 8 | **Only people who can read the thread right now can be mentioned, and they are told at once.** Nothing waits. | A solution's text may be written before its readers can see it (§43 decision 2); a comment is written in a thread its readers can already open. On a `proposed` solution that is its team, its reviewers and the assignee — so no notice can reveal a hidden solution. |
+| 9 | **A mentioned person gets the mention notice (event 27) instead of the ordinary comment notice (event 6) for that comment.** | One comment, one notice — the more specific of the two. |
+| 10 | **One *Mentions* switch on the profile mutes both kinds** — in solutions (event 26) and in comments (event 27). | "Don't tell me when I'm mentioned" is one wish. Each person's existing choice carries over. |
+| 11 | **At most 10 people per comment; the 30 a day are one budget shared with solution text.** Fixed in code. | The per-item number of §43 decision 9, and no second allowance to mass-notify with. |
+| 12 | **Told once per person per comment.** A mention added in an edit notifies; removing one sends nothing and takes nothing back. | The notice goes out with the save, so there is nothing left to cancel; and an edit must not nudge the same person twice (§43 decision 7). |
+| 13 | **The same *Mentioned* row of chips under the box.** | It is the certain record of who will be told (§43 decision 13): a name typed by hand reads the same in the text and notifies nobody. |
+| 14 | **A long comment is shown in full.** | As before: a 5 000-character comment already wrapped to its full height. |
+| 15 | **Nothing but the notice** — no follow, no access, no points, no list of where a person is mentioned — and **no new mentions through MCP**. | As §43 decisions 10 and 15. |
+| 16 | **The mention e-mail never quotes the comment.** | No e-mail quotes a comment (§12.1). What a comment says stays behind the page's visibility check. |
+| 17 | **No platform switch.** | As §43 decision 16. |
+
+### §44.2 The comment box
+
+One box, used for a new comment, a reply and an edit (§10.2), in place of the three
+single-line fields.
+
+- **The text box** is a plain multi-line text box, three lines tall, that grows with its
+  text up to twelve lines and scrolls after that. It takes at most 5 000 characters
+  (§10.2). Its placeholder is *"Add a comment…"* or *"Write a reply…"*; an edit opens
+  with the comment's display text (§44.5).
+- **Keys.** **Enter** makes a new line. **Ctrl+Enter** — **⌘+Enter** on a Mac — posts or
+  saves, exactly as the button does. **Escape** closes a reply or an edit box, unless
+  the mention list is open, which it closes first (§43.3).
+- **Two tabs** above the box, **Markdown** (selected at first) and **Preview**, as a
+  `tablist` of two `tab`s. *Preview* shows, in place of the text box, the comment
+  exactly as the thread will show it (§44.3, §44.4), with its mentions as they will be
+  bound (§44.5); with nothing typed it reads *"Nothing to preview."* Switching tabs
+  changes nothing in the text, the button works from either tab, and after a post the
+  box is back on *Markdown*.
+- **A hint** under the box while *Markdown* is selected, muted:
+  ``Markdown: **bold**, *italic*, lists, > quote, links · @ to mention a colleague``.
+- **Mentions.** Typing `@` opens the §43.3 mention list — the same look, keys and
+  roles — over the people who can read this thread (§44.5). The ***Mentioned* row**
+  (§43.3) sits under the box while it has a chip, with the line *"They'll be told when
+  you post."*, or *"They'll be told when you save."* in an edit. At a cap (§44.5) the
+  list does not open and the line reads the cap's message.
+- **The buttons** — **Post**, **Reply** or **Save**, with **Cancel** on a reply and an
+  edit — sit under the box. The first is disabled while the text is empty after
+  trimming and while a request is in flight. A refusal is shown under the box and
+  keeps the text.
+- **Unchanged:** the anonymous author's warning (§9), the closed notice on a duplicate
+  (§42.5), the read-only thread of an item in the trash (§10.4), the 15-minute edit
+  window and the rate limit (§10.2).
+- **On a phone** the box spans the thread's width and the buttons wrap under it.
+
+### §44.3 Markdown
+
+**What renders.**
+
+| Typed | Shown as |
+|---|---|
+| `**text**` or `__text__` | bold |
+| `*text*` or `_text_` | italic |
+| `~~text~~` | strikethrough |
+| `` `text` `` | inline code |
+| lines between two lines of ```` ``` ```` | a code block: monospace, its spaces and line breaks kept, scrolling sideways instead of wrapping. No syntax colouring; a language name after the opening line is ignored |
+| lines starting `- ` or `* ` | a bullet list |
+| lines starting `1. `, `2. ` … | a numbered list, starting at its first number |
+| lines starting `> ` | a quote |
+| `[text](address)`, or a bare address | a link (§44.4) |
+| `\*` — a backslash before a Markdown character | that character, not formatting |
+
+Lists and quotes may nest and may hold the inline formatting.
+
+**What does not.** Headings (`# …`), tables, images, horizontal rules, task lists,
+footnotes, indented code and raw HTML are not Markdown here. They are shown as typed,
+character for character: `<b>` is three characters, and `![chart](address)` is an
+exclamation mark followed by an ordinary link. An indented line is an ordinary line of
+its paragraph, not code.
+
+**The rules.**
+
+- **CommonMark** decides how the supported constructs are read — what closes an
+  emphasis, how a list nests, what a backslash escapes. The unsupported ones are
+  switched off in the parser, not removed afterwards; that is what leaves them as typed.
+- **A line break is a line break** (decision 3). A blank line starts a new paragraph,
+  and several blank lines count as one.
+- **Nothing a person types becomes markup.** The text is parsed into a tree of the
+  kinds in the table, and the page builds its elements from that tree. No HTML string
+  is produced or inserted anywhere — not in the thread, not in *Preview* — so there is
+  nothing to sanitize, and no element outside the table can appear.
+- **One parser.** A pure, client-safe function in `@innobox/shared/comment-markdown`,
+  used by the thread and by *Preview*. The server stores and returns the text as
+  written (§44.5) and renders nothing.
+- **A nesting limit.** Lists, quotes and formatting may sit at most **32** deep
+  (`COMMENT_MAX_NESTING`). A comment that goes deeper — nothing written by hand does;
+  thousands of nested markers do — is shown as plain text with its line breaks and
+  mentions, and a line that opens more than 32 lists and quotes is refused before the
+  parser runs, so it cannot cost a reader's browser time. The parser never fails: text
+  it cannot take is shown as plain text too.
+- **A mention is one unit** to the parser. Formatting can wrap it (`**@Ana Petrova**`),
+  but no character of a name is read as Markdown. Inside inline code or a code block it
+  is the plain name, with no link.
+- **Look.** A comment keeps its body size. Inline code and code blocks use
+  `--font-mono` on `--surface-2` with the small radius; a quote has a `--line-strong`
+  rule on its left and `--muted` text; lists are indented one step. On a phone a code
+  block scrolls inside the comment and never widens the page.
+
+### §44.4 Links
+
+- **What becomes a link:**
+  - a bare address that starts with `http://` or `https://`;
+  - a bare address that starts with `www.`, opened over `https`;
+  - a labelled link, `[text](address)`, whose address is an absolute `http` or `https`
+    one.
+- **What does not:** any other scheme (`javascript:`, `data:`, `file:`, `mailto:`,
+  `tel:` and the rest), a relative address, an e-mail address, and an address inside
+  inline code or a code block. A labelled link with such an address is shown as typed.
+  `CH-12` and `SOL-34` are ordinary text.
+- **How it is shown.** In `--accent-2`, underlined on hover and focus, breaking
+  anywhere so a long address never widens the thread. A bare address reads in full, as
+  typed; punctuation that ends a sentence after it is not part of it.
+- **How it opens.** In a new tab, always — a link to InnoBox itself included — with
+  `target="_blank"` and `rel="noopener noreferrer"`.
+- **Nothing else happens to a link.** The server fetches nothing, no preview is
+  shown, no click is recorded, no address is rewritten, and no warning stands between
+  the reader and the page. The CSP (§2.4) is unchanged: a link loads nothing into the
+  page.
+- **Elsewhere.** Comment text reaches no e-mail (§44.7), so §12.1 *E-mail content
+  safety* is unaffected. Challenge and solution text and invitation notes stay plain
+  text, where an address is not a link (§40.2).
+
+### §44.5 Mentions in a comment
+
+The token, binding and the serializer are those of §43.2, unchanged. What differs is
+who can be mentioned and when they are told.
+
+- **Stored text.** `comments.body` holds stored text: the Markdown as written, with
+  each mention a token (§43.2). The API removes U+E000 and U+E001 from every submitted
+  body first, and stores line breaks as a single line feed. Every response carries
+  **display text**; no response carries a token.
+- **Binding.** The web box sends `mentions: [{ userId, name }]` — the people on its
+  *Mentioned* row. A create that sends none has no mentions. An edit that sends none
+  binds the comment's current mentions by their current names (§43.2).
+- **The length limit** — 5 000 characters — is checked on the display text as
+  submitted, after trimming.
+- **Who can be mentioned.** Each person a save would give a **new** row must be all of:
+  - **active** and not erased, with a display name that is not empty;
+  - **not the commenter**;
+  - able to **read the thread** at that moment. For a challenge's thread: able to see
+    the challenge under the full §4.3 predicate. For a solution's thread: able to see
+    its challenge **and** the solution — which narrows only while the solution is
+    `proposed`, to its team, the challenge's assignee, the namespace's committee and
+    admins, and platform admins (§4.3).
+
+  Anyone else — an unknown id included — refuses the whole save with **422**, *"This
+  person can't be mentioned in this comment."* People who already have a row are not
+  checked again.
+- **The list's search** is `GET /api/users?q=&canSee=<CH-n>` on a challenge's thread
+  (§39.2) and **`canSee=<SOL-n>`** on a solution's: the people who can see that
+  solution, by the rule above. The caller is never offered.
+- **The caps** (decision 11), fixed in `@innobox/shared/mentions`:
+  - **per comment** — `MENTIONS_PER_COMMENT = 10`: after a save a comment has at most
+    10 rows — the people its text mentions, plus anyone told and since taken out of
+    it. Over that: **409**, *"A comment can mention at most 10 people."*
+  - **per day** — the `MENTIONS_PER_DAY = 30` of §43.5, now **one budget**: the rows of
+    `solution_mentions` and `comment_mentions` together that one person created as
+    `mentioned_by` in a UTC day. Over that: **409**, with §43.5's message.
+
+  The checks and the inserts run in one transaction under §43.5's advisory lock per
+  saver, so a solution save and a comment post can never both take the last place. A
+  refused save writes nothing — not the comment, not the rows.
+- **What a save writes.** In the transaction of a create or an edit, after binding,
+  each person with a token in the stored text and **no row** gets one, with the
+  commenter as `mentioned_by`. A row is never deleted or changed by an edit: it is the
+  marker that this person has had their one notice for this comment (decision 12),
+  whether or not the text still mentions them. After commit, event 27 (§44.6).
+- **Nothing else.** A mention follows nothing for anyone, adds nobody to a `people`
+  access list, earns nothing beyond the comment's own point (§23.2), and bumps no date
+  beyond what the save itself does.
+
+### §44.6 Notifications — event 27
+
+**Event 27 — "Mentioned in a comment."** A new row of the §12.1 matrix.
+
+- **Recipient:** the mentioned person only.
+- **When:** after commit of the save that gave them their row (§44.5). At most one per
+  person per comment, by construction. **Never coalesced.**
+- **Not written** while the person's *Mentions* preference is off. Their row is still
+  written, so a later change of mind brings nothing back.
+- **Instead of event 6.** A person who receives event 27 for a comment is left out of
+  that comment's event-6 recipients — it opens no comment row for them, and neither
+  refreshes nor counts in one they already hold. A person whose *Mentions* preference
+  is off is **not** left out: event 6 reaches them by its own rules and its own
+  preference. A mention added in an edit is told by event 27 even if the comment's
+  event 6 already reached that person; nothing is taken back.
+- **The sender** is the commenter, and is always named: comments are never anonymous
+  (§9). The notice never names the item's author.
+- **In-app:** *"Ana Petrova mentioned you in a comment on CH-412 Reduce invoice
+  matching time"*, or on a solution's thread *"Ana Petrova mentioned you in a comment
+  on SOL-34 on CH-412 Reduce invoice matching time"*; linked to the comment itself,
+  `/challenges/412#comment-<id>`.
+- **The link** opens the challenge, opens whatever hides the comment — the *Closed
+  solutions* section, the *Show N more replies* fold — scrolls to it and flashes it, as
+  *↪ replying to* does (§10.2). When the comment has been removed meanwhile, the page
+  simply opens at the top.
+- **E-mail:** subject *"Ana Petrova mentioned you in a comment on CH-412"* (or *"… on
+  SOL-34"*); the body carries the item's number, the challenge's number, title and
+  namespace, the sender's name and the link. It **never quotes the comment** (decision
+  16). The §12.1 content-safety rules apply.
+- **Actionable:** always immediate, never held for a digest; the e-mail switch applies.
+- **The preference** is the *Mentions in solutions* switch of §43.6, renamed
+  ***Mentions*** and covering events 26 and 27 (`notify_mentions`, unchanged; each
+  person's choice carries over). Row-level, applied when the notice would be written;
+  silent and forward-only.
+- **Read.** Opening the challenge's detail page marks the viewer's event-27 rows about
+  it and its solutions read, as for event 26. The §12.1 read-time gate hides a row
+  whose challenge the recipient can no longer see, as for event 26, and the trash filter
+  one whose item is in the trash.
+- **A removed comment.** Deleting a comment — the owner's delete or a moderator's
+  (§10.2) — deletes its event-27 inbox rows and unsent outbox rows in the same
+  transaction, so nobody is pointed at a comment that is gone.
+- **No channel webhook** (§12.4 is unchanged).
+
+### §44.7 Reading a comment
+
+- **In the thread** a comment is rendered Markdown (§44.3) with its links (§44.4). Each
+  mention is the person's name, `@` included, as an inline link in `--accent-2` to
+  their profile that opens the §13.8 directory card — with the deactivated and erased
+  forms of §43.7.
+- **A removed comment** shows its placeholder only (§10.2) — none of its text,
+  formatting, links or mentions — and its payload carries none.
+- **Agents (MCP, §25.6).** `list_comments` returns display text: the Markdown as
+  written, with each mention as `@` and the person's name, and no `mentions` field.
+  `post_comment` takes Markdown; an `@` in it is plain text and mentions nobody
+  (decision 15). The surface stays at **15** tools.
+- **The discussion summary (§22.13)** is sent the comments' text as written — Markdown
+  neither rendered nor stripped — with each mention as *"@colleague"* (§43.9). No
+  person's name reaches the provider.
+- **Nowhere else.** No e-mail, inbox line, digest, export, webhook or search result
+  carries a comment's text. Comments are not searched (§13.4), so nothing is found by a
+  mentioned person's name.
+
+### §44.8 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** Only people who can read the thread can be mentioned, the notice is
+  written only for them, and a mention adds nobody to a `people` access list. It does
+  show a thread's readers that the person can read it too — no more than §43.8 allows
+  for a solution's text.
+- **Invariant 3.** Comments are never anonymous (§9), and neither is a mention in one:
+  the notice names the commenter and nobody else. The anonymous author's warning
+  before commenting on their own item stands.
+- **A `proposed` solution that opens later** sends nothing new: the people mentioned
+  in its thread were told when the comments were posted.
+- **Visibility narrowed.** A mentioned person who can no longer see the item keeps
+  their name in the comment and loses the notice through the §12.1 read-time gate.
+- **Edit (§10.2).** Inside the owner's 15 minutes; rules as §44.5. A closed thread
+  (§42.5) takes no new comment, so no new mention except through such an edit.
+- **Delete of a comment (§10.2).** The rows stay, so the caps stay honest; the notices
+  go (§44.6).
+- **Trash (§10.4).** A thread in the trash is read-only; its notices are hidden by the
+  trash filter and come back with a restore, which sends nothing.
+- **Delete (§10.3).** The cascade removes the `comment_mentions` rows of every comment
+  that goes, with their event-27 inbox and unsent outbox rows.
+- **Deactivation.** A deactivated person cannot be newly mentioned and receives
+  nothing (§12.1); a mention of them stays, muted (§43.7).
+- **Erasure (§3)** deletes the person's `comment_mentions` rows and nulls
+  `mentioned_by` where they were the commenter. No comment is rewritten: their tokens
+  read *"@Deleted User"* from then on.
+- **Everything else** — replies, the duplicate close, hype, invitations, gamification,
+  public submissions — is unaffected.
+
+### §44.9 Data model (migration 0063)
+
+- **`comment_mentions`** — comment_id (FK `comments`, `ON DELETE CASCADE`), user_id (FK
+  `users`), mentioned_by (nullable FK `users`; null once the commenter is erased; check
+  `<> user_id`), created_at (timestamptz, default `now()`). Primary key `(comment_id,
+  user_id)`; an index on `(mentioned_by, created_at)` for the daily cap. Grants: SELECT
+  and INSERT; UPDATE on `mentioned_by` only; DELETE for the §10.3 cascade and the §3
+  erasure. There is no `settled_at`: a row exists only for someone already told or
+  passed over.
+- **`comments.body`** keeps its type. From this migration on it holds stored text
+  (§44.5). Existing rows contain no token and are untouched, and there is **no format
+  column** (decision 5).
+- **`notifications.type`** gains **`mentioned_in_comment`** (payload: the comment's
+  item as its `parentType` / `parentId` target, `commentId`, `challengeId`,
+  `challengeNumber`, `solutionNumber` — null on a challenge's thread — `title`,
+  `mentionerId`, `mentionerName` and the e-mail's `subject`); the §5 trigger sets
+  `challenge_id` and `solution_id` from the target as for every row. No coalescing
+  index. Two partial indexes on `(payload->>'commentId') WHERE type =
+  'mentioned_in_comment'` — one on `notifications`, one on `notification_outbox` —
+  serve the delete of §44.6.
+- No column on `users`: `notify_mentions` (§43.10) is reused.
+
+### §44.10 API, audit, tests
+
+- **API (§16).**
+  - `POST /api/comments` and `PATCH /api/comments/:id` accept **`mentions: [{ userId,
+    name }]`** (optional; at most 10 entries with distinct ids, `name` 1–200
+    characters). Their existing checks come first and are unchanged. Then: **400** for
+    a malformed `mentions`; **422** for an ineligible person; **409** for the
+    per-comment cap and **409** for the daily cap (§44.5). A refusal writes nothing. On
+    the `PATCH`, an absent `mentions` binds the current mentions and `mentions: []`
+    removes them all from the text.
+  - `GET /api/comments` rows carry **display text** in `body` and **`mentions: [{
+    start, length, user: { id, displayName, active } | null }]`** — where each mention
+    sits in `body`, in UTF-16 code units, with `user` null for an erased person; an
+    empty array when there are none and on a removed comment. A row the viewer may edit
+    carries **`mentionsLeft`** (its room under the per-comment cap), `null` otherwise;
+    the response carries the viewer's **`mentionsLeftToday`**.
+  - `GET /api/users?q=&canSee=<SOL-n>` — the people who can see that solution (§44.5),
+    beside the existing `canSee=<CH-n>` and under the same `search` bucket (§2.4). A
+    solution the caller cannot see answers as an unknown one.
+  - `GET` and `PATCH /api/profile` are unchanged: the preference stays **`mentions`**.
+- **Audit (§15).** No new action. `comment.posted` gains `mentions: [userId]` when
+  there are any; `comment.edited` gains `mentionsAdded` and `mentionsRemoved`. Comment
+  audit rows carry no body, so no token and no name reach the log. Event 27 and the
+  preference are not audited.
+- **Tests.**
+  - *Unit:* the parser — every row of the §44.3 table; nesting; each unsupported
+    construct shown as typed (a heading, a table, an image, a rule, a task list, raw
+    HTML, indented code); a line break kept and blank lines collapsed; backslash
+    escapes; formatting around a mention, a mention inside code, and a name that
+    contains Markdown characters; the link rule — `http`, `https` and `www.`, sentence
+    punctuation after an address, every refused scheme, a labelled link with a refused
+    scheme shown as typed, an address inside code, `target` and `rel` on every link;
+    the per-comment cap — the 10th person allowed and the 11th refused, a
+    told-and-removed person still counting; the daily budget counted across both
+    tables, and its boundary at 00:00:00 UTC; event 27's two renderings and its
+    actionable, non-digestable class; event 6's recipients with a mentioned person left
+    out and a muted one kept.
+  - *Integration:* a create with mentions writes the rows, stores tokens and returns
+    display text with ranges; a comment of 5 000 characters with ten mentions is
+    accepted; an ineligible id refuses the whole post and writes nothing; on a
+    `proposed` solution `canSee=<SOL-n>` offers a reviewer and not a colleague who
+    cannot see it, and the API refuses that colleague; a mentioned follower gets event
+    27 and no event 6 for that comment, a muted one gets event 6 and no event 27; an
+    edit that adds a mention notifies once, and removing and re-adding it sends
+    nothing; both caps, the daily one shared with a solution save, under concurrent
+    requests; deleting a comment removes its event-27 inbox and unsent outbox rows and
+    keeps the rows; event 27 is never held for a digest; opening the challenge reads
+    the row and the read-time gate hides it after a narrowing; the §10.3 cascade and
+    the §3 erasure; `post_comment` creates no mention and `list_comments` returns
+    display text; the summary prompt carries *"@colleague"* and no name.
+  - *E2e:* user A writes a comment of two paragraphs with `**bold**`, a list, an
+    address and `@` plus the start of user B's name, picks B and sees B's chip; the
+    *Preview* tab shows it formatted; **Ctrl+Enter** posts it; the thread shows the
+    bold text, the list, a link that opens in a new tab and B's name as a link; B's
+    bell shows *"… mentioned you in a comment on CH-…"*, and the link opens the
+    challenge at that comment.

@@ -15,6 +15,7 @@ import type { Pool } from "pg";
 import {
   CHALLENGE_STATUSES,
   CLIENT_NAME_MAX,
+  COMMENT_MENTION_MESSAGES,
   DUPLICATE_MESSAGES,
   COMMENT_BODY_MAX,
   COST_VS_BENEFITS_MAX,
@@ -398,7 +399,7 @@ export const TOOLS: readonly ToolDef[] = [
     name: "list_comments",
     title: "List comments",
     description:
-      "The comments on a challenge or a solution, oldest first, a page at a time. A reply carries threadRootId (its top-level comment) and replyToId (the comment it answers). Removed comments show as the web shows them.",
+      "The comments on a challenge or a solution, oldest first, a page at a time. A reply carries threadRootId (its top-level comment) and replyToId (the comment it answers). Removed comments show as the web shows them. A comment's body is Markdown as its author wrote it; a mention of a person reads @ followed by their name.",
     readOnly: true,
     bucket: "search",
     inputSchema: {
@@ -410,7 +411,8 @@ export const TOOLS: readonly ToolDef[] = [
     async run(ctx, args) {
       const parent = await parentId(ctx, args);
       const paging = page(args);
-      const comments = parent.id ? await listComments(ctx.pool, ctx.viewer, parent.type, parent.id) : null;
+      // §44.7: display text — Markdown as written, each mention as `@` and the name; no `mentions` field.
+      const comments = parent.id ? ((await listComments(ctx.pool, ctx.viewer, parent.type, parent.id))?.comments ?? null) : null;
       if (!comments) return NOT_FOUND(parent.type);
       return {
         ok: true,
@@ -861,7 +863,7 @@ export const TOOLS: readonly ToolDef[] = [
     name: "post_comment",
     title: "Post a comment",
     description:
-      "Posts a comment as the signed-in person on a challenge or solution they can see, shown as \"via agent\". Pass replyTo (a comment id from innobox_list_comments) to reply to a comment. Comments are never anonymous.",
+      "Posts a comment as the signed-in person on a challenge or solution they can see, shown as \"via agent\". Pass replyTo (a comment id from innobox_list_comments) to reply to a comment. Comments are never anonymous. The body is Markdown: line breaks are kept, and bold, italic, strikethrough, inline code, fenced code blocks, lists, quotes and http(s) links are rendered; headings, tables, images and HTML are shown as typed. An @ in the body is plain text: it mentions and notifies nobody.",
     readOnly: false,
     bucket: "comment",
     inputSchema: {
@@ -885,6 +887,10 @@ export const TOOLS: readonly ToolDef[] = [
       if (result.status === "closed") return fail(409, DUPLICATE_MESSAGES.commentsClosed);
       if (result.status === "invalid") return fail(400, result.error);
       if (result.status === "unprocessable") return fail(422, result.error);
+      // §44.7: an agent's comment sends no mention list, so it mentions nobody — an `@` in its text
+      // is plain text. These two refusals therefore cannot happen here; they are answered all the same.
+      if (result.status === "ineligible_mention") return fail(422, COMMENT_MENTION_MESSAGES.ineligible);
+      if (result.status === "mention_cap") return fail(409, result.reason === "comment_cap" ? COMMENT_MENTION_MESSAGES.commentCap : COMMENT_MENTION_MESSAGES.dailyCap);
       await notifyCommentPosted(notifyCtx(ctx), parent.type, parent.id, ctx.viewer.userId, result.replyToAuthorId).catch(logNotifyFailure("comment notification failed"));
       return { ok: true, data: { id: result.comment.id, threadRootId: result.comment.threadRootId, replyToId: result.comment.replyToId, createdAt: result.comment.createdAt } };
     },

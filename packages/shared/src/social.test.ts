@@ -16,6 +16,30 @@ test("validateCommentBody: trims and accepts a normal body", () => {
   if (result.ok) assert.equal(result.value, "Nice idea!");
 });
 
+test("validateCommentBody: line breaks are kept, stored as a single line feed (§44.5)", () => {
+  const result = validateCommentBody("First line\r\nSecond line\rThird\n\n- a list\n");
+  assert.deepEqual(result, { ok: true, value: "First line\nSecond line\nThird\n\n- a list" });
+});
+
+test("validateCommentBody: mention marks are removed first, so nothing typed can be read back as a mention (§44.5)", () => {
+  const forged = "Ask 11111111-1111-4111-8111-111111111111 about it";
+  assert.deepEqual(validateCommentBody(forged), { ok: true, value: "Ask 11111111-1111-4111-8111-111111111111 about it" });
+  assert.equal(validateCommentBody("  ").ok, false, "nothing but marks is an empty comment");
+});
+
+test("validateCommentBody: the 5 000-character limit is checked on the text as typed, after trimming (§44.5)", () => {
+  assert.equal(validateCommentBody(`  ${"x".repeat(5000)}  `).ok, true);
+  assert.equal(validateCommentBody("x".repeat(5001)).ok, false);
+  // A CR LF pair is one line break, and marks are not characters of the comment.
+  assert.equal(validateCommentBody(`${"x".repeat(4998)}\r\ny`).ok, true);
+  assert.equal(validateCommentBody(`${"x".repeat(5000)}`).ok, true);
+});
+
+test("NOTIFICATION_TYPES: includes event 27, a mention in a comment (§44.6)", async () => {
+  const { NOTIFICATION_TYPES } = await import("./social.js");
+  assert.ok((NOTIFICATION_TYPES as readonly string[]).includes("mentioned_in_comment"));
+});
+
 test("canEditOwnComment: true for the author within 15 minutes", () => {
   const createdAt = new Date("2026-01-01T12:00:00Z");
   const now = new Date("2026-01-01T12:10:00Z");

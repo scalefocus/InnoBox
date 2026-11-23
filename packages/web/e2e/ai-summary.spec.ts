@@ -51,7 +51,7 @@ test("discussion summary: summarize a long thread, then it goes stale", async ({
 
     // A new comment makes it stale.
     await page.getByPlaceholder("Add a comment…").fill("point 10");
-    await page.getByPlaceholder("Add a comment…").press("Enter");
+    await page.getByPlaceholder("Add a comment…").press("Control+Enter"); // §44.2: Enter alone is a new line
     await expect(panel).toContainText("New comments since this summary");
     await expect(panel.getByRole("button", { name: "Refresh" })).toBeVisible();
 

@@ -49,6 +49,72 @@ export const MENTION_HINT_ON_SAVE = "They'll be told when you save.";
 export const MENTION_ANONYMOUS_WARNING =
   "Mentions are part of the text everyone can read, and may hint at who wrote this. The people you mention aren't told who mentioned them.";
 
+// ── Mentions in a comment (§44) ──────────────────────────────────────────────────────────
+// The token, binding and the serializer above serve comments unchanged. What differs is who can be
+// mentioned (only people who can read the thread right now), when they are told (at the save, by
+// event 27) and the per-item cap; the daily cap is ONE budget across solution text and comments.
+
+/** §44.5 decision 11 — fixed in code. */
+export const MENTIONS_PER_COMMENT = 10;
+
+/** The user-facing refusals of a comment's mentions (§44.5, §44.10), in the order the API checks. */
+export const COMMENT_MENTION_MESSAGES = {
+  malformed: `mentions must list at most ${MENTIONS_PER_COMMENT} people`,
+  ineligible: "This person can't be mentioned in this comment.",
+  commentCap: `A comment can mention at most ${MENTIONS_PER_COMMENT} people.`,
+  dailyCap: MENTION_MESSAGES.dailyCap,
+} as const;
+
+/** §44.2: the comment box's copy. */
+export const COMMENT_MENTION_HINT_POST = "They'll be told when you post.";
+export const COMMENT_MENTION_HINT_SAVE = "They'll be told when you save.";
+export const COMMENT_MARKDOWN_HINT = "Markdown: **bold**, *italic*, lists, > quote, links · @ to mention a colleague";
+export const COMMENT_PREVIEW_EMPTY = "Nothing to preview.";
+
+/** §44.5: why a comment save over the caps is refused — the per-comment cap first.
+ *  `rowsOnComment` is the comment's rows after the save (the people its text mentions plus anyone
+ *  told and since taken out); `createdToday` the rows the commenter created since UTC midnight in
+ *  solution text AND comments together, this save's included. */
+export function commentMentionCapRefusal(rowsOnComment: number, createdToday: number): "comment_cap" | "daily_cap" | null {
+  if (rowsOnComment > MENTIONS_PER_COMMENT) return "comment_cap";
+  if (createdToday > MENTIONS_PER_DAY) return "daily_cap";
+  return null;
+}
+
+/** §44.10: the room the comment box shows — on this comment, and today across everything. */
+export function commentMentionRoom(rowsOnComment: number, createdToday: number): { left: number; leftToday: number } {
+  return {
+    left: Math.max(0, MENTIONS_PER_COMMENT - rowsOnComment),
+    leftToday: Math.max(0, MENTIONS_PER_DAY - createdToday),
+  };
+}
+
+/** Where a comment sits — its challenge, and its solution on a solution's thread. */
+export interface CommentMentionPlace {
+  challengeNumber: string | number;
+  /** Null on a challenge's own thread. */
+  solutionNumber: string | number | null;
+  challengeTitle: string;
+}
+
+/** The item a comment hangs under, as the notice names it: "CH-412" or "SOL-34". */
+function commentItemLabel(place: Pick<CommentMentionPlace, "challengeNumber" | "solutionNumber">): string {
+  return place.solutionNumber === null ? formatChallengeNumber(place.challengeNumber) : formatSolutionNumber(place.solutionNumber);
+}
+
+/** The bell's line for event 27 (§44.6). Comments are never anonymous (§9), so the commenter is
+ *  always named; the item's own author never is. */
+export function commentMentionedMessage(senderName: string, place: CommentMentionPlace): string {
+  const challenge = `${formatChallengeNumber(place.challengeNumber)} "${place.challengeTitle}"`;
+  const where = place.solutionNumber === null ? challenge : `${formatSolutionNumber(place.solutionNumber)} on ${challenge}`;
+  return `${senderName} mentioned you in a comment on ${where}.`;
+}
+
+/** Event 27's e-mail subject. */
+export function commentMentionedSubject(senderName: string, place: Pick<CommentMentionPlace, "challengeNumber" | "solutionNumber">): string {
+  return `${senderName} mentioned you in a comment on ${commentItemLabel(place)}`;
+}
+
 /** The text with every U+E000 and U+E001 removed — the first thing done to any submitted text. */
 export function stripMentionMarks(text: string): string {
   return text.replace(MARKS_RE, "");

@@ -364,13 +364,13 @@ export async function dispatchCoalescedComment(
 /** §12.1 read action: opening a challenge's page reads the viewer's unread comment rows — and,
  *  since §26.6, their unread "hyped" rows, since §34.5 their event-18 row, since §40.6 their
  *  event-22 invitations (the page shows them in its banner), since §41.6 their event-24 row and
- *  since §43.6 their event-26 mentions in its solutions — for the challenge itself AND its solutions
- *  (the page shows both). A solution row carries its challenge in `challenge_id` (§5, migration
+ *  since §43.6 their event-26 mentions in its solutions and since §44.6 their event-27 mentions in
+ *  its comments — for the challenge itself AND its solutions (the page shows both). A solution row carries its challenge in `challenge_id` (§5, migration
  *  0051), so one probe of the (user_id, challenge_id) unread index covers both. */
 export async function markCommentNotificationsReadForChallenge(db: Db, userId: string, challengeId: string): Promise<void> {
   await db.query(
     `update notifications set read_at = now()
-      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge', 'invitation', 'affected', 'mentioned') and read_at is null and challenge_id = $2::uuid`,
+      where user_id = $1 and type in ('comment_posted', 'hyped', 'topic_challenge', 'invitation', 'affected', 'mentioned', 'mentioned_in_comment') and read_at is null and challenge_id = $2::uuid`,
     [userId, challengeId],
   );
 }
@@ -689,7 +689,7 @@ export async function dispatchInvitation(ctx: NotifyContext, inviteeId: string, 
  * SENDER — the team member whose save wrote the mention — whoever moved the solution, so a reviewer
  * whose own transition settles a mention of them is still told. The usual drops apply — a
  * deactivated or erased person, one who cannot see the solution (the full §4.3 predicate, its
- * `proposed` rule included) — and the *Mentions in solutions* preference mutes it row-level: a
+ * `proposed` rule included) — and the *Mentions* preference mutes it row-level: a
  * dropped person is passed over in silence (§43.4). Immediate and never digested; one per person per
  * solution by construction, so no e-mail cap. Returns whether the rows were written.
  */
@@ -698,6 +698,31 @@ export async function dispatchMention(ctx: NotifyContext, userId: string, sender
   if ((await finalRecipients({ ...ctx, actorId: senderId }, target, [userId], { preference: "mentions" })).length === 0) return false;
   await writeNotifications(ctx.pool, [userId], "mentioned", withTarget(payload, target));
   return true;
+}
+
+/**
+ * §12.1 event 27 (§44.6): one mention in a comment, to the mentioned person — written right after
+ * the save that mentions them. The actor is the commenter. The usual drops apply — a deactivated or
+ * erased person, one who cannot read the thread (the item's full §4.3 predicate, a `proposed`
+ * solution's rule included; eligibility already required it at the save) — and the *Mentions*
+ * preference mutes it row-level. Immediate and never digested; one per person per comment by
+ * construction, so no e-mail cap. Returns whether the rows were written: a person who gets them is
+ * left out of that comment's event 6, a person who does not is not (§44.6).
+ */
+export async function dispatchCommentMention(ctx: NotifyContext, userId: string, target: NotificationTarget, payload: NotificationPayload): Promise<boolean> {
+  if ((await finalRecipients(ctx, target, [userId], { preference: "mentions" })).length === 0) return false;
+  await writeNotifications(ctx.pool, [userId], "mentioned_in_comment", withTarget(payload, target));
+  return true;
+}
+
+/**
+ * §44.6 "a removed comment": deletes a comment's event-27 inbox rows and its unsent outbox rows,
+ * inside the transaction that removes the comment, so nobody is pointed at a comment that is gone.
+ * Both are found by the comment's id in the payload (the partial indexes of migration 0063).
+ */
+export async function deleteCommentMentionNotifications(db: Db, commentId: string): Promise<void> {
+  await db.query(`delete from notifications where type = 'mentioned_in_comment' and payload->>'commentId' = $1`, [commentId]);
+  await db.query(`delete from notification_outbox where type = 'mentioned_in_comment' and payload->>'commentId' = $1 and status <> 'sent'`, [commentId]);
 }
 
 /**

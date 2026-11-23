@@ -8,6 +8,8 @@
 import {
   challengeAuthorIdsSql,
   challengeTeamJsonSql,
+  commentMentionedMessage,
+  commentMentionedSubject,
   formatChallengeNumber,
   formatSolutionNumber,
   inboxNote,
@@ -25,7 +27,7 @@ import {
   type TeamMemberRow,
 } from "@innobox/shared";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "../app/challenges/status";
-import { itemHref } from "./deep-link";
+import { commentHref, itemHref } from "./deep-link";
 import type { InvitationPayoff } from "./invitation-payoffs";
 import type { SettledMention } from "./mentions";
 import {
@@ -33,6 +35,7 @@ import {
   dispatchCoalescedAffected,
   dispatchCoalescedComment,
   dispatchCoalescedHype,
+  dispatchCommentMention,
   dispatchEvent,
   dispatchInAppEvent,
   dispatchInvitation,
@@ -349,7 +352,9 @@ export async function notifySolutionResubmitted(
  * never the commenter. Messages reference the parent CHALLENGE (solutions have no title); the
  * recipients are scoped to the comment's actual parent. A reply (§10.2) also counts as a reply for
  * the author of the comment it answers (`replyToAuthorId`). Shared by the comments route and the
- * §25 `post_comment` tool.
+ * §25 `post_comment` tool. `mentionedIds` are the people this comment's event 27 was written for
+ * (§44.6): they get that notice INSTEAD of this one, so they are left out here — the comment opens
+ * no row for them and neither refreshes nor counts in one they already hold.
  */
 export async function notifyCommentPosted(
   ctx: NotifyContext,
@@ -357,6 +362,7 @@ export async function notifyCommentPosted(
   parentId: string,
   commenterId: string,
   replyToAuthorId: string | null = null,
+  mentionedIds: readonly string[] = [],
 ): Promise<void> {
   const item =
     parentType === "challenge"
@@ -400,8 +406,8 @@ export async function notifyCommentPosted(
   await dispatchCoalescedComment(
     ctx,
     // The author of a comment answered is always among the other commenters (§10.2). The item's
-    // authors are its whole team (§39.8).
-    [...item.authorIds, ...otherCommenters, ...followers],
+    // authors are its whole team (§39.8). §44.6: a person told by event 27 is not told again here.
+    [...item.authorIds, ...otherCommenters, ...followers].filter((id) => !mentionedIds.includes(id)),
     {
       parentType,
       parentId: item.id,
@@ -786,6 +792,61 @@ export async function notifyMentioned(ctx: NotifyContext, solutionId: string, se
       mentionerName: senderName,
     });
   }
+}
+
+/**
+ * §12.1 event 27 (§44.6): each person a comment save just gave a mention row, told at once — "Ana
+ * Petrova mentioned you in a comment on CH-412 …", or "… on SOL-34 on CH-412 …" on a solution's
+ * thread. Comments are never anonymous (§9), so the commenter is always named; the item's own author
+ * never is. The link opens the challenge at the comment itself. The e-mail adds the namespace and
+ * never quotes the comment (§44 decision 16). The silent cases — muted, deactivated, erased, out of
+ * sight — are dispatchCommentMention's drops. Called after the save committed; returns the people
+ * who were told, whom the caller leaves out of the comment's event 6.
+ */
+export async function notifyCommentMentioned(
+  ctx: NotifyContext,
+  comment: { id: string; parentType: "challenge" | "solution"; parentId: string; authorId: string },
+  userIds: readonly string[],
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  // §44.6: nobody is pointed at a comment that is gone — a delete that landed after the save
+  // already ran its cleanup, so a removed comment is not notified about at all.
+  const { rows: live } = await ctx.pool.query(`select 1 from comments where id = $1 and deleted_at is null`, [comment.id]);
+  if (live.length === 0) return [];
+  const { rows } = await ctx.pool.query<{ challenge_id: string; challenge_number: string; challenge_title: string; solution_number: string | null; slug: string; sender: string | null }>(
+    comment.parentType === "challenge"
+      ? `select c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, null::text as solution_number, ns.slug,
+                (select display_name from users where id = $2) as sender
+           from challenges c join namespaces ns on ns.id = c.namespace_id where c.id = $1`
+      : `select c.id as challenge_id, c.number::text as challenge_number, c.title as challenge_title, s.number::text as solution_number, ns.slug,
+                (select display_name from users where id = $2) as sender
+           from solutions s join challenges c on c.id = s.challenge_id join namespaces ns on ns.id = c.namespace_id where s.id = $1`,
+    [comment.parentId, comment.authorId],
+  );
+  const item = rows[0];
+  if (!item) return [];
+  const place = { challengeNumber: item.challenge_number, solutionNumber: item.solution_number, challengeTitle: item.challenge_title };
+  const senderName = item.sender || "Someone";
+  const told: string[] = [];
+  for (const userId of userIds) {
+    const written = await dispatchCommentMention({ ...ctx, actorId: comment.authorId }, userId, { parentType: comment.parentType, parentId: comment.parentId }, {
+      message: commentMentionedMessage(senderName, place),
+      subject: commentMentionedSubject(senderName, place),
+      emailDetail: `In /${item.slug}`,
+      link: commentHref(item.challenge_number, comment.id),
+      parentType: comment.parentType,
+      parentId: comment.parentId,
+      commentId: comment.id,
+      challengeId: item.challenge_id,
+      challengeNumber: formatChallengeNumber(item.challenge_number),
+      solutionNumber: item.solution_number === null ? null : formatSolutionNumber(item.solution_number),
+      title: item.challenge_title,
+      mentionerId: comment.authorId,
+      mentionerName: senderName,
+    });
+    if (written) told.push(userId);
+  }
+  return told;
 }
 
 /** Notification failures are logged, never thrown — the state change already committed. */

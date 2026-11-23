@@ -2,7 +2,7 @@
 // the PATCH parser accepts any subset of the toggles and the e-mail switch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { NOTIFICATION_PREFERENCE_COLUMN, applyPreferenceMute, isNotificationPreference, parsePreferencePatch } from "./notification-preferences.js";
+import { NOTIFICATION_PREFERENCE_COLUMN, NOTIFICATION_PREFERENCE_LABEL, applyPreferenceMute, isNotificationPreference, parsePreferencePatch } from "./notification-preferences.js";
 
 test("applyPreferenceMute drops opted-out recipients but never an exempt one", () => {
   assert.deepEqual(applyPreferenceMute(["a", "b", "c", "d"], new Set(["b", "d"])), ["a", "c"]);
@@ -17,12 +17,17 @@ test("the column map is fixed and complete", () => {
     followedStatus: "notify_followed_status",
     followedSolutions: "notify_followed_solutions",
     invitations: "notify_invitations", // §40.6: an actionable event a person can mute…
-    mentions: "notify_mentions", // …and §43.6: the other one
+    mentions: "notify_mentions", // …and §43.6 / §44.6: mentions, in solutions (26) and comments (27)
   });
   assert.equal(isNotificationPreference("followedStatus"), true);
   assert.equal(isNotificationPreference("invitations"), true);
   assert.equal(isNotificationPreference("mentions"), true);
   assert.equal(isNotificationPreference("emailNotificationsEnabled"), false);
+});
+
+test("one Mentions toggle covers mentions in solutions and in comments (§44.6)", () => {
+  assert.equal(NOTIFICATION_PREFERENCE_LABEL.mentions.title, "Mentions");
+  assert.match(NOTIFICATION_PREFERENCE_LABEL.mentions.sub, /a solution or a comment/);
 });
 
 test("parsePreferencePatch accepts any subset of booleans and refuses the rest", () => {

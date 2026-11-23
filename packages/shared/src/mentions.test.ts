@@ -1,10 +1,17 @@
 // §43 mentions — the pure rules: the token, binding with its boundary rule, the serializer and its
 // ranges, the audit and AI forms, the drafting aid's placeholders, the request parser, the caps, the
-// settling check's status table, the composer's query rule, and event 26's copy and class.
+// settling check's status table, the composer's query rule, and event 26's copy and class — and, for
+// mentions in a comment (§44), the per-comment cap, the box's copy, and event 27's copy and class.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   AI_STORED_MENTION,
+  COMMENT_MARKDOWN_HINT,
+  COMMENT_MENTION_HINT_POST,
+  COMMENT_MENTION_HINT_SAVE,
+  COMMENT_MENTION_MESSAGES,
+  COMMENT_PREVIEW_EMPTY,
+  MENTIONS_PER_COMMENT,
   MENTIONS_PER_DAY,
   MENTIONS_PER_SOLUTION,
   MENTION_CLOSE,
@@ -17,6 +24,10 @@ import {
   auditMentions,
   bindMentions,
   boundUserIds,
+  commentMentionCapRefusal,
+  commentMentionRoom,
+  commentMentionedMessage,
+  commentMentionedSubject,
   displayMentions,
   hasMentions,
   insertMention,
@@ -228,4 +239,43 @@ test("event 26 names the sender unless there is none, and is never held for a di
   assert.equal(mentionedSubject("Ana Petrova", 34), "Ana Petrova mentioned you in SOL-34");
   assert.equal(mentionedSubject(null, 34), "You were mentioned in SOL-34");
   assert.equal(isDigestableEvent(26), false);
+});
+
+// ── Mentions in a comment (§44) ──────────────────────────────────────────────────────────
+
+test("a comment's caps refuse the 11th person on a comment and the 31st of a day (§44.5)", () => {
+  assert.equal(MENTIONS_PER_COMMENT, 10);
+  assert.equal(commentMentionCapRefusal(MENTIONS_PER_COMMENT, 1), null, "the 10th person is allowed");
+  assert.equal(commentMentionCapRefusal(MENTIONS_PER_COMMENT + 1, 1), "comment_cap");
+  assert.equal(commentMentionCapRefusal(1, MENTIONS_PER_DAY), null, "the 30th of the day is allowed");
+  assert.equal(commentMentionCapRefusal(1, MENTIONS_PER_DAY + 1), "daily_cap");
+  assert.equal(commentMentionCapRefusal(MENTIONS_PER_COMMENT + 1, MENTIONS_PER_DAY + 1), "comment_cap", "the per-comment cap is checked first");
+  // The first argument is the comment's ROWS after the save, so a person told and since taken out
+  // of the text still counts toward the 10.
+  assert.equal(commentMentionCapRefusal(9 + 1 + 1, 1), "comment_cap", "nine named, one told-and-removed, one new");
+  assert.deepEqual(commentMentionRoom(3, 28), { left: 7, leftToday: 2 });
+  assert.deepEqual(commentMentionRoom(12, 40), { left: 0, leftToday: 0 });
+});
+
+test("a comment's refusals and the box's copy (§44.2, §44.5)", () => {
+  assert.equal(COMMENT_MENTION_MESSAGES.ineligible, "This person can't be mentioned in this comment.");
+  assert.equal(COMMENT_MENTION_MESSAGES.commentCap, "A comment can mention at most 10 people.");
+  assert.equal(COMMENT_MENTION_MESSAGES.dailyCap, MENTION_MESSAGES.dailyCap, "one daily budget, one message");
+  assert.equal(COMMENT_MENTION_HINT_POST, "They'll be told when you post.");
+  assert.equal(COMMENT_MENTION_HINT_SAVE, "They'll be told when you save.");
+  assert.equal(COMMENT_MARKDOWN_HINT, "Markdown: **bold**, *italic*, lists, > quote, links · @ to mention a colleague");
+  assert.equal(COMMENT_PREVIEW_EMPTY, "Nothing to preview.");
+});
+
+test("event 27 always names the commenter, names the thread's item, and is never held for a digest (§44.6)", () => {
+  const onChallenge = { challengeNumber: 412, solutionNumber: null, challengeTitle: "Reduce invoice matching time" };
+  const onSolution = { ...onChallenge, solutionNumber: 34 };
+  assert.equal(commentMentionedMessage("Ana Petrova", onChallenge), 'Ana Petrova mentioned you in a comment on CH-412 "Reduce invoice matching time".');
+  assert.equal(commentMentionedMessage("Ana Petrova", onSolution), 'Ana Petrova mentioned you in a comment on SOL-34 on CH-412 "Reduce invoice matching time".');
+  assert.equal(commentMentionedSubject("Ana Petrova", onChallenge), "Ana Petrova mentioned you in a comment on CH-412");
+  assert.equal(commentMentionedSubject("Ana Petrova", onSolution), "Ana Petrova mentioned you in a comment on SOL-34");
+  // The numbers are the bare ones the rows hold, as text or as numbers.
+  assert.equal(commentMentionedSubject("Ana Petrova", { challengeNumber: "412", solutionNumber: "34" }), "Ana Petrova mentioned you in a comment on SOL-34");
+  assert.equal(isDigestableEvent(27), false, "actionable: always immediate");
+  assert.equal(isDigestableEvent(27, true), false);
 });

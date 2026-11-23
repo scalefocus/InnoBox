@@ -247,6 +247,9 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   overflow: hidden;
   transform-origin: top center; --menu-pop-y: -6px; /* opens below its anchor */
 }
+/* …or above it, when it does not fit below and there is more room above (FloatingResults): the
+   new-comment box is the last thing on a challenge's page (§44.2). */
+.user-search-pop[data-side="above"] { transform-origin: bottom center; --menu-pop-y: 6px; }
 .user-result-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 9px;
   border: 0; background: none; cursor: pointer; border-radius: 7px; text-align: left;
@@ -756,6 +759,52 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
   .row.comment-reply { padding-left: 22px; }
   .row.comment-reply::before { left: 8px; }
 }
+
+/* The comment box (§44.2): the Markdown | Preview tabs (the .srctabs strip, compact), the text box
+   — three lines tall, growing with its text up to twelve and scrolling after that (the script sets
+   its height; these two bounds hold it) — the muted hint, the Mentioned row and the buttons, stacked.
+   It spans the thread's width and its buttons wrap, so a phone needs no rule of its own. The Preview
+   panel mirrors the text box's frame, so switching tabs does not jump. Tokens only. */
+.comment-box { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
+.comment-box-tabs .srctab { padding: 5px 11px; font-size: 12.5px; }
+.comment-box-text {
+  display: block; width: 100%; line-height: 1.5; resize: none; overflow-y: auto;
+  min-height: calc(4.5em + 18px); max-height: calc(18em + 18px);
+}
+.comment-box-hint { margin-top: 4px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.comment-box-preview {
+  min-height: calc(4.5em + 18px); min-width: 0; padding: 8px 12px; font-size: 14px; line-height: 1.5;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface);
+}
+.comment-box-error { font-size: 13px; color: var(--danger); }
+.comment-box-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* A rendered comment (§44.3, §44.4, §44.7), in the thread and in the box's Preview: it keeps the
+   comment's body size; inline code and code blocks are mono on --surface-2 with the small radius
+   (the hairline keeps them visible on a hovered row, which is --surface-2 too); a quote has a
+   --line-strong rule and muted text; lists sit one step in. A code block scrolls sideways inside
+   the comment and — `contain: inline-size` — adds nothing to the width of anything around it, so a
+   long line never widens the page, on a phone either. A link is --accent-2, underlined on hover and
+   focus, and breaks anywhere like the rest of the text. */
+.comment-md { min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.comment-md p, .comment-md ul, .comment-md ol, .comment-md pre, .comment-md blockquote { margin: 0 0 8px; }
+.comment-md ul, .comment-md ol { padding-left: 22px; }
+.comment-md li + li { margin-top: 2px; }
+.comment-md li > p, .comment-md li > ul, .comment-md li > ol { margin-bottom: 2px; }
+.comment-md blockquote { padding: 1px 0 1px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.comment-md code {
+  padding: 1px 5px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-family: var(--font-mono); font-size: 0.9em;
+}
+.comment-md pre {
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+  white-space: pre; overflow-wrap: normal; overflow-x: auto; contain: inline-size;
+}
+.comment-md pre code { padding: 0; border: 0; border-radius: 0; background: none; font-size: 12.5px; }
+.comment-md > :first-child { margin-top: 0; }
+.comment-md > :last-child, .comment-md li > :last-child, .comment-md blockquote > :last-child { margin-bottom: 0; }
+.comment-link { color: var(--accent-2); }
+.comment-link:hover, .comment-link:focus-visible { text-decoration: underline; }
 
 /* What's new — "Coming soon" (§13.9): a greyed-out "blueprint". A dashed frame, a faint hatch
    that fades out below the heading, muted type and NO accent colour or hover tint, so nothing

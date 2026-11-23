@@ -1,9 +1,9 @@
 // Per-event notification preferences (INNOBOX_SPEC.md §12.1) — pure and CLIENT-SAFE (also
 // exposed at `@innobox/shared/notification-preferences` for the profile page). Five toggles,
 // default on, that remove a recipient from an event before any row is written: the three
-// follower-derived ones, §40.6's invitations to propose a solution and §43.6's mentions in
-// solutions — the two actionable events a person can mute, since anyone who can see a challenge
-// may send one. The admin attention events and the other actionable author/assignee events are
+// follower-derived ones, §40.6's invitations to propose a solution and the one *Mentions* toggle
+// for mentions in solutions (§43.6, event 26) and in comments (§44.6, event 27) — the only
+// actionable events a person can mute, since anyone who can see a challenge may send one. The admin attention events and the other actionable author/assignee events are
 // never mutable.
 import { EMAIL_DELIVERY_MODES, isEmailDelivery, type EmailDelivery } from "./email-digest.js";
 
@@ -37,8 +37,8 @@ export const NOTIFICATION_PREFERENCE_LABEL: Record<NotificationPreference, { tit
     sub: "When a colleague invites you to propose a solution to a challenge.",
   },
   mentions: {
-    title: "Mentions in solutions",
-    sub: "When a colleague mentions you in the text of a solution you can see.",
+    title: "Mentions",
+    sub: "When a colleague mentions you in a solution or a comment you can see.",
   },
 };
 

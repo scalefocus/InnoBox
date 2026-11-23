@@ -153,6 +153,10 @@
     "./mentions": {
       "types": "./dist/mentions.d.ts",
       "default": "./dist/mentions.js"
+    },
+    "./comment-markdown": {
+      "types": "./dist/comment-markdown.d.ts",
+      "default": "./dist/comment-markdown.js"
     }
   },
   "scripts": {
@@ -163,6 +167,7 @@
     "lint": "eslint ."
   },
   "devDependencies": {
+    "@types/mdast": "^4.0.4",
     "@types/node": "^26.6.6",
     "@types/sanitize-html": "^2.16.2",
     "eslint": "^10.15.0",
@@ -171,6 +176,12 @@
   },
   "dependencies": {
     "htmlparser2": "^12.0.0",
+    "mdast-util-from-markdown": "^2.1.0",
+    "mdast-util-gfm-autolink-literal": "^2.1.2",
+    "mdast-util-gfm-strikethrough": "^2.0.1",
+    "micromark": "^4.0.3",
+    "micromark-extension-gfm-autolink-literal": "^2.1.0",
+    "micromark-extension-gfm-strikethrough": "^2.1.0",
     "sanitize-html": "^2.18.2"
   }
 }

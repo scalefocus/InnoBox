@@ -3058,12 +3058,19 @@ export interface CoAuthorPickerAudience {
   challenge: ChallengeVisibilityInput;
   full: boolean;
   exclude: string[];
+  /** §44.5: set for the mention list of a `proposed` solution's comment thread — the solution's
+   *  team. The audience then narrows to the people who can see that solution (§4.3). */
+  proposedSolutionAuthorIds?: string[];
 }
 
 /**
  * §39.2 picker variants, each null — so the search returns nobody — unless the caller may use it:
  *  - `coAuthorFor` (CH-n / SOL-n): the Team panel — a member of the live, visible item;
- *  - `canSee` (CH-n): the solution form — someone who can see the live challenge;
+ *  - `canSee` (CH-n): the solution form, and the mention list of a challenge's comment thread
+ *    (§44.5) — someone who can see the live challenge;
+ *  - `canSee` (SOL-n): the mention list of a solution's comment thread (§44.5) — someone who can see
+ *    the live solution: whoever can see its challenge, narrowed while it is `proposed` to its team,
+ *    the challenge's assignee, the namespace's committee and admins, and platform admins;
  *  - `namespace` + `visibility`: the challenge form — a member of that namespace.
  */
 export async function getCoAuthorPickerAudience(
@@ -3084,6 +3091,14 @@ export async function getCoAuthorPickerAudience(
       [item.id],
     );
     return { challenge: item.challenge, full: entity === "solution", exclude: [...item.authorIds, ...rows.map((r) => r.user_id)] };
+  }
+  if (query.canSee && /^SOL-/i.test(query.canSee.trim())) {
+    const number = query.canSee.trim().replace(/^SOL-/i, "");
+    if (!isEntityNumber(number)) return null;
+    // A solution the caller cannot see answers as an unknown one (§2.4).
+    const item = await lockTeamItem(pool, viewer, "solution", number, false);
+    if (!item || !item.visible || item.trashed) return null;
+    return { challenge: item.challenge, full: true, exclude: [], ...(item.status === "proposed" ? { proposedSolutionAuthorIds: item.authorIds } : {}) };
   }
   if (query.canSee) {
     const number = query.canSee.replace(/^CH-/i, "");

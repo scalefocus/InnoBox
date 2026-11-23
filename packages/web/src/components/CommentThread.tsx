@@ -10,10 +10,19 @@
 // live comment has a Reply action that opens a composer under its thread. A reply that answers
 // another reply carries "↪ replying to <name>", which scrolls to and flashes that comment. A
 // `readOnly` thread (an item in the §10.4 trash) shows the comments and nothing else.
+//
+// Markdown, links and mentions (§44): a new comment, a reply and an edit are all written in the
+// §44.2 comment box (CommentBox), and every live comment — those posted before this shipped
+// included — is rendered Markdown with its links and its mentions (CommentMarkdown, §44.7). A
+// removed comment shows its placeholder only. A `#comment-<id>` link (§44.6) opens whatever hides
+// that comment, scrolls to it and flashes it, exactly as "↪ replying to" does.
 import { Fragment, useEffect, useRef, useState } from "react";
 import { REPLIES_SHOWN, groupThreads } from "@innobox/shared/comment-threads";
+import type { MentionCandidate } from "@innobox/shared/mentions";
 import { readJson } from "@/lib/api-client";
 import { AvatarBubble } from "@/components/AvatarBubble";
+import { CommentBox } from "@/components/CommentBox";
+import { CommentMarkdown, type CommentMentionView } from "@/components/CommentMarkdown";
 import { DiscussionSummary } from "@/components/DiscussionSummary";
 import { useDateFmt } from "@/components/DateFormat";
 import { reportFeatureUse } from "@/lib/survey-client";
@@ -25,7 +34,12 @@ interface CommentRecord {
   authorDisplayName: string;
   authorActive?: boolean;
   authorScrubbed?: boolean;
+  /** Display text (§44.5): the Markdown as written, each mention as `@` and the person's name. */
   body: string;
+  /** §44.10: where each mention sits in `body`. Empty on a removed comment; absent in an older payload. */
+  mentions?: CommentMentionView[];
+  /** §44.10: room under the per-comment cap, on a comment the viewer may edit; null otherwise. */
+  mentionsLeft?: number | null;
   threadRootId: string | null;
   replyToId: string | null;
   createdAt: string;
@@ -47,6 +61,20 @@ interface ReplyDraft {
 }
 
 const FLASH_MS = 1600;
+const JSON_HEADERS = { "content-type": "application/json" };
+
+/** §44.6: the comment a `#comment-<id>` link names, or null when the address names none. */
+function commentIdInHash(): string | null {
+  const match = /^#comment-(.+)$/.exec(window.location.hash);
+  return match ? match[1]! : null;
+}
+
+/** The browser's Navigation API, where it has one — the only place a link followed with the page
+ *  already open is announced when the app's router, not the browser, changed the address. */
+interface NavigationLike {
+  addEventListener(type: "currententrychange", listener: (e: Event) => void): void;
+  removeEventListener(type: "currententrychange", listener: (e: Event) => void): void;
+}
 
 export function CommentThread({
   parentType,
@@ -58,7 +86,8 @@ export function CommentThread({
 }: {
   parentType: "challenge" | "solution";
   parentId: string;
-  /** The item's CH-/SOL- number — enables the §22.13 summary control. */
+  /** The item's CH-/SOL- number — enables the §22.13 summary control, and the comment box's mention
+   *  list, which offers the people who can see that item (§44.5). */
   parentNumber?: string;
   /** True when the viewer is the ANONYMOUS author of this item — §9 warns them that commenting
    *  shows their real name (comments are never anonymous), without revealing them as the author. */
@@ -72,21 +101,48 @@ export function CommentThread({
   const closed = closedNotice !== null;
   const fmt = useDateFmt();
   const [comments, setComments] = useState<CommentRecord[] | null>(null);
-  const [draft, setDraft] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  /** §44.10: the viewer's room under the daily mention cap; undefined (no limit shown) until known. */
+  const [mentionsLeftToday, setMentionsLeftToday] = useState<number | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
   const [reply, setReply] = useState<ReplyDraft | null>(null);
-  const [replyText, setReplyText] = useState("");
-  const [replyError, setReplyError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [flashId, setFlashId] = useState<string | null>(null);
+  /** The comment to bring into view; `seq` makes a second jump to the same comment a new one. */
+  const [jump, setJump] = useState<{ id: string; seq: number } | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The address's `#comment-<id>` is followed once, when the comments first arrive (§44.6). */
+  const hashFollowed = useRef(false);
+
+  /** Scroll to a comment and flash it — a reply's "↪ replying to" target, or the comment a
+   *  `#comment-<id>` link names — expanding its thread first if it sits behind "Show N more replies". */
+  const jumpTo = (target: CommentRecord) => {
+    if (target.threadRootId) setExpanded((prev) => new Set(prev).add(target.threadRootId!));
+    setJump((prev) => ({ id: target.id, seq: (prev?.seq ?? 0) + 1 }));
+    setFlashId(target.id);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId(null), FLASH_MS);
+  };
+
+  /** §44.6: follow the address's `#comment-<id>` when that comment is in this thread and still
+   *  there. A removed one, or one in another thread, is left alone — the page stays where it is. */
+  const followHash = (list: readonly CommentRecord[]) => {
+    const id = commentIdInHash();
+    const target = id === null ? undefined : list.find((c) => c.id === id);
+    if (target && !target.deleted) jumpTo(target);
+  };
 
   const refresh = () => {
     fetch(`/api/comments?parentType=${parentType}&parentId=${parentId}`, { headers: { accept: "application/json" } })
       .then((res) => res.json())
-      .then((json) => setComments(json.comments ?? []))
+      .then((json) => {
+        const list: CommentRecord[] = json.comments ?? [];
+        setComments(list);
+        setMentionsLeftToday(typeof json.mentionsLeftToday === "number" ? json.mentionsLeftToday : undefined);
+        if (!hashFollowed.current) {
+          hashFollowed.current = true;
+          followHash(list);
+        }
+      })
       .catch(() => setComments([]));
   };
 
@@ -99,11 +155,41 @@ export function CommentThread({
     if (flashTimer.current) clearTimeout(flashTimer.current);
   }, []);
 
-  const submit = async (body: string, replyTo: string | null): Promise<string | null> => {
+  // Runs after the render that expanded the comment's thread, so the comment is in the page.
+  useEffect(() => {
+    if (!jump) return;
+    const el = document.getElementById(`comment-${jump.id}`);
+    if (!el) return;
+    // §44.6: a comment under a closed solution sits in the collapsed "Closed solutions" section.
+    for (let fold = el.closest("details"); fold; fold = fold.parentElement?.closest("details") ?? null) fold.open = true;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [jump]);
+
+  // §44.6: a comment link followed while this page is already open changes only the address's
+  // hash. The browser announces its own change with `hashchange`; a change made by the app's router
+  // (the bell's link) reaches the page only through the Navigation API, where the browser has one.
+  useEffect(() => {
+    if (comments === null) return;
+    const onHashChange = () => followHash(comments);
+    const onEntryChange = (e: Event) => {
+      if ((e as Event & { navigationType?: string | null }).navigationType === "push") followHash(comments);
+    };
+    const navigation = (window as unknown as { navigation?: NavigationLike }).navigation;
+    window.addEventListener("hashchange", onHashChange);
+    navigation?.addEventListener("currententrychange", onEntryChange);
+    return () => {
+      window.removeEventListener("hashchange", onHashChange);
+      navigation?.removeEventListener("currententrychange", onEntryChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-subscribed whenever the comments change
+  }, [comments]);
+
+  /** Posts a comment (§44.10): null once it is saved, or the refusal's message for the box. */
+  const submit = async (body: string, mentions: MentionCandidate[], replyTo: string | null): Promise<string | null> => {
     const res = await fetch("/api/comments", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(replyTo ? { parentType, parentId, body, replyTo } : { parentType, parentId, body }),
+      headers: JSON_HEADERS,
+      body: JSON.stringify(replyTo ? { parentType, parentId, body, replyTo, mentions } : { parentType, parentId, body, mentions }),
     });
     const json = await readJson(res);
     if (!res.ok) return json.error ?? "Could not post comment";
@@ -111,80 +197,48 @@ export function CommentThread({
     return null;
   };
 
-  const post = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.trim()) return;
-    setSubmitting(true);
-    try {
-      if ((await submit(draft, null)) === null) {
-        setDraft("");
-        refresh();
-      }
-    } catch {
-      /* surfaced via the disabled state resetting; keep this lightweight */
-    } finally {
-      setSubmitting(false);
-    }
+  const post = async (body: string, mentions: MentionCandidate[]): Promise<string | null> => {
+    const error = await submit(body, mentions, null);
+    // Also after a refusal: a cap may have been reached elsewhere, and the box shows the room left.
+    refresh();
+    return error;
   };
 
-  const postReply = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reply || !replyText.trim()) return;
-    setSubmitting(true);
-    try {
-      const error = await submit(replyText, reply.replyToId);
-      if (error === null) {
-        // The new reply is the newest in its thread: open the thread so it is in view.
-        setExpanded((prev) => new Set(prev).add(reply.rootId));
-        setReply(null);
-        setReplyText("");
-        setReplyError(null);
-      } else {
-        setReplyError(error);
-      }
-      // A 422 means the comment was removed meanwhile — re-read so the thread shows it.
-      refresh();
-    } catch {
-      setReplyError("Could not post reply");
-    } finally {
-      setSubmitting(false);
+  const postReply = async (body: string, mentions: MentionCandidate[]): Promise<string | null> => {
+    if (!reply) return null;
+    const error = await submit(body, mentions, reply.replyToId);
+    if (error === null) {
+      // The new reply is the newest in its thread: open the thread so it is in view.
+      setExpanded((prev) => new Set(prev).add(reply.rootId));
+      setReply(null);
     }
+    // A 422 means the comment was removed meanwhile — re-read so the thread shows it.
+    refresh();
+    return error;
   };
 
   const openReply = (target: CommentRecord) => {
     setReply({ rootId: target.threadRootId ?? target.id, replyToId: target.id, replyToName: target.authorDisplayName });
-    setReplyText("");
-    setReplyError(null);
   };
 
-  const saveEdit = async (id: string) => {
+  /** Saves an edit (§44.10). The web always sends the Mentioned row, so a name taken out of the
+   *  text stops being a mention and one left in keeps its person. */
+  const saveEdit = async (id: string, body: string, mentions: MentionCandidate[]): Promise<string | null> => {
     const res = await fetch(`/api/comments/${id}`, {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ body: editDraft }),
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ body, mentions }),
     });
-    if (res.ok) {
-      setEditingId(null);
-      refresh();
-    }
+    const json = await readJson(res);
+    if (res.ok) setEditingId(null);
+    refresh();
+    return res.ok ? null : (json.error ?? "Could not save comment");
   };
 
   const remove = async (id: string) => {
     if (!window.confirm("Delete this comment?")) return;
     const res = await fetch(`/api/comments/${id}`, { method: "DELETE" });
     if (res.ok || res.status === 204) refresh();
-  };
-
-  /** Scroll to the comment a reply answers and flash it — expanding its thread first if the
-   *  target sits behind "Show N more replies". */
-  const jumpTo = (target: CommentRecord) => {
-    if (target.threadRootId) setExpanded((prev) => new Set(prev).add(target.threadRootId!));
-    requestAnimationFrame(() => {
-      document.getElementById(`comment-${target.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-      setFlashId(target.id);
-      if (flashTimer.current) clearTimeout(flashTimer.current);
-      flashTimer.current = setTimeout(() => setFlashId(null), FLASH_MS);
-    });
   };
 
   // Any post, edit or delete changes this, so the summary control re-reads its state.
@@ -197,6 +251,8 @@ export function CommentThread({
     // "↪ replying to" only when the reply answers another reply — under the root it is implied.
     const answered = isReply && c.replyToId !== null && c.replyToId !== c.threadRootId ? byId.get(c.replyToId) : undefined;
     const classes = ["row", isReply ? "comment-reply" : "", flashId === c.id ? "comment-flash" : ""].filter(Boolean).join(" ");
+    // A comment removed while its edit box was open shows its placeholder, not the box.
+    const editing = editingId === c.id && !c.deleted && !readOnly;
     return (
       <div className={classes} id={`comment-${c.id}`} key={c.id} style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
         {/* Never the name of a removed comment's author (§10.2). */}
@@ -231,23 +287,29 @@ export function CommentThread({
           <span className="sub mono">{fmt.dateTime(c.createdAt)}</span>
           {c.editedAt && !c.deleted && <span className="chip">edited</span>}
         </div>
-        {editingId === c.id ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            <input className="field" style={{ flex: 1, minWidth: 0 }} value={editDraft} onChange={(e) => setEditDraft(e.target.value)} />
-            <button type="button" className="btn btn-sm btn-primary" onClick={() => saveEdit(c.id)}>
-              Save
-            </button>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditingId(null)}>
-              Cancel
-            </button>
-          </div>
+        {editing ? (
+          // §44.2: the edit opens with the comment's display text and its current mentions picked.
+          <CommentBox
+            key={`edit-${c.id}`}
+            mode="edit"
+            label="Edit comment"
+            initialText={c.body}
+            initialMentions={c.mentions}
+            canSee={parentNumber}
+            mentionsLeft={c.mentionsLeft ?? undefined}
+            mentionsLeftToday={mentionsLeftToday}
+            autoFocus
+            onSubmit={(body, mentions) => saveEdit(c.id, body, mentions)}
+            onCancel={() => setEditingId(null)}
+          />
+        ) : c.deleted ? (
+          // §44.7: a removed comment shows its placeholder only — no text, formatting, links or mentions.
+          <p style={{ margin: 0, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontStyle: "italic", color: "var(--muted)" }}>{c.body}</p>
         ) : (
-          <p style={{ margin: 0, fontSize: 14, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontStyle: c.deleted ? "italic" : undefined, color: c.deleted ? "var(--muted)" : undefined }}>
-            {c.body}
-          </p>
+          <CommentMarkdown body={c.body} mentions={c.mentions} />
         )}
         {/* A removed comment can't be answered, edited or deleted again. */}
-        {!c.deleted && !readOnly && editingId !== c.id && (
+        {!c.deleted && !readOnly && !editing && (
           <div style={{ display: "flex", gap: 8 }}>
             {!closed && (
               <button type="button" className="btn btn-sm btn-ghost" onClick={() => openReply(c)}>
@@ -255,14 +317,7 @@ export function CommentThread({
               </button>
             )}
             {c.canEdit && (
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => {
-                  setEditingId(c.id);
-                  setEditDraft(c.body);
-                }}
-              >
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditingId(c.id)}>
                 Edit
               </button>
             )}
@@ -300,35 +355,19 @@ export function CommentThread({
                   </div>
                 )}
                 {reply?.rootId === root.id && !readOnly && !closed && (
-                  <form key={`composer-${reply.replyToId}`} className="row comment-reply" onSubmit={postReply} style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
-                    <span className="sub">Replying to {reply.replyToName}</span>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <input
-                        className="field"
-                        style={{ flex: 1, minWidth: 0 }}
-                        placeholder="Write a reply…"
-                        aria-label={`Reply to ${reply.replyToName}`}
-                        value={replyText}
-                        onChange={(e) => setReplyText(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Escape") setReply(null);
-                        }}
-                        maxLength={5000}
-                        autoFocus
-                      />
-                      <button type="submit" className="btn btn-sm btn-primary" disabled={submitting || !replyText.trim()}>
-                        Reply
-                      </button>
-                      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setReply(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                    {replyError && (
-                      <span className="sub" role="alert" style={{ color: "var(--danger)" }}>
-                        {replyError}
-                      </span>
-                    )}
-                  </form>
+                  <CommentBox
+                    key={`composer-${reply.replyToId}`}
+                    mode="reply"
+                    className="row comment-reply"
+                    heading={<span className="sub">Replying to {reply.replyToName}</span>}
+                    placeholder="Write a reply…"
+                    label={`Reply to ${reply.replyToName}`}
+                    canSee={parentNumber}
+                    mentionsLeftToday={mentionsLeftToday}
+                    autoFocus
+                    onSubmit={postReply}
+                    onCancel={() => setReply(null)}
+                  />
                 )}
               </Fragment>
             );
@@ -346,19 +385,14 @@ export function CommentThread({
         </p>
       )}
       {!readOnly && !closed && (
-        <form onSubmit={post} style={{ display: "flex", gap: 8 }}>
-          <input
-            className="field"
-            style={{ flex: 1 }}
-            placeholder="Add a comment…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={5000}
-          />
-          <button type="submit" className="btn btn-sm btn-primary" disabled={submitting || !draft.trim()}>
-            Post
-          </button>
-        </form>
+        <CommentBox
+          mode="post"
+          placeholder="Add a comment…"
+          label={parentNumber ? `Add a comment on ${parentNumber}` : "Add a comment"}
+          canSee={parentNumber}
+          mentionsLeftToday={mentionsLeftToday}
+          onSubmit={post}
+        />
       )}
     </div>
   );
