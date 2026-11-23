@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.31.1",
+    date: "2026-11-23",
+    summary:
+      "Fixed: on the Feature ideas admin page, switching tabs quickly could leave the previous tab's list showing, so the Planned tab could show ideas still waiting for review. Each tab now always shows its own list.",
+  },
+  {
     version: "1.31.0",
     date: "2026-11-23",
     summary:

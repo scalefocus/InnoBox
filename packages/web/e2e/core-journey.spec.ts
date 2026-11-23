@@ -50,7 +50,8 @@ test("core journey: submit → triage → propose", async ({ browser }) => {
   // ── 3. The member (reloading to pick up `valid`) proposes a solution. ──
   await author.goto(`/challenges/${number}`);
   await author.getByRole("button", { name: "Propose a solution" }).click();
-  await author.locator('textarea[placeholder="Describe your solution"]').fill(`An e2e solution for ${stamp}.`);
+  // By its accessible name, not its placeholder: the placeholder carries a hint that changes (§43.3).
+  await author.getByLabel("Solution description").fill(`An e2e solution for ${stamp}.`);
   await author.getByRole("button", { name: "Submit solution" }).click();
   await expect(author.locator(".pill", { hasText: "Proposed" })).toBeVisible();
 

@@ -149,14 +149,22 @@ function Review() {
     window.setTimeout(() => setToast((cur) => (cur === message ? null : cur)), 3600);
   }, []);
 
+  // Only the latest load may fill the list. A response that arrives after a newer load started
+  // (a tab switch, or a refresh after an action) is dropped; otherwise a slow Pending reply could
+  // land under the Planned tab (§38.5).
+  const loadSeq = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeq.current;
     fetch(`/api/admin/feature-ideas?tab=${tab}`, { headers: { accept: "application/json" } })
       .then(readJson)
       .then((json) => {
+        if (seq !== loadSeq.current) return;
         setRows((json.ideas as IdeaRow[]) ?? []);
         setTargets((json.targets as MergeTarget[]) ?? []);
       })
-      .catch(() => notify("Could not load the ideas"));
+      .catch(() => {
+        if (seq === loadSeq.current) notify("Could not load the ideas");
+      });
   }, [tab, notify]);
 
   useEffect(() => load(), [load]);
