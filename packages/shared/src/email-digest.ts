@@ -25,23 +25,26 @@ export function isEmailDelivery(v: unknown): v is EmailDelivery {
 // ── Which events a digest covers ─────────────────────────────────────────────────────────
 
 /** The §12.1 event-matrix rows, by number. */
-export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27;
+export type NotificationEventNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28;
 
-/** The follower-type events: 2 (new solution), 3 (status changed), 6 (comments), 8 (implemented),
+/** The follower-type events: 1 (new challenge — for the innovation board route only, §45.5; its
+ *  admins are on the never-held route), 2 (new solution), 3 (status changed), 6 (comments), 8
+ *  (implemented),
  *  16 (hyped — §26.6 treats it as follower-type for the digest, not as actionable), 18 (a new
  *  challenge in a topic the recipient follows, §34.5), 20 (a feature you proposed or upvoted is
  *  now available, §38.8), 24 (someone said your challenge affects them too, §41.6) and 25 (closed as
  *  a duplicate, §42.6 — for the assignee and followers; its authors are on the never-held route).
  *  Event 19, a review of your own proposal, is actionable and always immediate. */
-const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([2, 3, 6, 8, 16, 18, 20, 24, 25]);
+const DIGESTABLE_EVENTS: ReadonlySet<NotificationEventNumber> = new Set([1, 2, 3, 6, 8, 16, 18, 20, 24, 25]);
 
 /**
  * True when an event may be held for a recipient's digest. Only the follower-type events are; a
- * recipient on the ADMIN route (namespace admins and the committee on a new solution) is an
+ * recipient on the ADMIN route (namespace admins on a new challenge, namespace admins and the
+ * committee on a new solution) is an
  * attention event and always immediate, as are the actionable author/assignee events (4, 5, 7,
  * 11, 12, 19, 21, 22 — an invitation to propose, §40.6 — 26 and 27 — a mention in a solution,
- * §43.6, or in a comment, §44.6 — and
- * 25 to an author, §42.6, whose route the caller passes as `onAdminRoute`), the admin events (1, 9,
+ * §43.6, or in a comment, §44.6 — 28 — added to the innovation board, §45.6 — and
+ * 25 to an author, §42.6, whose route the caller passes as `onAdminRoute`), the admin events (9,
  * 10, 14) and events 13 and 23, which have no e-mail at all.
  */
 export function isDigestableEvent(event: NotificationEventNumber, onAdminRoute = false): boolean {
@@ -70,7 +73,8 @@ export function nextDigestSlot(cadence: DigestCadence, now: Date): Date {
 /** At most this many items are listed; the rest are summed up in one closing line. */
 export const DIGEST_MAX_ITEMS = 25;
 
-export type DigestKind = "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature" | "affected" | "duplicate";
+/** `challenge` is §45.5: a new challenge, told to an innovation board member (event 1). */
+export type DigestKind = "challenge" | "solution" | "status" | "comment" | "implemented" | "hype" | "topic" | "feature" | "affected" | "duplicate";
 
 /** What a held outbox row carries for the digest (payload.digest), written at insert time. */
 export interface DigestFacts {
@@ -112,6 +116,9 @@ export interface RenderedDigest {
   itemCount: number;
 }
 
+/** §45.5: the digest line for event 1 on the innovation board route. */
+export const NEW_CHALLENGE_DIGEST_LINE = "New challenge";
+
 const digitsOf = (n: string): string => n.replace(/\D/g, "");
 const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
@@ -126,6 +133,8 @@ function itemLines(updates: readonly DigestUpdate[]): string[] {
     const latest = duplicate.reduce((a, b) => (b.at.getTime() >= a.at.getTime() ? b : a));
     lines.push(closedAsDuplicateDigestLine(latest.originalNumber ? digitsOf(latest.originalNumber) : null));
   }
+  // §45.5: a challenge an innovation board member is told was submitted — once, however it got here.
+  if (updates.some((u) => u.kind === "challenge")) lines.push(NEW_CHALLENGE_DIGEST_LINE);
   // §34.5: a challenge new in a followed topic leads its block — it is why the item is there.
   const topics = new Set(updates.filter((u) => u.kind === "topic").flatMap((u) => u.topics ?? []));
   if (topics.size > 0) lines.push(topicDigestLine([...topics]));

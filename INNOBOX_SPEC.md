@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.31 — draft for review** (2026-11-23; v0.2 added the UI and CI/CD
+> Status: **v0.32 — draft for review** (2026-11-23; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -123,7 +123,15 @@
 > who can read the thread right now, told at once (event 27) in place of the ordinary
 > comment notice, under one renamed *Mentions* switch and a daily budget shared with
 > solution text — lifting the "no rich text" and "no mentions in comments" non-goals
-> (§44)).
+> (§44); v0.32 (2026-11-23)
+> specified the **innovation board** as a new-feature gap — one platform-wide list of
+> up to 100 people that platform admins keep in Administration; a member reads
+> `awaiting_triage` challenges and `proposed` solutions wherever the visibility rule
+> already admits them, and is told of every new challenge and every new solution
+> (events 1 and 2, by e-mail and in-app, under their digest choice, with no mute) —
+> with no triage, no status change, no reveal and no restricted content; a person is
+> told once when added (event 28), the roster is seen by platform admins only, and the
+> submit forms say the board can read a submission before review (§45)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -241,7 +249,10 @@ Cross-cutting requirements:
 ### §2.1 Platform invariants (non-negotiable)
 
 1. **Roles resolve from SCIM-synced group membership + `role_mappings`, never from
-   OIDC token claims** (Entra group-claim overage).
+   OIDC token claims** (Entra group-claim overage). The three grants made inside the
+   app — a challenge's assignee (§7.3), a `people` access list (§4.3) and innovation
+   board membership (§45) — are database rows written by an authorized admin; they too
+   are never read from a token.
 2. **All access is auth-required and strictly visibility-filtered.** A
    namespace-restricted challenge must never leak through lists, search,
    autocomplete, counts, KPIs, leaderboards, notifications, or outbound channel
@@ -1133,7 +1144,9 @@ Entra runbook); on conflict this document wins.
   invitation dismissals, deletes the user's §43 `solution_mentions` and §44
   `comment_mentions` rows and nulls `mentioned_by` where they were the sender (no
   solution or comment text is rewritten: a mention of them reads *"@Deleted User"* from
-  then on, §43.8, §44.8), and resets the notification
+  then on, §43.8, §44.8), deletes the user's §45
+  `innovation_board_members` row and nulls `added_by` on the rows they added (§45.8),
+  and resets the notification
   preferences (`email_notifications_enabled` to false, since no address is left; the
   three `notify_followed_*` columns, `notify_invitations` and `notify_mentions`, which
   are `NOT NULL`, to their default). Everything runs
@@ -1269,6 +1282,7 @@ shown (§13.6).
 | **Committee Member** | per-namespace | Move challenges/solutions of the namespace through the **enforced** state machines (§7.2, §8.2) — never one they are an author of (§39.5); comment with a committee badge. No assignment, no reveal, no bulk/config |
 | **Member** | per-namespace | Namespace membership only: read the namespace's restricted content and submit into it (§4.3). No powers beyond the authenticated-user baseline. Every user is an implicit member of `global` |
 | **Assignee** | per-challenge | Enforced transitions on the assigned challenge and its solutions; request improvements; comment. Granted by assignment, revoked by unassignment |
+| **Innovation Board Member** | global | Read `awaiting_triage` challenges and `proposed` solutions wherever the §4.3 visibility rule already admits them, and be told of every new challenge and solution (§12.1 events 1–2). **No** triage, transition, assignment, reveal or admin surface. Added and removed by a platform admin in the app, not through `role_mappings` (§45) |
 | **Authenticated user** (implicit) | global | Submit challenges, propose solutions (on `valid` challenges), invite colleagues to propose one (§40), mention colleagues in a solution (§43) or a comment (§44), say a challenge affects them too (§41), comment, like/unlike, follow, view per visibility, manage own profile/preferences |
 
 A user may hold different roles in different namespaces. Roles are additive.
@@ -1281,9 +1295,11 @@ bounded:
 - **One statement.** The user row (by the token's `oid`), the `active` and
   `scrubbed_at` check, the §3 `sessions_valid_from` comparison inputs, the role grants
   (group membership ⋈ `role_mappings`, plus the `INNOBOX_BOOTSTRAP_ADMIN_GROUP`
-  implicit mapping while it is set) and the §4.3 `people` access list (`challenge_access`)
+  implicit mapping while it is set), the §4.3 `people` access list (`challenge_access`)
+  and the §45 board membership (`innovation_board_members`)
   are read in **one SQL statement** — one database round trip, not one per source. The
-  grants and the access list come back as arrays on the user row. The `global`
+  grants and the access list come back as arrays on the user row, and the board
+  membership as a boolean. The `global`
   namespace's id, which never changes after migration, may be held in process memory.
 - **At most once per request.** The result is memoized for the lifetime of a single
   request only, so a handler, the helpers it calls and the §14.5 presence stamp share
@@ -1358,9 +1374,14 @@ bounded:
     `namespace`-visible item keeps seeing it even after losing membership of its
     namespace. The same predicate holds in every list, count and search (the SQL form)
     as on the detail page.
+    **An innovation board member (§45.3) is exempt from this rule for
+    `awaiting_triage` — never for `withdrawn`:** they see such a challenge exactly when
+    the visibility rule above admits them, so the exemption opens no restricted
+    content.
   - Solutions in `proposed` status: visible only to their author (every member of a
     co-author team, §39.6), the challenge's
-    assignee, and the namespace's committee/admins (mirrors the legacy behavior of
+    assignee, the namespace's committee/admins, and an innovation board member who can
+    see the challenge (§45.3) (mirrors the legacy behavior of
     hiding un-reviewed solutions).
   - `rejected` / `not_selected` / `withdrawn` solutions: shown in a collapsed
     (`<details>`) "Closed solutions" section of the challenge page to anyone who can
@@ -1423,6 +1444,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   `scim.group_renamed` audit rows show a SCIM origin, i.e. no `via: reconciliation`),
   created_at, updated_at; plus **`group_members`** (group_id, user_id).
 - **`role_mappings`** — entra group id → (namespace_id | null for platform) + role.
+- **`innovation_board_members`** — the §45 board: user_id (primary key), added_by
+  (nullable user FK), added_at. One row per member, written and deleted by platform
+  admins in the app (§45.9).
 - **`ai_integration`** (single row), **`ai_usage`** and **`ai_results`** — the §22 AI
   provider connection, its per-call usage log (counts only, never content) and the
   cached task results (§22.11, §22.13).
@@ -1680,18 +1704,23 @@ anonymously"** checkbox (§9), **co-authors** (up to four colleagues from the el
 people of the chosen namespace and visibility; never together with *Submit
 anonymously*, §39.2, §39.3), and an optional **"How many people does this affect, you
 included?"** (a whole number 1–1,000, after topics — the authors' estimate, §41.2).
+While the innovation board has a member, a muted line above **Submit** says the board
+can read the challenge before review (§45.7).
 
 On submit: challenge created with status **`awaiting_triage`**, number allocated, any
 files staged during the form **bound** to it in the same transaction (§11) — the create
 is **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — every author (the submitter and any
-co-authors, §39) auto-follows it (§12.3), notifications fire (§12.1 event 1, and event
+co-authors, §39) auto-follows it (§12.3), notifications fire (§12.1 event 1 — to the
+namespace's admins and to the innovation board members who can see it, §45.5 — and event
 21 to each co-author), audit entry.
 
 **Duplicate warning.** The first **Submit** click runs a server-side similarity check
 before anything is created: `POST /api/challenges/similar { title, description }`
 ranks the caller's **visible** challenges — the same visibility predicate as search
-(invariant 2), so another author's `awaiting_triage` item is never a candidate (an
+(invariant 2), so another author's `awaiting_triage` item is a candidate only for a
+caller who can already see it — an admin of its namespace or an innovation board member
+(§45.3) — and never for anyone else (an
 accepted gap: two people submitting the same idea in the same hour will not see each
 other; the triage queue is where that surfaces) — with the §13.4 full-text index over
 title + description, **excluding `rejected`, `withdrawn` and `duplicate`** (a
@@ -1721,13 +1750,16 @@ Form: description, cost vs benefits (optional), attachments (**staged inline via
 `draftKey`**, §11 — picked, dropped, or pasted, §11 *Drop and paste*), "Submit
 anonymously", co-authors (up to four colleagues who can see the challenge; never
 together with "Submit anonymously", §39.2, §39.3). Typing `@` in either text box
-mentions a colleague who can see the challenge (§43.3).
+mentions a colleague who can see the challenge (§43.3). While the innovation board has a
+member, a muted line above the submit button says the board can read the solution
+before review (§45.7).
 
 On submit: solution created with status **`proposed`**, number allocated, any files
 staged during the form **bound** to it in the same transaction (§11) — the create is
 **rejected while any staged file is still scanning, infected, or unscannable** when a scanner is
 available (§11 *Binding at submit* scan gate) — every author (the proposer and any
-co-authors, §39) auto-follows it, notifications fire (§12.1 event 2, event 21 to
+co-authors, §39) auto-follows it, notifications fire (§12.1 event 2 — the innovation
+board members who can see the challenge among its recipients, §45.5 — event 21 to
 each co-author, and event 26 to each mentioned person who can already see the
 solution — the others are told later, §43.4), audit entry. The form locks
 while the request is in flight and closes only once the challenge has re-rendered
@@ -2806,8 +2838,8 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 
 | # | Event | Recipients |
 |---|---|---|
-| 1 | Challenge submitted | Namespace admins of the target namespace |
-| 2 | Solution proposed | Namespace admins + committee, challenge author, challenge followers |
+| 1 | Challenge submitted | Namespace admins of the target namespace; innovation board members who can see it (§45.5) |
+| 2 | Solution proposed | Namespace admins + committee, challenge author, challenge followers; innovation board members who can see the challenge (§45.5) |
 | 3 | Status changed (challenge or solution) | Item author, assignee, followers |
 | 4 | Rejected | Item author (distinct template) |
 | 5 | Needs improvement | Item author (call-to-action: edit & resubmit) |
@@ -2832,6 +2864,7 @@ no account and no profile. The per-user e-mail opt-out (§13.5) is honored at di
 | 25 | Closed as a duplicate (§42.6) | The duplicate's authors — actionable: immediate, never digested, not mutable; and its assignee and followers as they were before the move — follower-type (digestable; the status-change preference mutes followers, never the assignee). Never the marker or the original's side. Written **instead of** events 3 and 4 for the mark; rendered per recipient, naming the original only to those who can see it |
 | 26 | Mentioned in a solution (§43.6) | The mentioned person only — once per person per solution, at the first moment they can see it, and never while it is `rejected`, `not_selected` or `withdrawn`; not written for a member of the solution's team or while their *Mentions* preference is off. Names the sender unless the solution is anonymous. Actionable: immediate, never digested |
 | 27 | Mentioned in a comment (§44.6) | The mentioned person only — once per person per comment, at the save that mentions them; only someone who can read the thread at that moment can be mentioned. Written **instead of** event 6 for that person and that comment; not written while their *Mentions* preference is off, and event 6 then reaches them by its own rules. Always names the commenter. Actionable: immediate, never digested |
+| 28 | Added to the innovation board (§45.6) | The person a platform admin added — never an admin who added themselves, and nobody on a removal. Actionable: immediate, never digested, not mutable |
 
 **Authors are teams (§39).** Wherever this matrix names the *item author*, the
 *challenge author* or the *authors of `not_selected` siblings*, every member of that
@@ -2895,15 +2928,17 @@ a day or a week.
 - **The choice.** `users.email_delivery`: **Immediately** (`immediate`, the default and
   today's behaviour), **Daily digest** (`daily`), or **Weekly digest** (`weekly`). It is
   set on the profile (§13.5) and is silent (not audited), like the other preferences.
-- **What a digest covers.** Only the **follower-type** events: 2 (new solution — for the
-  challenge author and followers, not the admin and committee route), 3 (status
+- **What a digest covers.** Only the **follower-type** events: 1 (new challenge — for
+  the innovation board route only, §45.5), 2 (new solution — for the
+  challenge author and followers and for the innovation board route, not the admin and
+  committee route), 3 (status
   changed), 6 (comments, including replies), 8 (solution implemented), 16 (hyped,
   §26.6), 18 (new challenge in a topic you follow, §34.5), 20 (feature now
   available, §38.8), 24 (affects them too, §41.6) and 25 (closed as a duplicate, §42.6
   — for the assignee and followers). Everything
   else stays **immediate** whatever the choice: the admin attention events (1, 2, 9,
   10 and 14 to admins), and the actionable author and assignee events (4, 5, 7, 11,
-  12, 21, 22, 25 to an author, 26, 27, and 19 to a proposer). Events 13 and 23 have no e-mail
+  12, 21, 22, 25 to an author, 26, 27, 28, and 19 to a proposer). Events 13 and 23 have no e-mail
   at all.
 - **Hold, don't send.** When a covered event's outbox row is written for a recipient
   on `daily` or `weekly`, it gets `digest_due_at` = the recipient's next send slot,
@@ -2928,7 +2963,8 @@ a day or a week.
   body groups the updates **by item**, most recently active first. Each item gets a
   heading with its number and title, linked, and one line per kind of update:
   *"2 status changes — now In review"*, *"5 new comments, 1 reply to you"*, *"1 new
-  solution"*, *"Solution SOL-17 was implemented"*, *"New in a topic you follow — AI"*.
+  solution"*, *"Solution SOL-17 was implemented"*, *"New in a topic you follow — AI"*,
+  *"New challenge"* (event 1 to the innovation board, §45.5).
   It shows at most **25 items**, then
   *"and K more — open InnoBox to see everything"*. It never quotes comment bodies or
   descriptions. Authors are masked per §9, and the §12.1 e-mail content-safety rules
@@ -2959,7 +2995,8 @@ true; existing users backfilled on):
   (assignments transferred), 21 (co-author added or removed), 25 to an author — which
   stay non-mutable.
 - *New solutions on challenges I follow* — gates **event 2** for the challenge author
-  and followers; the admin/committee recipients of event 2 are unaffected.
+  and followers; the admin/committee recipients of event 2 are unaffected, and so is
+  the innovation board route, which has no preference at all (§45.5).
 
 A fourth toggle, *Invitations to propose a solution* (`notify_invitations`, default
 **on**, §40.6), gates **event 22** the same row-level way, and a fifth, *Mentions*
@@ -3557,7 +3594,8 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
 - Both apply the **full** §4.3 predicate per viewer: a solution counts, or can be a
   spotlight, only if its parent challenge is visible to the viewer — namespace rule
   **and** state rule (not `awaiting_triage`/`withdrawn` unless the viewer is its author
-  or an admin of its namespace).
+  or an admin of its namespace, or — for `awaiting_triage` only — an innovation board
+  member the visibility rule admits, §45.3).
 - Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
   rankings; neither is duplicated here.
 
@@ -3746,7 +3784,8 @@ status** (incl. awaiting triage); **my solutions by status**; **likes received**
 items I follow — **only those the owner can currently see** (§4.3); a follow on an item
 that has since become hidden is kept, not deleted, and the item reappears if it becomes
 visible again; latest activity (newest first, any status — fixing the legacy
-"oldest in-review only" bug); notification preferences (the e-mail opt-out
+"oldest in-review only" bug); notification preferences (for an innovation board member,
+first a muted line saying they are on the board, §45.7; then the e-mail opt-out
 **switch**, below, then the §12.1 **E-mail delivery** choice — a three-option
 segmented control, *Immediately · Daily digest · Weekly digest*, with a muted line
 under it naming the next send (*"Next digest: 13/10/2026 09:00"* — the 06:00 UTC slot
@@ -5100,6 +5139,10 @@ delegated per namespace.**
 - Date display format: EU (dd/mm/yyyy, 24-hour) or US (mm/dd/yyyy, AM/PM).
 - Namespace management: create / rename / archive; role mappings (Entra group →
   namespace role / platform admin).
+- **Innovation board** — the §45.2 card: the people who read new challenges and
+  solutions before review and are told about each one. Add (a people picker, up to 20
+  at a time) and remove; at most 100 members. Audited as
+  `innovation_board.member_added` and `innovation_board.member_removed`.
 - Notification sender: connect/disconnect the Microsoft 365 service mailbox
   (delegated Graph consent flow via the dedicated "InnoBox Email" app registration,
   §12.1), author the branded HTML wrapper, test-send.
@@ -6152,7 +6195,11 @@ anomalies. Since v0.10 also:
   settling of a mention, event 26 and the preference are not audited (§43.11). For a
   comment, `comment.posted` gains `mentions` and `comment.edited` gains `mentionsAdded`
   and `mentionsRemoved`; comment rows carry no body, and event 27 is not audited
-  (§44.10).
+  (§44.10);
+- **innovation board** — `innovation_board.member_added` and
+  `innovation_board.member_removed` (actor the platform admin, target the person, one
+  row per person; under Admin), and `user.scrubbed` gains `boardMember: true` when the
+  erasure removed a membership. Events 1, 2 and 28 are not audited (§45.10).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6323,7 +6370,8 @@ optional and composable (each an additional `AND`):
   (`solution.*`) / Comments (`comment.*`) / Attachments (`attachment.*`) / Identity
   (`user.*`, `scim.*`, `role_mapping.*`, `recon.*`) / Admin (`settings.*`,
   `namespace.*`, `impact_area.*`, `topic.*`, `system_banner.*`, `presence.*`, `email.*`,
-  `audit.*`, `webhook.*`, `survey.*`, `ai.*`, `public_submission.*`, every
+  `audit.*`, `webhook.*`, `survey.*`, `ai.*`, `public_submission.*`,
+  `innovation_board.*`, every
   `*.exported`) / **Anonymity** (`anonymity.*` — admin
   reveals and self-reveals, the most sensitive reads to review). The curation events (`challenge.featured` /
   `challenge.unfeatured`) fall under Challenges by prefix; `like.*` rows appear under
@@ -6453,7 +6501,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   `me/survey/start`, `me/survey/close`, `me/survey/responses` and `me/survey/bug` drive
   the §13.10 feedback survey and bug reports, and `GET` carries `openSurvey`,
   `selfSurvey` and `bugReports`, plus the §23
-  `gamification` block and `newAchievements`, and the §14.12 `rum: { enabled, sampleRate }`;
+  `gamification` block and `newAchievements`, the §14.12 `rum: { enabled, sampleRate }`
+  and the §45.10 `innovationBoard: { member, active }`;
   `me/achievements-seen` `POST` advances the
   §23.7 toast marker), `rum` (`POST` — the §14.12 beacon: any signed-in user, `text/plain`
   JSON, **204**, never a row with a user id), `profile` (own and other users'
@@ -6503,7 +6552,11 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   (§34.9);
   **`admin/feature-ideas`** (`GET ?tab=`), `admin/feature-ideas/count`, and
   `admin/feature-ideas/:id` with its `approve`, `decline` and `merge` (`POST`), `PATCH`
-  and `DELETE` routes (§38.14)
+  and `DELETE` routes (§38.14);
+  **`admin/innovation-board`** (`GET` the roster), `admin/innovation-board/members`
+  (`POST { userIds }` — 1–20 people, all-or-nothing; 422 for an ineligible person, 409
+  over the cap of 100) and `admin/innovation-board/members/:userId` (`DELETE`; 404 when
+  not on the board) (§45.10)
   — all platform admin only)
 - `coming-soon` (`GET` the §13.9 entries with their votes, voters and proposer, filtered
   by audience; `coming-soon/votes` `POST` the toggle), `feature-ideas` (`POST` a
@@ -8023,7 +8076,8 @@ With `people` visibility the access list is written in the same transaction
 `awaiting_triage`, the listed people see it, and get event 15, only once it leaves
 triage (§4.3, §12.1). It marks the submission `accepted` with `decided_at`/`decided_by`. After commit,
 everything a new challenge triggers follows: §12.1 event 1 to the namespace's admins
-(and all platform admins), the §12.4 `challenge.created` webhook, and the audit row,
+(and all platform admins) and to the innovation board members who can see the
+challenge (§45.5), the §12.4 `challenge.created` webhook, and the audit row,
 `challenge.created` with `source: "public"` plus `editedOnAccept: ["title",
 "description"]` naming whichever fields the admin changed. Nobody is auto-followed
 (there is no author), and the accepting admin is recorded in the audit log, not as the
@@ -8784,8 +8838,9 @@ A person may hype an item when **all** of the following hold; the detail payload
    `in_implementation` or `external_acceptance`. A solution is additionally hypeable
    only while its **parent challenge is open** by the same test — a closed challenge
    freezes hypes on its solutions exactly as it freezes likes (§8.3). `awaiting_triage`
-   is not hypeable: it is visible only to the author (who cannot self-hype) and the
-   namespace's admins, and a signal before triage would pre-empt it.
+   is not hypeable: it is visible only to the author (who cannot self-hype), the
+   namespace's admins and the innovation board (§45.3), and a signal before triage
+   would pre-empt it.
 4. **The viewer is not the item's author** (decision 9) — nor any member of its
    co-author team (§39.9). This holds for an anonymous
    item too: `canHype` is a per-viewer flag, so a `false` on your own anonymous item is
@@ -10855,7 +10910,7 @@ is decided by it.
 | 3 | **Two numbers: the reach** (the authors' estimate plus every mark's headcount) **and the people count** (the number of marks). Triage sorts by the reach. | People in one team may each count the whole team, so the sum can count someone twice. Showing the people count beside it, and calling the sum "about", keeps the estimate honest without a de-duplication rule nobody could apply. |
 | 4 | **Marks are public.** Anyone who can see the challenge sees who marked it and each person's headcount. | A mark is a real-name statement, like a like or a hype. A public number discourages inflation, and reviewers can follow up with the people affected. |
 | 5 | **The authors don't mark; they give an optional estimate on the submit form**, editable whenever the challenge is editable. Left empty, the authors count as 1. | The authors are affected by definition. One estimate for the team, set where the problem is described, counts them once, and a number names nobody, so it is safe on an anonymous challenge (invariant 3). |
-| 6 | **Marks open once the challenge is past triage and freeze when it closes.** `in_review`, `needs_improvement`, `meeting_scheduled` and `valid` take them; `solved`, `rejected`, `withdrawn` and `duplicate` keep them, read-only. | An `awaiting_triage` challenge is visible only to its authors and admins (§4.3). A closed challenge's reach is history, as its likes are (§8.3). |
+| 6 | **Marks open once the challenge is past triage and freeze when it closes.** `in_review`, `needs_improvement`, `meeting_scheduled` and `valid` take them; `solved`, `rejected`, `withdrawn` and `duplicate` keep them, read-only. | An `awaiting_triage` challenge is visible only to its authors, admins and the innovation board (§4.3, §45.3). A closed challenge's reach is history, as its likes are (§8.3). |
 | 7 | **A mark can be changed and taken back while marks are open.** | It is a statement of fact, not a scarce budget, and facts change. |
 | 8 | **A person's first mark auto-follows the challenge.** | Someone it affects wants to hear when it is solved or rejected. They can unfollow; removing the mark leaves the follow alone. |
 | 9 | **The authors hear of each new marker in-app and by e-mail (event 24)**, coalesced per challenge while unread and follower-type for the digest — **once per marker per challenge, ever.** | Knowing the problem is shared is worth a nudge. Once per person means a mark toggled on and off cannot spam the authors. |
@@ -11696,7 +11751,7 @@ What it does depends on the solution's status at that moment:
 | The solution is | The check |
 |---|---|
 | **open to everyone** who can see the challenge — any status but `proposed`, `rejected`, `not_selected` and `withdrawn` | settles **every** pending mention |
-| **`proposed`** | settles only the pending people who can already see it under §4.3 — its reviewers and the challenge's assignee, and its own team, who are settled silently (below); the others wait |
+| **`proposed`** | settles only the pending people who can already see it under §4.3 — its reviewers, the challenge's assignee and innovation board members (§45.3), and its own team, who are settled silently (below); the others wait |
 | **closed** — `rejected`, `not_selected` or `withdrawn` | settles nobody (decision 3) |
 
 So a mention made on the propose form reaches a reviewer at once and everyone else when
@@ -11867,7 +11922,8 @@ last place. A refused save writes nothing — not the text, not the rows.
     text it changed or removed is dropped — cancelled if still pending — and nobody new
     is mentioned. The check after an agent's edit resolves no roles: on a `proposed`
     solution it settles only the solution's team and the challenge's assignee, and a
-    mentioned reviewer is told when the solution leaves `proposed`.
+    mentioned reviewer or innovation board member is told when the solution leaves
+    `proposed`.
   - Event 26 rows appear in `list_my_notifications` like any inbox row.
 
 ### §43.10 Data model (migration 0062)
@@ -12321,3 +12377,280 @@ who can be mentioned and when they are told.
     bold text, the list, a link that opens in a new tab and B's name as a link; B's
     bell shows *"… mentioned you in a comment on CH-…"*, and the link opens the
     challenge at that comment.
+
+---
+
+## §45 Innovation board
+
+Some people need to see every idea the moment it is raised, not only the ones that
+survive triage. The **innovation board** is one platform-wide list of people, kept by
+platform admins in Administration. A member can read new challenges and new solutions
+before they are reviewed, and is told about each one by e-mail and in-app. Membership is
+a way to **watch**, never to **decide**: it carries no triage, no status change, no
+reveal and no admin surface, and it opens no restricted content.
+
+### §45.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **One platform-wide board, kept by platform admins.** Not one per namespace. | Review inside a namespace already has the committee (§4.2). The board exists to see across namespaces. |
+| 2 | **A list of people picked in the app**, not an Entra group in `role_mappings`. | A platform admin must be able to change it without a directory change. It is a database grant made by an authorized admin — like assignment (§7.3) and the `people` access list (§4.3) — and never a token claim, so invariant 1 holds. |
+| 3 | **Members read `awaiting_triage` challenges and `proposed` solutions.** | A notice about something its reader cannot open is useless, and would break the §12.1 visibility drop. |
+| 4 | **The visibility rule is untouched.** A member sees a pre-review item only where the `org` / `namespace` / `people` rule of §4.3 already lets them in. | The board is not a way round a restricted namespace (invariant 2). Widening stays with the namespace and platform admins. |
+| 5 | **Never a `withdrawn` item.** | A withdrawal is the author taking the item back. |
+| 6 | **No powers.** No triage queue, transition, assignment, reveal, moderation, triage notes, contact details or comment badge. | Review stays with the roles that answer for it. A member acts as any viewer does. |
+| 7 | **Told about a new challenge (event 1) and a new solution (event 2), and nothing else.** | That is what was asked for. Resubmissions, withdrawals and status changes reach a member who follows the item, as they reach anyone. |
+| 8 | **E-mail and in-app; the member's digest choice applies; there is no mute.** | A member has no duty to act, so a daily or weekly summary is a fair way to receive a busy stream. Leaving the board is the mute. |
+| 9 | **Told once when added (event 28); a removal is silent.** | A person should know why they can suddenly read un-reviewed items and why more mail arrives. |
+| 10 | **The roster is seen by platform admins only.** A member sees their own membership on their profile. | Least disclosure: nothing else in the app publishes who holds which role. |
+| 11 | **The submit forms say the board can read the submission**, naming nobody. | Until now only admins (and, for a solution, the committee and the assignee) read a submission before review. Authors must be told that has changed. |
+| 12 | **Never notified about an item of their own** — one they submitted or are a co-author of. | They wrote it, or event 21 told them. |
+| 13 | **Nothing but the access and the notices.** No backfill on joining, no auto-follow, no points or badge. | Joining must not flood a person, and a follow is theirs to choose. |
+| 14 | **Active users only, at most 100.** Fixed in code. | A pending e-mail entry would grant early access to an address nobody has verified. 100 is room for a real board; a larger audience should be a namespace role. |
+| 15 | **No board queue and no gallery tab in this version.** | The request is for notices. The notice, the bell and search are the ways in. |
+| 16 | **No platform switch.** An empty board is the off state. | Nothing to configure beyond the list. |
+
+### §45.2 Membership — the Administration card
+
+A card **Innovation board** on Platform settings (§14.3), platform admins only. Its
+subtitle reads *"People on the board can read new challenges and solutions before
+review, and are told about each one."*
+
+- **The list** shows one row per member, in name order: avatar bubble, name, dimmed
+  e-mail, a muted *"Added <date> by <name>"* (the date through `useDateFmt()`; only the
+  date when that admin has since been erased) and **Remove**. A deactivated member's row
+  carries the muted *Deactivated* tag. Above it, a count: *"12 of 100"*. With nobody on
+  the board the list gives way to *"Nobody is on the innovation board yet."*
+- **Adding** uses a tag field of the same kind as the §4.3 access-list editor: typing
+  searches active users (the §7.3 directory picker, unfiltered), and picking a result
+  adds that person as a tag with a **✕**. People already on the board are not offered,
+  and a typed string that matches nobody cannot be committed — there are no pending
+  e-mail entries (decision 14). **Add to board** adds every tagged person in one call,
+  at most 20 at a time.
+- **Who can be added:** any active, not-erased user, whatever their roles — a namespace
+  or platform admin included, and the acting admin themselves.
+- **Removing** asks first: *"Remove <Name> from the innovation board? They will no
+  longer be able to read challenges and solutions before review, and the notices will
+  stop."*
+- **The cap** is `INNOVATION_BOARD_MAX = 100`, fixed in `@innobox/shared`. Deactivated
+  members count toward it. At the cap the tag field is disabled with *"The innovation
+  board is full. Remove someone to add another person."*
+- **Effect.** Both changes apply from the member's next request (§4.2 resolves on every
+  request and caches nothing). An add writes event 28 (§45.6); a removal writes nothing.
+  Neither backfills or deletes any notice (§45.8).
+
+### §45.3 What a member can read
+
+**For a board member the two pre-review state rules of §4.3 do not apply. Everything
+else in §4.3 does.**
+
+- **An `awaiting_triage` challenge** is visible to a member exactly when the visibility
+  rule alone admits them: any `org` challenge; a `namespace` challenge of a namespace
+  they belong to; a `people` challenge that its access list, their namespace role or an
+  assignment already opens to them.
+- **A `proposed` solution** is visible to a member who can see its challenge.
+- **Not** a `withdrawn` challenge or solution (decision 5), and nothing in the trash
+  (§10.4).
+- **Restricted content never opens** (decision 4). A member outside a namespace sees its
+  `namespace` and `people` challenges no sooner than any other outsider — that is, never.
+- **One predicate.** The exemption lives in the §4.3 predicate and its SQL twin, so it
+  holds on every per-viewer surface alike: the detail page, search (§13.4), the §6.1
+  similarity check, the bell with its read-time gate (§12.1), the pulse (§12.2), the KPI
+  tiles and spotlights (§13.2), the AI summary (§22.13) and the MCP tools (§25), where
+  the §25.5 restricted-content switch applies to a member as to anyone.
+- **Surfaces that leave these states out for every viewer still do:** the gallery's
+  **Open** tab and a card's solution count (§13.1), other people's profiles (§13.5),
+  leaderboards (§13.3) and channel webhooks (§12.4). There is no board queue
+  (decision 15).
+- **No picker reveals the roster** (decision 10). Co-author eligibility is judged without
+  the state rules (§39.2), and the solution form's pickers exist only on a `valid`
+  challenge, where a member sees no more than anyone else. The two checks that run while
+  an item is still in review judge a person **without** the exemption, in the list and on
+  the server alike: the §7.3 assignee check, and who can be mentioned in a comment (§44.5).
+  So a member is offered, accepted or refused there exactly as if they were not on the
+  board, and neither answer tells the person asking who is on it.
+
+### §45.4 What a member can and cannot do
+
+- **As any viewer.** Whatever is open to a viewer of an item in that status is open to
+  a member: commenting and replying (§10.2), liking and following (§12.3). Each action
+  keeps its own status rules — a hype (§26.3) and an "affects me too" mark (§41.3) are
+  refused on an `awaiting_triage` challenge for a member as for everyone, and a solution
+  can be proposed only on a `valid` one (§6.2).
+- **An ordinary comment.** A member's comment carries no badge, and event 6 names them
+  as it names any commenter. An author who reads it learns that this person can see the
+  item; that is the member's own act, and no list follows from it (decision 10).
+- **Not** (decision 6): the triage queue and its attention bubble (§14.1, §14.4 — the
+  pulse's `attention` stays `null`); any status change (§7.2, §8.2); assignment (§7.3);
+  the anonymity reveal (§9) — an anonymous author stays masked for a member everywhere,
+  the notices included; the visibility control and the access list (§4.3 — a member sees
+  the chip only); topic re-tagging (§34.3); AI triage notes (§22.11); the *Submitted
+  from outside* panel (§24.6) and the public-submissions queue (§24.5); the trash
+  (§10.4); CSV export. Every such route answers a member as it answers any user without
+  that role.
+
+### §45.5 Notifications — events 1 and 2 to the board
+
+Both events gain a recipient route, **the board route**.
+
+- **Who.** Every board member who can see the new item's challenge under §45.3 — less
+  the actor, less the members of the new item's own team (decision 12), and less anyone
+  deactivated or erased (§12.1).
+- **When.** After commit of the create, by every path that creates the item: the web
+  forms (§6.1, §6.2), the MCP `submit_challenge` and `propose_solution` tools (§25.6),
+  and **Accept** on a public submission (§24.6). Once per item. **Not** on a resubmit
+  (event 9), an admin's move back into `awaiting_triage` or `proposed`, a restore from
+  the trash, a later change of visibility, or a person joining the board.
+- **One row per person.** A person on several routes of one event gets one inbox row
+  and one e-mail (§12.1), by the strongest route they are on:
+  1. the **admin** route of event 1, or the **admin and committee** route of event 2 —
+     immediate, never digested, not mutable, exactly as today;
+  2. the **board** route — the digest choice applies, and there is no preference;
+  3. the **author and follower** route of event 2 — the digest choice applies, and
+     *New solutions on challenges I follow* mutes it.
+- **Copy.** To the board, event 1 reads *"New challenge CH-412 "Reduce invoice matching
+  time" was submitted."* — the admins keep *"… needs triage."* Event 2 is unchanged:
+  *"A new solution was proposed on CH-412 "Reduce invoice matching time"."* Neither
+  names an author, as today, so anonymity cannot leak through them (invariant 3). Links
+  are the §12.1 deep links.
+- **E-mail.** A standard outbox row; the e-mail switch applies. For the board route
+  both events are **follower-type** for the digest: held on `daily` / `weekly` and
+  listed under the item's heading — *"New challenge"* for event 1, the existing *"1 new
+  solution"* for event 2.
+- **No preference** (decision 8), and no channel webhook change (§12.4).
+- **Afterwards.** The §12.1 read-time gate applies as to every row: a notice about a
+  challenge the member can no longer see — it was withdrawn or narrowed, or they left
+  the board while it still awaited triage — is hidden, and returns if access does. The
+  digest's send-time visibility check drops a held row the same way.
+- **Event 18 is separate.** Event 1 tells a member that a challenge was submitted;
+  event 18 tells a topic's followers that it opened for solutions (§34.5). A member who
+  follows the topic gets both.
+
+### §45.6 Notifications — event 28
+
+**Event 28 — "Added to the innovation board."** A new row of the §12.1 matrix.
+
+- **Recipient:** the person a platform admin added — never an admin who added
+  themselves (they are the actor).
+- **When:** after commit of the add, for every add; a person removed and added again is
+  told again. A removal writes nothing (decision 9).
+- **In-app:** *"Ana Petrova added you to the innovation board. You'll hear about every
+  new challenge and solution."*, linked to `/profile`.
+- **E-mail:** subject *"You've been added to the innovation board"*. The body says who
+  added them, that they can now read new challenges and solutions before review and
+  will be told about each one, and that their e-mail delivery choice applies, with the
+  link to their profile.
+- **Actionable:** always immediate, never held for a digest, not mutable; the e-mail
+  switch applies. The row names no item, so the read-time gates leave it alone.
+
+### §45.7 What people are told
+
+- **The roster** is returned by the platform-admin API of §45.10 and by nothing else.
+  No profile, directory card (§13.8), detail page or list says who is on the board, and
+  the add and remove audit rows are read in the audit browser, which is platform-admin
+  only (§15).
+- **A member's own profile** (§13.5) shows one muted line at the top of the notification
+  preferences: *"You're on the innovation board: you can read new challenges and
+  solutions before review, and you're told about each one. To stop, ask a platform
+  admin to remove you."*
+- **The submit forms** (decision 11). While the board has at least one active member,
+  the challenge form (§6.1) and the solution form (§6.2) show one muted line directly
+  above their submit button:
+  - for an `org` challenge, and a solution on one — *"The innovation board can read this
+    before it's reviewed."*;
+  - on the challenge form with *Namespace-only* chosen — *"Innovation board members in
+    this namespace can read this before it's reviewed."*;
+  - on the solution form of a restricted challenge — *"Innovation board members who can
+    see this challenge can read this before it's reviewed."*
+
+  The line is the same with *Submit anonymously* ticked: anonymity is unchanged, and a
+  member sees *Anonymous* like everyone else. The forms learn the state from
+  `me.innovationBoard.active` (§45.10); with an empty board the line is absent.
+
+### §45.8 Lifecycle
+
+- **Removal** takes the early access away from the next request. Rows already in the
+  member's inbox follow the read-time gate (§45.5); their follows of items they can no
+  longer see are kept and deliver nothing (§12.3); their comments stay.
+- **Deactivation (§3).** The entry stays and counts toward the cap; a deactivated person
+  receives nothing (§12.1) and, unable to sign in, reads nothing. Reactivation resumes
+  both from that moment, with no backfill.
+- **Erasure (§3)** deletes the person's entry and nulls `added_by` on the entries they
+  added.
+- **Namespace changes.** A member who joins or leaves a namespace gains or loses its
+  restricted pre-review items with the rest of its restricted content.
+- **Leaving review.** When a challenge leaves `awaiting_triage`, or a solution leaves
+  `proposed`, a member sees it as everyone who can see it does; nothing is written.
+- **Withdrawal** hides a pre-review item from a member at once, and its notice with it.
+- **Trash and delete (§10.3, §10.4)** treat a member as any viewer; the §10.3 cascade
+  removes the item's inbox and unsent outbox rows as for every recipient.
+- **Mentions (§43.4).** A board member mentioned in a `proposed` solution they can see
+  is told at the save, as a reviewer is.
+- **Duplicates (§42), invitations (§40), hype (§26) and topics (§34)** are unaffected.
+
+### §45.9 Data model (migration 0064)
+
+- **`innovation_board_members`** — user_id (primary key, FK `users`), added_by (nullable
+  FK `users`; null once that admin is erased), added_at (timestamptz, default `now()`).
+  Grants: SELECT, INSERT and DELETE; UPDATE on `added_by` only.
+- **`notifications.type`** gains **`innovation_board_added`** (payload: `addedById`,
+  `addedByName` and the e-mail's `subject`; it names no item, so `challenge_id` and
+  `solution_id` stay null). Event 1 and 2 rows keep their types; a board recipient's
+  row carries the board wording in its payload.
+- No column on `users`, `challenges`, `solutions` or `platform_settings`, and no points,
+  badge or ledger reason.
+
+### §45.10 API, audit, tests
+
+- **API (§16).** Platform admin only, **403** for anyone else:
+  - `GET /api/admin/innovation-board` → `{ max, members: [{ user: { id, displayName,
+    email, active }, addedAt, addedBy: { id, displayName } | null }] }`.
+  - `POST /api/admin/innovation-board/members { userIds }` — 1–20 distinct ids,
+    all-or-nothing: **400** for a malformed body; **422** *"This person can't be added
+    to the innovation board."* for an unknown, inactive or erased id; **409** *"The
+    innovation board can have at most 100 members."* over the cap. An id already on the
+    board is skipped. **200** returns `{ added: [userId] }`. The cap check and the
+    inserts run in one transaction under a transaction-scoped advisory lock, so two
+    concurrent adds cannot both take the last place.
+  - `DELETE /api/admin/innovation-board/members/:userId` — **204**; **404** when that
+    person is not on the board.
+  - `GET /api/me` gains **`innovationBoard: { member, active }`** — whether the caller
+    is on the board, and whether the board has at least one active member.
+  - No challenge or solution route changes shape: each reads the §4.2 resolution, which
+    now carries the caller's board membership.
+- **Audit (§15).** `innovation_board.member_added` and `innovation_board.member_removed`
+  — actor the admin, target the person, one row per person — under Admin. `user.scrubbed`
+  gains `boardMember: true` when the erasure removed a membership. Events 1, 2 and 28
+  are not audited, as no notification is.
+- **Tests.**
+  - *Unit:* the predicate — a member against an `awaiting_triage` challenge that is
+    `org`, `namespace` (as a member of the namespace and not) and `people` (on the list
+    and not), against a `withdrawn` and a trashed one, against a `proposed` solution
+    under each, and through an agent with restricted content off; the same table for a
+    non-member, unchanged; the route precedence of §45.5 for a person on each
+    combination of routes; the digestable class of events 1 and 2 by route; the actor
+    and team exclusions; event 28's class and copy; the cap.
+  - *Integration:* add, remove, a repeated add, the 100th member allowed and the 101st
+    refused, an ineligible id refusing the whole call, and 403 for a namespace admin; a
+    member opens an `awaiting_triage` `org` challenge, finds it in search and in the
+    similarity check, and a non-member gets 404; a member outside a namespace gets 404
+    on its `namespace` challenge in triage and no event 1, and a member inside gets
+    both; a `proposed` solution is in the detail payload for a member and absent for
+    another viewer; a member's status change, triage queue, reveal and access-list
+    calls are refused, the detail payload carries no triage notes and no contact panel
+    for them, and their pulse's `attention` is null; event 1 after a web create, an MCP
+    `submit_challenge` and a public **Accept**, and event 2 after a web and an MCP
+    proposal; none on a resubmit; a member on `daily` has both held and listed in the
+    digest; a member who is also a namespace admin gets one row, with the admin wording,
+    at once; a follower on the board with *New solutions on challenges I follow* off
+    still gets event 2; the submitter and a co-author on the board get neither; a
+    deactivated member gets nothing; event 28 on an add, none on a self-add or a
+    removal; after a removal the row about a challenge still in triage is hidden and
+    comes back once it is triaged; erasure deletes the entry and nulls `added_by`;
+    `me.innovationBoard` for a member, a non-member and an empty board; no payload
+    outside the admin API names a member.
+  - *E2e:* a platform admin opens Platform settings and adds user B to the board; B's
+    bell shows the add notice; user A submits an organization-wide challenge, having
+    seen the board line above **Submit**; B's bell shows *"New challenge CH-… was
+    submitted."*, and its link opens the challenge in *Awaiting triage* with no triage
+    controls.

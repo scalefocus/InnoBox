@@ -165,3 +165,7 @@ export * from "./sql-like.js";
 // web stores share. Coming soon itself lives only in the database.
 export * from "./feature-ideas.js";
 export * from "./feature-ideas-db.js";
+
+// §45 the innovation board: the limits, the add request's validation and the copy (client-safe,
+// also at `@innobox/shared/innovation-board`). The §4.3 exemption itself is in challenges.ts.
+export * from "./innovation-board.js";

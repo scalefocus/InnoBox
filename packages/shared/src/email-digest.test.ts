@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DIGEST_MAX_ITEMS,
+  NEW_CHALLENGE_DIGEST_LINE,
   isDigestableEvent,
   isEmailDelivery,
   nextDigestSlot,
@@ -16,11 +17,35 @@ import { parsePreferencePatch } from "./notification-preferences.js";
 
 const ALL_EVENTS: NotificationEventNumber[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
 
-test("only the follower-type events (2, 3, 6, 8), hyped (16), a new challenge in a followed topic (18), feature now available (20) and affects them too (24) are digestable", () => {
+test("only the follower-type events (2, 3, 6, 8), a new challenge to the innovation board (1), hyped (16), a new challenge in a followed topic (18), feature now available (20) and affects them too (24) are digestable", () => {
   assert.deepEqual(
     ALL_EVENTS.filter((e) => isDigestableEvent(e)),
-    [2, 3, 6, 8, 16, 18, 20, 24],
+    [1, 2, 3, 6, 8, 16, 18, 20, 24],
   );
+});
+
+test("event 1 is held on the innovation board route only — a namespace admin's copy stays immediate (§45.5)", () => {
+  assert.equal(isDigestableEvent(1, false), true);
+  assert.equal(isDigestableEvent(1, true), false);
+});
+
+test("event 28 — added to the innovation board — is actionable and never held (§45.6)", () => {
+  assert.equal(isDigestableEvent(28), false);
+  assert.equal(isDigestableEvent(28, true), false);
+});
+
+test("renderDigest: a new challenge told to an innovation board member leads its block, once (§45.5)", () => {
+  const digest = renderDigest(
+    [update({ kind: "solution", count: 2 }), update({ kind: "challenge" }), update({ kind: "challenge" })],
+    "daily",
+    "https://x.test",
+  );
+  assert.ok(digest);
+  assert.equal(
+    digest!.text.split("\n\n")[1],
+    ["CH-412 — Faster onboarding", "https://x.test/challenges/412", `- ${NEW_CHALLENGE_DIGEST_LINE}`, "- 2 new solutions"].join("\n"),
+  );
+  assert.equal(NEW_CHALLENGE_DIGEST_LINE, "New challenge");
 });
 
 test("renderDigest: the people who said a challenge affects them get one line, with the latest reach (§41.6)", () => {
@@ -65,7 +90,9 @@ test("a recipient on the admin route is never held — event 2 to admins and the
 });
 
 test("the admin attention and actionable events are never held", () => {
-  for (const e of [1, 4, 5, 7, 9, 10, 11, 12, 13, 14, 17, 19] as const) assert.equal(isDigestableEvent(e), false, `event ${e}`);
+  for (const e of [4, 5, 7, 9, 10, 11, 12, 13, 14, 17, 19] as const) assert.equal(isDigestableEvent(e), false, `event ${e}`);
+  // Event 1 is an admin attention event on its admin route (§45.5 holds it for the board only).
+  assert.equal(isDigestableEvent(1, true), false);
 });
 
 test("renderDigest: hypes get one line per item — the challenge's first, then each solution's (§26.6)", () => {

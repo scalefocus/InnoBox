@@ -34,6 +34,7 @@ const PLATFORM_STATE_SPECS = [
   "featured.spec.ts",
   "gamification.spec.ts",
   "hype.spec.ts",
+  "innovation-board.spec.ts",
   "invite-solver.spec.ts",
   "public-submissions.spec.ts",
   "survey.spec.ts",

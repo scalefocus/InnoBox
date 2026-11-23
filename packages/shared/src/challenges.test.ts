@@ -600,3 +600,76 @@ test("an AI agent never sees a trashed item, not even a platform admin's (§10.4
   assert.equal(canSeeSolution(agent, { namespaceId: NS_A, assigneeId: null }, { status: "valid", authorIds: [AUTHOR], trashed: true }), false);
   assert.equal(canSeeChallenge(agent, { ...challenge, trashed: false }), true, "a live item is unaffected");
 });
+
+// ── §45.3 the innovation board: exempt from the two pre-review state rules, nothing else ──
+
+function boardMember(
+  userId: string,
+  grants: { role: "platform_admin" | "namespace_admin" | "committee" | "member"; namespaceId: string | null }[] = [],
+  accessListChallengeIds: string[] = [],
+) {
+  return { userId, roles: buildRoleSet(grants, { globalNamespaceId: GLOBAL, accessListChallengeIds, innovationBoardMember: true }) };
+}
+
+const inTriage = (visibility: "org" | "namespace" | "people", status: "awaiting_triage" | "withdrawn" = "awaiting_triage") => ({
+  id: CH,
+  namespaceId: NS_A,
+  assigneeId: null,
+  visibility,
+  status,
+  authorIds: [AUTHOR],
+  trashed: false,
+});
+
+test("canSeeChallenge §45.3: a board member reads an org challenge in triage; a non-member still cannot", () => {
+  assert.equal(canSeeChallenge(boardMember(OTHER), inTriage("org")), true);
+  assert.equal(canSeeChallenge(viewer(OTHER), inTriage("org")), false);
+});
+
+test("canSeeChallenge §45.3: the exemption opens no restricted content — a namespace challenge in triage needs membership", () => {
+  assert.equal(canSeeChallenge(boardMember(OTHER), inTriage("namespace")), false, "outside the namespace: never");
+  assert.equal(canSeeChallenge(boardMember(OTHER, [{ role: "member", namespaceId: NS_A }]), inTriage("namespace")), true);
+  // Membership alone, without the board, still waits for triage.
+  assert.equal(canSeeChallenge(viewer(OTHER, [{ role: "member", namespaceId: NS_A }]), inTriage("namespace")), false);
+  // Membership of another namespace opens nothing.
+  assert.equal(canSeeChallenge(boardMember(OTHER, [{ role: "member", namespaceId: NS_B }]), inTriage("namespace")), false);
+});
+
+test("canSeeChallenge §45.3: a people challenge in triage opens to a board member only through its list", () => {
+  assert.equal(canSeeChallenge(boardMember(OTHER), inTriage("people")), false);
+  assert.equal(canSeeChallenge(boardMember(OTHER, [], [CH]), inTriage("people")), true);
+  // On the list but not on the board: the state rule holds until it leaves triage.
+  assert.equal(canSeeChallenge(viewer(OTHER, [], [CH]), inTriage("people")), false);
+  // Namespace membership alone grants nothing on a people challenge, board or not.
+  assert.equal(canSeeChallenge(boardMember(OTHER, [{ role: "member", namespaceId: NS_A }]), inTriage("people")), false);
+});
+
+test("canSeeChallenge §45.3: never a withdrawn challenge, and never the trash", () => {
+  assert.equal(canSeeChallenge(boardMember(OTHER), inTriage("org", "withdrawn")), false);
+  assert.equal(canSeeChallenge(boardMember(OTHER), { ...inTriage("org"), trashed: true }), false);
+  // Its own author keeps seeing a withdrawn one, board or not.
+  assert.equal(canSeeChallenge(boardMember(AUTHOR), inTriage("org", "withdrawn")), true);
+});
+
+test("canSeeChallenge §45.3: through an agent the restricted-content switch applies to a board member as to anyone", () => {
+  const agent = { ...boardMember(OTHER, [{ role: "member", namespaceId: NS_A }]), orgVisibleOnly: true, viaAgent: true };
+  assert.equal(canSeeChallenge(agent, inTriage("namespace")), false);
+  assert.equal(canSeeChallenge(agent, inTriage("org")), true);
+});
+
+test("canSeeSolution §45.3: a board member reads a proposed solution; not a trashed one", () => {
+  const challenge = { namespaceId: NS_A, assigneeId: null };
+  assert.equal(canSeeSolution(boardMember(OTHER), challenge, { status: "proposed", authorIds: [AUTHOR], trashed: false }), true);
+  assert.equal(canSeeSolution(viewer(OTHER), challenge, { status: "proposed", authorIds: [AUTHOR], trashed: false }), false);
+  assert.equal(canSeeSolution(boardMember(OTHER), challenge, { status: "proposed", authorIds: [AUTHOR], trashed: true }), false);
+});
+
+test("§45.4: board membership is no role — it grants no admin, committee or namespace standing", () => {
+  const { roles } = boardMember(OTHER);
+  assert.equal(roles.isInnovationBoardMember, true);
+  assert.equal(roles.isPlatformAdmin, false);
+  assert.equal(roles.isNamespaceAdmin(NS_A), false);
+  assert.equal(roles.isCommittee(NS_A), false);
+  assert.equal(roles.isMemberOf(NS_A), false);
+  assert.deepEqual(roles.grants, [{ role: "member", namespaceId: GLOBAL }]);
+});

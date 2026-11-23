@@ -121,12 +121,16 @@ async function resolveRoles(pool: Pool, userId: string, bootstrapAdminGroup: str
   const { rows: global } = await pool.query<{ id: string }>(`select id from namespaces where slug = 'global'`);
   // §4.3 `people`: the challenges whose access list names the user.
   const { rows: access } = await pool.query<{ challenge_id: string }>(`select challenge_id from challenge_access where user_id = $1`, [userId]);
+  // §45.3: innovation board membership — what lets a member's held "new challenge" and "new
+  // solution" rows pass the send-time check while the item is still in review.
+  const { rows: board } = await pool.query(`select 1 from innovation_board_members where user_id = $1`, [userId]);
   return buildRoleSet(
     grants.map((g) => ({ role: g.role, namespaceId: g.namespace_id })),
     {
       bootstrapPlatformAdmin: bootstrap.length > 0,
       globalNamespaceId: global[0]?.id ?? "",
       accessListChallengeIds: access.map((r) => r.challenge_id),
+      innovationBoardMember: board.length > 0,
     },
   );
 }

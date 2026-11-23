@@ -11,6 +11,7 @@ import { getSessionUser, requireUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { getDateFormat } from "@/app/api/admin/settings/store";
 import { getAiDisplayNameSetting } from "@/app/api/admin/ai/store";
+import { boardHasActiveMember } from "@/app/api/admin/innovation-board/store";
 import { aiDisplayName } from "@innobox/shared/ai";
 import { APP_VERSION } from "@innobox/shared/version";
 import { markQuickStartSeen, markWhatsNewSeen } from "./store";
@@ -28,7 +29,7 @@ async function handleGET(): Promise<Response> {
   const user = await getSessionUser();
   if (!user) return Response.json({ error: "unauthenticated" }, { status: 401 });
 
-  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn, rum] = await Promise.all([
+  const [dateFormat, aiName, openSurvey, selfSurvey, bugReports, gamification, achievements, mcp, connected, hypeOn, rum, boardActive] = await Promise.all([
     getDateFormat(pool),
     getAiDisplayNameSetting(pool),
     readOpenSurvey(pool, user.id),
@@ -40,6 +41,7 @@ async function handleGET(): Promise<Response> {
     hasLiveConnection(pool, user.id),
     getHypeEnabled(pool),
     getRumSettings(pool),
+    boardHasActiveMember(pool),
   ]);
   // §26.11: the hype button's initial budget — null while hype is off.
   const hype = hypeOn ? { enabled: true, hypesLeft: (await viewerHypeBudget(pool, user.id)).hypesLeft } : null;
@@ -84,6 +86,9 @@ async function handleGET(): Promise<Response> {
     hype,
     // §14.12: whether a new tab starts the monitoring collector, and at what sample rate.
     rum,
+    // §45.7: the caller's own membership (their profile says so) and whether the board has anyone
+    // on it (the submit forms then say it can read a submission). Never who else is on it.
+    innovationBoard: { member: user.roles.isInnovationBoardMember, active: boardActive },
   });
 }
 

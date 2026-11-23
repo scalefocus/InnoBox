@@ -82,7 +82,9 @@ touched.**
 
 ## Non-negotiable invariants (§2.1)
 1. **Roles resolve from SCIM-synced group membership + `role_mappings`, NEVER from
-   OIDC token claims** (Entra ~200-group claim overage).
+   OIDC token claims** (Entra ~200-group claim overage). The grants an admin makes in
+   the app — a challenge's assignee, a `people` access list, innovation board
+   membership (§45) — are database rows, likewise never read from a token.
 2. **All access is auth-required and strictly visibility-filtered.** A
    namespace-restricted challenge must never leak via lists, search, autocomplete,
    counts, KPIs, leaderboards, or notifications (§4.3). The only unauthenticated
@@ -130,6 +132,10 @@ touched.**
 ## Roles (§4)
 - **Platform Admin** (global) · **Namespace Admin** (per-ns) · **Committee Member**
   (per-ns, enforced transitions only) · **Assignee** (per-challenge).
+- **Innovation Board Member** (global, §45): picked by a platform admin in the app.
+  Reads `awaiting_triage` challenges and `proposed` solutions only where the
+  visibility rule already admits them, and is told of every new one. No powers, and
+  the roster is shown to platform admins only.
 - Implicit for any authenticated user: submit challenges, propose solutions (on
   `valid` challenges only), comment, like, follow, consume per visibility.
 

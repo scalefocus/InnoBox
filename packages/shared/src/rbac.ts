@@ -29,6 +29,10 @@ export interface RoleSet {
   isOnAccessList(challengeId: string): boolean;
   /** §4.3 `people`: the challenges whose access list names the user (bound entries only). */
   accessListChallenges(): string[];
+  /** §45: the user is on the innovation board — exempt from the two pre-review state rules of §4.3
+   *  (an `awaiting_triage` challenge, a `proposed` solution) wherever the visibility rule already
+   *  admits them. It carries no power: every admin and reviewer check ignores it. */
+  isInnovationBoardMember: boolean;
 }
 
 export interface BuildRoleSetOptions {
@@ -39,6 +43,17 @@ export interface BuildRoleSetOptions {
   /** §4.3 `people`: the challenges whose access list names the user, read per request beside the
    *  grants. Absent = none, so a caller that forgets it fails closed (the list grants nothing). */
   accessListChallengeIds?: readonly string[];
+  /** §45: the user has a row in `innovation_board_members`, read per request beside the grants — a
+   *  database grant a platform admin made in the app, never a token claim (invariant 1). Absent =
+   *  not a member, so a caller that forgets it fails closed. */
+  innovationBoardMember?: boolean;
+}
+
+/** §45.3: the same roles judged WITHOUT the innovation board exemption — for a gate whose answer a
+ *  third party learns (the §7.3 assignee check and its picker), so that the answer never tells them
+ *  who is on the board. */
+export function withoutInnovationBoard(roles: RoleSet): RoleSet {
+  return roles.isInnovationBoardMember ? { ...roles, isInnovationBoardMember: false } : roles;
 }
 
 export function buildRoleSet(grants: RoleGrant[], opts: BuildRoleSetOptions): RoleSet {
@@ -96,5 +111,6 @@ export function buildRoleSet(grants: RoleGrant[], opts: BuildRoleSetOptions): Ro
     accessListChallenges(): string[] {
       return [...accessList];
     },
+    isInnovationBoardMember: opts.innovationBoardMember === true,
   };
 }

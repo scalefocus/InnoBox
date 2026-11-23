@@ -49,6 +49,8 @@ export const AUDIT_CATEGORY_PATTERNS: Record<Exclude<AuditCategory, "all">, read
     "mcp.%",
     // §24.9 the public submission review queue: accept, decline, discard and contact erasure.
     "public_submission.%",
+    // §45.10 the innovation board: a member added or removed.
+    "innovation_board.%",
     "%.exported",
     // The triage CSV export was once audited under this name (now `triage.exported`). Audit rows
     // are immutable, so the historical ones are kept under the same chip by name.

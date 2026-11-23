@@ -2183,6 +2183,23 @@ select.field:disabled { cursor: not-allowed; opacity: 0.6; }
 /* The access-list editor: the tag field plus a muted line under it. */
 .access-editor-hint { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
 
+/* ── Innovation board (INNOBOX_SPEC.md §45.2, §45.7) ──────────────────────────────────────────
+   The Platform settings card: the people picker (the access-list tag field) beside its button, and
+   one row per member — bubble, name over e-mail, when and by whom they were added, Remove. The
+   same muted note line sits above the submit buttons and on a member's profile. Tokens only. */
+.board-add { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.board-add-field { flex: 1 1 320px; min-width: 0; }
+.board-row { flex-wrap: wrap; gap: 10px 14px; }
+.board-row-who { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; }
+.board-row-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-row-mail { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-row-added { font-size: 12.5px; white-space: nowrap; }
+.board-note { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+@media (max-width: 880px) {
+  .board-row { padding: 12px 14px; }
+  .board-row-added { white-space: normal; flex-basis: 100%; }
+}
+
 /* ── Mentions (INNOBOX_SPEC.md §43.3, §43.7) ──────────────────────────────────────────────────
    A mention in a solution's text: the person's name as an inline link in the accent ink — muted
    for a deactivated person, muted and unlinked for an erased one. The composer's list rides on the

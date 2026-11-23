@@ -167,6 +167,17 @@ export async function getNamespaceCommitteeUserIds(db: Db, namespaceId: string):
   return rows.map((r) => r.user_id);
 }
 
+/** §45.5: the innovation board — the rows a platform admin wrote in the app, never a token claim
+ *  (invariant 1) — active, not-erased members only (§12.1). */
+export async function getInnovationBoardUserIds(db: Db): Promise<string[]> {
+  const { rows } = await db.query<{ user_id: string }>(
+    `select m.user_id
+       from innovation_board_members m
+       join users u on u.id = m.user_id and u.active and u.scrubbed_at is null`,
+  );
+  return rows.map((r) => r.user_id);
+}
+
 export async function getFollowerUserIds(db: Db, parentType: "challenge" | "solution", parentId: string): Promise<string[]> {
   const { rows } = await db.query<{ user_id: string }>(
     `select user_id from follows where parent_type = $1 and parent_id = $2`,

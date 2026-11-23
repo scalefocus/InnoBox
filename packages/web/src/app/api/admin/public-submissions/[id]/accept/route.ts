@@ -3,13 +3,12 @@
 // `visibility` may be `people` (§4.3), with the access list `access: { userIds, emails }`. One
 // transaction creates the challenge (awaiting_triage, no author) and marks the row accepted; after
 // commit, everything a new challenge triggers follows — §12.1 event 1 to the namespace's admins and
-// the platform admins. Nobody is auto-followed: there is no author. 409 when another admin decided
-// first. Platform admin only.
+// the platform admins, and to the innovation board members who can see it (§45.5). Nobody is
+// auto-followed: there is no author. 409 when another admin decided first. Platform admin only.
 import { resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { readJsonObject } from "@/lib/http";
-import { dispatchEvent, getNamespaceAdminUserIds } from "@/lib/notify";
-import { logNotifyFailure } from "@/lib/notify-events";
+import { logNotifyFailure, notifyChallengeSubmitted } from "@/lib/notify-events";
 import { withSystemLog } from "@/lib/system-log";
 import { isUuid } from "../../../../challenges/validation";
 import { TEAMS_NEED_NAMESPACE, acceptPublicSubmission } from "../../store";
@@ -37,12 +36,9 @@ async function handlePOST(req: Request, context: { params: Promise<{ id: string 
   });
   switch (result.status) {
     case "ok": {
-      await dispatchEvent(
+      await notifyChallengeSubmitted(
         { pool, actorId: gate.user.id, resolveRoles: resolveRolesForUser },
-        { parentType: "challenge", parentId: result.challengeId },
-        await getNamespaceAdminUserIds(pool, result.namespaceId),
-        "challenge_submitted",
-        { message: `New challenge ${result.number} "${result.title}" needs triage.`, link: `/challenges/${result.number.replace("CH-", "")}` },
+        { id: result.challengeId, number: result.number, title: result.title, namespaceId: result.namespaceId },
       ).catch(logNotifyFailure("challenge.submitted notification failed"));
       return Response.json({ number: result.number });
     }

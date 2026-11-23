@@ -209,12 +209,17 @@ export interface ChallengeVisibilityInput {
  *  assignee — namespace membership alone grants nothing. A trashed
  *  challenge (§10.4) is visible to platform admins only — the read-only trashed detail view;
  *  to everyone else it does not exist (invariant 2). Lists never show it to anyone: the SQL
- *  twin drops trashed rows for platform admins too. */
+ *  twin drops trashed rows for platform admins too.
+ *
+ *  §45.3: an innovation board member is exempt from the state rule for `awaiting_triage` — never
+ *  for `withdrawn` — and sees such a challenge exactly when the visibility rule alone admits them,
+ *  so the exemption opens no restricted content. */
 export function canSeeChallenge(viewer: ViewerContext, challenge: ChallengeVisibilityInput): boolean {
   if (viewer.orgVisibleOnly && isRestrictedVisibility(challenge.visibility)) return false;
   if (challenge.trashed) return viewer.roles.isPlatformAdmin && !viewer.viaAgent;
   if (challenge.status === "awaiting_triage" || challenge.status === "withdrawn") {
-    return challenge.authorIds.includes(viewer.userId) || viewer.roles.isNamespaceAdmin(challenge.namespaceId);
+    if (challenge.authorIds.includes(viewer.userId) || viewer.roles.isNamespaceAdmin(challenge.namespaceId)) return true;
+    return challenge.status === "awaiting_triage" && viewer.roles.isInnovationBoardMember && passesVisibilityRule(viewer, challenge);
   }
   return passesVisibilityRule(viewer, challenge);
 }
@@ -253,7 +258,8 @@ export interface SolutionVisibilityInput {
 
 /** §4.3: a solution inherits its parent challenge's visibility gate, and while
  *  `proposed` is additionally hidden except to its authors (every member, §39.6), the challenge's
- *  assignee, and the namespace's committee/admins. Callers must have already resolved
+ *  assignee, the namespace's committee/admins, and an innovation board member (§45.3 — who, like
+ *  everyone here, must already see the parent). Callers must have already resolved
  *  `canSeeChallenge` for the parent — this only applies the solution-specific narrowing. A
  *  trashed solution (§10.4) is visible to platform admins only. A solution's team is joined by
  *  whoever can see its parent under the full §4.3 predicate (§39.2) — `canSeeChallenge` itself. */
@@ -268,7 +274,7 @@ export function canSeeSolution(
   const isAssignee = challenge.assigneeId !== null && viewer.userId === challenge.assigneeId;
   const isCommitteeOrAdmin =
     viewer.roles.isCommittee(challenge.namespaceId) || viewer.roles.isNamespaceAdmin(challenge.namespaceId);
-  return isAuthor || isAssignee || isCommitteeOrAdmin;
+  return isAuthor || isAssignee || isCommitteeOrAdmin || viewer.roles.isInnovationBoardMember;
 }
 
 // ── §8.3 single accepted solution & auto-close ──────────────────────────────────────────

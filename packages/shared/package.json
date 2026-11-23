@@ -157,6 +157,10 @@
     "./comment-markdown": {
       "types": "./dist/comment-markdown.d.ts",
       "default": "./dist/comment-markdown.js"
+    },
+    "./innovation-board": {
+      "types": "./dist/innovation-board.d.ts",
+      "default": "./dist/innovation-board.js"
     }
   },
   "scripts": {

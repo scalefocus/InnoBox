@@ -38,6 +38,7 @@ import { TopicPicker, useActiveTopics, type TopicTag } from "@/components/TopicP
 import { TeamBubbles } from "@/components/TeamByline";
 import { ANONYMOUS_NO_COAUTHORS_HINT, CoAuthorPicker, TeamFullNames, TeamPanel, type TeamMember } from "@/components/TeamPanel";
 import type { UserResult } from "@/components/UserResultButton";
+import { InnovationBoardFormNote } from "@/components/InnovationBoardNote";
 import { InvitationBanner, InviteSolverButton, type InvitationsSent, type InvitedBy } from "@/components/InviteSolver";
 import { OWN_ITEM_REVIEW_HINT } from "@innobox/shared/coauthors";
 import { duplicateCommentsNotice } from "@innobox/shared/duplicates";
@@ -1529,6 +1530,8 @@ function ProposeSolutionForm({
           </p>
         )}
       </div>
+      {/* §45.7: while the innovation board has a member, say it can read this before review. */}
+      <InnovationBoardFormNote form="solution" restricted={restricted} />
       <div style={{ display: "flex", gap: 10 }}>
         <button type="submit" className="btn btn-primary form-lock-raised" disabled={button.disabled || ai.busy}>
           <PrimaryButtonLabel state={button} />
