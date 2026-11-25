@@ -84,3 +84,22 @@ export function shouldRowNavigate(click: {
 export function solutionCountLabel(n: number): string {
   return `${n} solution${n === 1 ? "" : "s"}`;
 }
+
+// ── The tab in the address (§13.1) ──────────────────────────────────────────────────────────
+
+export type GalleryTab = "open" | "mine" | "completed";
+
+/** The tab an address value selects: `mine` and `completed` name theirs; absent or anything else is
+ *  Open — so an unknown value is never passed to `GET /api/challenges`, whose own `tab` refuses one. */
+export function galleryTabFromParam(raw: string | null): GalleryTab {
+  return raw === "mine" || raw === "completed" ? raw : "open";
+}
+
+/** The address after choosing `tab`: Mine and Completed set `tab`, Open removes it, and every other
+ *  parameter is kept. Also drops an unknown value already there. */
+export function galleryParamsForTab(current: string, tab: GalleryTab): string {
+  const next = new URLSearchParams(current);
+  if (tab === "open") next.delete("tab");
+  else next.set("tab", tab);
+  return next.toString();
+}

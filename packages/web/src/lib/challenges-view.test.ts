@@ -106,3 +106,14 @@ test("solution count label pluralizes like the card", () => {
   assert.equal(solutionCountLabel(1), "1 solution");
   assert.equal(solutionCountLabel(2), "2 solutions");
 });
+
+test("§13.1 the gallery tab in the address: mine, completed, absent and unknown as Open; writing keeps the rest", async () => {
+  const { galleryTabFromParam, galleryParamsForTab } = await import("./challenges-view");
+  assert.equal(galleryTabFromParam("mine"), "mine");
+  assert.equal(galleryTabFromParam("completed"), "completed");
+  assert.equal(galleryTabFromParam(null), "open");
+  assert.equal(galleryTabFromParam("archived"), "open");
+  assert.equal(galleryParamsForTab("topic=t1", "completed"), "topic=t1&tab=completed");
+  assert.equal(galleryParamsForTab("tab=mine&topic=t1", "open"), "topic=t1");
+  assert.equal(galleryParamsForTab("tab=bogus", "open"), "");
+});

@@ -161,6 +161,10 @@
     "./innovation-board": {
       "types": "./dist/innovation-board.d.ts",
       "default": "./dist/innovation-board.js"
+    },
+    "./implementation-board": {
+      "types": "./dist/implementation-board.d.ts",
+      "default": "./dist/implementation-board.js"
     }
   },
   "scripts": {

@@ -208,6 +208,12 @@ export async function giveHype(pool: Pool, viewer: Viewer, parentType: ParentTyp
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`hype:${viewer.userId}`]);
     const now = await dbNow(client);
     // §26.3 / §39.9: hyping is refused to every member of the item's team.
+    // §26.2 / §46.8: for a solution, the challenge's row is locked first and the solution's second —
+    // the order every transaction that holds both takes — so a hype never waits on a status change
+    // in a cycle.
+    if (parentType === "solution") {
+      await client.query(`select 1 from challenges where id = (select challenge_id from solutions where id = $1) for share`, [parentId]);
+    }
     const { rows } = await client.query<{ status: string; is_author: boolean; created_at: Date; challenge_status: string }>(
       parentType === "challenge"
         ? `select c.status, ${isChallengeMemberSql("c", "$2")} as is_author, c.created_at, c.status as challenge_status

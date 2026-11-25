@@ -3,7 +3,7 @@
 // @innobox/shared's validateChallengeFields/validateSolutionFields, called from store.ts
 // where the impact-area lookup it needs is available. This module only handles the bits
 // that don't need a DB round-trip: list filters and id-shaped fields.
-import { CHALLENGE_STATUSES, type ChallengeStatus } from "@innobox/shared";
+import { CHALLENGE_STATUSES, isChallengeStatus, isSolutionStatus, type ChallengeStatus } from "@innobox/shared";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -141,6 +141,27 @@ export function parseStatusOverride(body: unknown, isValid: (s: string) => boole
     return fail("status must be a valid status value");
   }
   return { ok: true, value: status };
+}
+
+/** §46.8: the optional `baseStatus` (a solution status) and `baseChallengeStatus` (a challenge status)
+ *  of a solution status change. Absent means not compared; present and not a status of its kind is a
+ *  400 — `null` included. */
+export function parseSolutionStatusBase(body: Record<string, unknown>): Parsed<{ status?: string; challengeStatus?: string } | undefined> {
+  const hasStatus = "baseStatus" in body;
+  const hasChallenge = "baseChallengeStatus" in body;
+  if (!hasStatus && !hasChallenge) return { ok: true, value: undefined };
+  const out: { status?: string; challengeStatus?: string } = {};
+  if (hasStatus) {
+    const v = body.baseStatus;
+    if (typeof v !== "string" || !isSolutionStatus(v)) return fail("baseStatus must be a valid status value");
+    out.status = v;
+  }
+  if (hasChallenge) {
+    const v = body.baseChallengeStatus;
+    if (typeof v !== "string" || !isChallengeStatus(v)) return fail("baseChallengeStatus must be a valid status value");
+    out.challengeStatus = v;
+  }
+  return { ok: true, value: out };
 }
 
 export function parseLikeToggle(body: unknown): Parsed<{ parentType: "challenge" | "solution"; parentId: string }> {

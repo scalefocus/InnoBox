@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.32.0",
+    date: "2026-11-25",
+    summary:
+      "New: the implementation board, under Implementation in the sidebar. Every accepted solution you can see is a card in the column of its stage, from Accepted internally to Implemented, with how long it has waited there. Reviewers move cards from a Move to… menu or by dragging; only a move into Implemented asks first.",
+  },
+  {
     version: "1.31.1",
     date: "2026-11-23",
     summary:
