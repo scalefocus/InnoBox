@@ -66,9 +66,11 @@ const STEPS: Step[] = [
     eyebrow: "5 · Get your bearings",
     title: "Find your way around",
     body:
-      "Home is your dashboard — KPI tiles and recent spotlights at a glance. Challenges lists and filters everything you can see. Leaderboard ranks top contributors. The search bar in the topbar finds anything by title, description, or number (like CH-123).",
+      "Home is your dashboard — KPI tiles and recent spotlights at a glance. Challenges lists and filters everything you can see. Implementation shows every accepted solution on its way to being built. Leaderboard ranks top contributors. The search bar in the topbar finds anything by title, description, or number (like CH-123).",
     image: "/quick-start/04-dashboard.png",
     alt: "The Home dashboard with KPI tiles and spotlight cards",
+    // §46.3: one sentence and this link — no section or mockup of its own for the board.
+    link: { href: "/implementation", label: "See the implementation board" },
   },
 ];
 

@@ -5,12 +5,12 @@
 // parent challenge's assignee traverse the enforced §8.2 graph (illegal moves → 422). NOT
 // exempt from §8.3 either way: the store enforces the single-winner gate and the implemented
 // auto-close cascade. A real transition fires event 3/4/5, and `implemented` also fires event 8.
-import { isSolutionStatus, MENTION_MESSAGES, parseBaseEditedAt, parseMentionsInput, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
+import { BOARD_COPY, isSolutionStatus, MENTION_MESSAGES, parseBaseEditedAt, parseMentionsInput, TEAM_MESSAGES, validateDeleteReason } from "@innobox/shared";
 import { requireUser, resolveRolesForUser } from "@/lib/auth";
 import { pool } from "@/lib/db";
 import { logNotifyFailure, notifyInvitationPayoffs, notifyMentioned, notifySolutionStatusChanged } from "@/lib/notify-events";
 import { getStorage } from "@/lib/storage";
-import { isEntityNumber, parseStatusOverride } from "../../challenges/validation";
+import { isEntityNumber, parseSolutionStatusBase, parseStatusOverride } from "../../challenges/validation";
 import { deleteSolution } from "../../challenges/delete";
 import { editSolution, setSolutionStatus } from "../../challenges/store";
 import { getSolutionByNumber } from "../store";
@@ -44,8 +44,19 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
   const body = read.value;
   const parsed = parseStatusOverride(body, (s) => isSolutionStatus(s));
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
+  // §46.8: the optional base statuses the implementation board sends — 400 when present and not a
+  // status of the right kind, like a bad `status`.
+  const base = parseSolutionStatusBase(body);
+  if (!base.ok) return Response.json({ error: base.error }, { status: 400 });
 
-  const result = await setSolutionStatus(pool, { userId: gate.user.id, roles: gate.user.roles }, number, parsed.value, resolveRolesForUser);
+  const result = await setSolutionStatus(
+    pool,
+    { userId: gate.user.id, roles: gate.user.roles },
+    number,
+    parsed.value,
+    resolveRolesForUser,
+    base.value,
+  );
   switch (result.status) {
     case "ok": {
       if (result.changed) {
@@ -83,6 +94,8 @@ async function handlePATCH(req: Request, context: { params: Promise<{ number: st
         { error: "another solution on this challenge is already accepted or further along" },
         { status: 409 },
       );
+    case "stale":
+      return Response.json({ error: BOARD_COPY.staleStatus, code: "stale_status" }, { status: 409 });
   }
 }
 

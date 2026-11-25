@@ -11,7 +11,7 @@ import { Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "re
 import { useDateFmt } from "@/components/DateFormat";
 import type { TeamPerson } from "@/components/TeamByline";
 import { CHALLENGE_STATUS_LABEL, statusPillClass } from "./status";
-import { readChallengesView, writeChallengesView, type ChallengesView } from "@/lib/challenges-view";
+import { galleryParamsForTab, galleryTabFromParam, readChallengesView, writeChallengesView, type ChallengesView } from "@/lib/challenges-view";
 import { ChallengesList, ChallengesViewToggle } from "./ChallengesList";
 import { ChallengeAuthorBubbles, ChallengeAuthorName, ChallengeNewTag, ChallengeStateBadges } from "./ChallengeBadges";
 import { applyGalleryFilters, EMPTY_GALLERY_FILTERS, GalleryFilterFields, type GalleryFilterValues } from "./GalleryFilters";
@@ -123,7 +123,20 @@ function ChallengesGallery() {
     };
   }, [topicId, router]);
 
-  const [tab, setTab] = useState<Tab>("open");
+  // §13.1: the tab is carried in the address — Mine and Completed set `tab`, Open removes it, and an
+  // unknown value is dropped and shows Open, never reaching the API's own `tab`.
+  const rawTab = params.get("tab");
+  const tab: Tab = galleryTabFromParam(rawTab);
+  useEffect(() => {
+    if (rawTab !== null && rawTab !== "mine" && rawTab !== "completed") {
+      const qs = galleryParamsForTab(window.location.search, "open");
+      router.replace(qs ? `/challenges?${qs}` : "/challenges", { scroll: false });
+    }
+  }, [rawTab, router]);
+  const setTab = (next: Tab) => {
+    const qs = galleryParamsForTab(window.location.search, next);
+    router.replace(qs ? `/challenges?${qs}` : "/challenges", { scroll: false });
+  };
   const [sort, setSort] = useState<Sort>("newest");
   // §26.8: the "most hyped" sort and the hype numbers exist only while hype is on.
   const [hypeOn, setHypeOn] = useState(false);

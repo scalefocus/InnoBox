@@ -12,6 +12,7 @@ import { cachedGet } from "@/lib/ui";
 import { authErrorMessage } from "@/lib/auth-pages";
 import { useDateFmt } from "@/components/DateFormat";
 import { TeamByline, teamOf, type TeamPerson } from "@/components/TeamByline";
+import { BOARD_COPY } from "@innobox/shared/implementation-board";
 import { CHALLENGE_STATUS_LABEL, SOLUTION_STATUS_LABEL } from "./challenges/status";
 import { FeaturedChallenges, type FeaturedChallengeCard } from "@/components/FeaturedChallenges";
 import { HypedThisWeek, type HypedBoard } from "@/components/Hype";
@@ -114,6 +115,10 @@ function Dashboard({ data }: { data: DashboardData | null }) {
       <div className="card card-pad reveal" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <Link href="/challenges" className="btn btn-primary">
           Browse challenges
+        </Link>
+        {/* §13.2 / §46.3: between Challenges and the leaderboard — a link, no tile. */}
+        <Link href="/implementation" className="btn btn-ghost">
+          {BOARD_COPY.homeLink}
         </Link>
         <Link href="/leaderboard" className="btn btn-ghost">
           See the leaderboard

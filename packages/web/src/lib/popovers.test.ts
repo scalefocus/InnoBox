@@ -28,6 +28,7 @@ const POPOVERS: Record<string, string> = {
   "search-ac": "components/TopbarSearch.tsx", // topbar search autocomplete
   "user-search-pop": "components/FloatingResults.tsx", // triage assignee pickers + the §4.3 access-list editor
   "affected-pop": "components/Affected.tsx", // §41.3 "This affects me too" headcount popover
+  "impl-move-menu": "app/implementation/page.tsx", // §46.7 Move to… on an implementation-board card
 };
 
 function tsxFiles(dir: string): string[] {

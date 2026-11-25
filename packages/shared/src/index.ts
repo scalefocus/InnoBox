@@ -169,3 +169,7 @@ export * from "./feature-ideas-db.js";
 // §45 the innovation board: the limits, the add request's validation and the copy (client-safe,
 // also at `@innobox/shared/innovation-board`). The §4.3 exemption itself is in challenges.ts.
 export * from "./innovation-board.js";
+
+// §46 the implementation board: the columns, limits, query parser, moves, order and copy (client-safe,
+// also at `@innobox/shared/implementation-board`). The rows and the status change live in the web tier.
+export * from "./implementation-board.js";

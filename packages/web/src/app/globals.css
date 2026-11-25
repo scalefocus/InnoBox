@@ -2326,3 +2326,54 @@ a.mention:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px;
   .topic-head-actions { align-self: stretch; justify-content: space-between; }
   .ch-topics-edit { flex-basis: 100%; }
 }
+
+/* ── Implementation board (INNOBOX_SPEC.md §46) ───────────────────────────────────────────
+   `impl-` rather than `board-`: `.board-*` is the innovation board's (§45). The page uses the full
+   width of the main area; the row of columns scrolls sideways inside the board when the five do not
+   fit at 240 px each, and the page itself never does. At 880 px and below the columns stack as
+   collapsible sections. The Move to… list is a `.menu-pop` popover in an overlay layer (§2.2). */
+.content:has(.impl-page) { max-width: none; }
+.impl-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+.impl-filters select.field { width: auto; min-width: 160px; padding-top: 6px; padding-bottom: 6px; }
+.impl-board { display: grid; grid-template-columns: repeat(5, minmax(240px, 1fr)); gap: 14px; overflow-x: auto; padding-bottom: 6px; align-items: start; transition: opacity 0.15s; }
+.impl-board.is-dimmed { opacity: 0.6; }
+.impl-board.is-dimmed .impl-move-btn { pointer-events: none; }
+.impl-board.is-dragging { cursor: grabbing; user-select: none; }
+.impl-col { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; transition: border-color 0.15s, opacity 0.15s; }
+.impl-col.is-target { border-color: var(--accent); }
+.impl-col.is-over { background: var(--accent-soft); }
+.impl-col.is-dimmed-target { opacity: 0.55; }
+.impl-col-head { display: flex; align-items: center; gap: 2px; margin: 0; font-size: 13px; font-weight: 600; }
+.impl-col-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.impl-col-toggle { width: 100%; border: 0; background: none; padding: 4px 2px; cursor: pointer; text-align: left; color: var(--ink); font-family: var(--font-body); }
+.impl-col-count { color: var(--muted); font-size: 12.5px; }
+.impl-col-body { display: flex; flex-direction: column; gap: 10px; }
+.impl-empty, .impl-cap, .impl-note { margin: 0; font-size: 12.5px; }
+.impl-note { line-height: 1.5; }
+.impl-more { align-self: flex-start; }
+.impl-card { display: flex; flex-direction: column; gap: 7px; padding: 12px 13px; cursor: pointer; min-width: 0; }
+.impl-card.is-movable { cursor: grab; user-select: none; }
+.impl-card.is-movable .impl-card-title { user-select: text; }
+.impl-card.is-dragged { opacity: 0.45; }
+.impl-card.is-busy { opacity: 0.75; }
+.impl-card-title { font-weight: 600; font-size: 14px; color: var(--ink); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-decoration: none; }
+.impl-card-title:hover { color: var(--accent-2); }
+.impl-card-ids { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.impl-card-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.impl-card-chips button.chip { cursor: pointer; font: inherit; }
+.impl-card-stage { font-size: 12.5px; }
+.impl-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; min-width: 0; }
+.impl-card-author { min-width: 0; overflow: hidden; }
+.impl-card-meta { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--muted); }
+.impl-unassigned { font-size: 12px; }
+.impl-stat { font-variant-numeric: tabular-nums; }
+.impl-card-actions { display: flex; }
+.impl-move-btn[aria-disabled="true"] { opacity: 0.55; cursor: progress; }
+.impl-move-menu { position: fixed; z-index: 70; min-width: 200px; display: flex; flex-direction: column; gap: 2px; transform-origin: top left; --menu-pop-y: -6px; }
+@media (max-width: 880px) {
+  .impl-board, .impl-board.is-stacked { display: flex; flex-direction: column; align-items: stretch; overflow-x: visible; }
+  .impl-filters select.field { flex: 1 1 140px; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .impl-board, .impl-col { transition: none; }
+}

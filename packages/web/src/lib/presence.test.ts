@@ -109,6 +109,12 @@ test("location-less user actions stamp the time but keep the last known location
   assert.equal(presenceTouchFor("/api/attachments/abc", "GET"), null);
 });
 
+test("implementation board: its read is silent; a move is the solutions PATCH and stamps (§46.8)", () => {
+  assert.equal(presenceTouchFor("/api/implementation-board", "GET"), null);
+  assert.equal(presenceTouchFor("/api/implementation-board", "HEAD"), null);
+  assert.ok(presenceTouchFor("/api/solutions/34", "PATCH"));
+});
+
 test("feature ideas: upvoting, proposing and withdrawing stamp the time; reading Coming soon does not (§38.12)", () => {
   assert.deepEqual(presenceTouchFor("/api/coming-soon/votes", "POST"), { tier: "touch" });
   assert.deepEqual(presenceTouchFor("/api/feature-ideas", "POST"), { tier: "touch" });

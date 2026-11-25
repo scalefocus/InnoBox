@@ -1783,7 +1783,16 @@ export type SetSolutionStatusResult =
   | { status: "own_item" }
   | { status: "illegal_transition" }
   | { status: "invalid_status" }
-  | { status: "blocked_single_winner" };
+  | { status: "blocked_single_winner" }
+  /** §46.8: a base status the caller sent is no longer current (→ 409 `stale_status`). */
+  | { status: "stale" };
+
+/** §46.8: the two statuses the mover's page showed — the implementation board always sends both,
+ *  the detail page neither. A field left undefined is not compared. */
+export interface SolutionStatusBase {
+  status?: string;
+  challengeStatus?: string;
+}
 
 /** Thrown from inside the transaction when the DB's solutions_single_winner_idx (not
  *  just the application pre-check) catches a concurrent race on the §8.3 gate. */
@@ -1791,57 +1800,86 @@ class SingleWinnerRaceError extends Error {}
 
 /** `resolveRoles` (§43.4): lets the mention check tell which pending people can already see a
  *  solution an override has moved back to `proposed`; every other target status needs none. */
+/**
+ * §46.8 One transaction: the solution and its challenge are found by number, then — inside the
+ * transaction — the challenge's row is locked FOR UPDATE first and the solution's second (the order
+ * every transaction that holds both takes: the §10.3 delete, the trash purge, the author's withdraw,
+ * a hype on a solution), and everything those rows decide is read again under the lock: visibility
+ * (404), the trash (409), the review roles (403), the base statuses (409 `stale`), the arrow (422)
+ * and the single-winner gate (409). Two people who confirm at the same moment cannot both land, and
+ * every audit row's `before` is the status it replaced. A move into `implemented` locks the
+ * siblings it closes after both rows, in id order.
+ */
 export async function setSolutionStatus(
   pool: Pool,
   actor: Viewer,
   number: string,
   newStatus: string,
   resolveRoles?: ResolveAssigneeRoles,
+  base?: SolutionStatusBase,
 ): Promise<SetSolutionStatusResult> {
   if (!isSolutionStatus(newStatus)) return { status: "invalid_status" };
   if (!isEntityNumber(number)) return { status: "not_found" };
 
-  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
-    `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
-       from solutions s
-       join challenges c on c.id = s.challenge_id
-      where s.number = $1`,
-    [number],
-  );
-  const current = rows[0];
-  if (!current || !isSolutionRowVisible(actor, current)) return { status: "not_found" };
-  if (isRowTrashed(current)) return { status: "trashed" }; // §10.4
-  // Enforcer of a solution = committee of the parent's namespace who is not an author of this
-  // solution (§39.5 — being on the parent challenge's team does not bar them), or the parent
-  // challenge's assignee (§8.2). Admins free-set (override); anyone else is refused.
-  const roles = reviewRoles(actor, current.namespace_id, current.assignee_id, current.author_ids);
-  const decision = decideTransition({
-    from: current.status,
-    to: newStatus,
-    isAdmin: actor.roles.isNamespaceAdmin(current.namespace_id),
-    isEnforcer: isReviewEnforcer(roles),
-    isLegalArrow: isSolutionEnforcedTransition(current.status as SolutionStatus, newStatus),
-    barredAsAuthor: isBarredAsAuthor(roles),
-  });
-  if (!decision.allowed) return { status: decision.reason };
-  const mode = decision.mode;
-
-  // §10.4: trashed siblings count too — a trashed solution past `valid` still holds the §8.3
-  // single-winner slot, which is what makes its restore safe. `author_ids`: each sibling's team, all
-  // told when it is closed as not_selected (§12.1 event 8, §39.8).
-  const { rows: siblingRows } = await pool.query<{ id: string; status: string; author_ids: string[]; trashed: boolean }>(
-    `select s.id, s.status, ${solutionAuthorIdsSql("s")} as author_ids, s.trashed_at is not null as trashed
-       from solutions s where s.challenge_id = $1 and s.id <> $2`,
-    [current.challenge_id, current.id],
-  );
-
-  if (newStatus === "accepted_internally") {
-    const blocked = blocksAcceptedInternally(siblingRows.map((s) => s.status as SolutionStatus));
-    if (blocked) return { status: "blocked_single_winner" };
-  }
+  // The first read decides nothing but which rows to lock.
+  const { rows: idRows } = await pool.query<{ id: string; challenge_id: string }>(`select s.id, s.challenge_id from solutions s where s.number = $1`, [number]);
+  const target = idRows[0];
+  if (!target) return { status: "not_found" };
 
   try {
-    return await inTransaction(pool, async (client) => {
+    return await inTransaction(pool, async (client): Promise<SetSolutionStatusResult> => {
+      await client.query(`select 1 from challenges where id = $1 for update`, [target.challenge_id]);
+      await client.query(`select 1 from solutions where id = $1 for update`, [target.id]);
+      const { rows } = await client.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+        `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
+           from solutions s
+           join challenges c on c.id = s.challenge_id
+          where s.id = $1`,
+        [target.id],
+      );
+      const current = rows[0];
+      if (!current || !isSolutionRowVisible(actor, current)) return { status: "not_found" };
+      if (isRowTrashed(current)) return { status: "trashed" }; // §10.4
+      // Enforcer of a solution = committee of the parent's namespace who is not an author of this
+      // solution (§39.5 — being on the parent challenge's team does not bar them), or the parent
+      // challenge's assignee (§8.2). Admins free-set (override); anyone else is refused.
+      const roles = reviewRoles(actor, current.namespace_id, current.assignee_id, current.author_ids);
+      const decision = decideTransition({
+        from: current.status,
+        to: newStatus,
+        isAdmin: actor.roles.isNamespaceAdmin(current.namespace_id),
+        isEnforcer: isReviewEnforcer(roles),
+        isLegalArrow: isSolutionEnforcedTransition(current.status as SolutionStatus, newStatus),
+        barredAsAuthor: isBarredAsAuthor(roles),
+      });
+      // §46.8 order of checks: the 403s, then the stale 409, then the 422 of an illegal arrow — so the
+      // base fields tell nobody a status they could not already read.
+      if (!decision.allowed && decision.reason !== "illegal_transition") return { status: decision.reason };
+      const stale =
+        base !== undefined &&
+        ((base.status !== undefined && base.status !== current.status) ||
+          (base.challengeStatus !== undefined && base.challengeStatus !== current.challenge_status));
+      if (stale) return { status: "stale" };
+      if (!decision.allowed) return { status: decision.reason };
+      const mode = decision.mode;
+
+      // §10.4: trashed siblings count too — a trashed solution past `valid` still holds the §8.3
+      // single-winner slot, which is what makes its restore safe. `author_ids`: each sibling's team,
+      // all told when it is closed as not_selected (§12.1 event 8, §39.8). A move into `implemented`
+      // locks the siblings it closes, in id order, after the challenge and the solution (§46.8).
+      const lockSiblings = newStatus === "implemented" && current.status !== newStatus;
+      const { rows: siblingRows } = await client.query<{ id: string; status: string; author_ids: string[]; trashed: boolean }>(
+        `select s.id, s.status, ${solutionAuthorIdsSql("s")} as author_ids, s.trashed_at is not null as trashed
+           from solutions s where s.challenge_id = $1 and s.id <> $2
+          order by s.id${lockSiblings ? " for update" : ""}`,
+        [current.challenge_id, current.id],
+      );
+
+      if (newStatus === "accepted_internally" && current.status !== newStatus) {
+        const blocked = blocksAcceptedInternally(siblingRows.map((s) => s.status as SolutionStatus));
+        if (blocked) return { status: "blocked_single_winner" };
+      }
+
       let autoClose: { challengeId: string; challengeNumber: string; challengeTitle: string; notSelectedAuthorIds: string[]; solutionIds: string[] } | undefined;
       const payoffs: InvitationPayoff[] = [];
 
@@ -2740,20 +2778,29 @@ export type WithdrawSolutionResult =
   | { status: "forbidden" }
   | { status: "not_withdrawable" };
 
+/** §46.8 Lock order: like a status change, the withdraw locks the challenge's row, then the
+ *  solution's, and judges "not terminal" against the status it reads under them — so a withdraw that
+ *  crosses a move into `implemented` is refused, and its audit `before` is the status it replaced. */
 export async function withdrawSolution(pool: Pool, author: Viewer, number: string): Promise<WithdrawSolutionResult> {
   if (!isEntityNumber(number)) return { status: "not_found" };
-  const { rows } = await pool.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
-    `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
-       from solutions s join challenges c on c.id = s.challenge_id where s.number = $1`,
-    [number],
-  );
-  const cur = rows[0];
-  if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
-  if (isRowTrashed(cur)) return { status: "trashed" }; // §10.4
-  if (!cur.author_ids.includes(author.userId)) return { status: "forbidden" };
-  if (!canAuthorWithdrawSolution(cur.status as SolutionStatus)) return { status: "not_withdrawable" };
+  const { rows: idRows } = await pool.query<{ id: string; challenge_id: string }>(`select s.id, s.challenge_id from solutions s where s.number = $1`, [number]);
+  const target = idRows[0];
+  if (!target) return { status: "not_found" };
 
-  return inTransaction(pool, async (client) => {
+  return inTransaction(pool, async (client): Promise<WithdrawSolutionResult> => {
+    await client.query(`select 1 from challenges where id = $1 for update`, [target.challenge_id]);
+    await client.query(`select 1 from solutions where id = $1 for update`, [target.id]);
+    const { rows } = await client.query<SolutionVisibilityColumns & { id: string; challenge_id: string; challenge_number: string; challenge_title: string }>(
+      `select s.id, s.challenge_id, ${SOLUTION_VISIBILITY_SELECT}, c.number::text as challenge_number, c.title as challenge_title
+         from solutions s join challenges c on c.id = s.challenge_id where s.id = $1`,
+      [target.id],
+    );
+    const cur = rows[0];
+    if (!cur || !isSolutionRowVisible(author, cur)) return { status: "not_found" };
+    if (isRowTrashed(cur)) return { status: "trashed" }; // §10.4
+    if (!cur.author_ids.includes(author.userId)) return { status: "forbidden" };
+    if (!canAuthorWithdrawSolution(cur.status as SolutionStatus)) return { status: "not_withdrawable" };
+
     await client.query(`update solutions set status = 'withdrawn', updated_at = now(), status_changed_at = now() where id = $1`, [cur.id]);
     await client.query(`delete from ai_results where parent_type = 'solution' and parent_id = $1`, [cur.id]); // §22.7
     await appendAudit(client, {

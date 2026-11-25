@@ -219,6 +219,8 @@ export function presenceTouchFor(pathname: string, method: string): PresenceTouc
       return isRead ? null : { tier: "touch" };
 
     // ── Silent by construction ────────────────────────────────────────────────────────
+    // §46.8: GET /api/implementation-board is both the board's opening read and its 30-second
+    // re-read, so it is left unlisted; a move on the board is the solutions PATCH above.
     // users/:id/photo + users/:id/card fire en masse from avatar bubbles and hover cards
     // (§3.1, §13.8); me / impact-areas / namespaces are app-shell and form metadata that
     // load without anyone doing anything.

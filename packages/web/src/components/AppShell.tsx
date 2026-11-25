@@ -89,6 +89,8 @@ const BASE_NAV: NavItem[] = [
   { href: "/", label: "Home", icon: <HomeIcon /> },
   { href: "/challenges/new", label: "Submit a Challenge", icon: <SubmitChallengeIcon /> },
   { href: "/challenges", label: "Challenges", icon: <ChallengesIcon /> },
+  // §46.3: every signed-in user, always; no count bubble.
+  { href: "/implementation", label: "Implementation", icon: <ImplementationIcon /> },
   // §34.6: every signed-in user; no count bubble.
   { href: "/topics", label: "Topics", icon: <TopicsIcon /> },
   { href: "/leaderboard", label: "Leaderboard", icon: <TrophyIcon /> },
@@ -857,6 +859,17 @@ function ChallengesIcon() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3a6 6 0 0 0-3.5 10.9c.6.44 1 1.16 1 1.95V17h5v-1.15c0-.79.4-1.51 1-1.95A6 6 0 0 0 12 3Z" />
       <path d="M9.5 20h5M10.5 21.5h3" />
+    </svg>
+  );
+}
+
+function ImplementationIcon() {
+  // Three columns of cards — the implementation board (§46). Outline, rounded, monochrome.
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="5" height="12" rx="1.2" />
+      <rect x="9.5" y="4" width="5" height="16" rx="1.2" />
+      <rect x="16" y="4" width="5" height="8" rx="1.2" />
     </svg>
   );
 }

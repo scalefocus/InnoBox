@@ -4,7 +4,7 @@
 > is reviewed and approved, and only then gets implemented. Code follows spec, never
 > the reverse. `§n` references are internal to this document.
 >
-> Status: **v0.32 — draft for review** (2026-11-23; v0.2 added the UI and CI/CD
+> Status: **v0.33 — draft for review** (2026-11-25; v0.2 added the UI and CI/CD
 > sections; v0.3 pinned every externally-referenced convention inline, so the
 > document is fully self-contained; v0.4 pinned the canonical production URL as
 > deployment configuration (`PUBLIC_BASE_URL`), aligned §12.1 with the bundled
@@ -131,7 +131,22 @@
 > (events 1 and 2, by e-mail and in-app, under their digest choice, with no mute) —
 > with no triage, no status change, no reveal and no restricted content; a person is
 > told once when added (event 28), the roster is seen by platform admins only, and the
-> submit forms say the board can read a submission before review (§45)).
+> submit forms say the board can read a submission before review (§45); v0.33
+> (2026-11-25) specified the **implementation board** as a new-feature gap — one page,
+> *Implementation* in the sidebar, where every solution from `accepted_internally` to
+> `implemented` that the viewer can see, across namespaces, is a card in the column of
+> its status while its challenge is `valid` or `solved` (an implemented one for 90
+> days); whoever may change a solution's status on its detail page moves its card, from
+> a *Move to…* menu or by dragging, as an ordinary status change — only a move into
+> *Implemented* asks first, and a move made from an out-of-date card is refused under a
+> row lock that every solution status change now takes; the board filters by namespace,
+> impact area, topic, *Involving me* and *Following*, re-reads itself every 30 seconds
+> and is linked from Home and Quick start — with no reject on the board and no new
+> notification, points, badge, agent tool or switch (§46; the retired §32 stays
+> unused) — and restated §8.3 as the app already behaves: the single-winner gate covers
+> all five statuses, `implemented` sends events 3 and 8, an admin's move out of
+> `implemented` reverses nothing, and implementing under an already-solved challenge
+> does not post `challenge.solved` again (§8.3)).
 > Derived from the legacy
 > Power Apps "InnoBox" canvas app (solution export `innobox-solution-master@e67e8ca94e4`)
 > and a requirements interview with the product owner. This is a **brand-new
@@ -366,7 +381,8 @@ including theme-aware scrollbars and form controls. Pinned values:
   notice** (a floating card, bottom-right, after a new release); fully responsive. The shell renders in
   three states keyed on the session:
   - **Authenticated** — unchanged from the signed-in experience: full nav (Home,
-    **Submit a Challenge**, Challenges, **Topics** (§34.6), Leaderboard, plus **Triage** and
+    **Submit a Challenge**, Challenges, **Implementation** (§46), **Topics** (§34.6),
+    Leaderboard, plus **Triage** and
     Administration for admins — both carrying the §14.4 attention bubble),
     the account menu
     (display name + initials avatar, with My profile / Quick start / What's new /
@@ -410,8 +426,9 @@ including theme-aware scrollbars and form controls. Pinned values:
   - **In scope today:** the account menu, the notification panel (desktop), the §7.3
     assignee search on the challenge detail page, the §14.1 triage assignee pickers
     (filter-by-assignee, bulk-assign, per-row assign), the §13.8 directory card, the
-    **topbar search autocomplete** (§13.4), and the §43.3 **mention list** under a
-    solution's text boxes. Any future popover joins this list by construction.
+    **topbar search autocomplete** (§13.4), the §43.3 **mention list** under a
+    solution's text boxes, and the §46.7 **Move to…** menu on an implementation-board
+    card. Any future popover joins this list by construction.
   - **Explicit exceptions:** native `<select>` lists and `window.confirm` dialogs
     (OS-drawn), the mobile nav drawer, and the mobile full-screen notification
     **sheet**, the §13.9 **update notice** (a floating status card anchored to no
@@ -424,7 +441,9 @@ including theme-aware scrollbars and form controls. Pinned values:
   `--surface` at ~60% opacity, `cursor: progress`, no new token; one shared component
   serves all three (§6.4).
 - **Segmented view toggles** reuse the existing `.sort-toggle` look, each option
-  `aria-pressed` — e.g. the Challenges gallery's **Cards | List** toggle (§13.1).
+  `aria-pressed` — e.g. the Challenges gallery's **Cards | List** toggle (§13.1). The
+  implementation board's two filter buttons, **Involving me** and **Following** (§46.5),
+  are single pressed-or-not buttons in the same look.
 - **Identity:** InnoBox has its **own wordmark/mark** — the official `innobox`
   logotype (deep navy, with the terminal `o` rendered as an orange box). The sidebar
   renders the wordmark image from `packages/web/public/brand`, with two theme variants
@@ -1363,7 +1382,8 @@ bounded:
   list (§7.3).
 - **Everywhere else** a `people` challenge behaves like a `namespace` one: the
   per-viewer predicate governs lists, counts, search, the §6.1 similarity check, the
-  §13.2 featured section and notifications; org-only surfaces (leaderboards, profiles,
+  §13.2 featured section, the implementation board and its column counts (§46) and
+  notifications; org-only surfaces (leaderboards, profiles,
   gamification ranking, §12.4 webhooks) leave it out; AI tasks and MCP treat it as
   restricted content (§22.7, §25.5).
 - Additional state-based visibility (applies on top, most restrictive wins):
@@ -1506,7 +1526,9 @@ Entities (Postgres; key fields only — types/constraints finalized in migration
   at most 100 per challenge, enforced by the API.
 - **`solutions`** — id, **number** (`SOL-<n>`), challenge_id, description (≤ 10 000),
   cost_vs_benefits (≤ 5 000, optional), is_anonymous, author_id, status (§8.1),
-  status_changed_at (as challenges, §14.4), created_at, updated_at, edited_at,
+  status_changed_at (as challenges, §14.4; on the implementation board it is also a
+  card's time in stage, its place in its column and the start of an implemented card's
+  90 days, §46.2), created_at, updated_at, edited_at,
   trashed_at + trashed_by + trash_reason (as challenges, §10.4).
   The two text columns hold **stored text**: a §43 mention is a token carrying the
   person's id, never their name; every response carries the display text instead, and
@@ -1991,28 +2013,41 @@ there is no admin-only "triage" step for solutions:** committee/assignee may tak
 `proposed → in_review | rejected` directly. Terminal statuses
 (`implemented`/`rejected`/`not_selected`/`withdrawn`) are exited by admin override
 only. The §8.3 single-winner gate and the `implemented` auto-close cascade apply to
-**enforced and override transitions alike** (setting `valid → accepted_internally`
-is refused while a sibling is at or past that status; `→ implemented` solves the
-challenge and closes siblings as `not_selected`). Controls live on the §13.1 detail
-page per solution; the endpoint is shared (`PATCH /api/solutions/:number`). Every
+**enforced and override transitions alike** (a solution cannot enter
+`accepted_internally` or a later status while a sibling holds one; `→ implemented`
+solves the challenge and closes siblings as `not_selected`). Controls live on the §13.1
+detail page per solution and, for a solution at or past `accepted_internally`, on its
+card on the implementation board (§46), which offers a subset of the same moves to the
+same people and adds no power of its own; the endpoint is shared
+(`PATCH /api/solutions/:number`) and judges every request by the rules above, whichever
+surface sent it. The request may carry `baseStatus` and `baseChallengeStatus` — the two
+statuses the mover's page showed — and is then refused (**409**) when either is no
+longer current (§46.8). Every
 status change of a solution, by any path, also runs the §43.4 check, which tells the
 people its text mentions once they can see it.
 
 ### §8.3 Single accepted solution & auto-close
 
-- **Gate:** `valid → accepted_internally` is refused (enforced *and* override) while
-  another solution of the same challenge is at or past `accepted_internally`
-  (invariant 7).
+- **Gate:** a solution cannot enter `accepted_internally` or any later status
+  (`waiting_for_resources`, `in_implementation`, `external_acceptance`, `implemented`)
+  while another solution of the same challenge — one in the trash included (§10.4) —
+  holds one of them (invariant 7). The enforced graph reaches these statuses only
+  through `valid → accepted_internally`; an admin override that skips that arrow is
+  refused the same way (**409**). A unique index holds the rule in the database, so no
+  path and no race can break it, and a challenge never has more than one card on the
+  implementation board (§46.2).
 - **On `implemented`:** in one transaction —
   1. the solution becomes `implemented` (terminal);
   2. the parent challenge automatically becomes **`solved`** (`resolved_at` set);
   3. every other non-terminal solution of the challenge becomes **`not_selected`**
      (terminal; distinct from `rejected` — no stigma, excluded from "rejected"
      metrics);
-  4. notifications fire (§12.1 event 8) and every change is audited — the challenge's
-     `solved` row and each sibling's `not_selected` row as ordinary `status_changed`
-     rows carrying `before.status`, `after.status`, `override` and
-     `trigger: "auto_close"`, with the implementing actor as actor. `override`
+  4. notifications fire — §12.1 event 3 for the implemented solution, as for any status
+     change, and event 8 for the auto-close; the challenge's move to `solved` and the
+     siblings' moves to `not_selected` send no event 3 of their own — and every change
+     is audited: the challenge's `solved` row and each sibling's `not_selected` row are
+     ordinary `status_changed` rows carrying `before.status`, `after.status`, `override`
+     and `trigger: "auto_close"`, with the implementing actor as actor. `override`
      **inherits the mode of the triggering transition**: the cascade rows are part of
      the actor's one action, so an admin override that set `implemented` writes them
      with `override: true`, and an enforced move with `override: false`.
@@ -2030,6 +2065,19 @@ people its text mentions once they can see it.
   `resolved_at` cleared, while siblings closed as `not_selected` stay closed. The
   single-winner slot is free again for a new proposal; the challenge reopens with its
   existing solutions terminal.
+- **If an admin moves the `implemented` solution to another status** (an override,
+  §8.2), nothing is replayed in reverse either: the challenge stays `solved` with its
+  `resolved_at`, and siblings closed as `not_selected` stay closed. Only the solution
+  moves.
+- **Implementing under a challenge that is already `solved`** — moving such a solution
+  back to `implemented`, or implementing one that was still in progress when an admin
+  set its challenge to `solved` (§46.2) — runs the steps above again. Any sibling
+  reopened in between is closed, events 3 and 8 are sent again and `solution.implemented`
+  is posted again (§12.4). The challenge does not enter `solved`, so `challenge.solved`
+  is not posted, `resolved_at` is kept, an outside submitter's outcome mail is not sent
+  a second time (§24.7) and no points are awarded again (§23.2). Step 2 still writes the
+  challenge's `status_changed` row, here `solved → solved` with `trigger:
+  "auto_close"`, and refreshes the challenge's `status_changed_at`.
 
 ---
 
@@ -2298,10 +2346,10 @@ so no notification survives pointing at a dead entity.
 
 **Derived state.** Because the rows are gone, the item disappears everywhere by
 construction: lists, search vectors, solution and like counts, KPIs, dashboard
-spotlights, the Home featured section (§13.2), the triage queue and its attention badge
-(§14.4), CSV exports. **Leaderboards recompute without it** — deleting an implemented
-solution retroactively removes its author's credit and can change historical ranks
-(§13.3). That is accepted.
+spotlights, the Home featured section (§13.2), the implementation board (§46), the
+triage queue and its attention badge (§14.4), CSV exports. **Leaderboards recompute
+without it** — deleting an implemented solution retroactively removes its author's
+credit and can change historical ranks (§13.3). That is accepted.
 
 **Audit.** The delete writes `challenge.deleted` / `solution.deleted` carrying: the
 number, entity type, author id, status at deletion, namespace, the per-type counts of
@@ -2374,8 +2422,9 @@ trashed item is gone for everyone else from the moment it is trashed.
 - **What "trashed" hides.** A trashed challenge, and every solution under it, drops out
   of **everything** exactly as a deleted one would (§10.3 *Derived state*): lists,
   search, the duplicate check (§6.1), counts, KPIs, spotlights, the Home featured
-  section, leaderboards, profiles, the triage queue and its attention badge, CSV
-  exports, the hover card, AI tasks. A trashed solution drops out the same way, and
+  section, the implementation board (§46 — for platform admins too), leaderboards,
+  profiles, the triage queue and its attention badge, CSV exports, the hover card, AI
+  tasks. A trashed solution drops out the same way, and
   its challenge stays. The rule lives in the **shared visibility predicate** (§4.3),
   not in each query, so a new surface cannot forget it. A request about a trashed item
   answers **404** to everyone except a platform admin (below). That is the same answer
@@ -3132,6 +3181,9 @@ member of a co-author team, including one who joins later, §39.8) and
 assignees are auto-followed to their items (can unfollow), and so is anyone the first
 time they mark a challenge as affecting them (§41.3; removing the mark does not
 unfollow). Followers receive events 3, 6, 8 (and 2 and 25 for challenge followers).
+Following a challenge is not following its solutions: a solution's status changes
+(event 3) reach the followers of that solution. The implementation board's *Following*
+filter (§46.5) reads both kinds of follow and changes neither.
 
 **Marking a duplicate moves follows** (§42.4): each follower of the duplicate challenge
 who can see the original follows the original instead, and their follow of the
@@ -3155,8 +3207,8 @@ their own outbox, never create inbox rows or e-mails, and have no per-user varia
 (per-user webhooks are out of scope, §19).
 
 **Events.** Exactly three. Each is enqueued on the real transition that causes it,
-enforced or override, from the detail page, the triage bulk-status action, or the §8.3
-auto-close:
+enforced or override, from the detail page, the implementation board (§46), the triage
+bulk-status action, or the §8.3 auto-close:
 
 | Event | Fires when | Item posted |
 |---|---|---|
@@ -3422,9 +3474,15 @@ A dedicated **`/challenges`** page (own app-shell nav item, separate from Home).
 - Tabs **Open** (non-terminal statuses; excludes `awaiting_triage` per §4.3),
   **Mine** (own items incl. `awaiting_triage` — every item the viewer is a co-author
   of, §39), **Completed** (`solved`, `rejected` and
-  `duplicate`, §42.5). Filters: status, impact area, **topic** (§34.6 — with its filtered
-  header and Follow button), namespace, author name (matching any
-  member of a co-author team, §39); sort: newest
+  `duplicate`, §42.5). The tab is carried in the URL, as the topic filter is (§34.6):
+  choosing **Mine** or **Completed** sets `tab=mine` or `tab=completed`, replacing the
+  history entry and keeping every other parameter, and choosing **Open** removes it. An
+  absent value is **Open**; any other value is dropped from the address, shows **Open**
+  and is never passed to `GET /api/challenges`, whose own `tab` still refuses one with
+  400. A link can therefore open a tab: the implementation board's link to older
+  implemented solutions opens `tab=completed` (§46.3). Filters: status, impact area,
+  **topic** (§34.6 — with its filtered header and Follow button), namespace, author
+  name (matching any member of a co-author team, §39); sort: newest
   (default), most liked, most solutions, most hyped (while hype is on, §26.5) and
   widest reach (§41.5).
 - Cards show number (`CH-<n>`), title, author (masked if anonymous, §9; a co-author
@@ -3552,6 +3610,11 @@ whole visit, and the next visit flags only genuinely newer items.
     moves.
   - A viewer who is both admin and committee sees the admin override (the superset).
   - Neither control offers `duplicate` (§42.2).
+  - A solution at or past `accepted_internally` can also be moved from its card on the
+    implementation board (§46), by the same people under the same rules: a second place
+    for the control, not a second permission. Rejecting it, sending it back to `valid`
+    and moving it out of `implemented` stay here, and these controls ask no
+    confirmation, as before.
 - **Mark as duplicate** (§42.3): beside the status control, rendered from
   `canMarkDuplicate`, opening the dialog that picks the original, takes an optional
   note and previews the effect. On a duplicate, a banner under the header points to the
@@ -3590,14 +3653,18 @@ visitors — it is the app's only public page (§2.1 invariant 2, §2.2).
   (in review / valid / solved / rejected — a `duplicate` is in none of them, §42.5) and
   solutions by status (in review / valid / in implementation / implemented).
 - **Spotlight cards:** most recently `implemented` solution; most recent
-  `in_implementation` solution.
+  `in_implementation` solution. Unlike the implementation board, the spotlights and the
+  solution tiles do not require the challenge to be `valid` or `solved` and have no
+  90-day limit, so they need not match the board's columns (§46.10).
 - Both apply the **full** §4.3 predicate per viewer: a solution counts, or can be a
   spotlight, only if its parent challenge is visible to the viewer — namespace rule
   **and** state rule (not `awaiting_triage`/`withdrawn` unless the viewer is its author
   or an admin of its namespace, or — for `awaiting_triage` only — an innovation board
   member the visibility rule admits, §45.3).
-- Links out to `/challenges` (§13.1) for browsing and `/leaderboard` (§13.3) for
-  rankings; neither is duplicated here.
+- Links out, in the row directly under the spotlight cards, in this order: `/challenges`
+  (§13.1) for browsing, **See the implementation board** (`/implementation`, §46.3) for
+  what is being built, and `/leaderboard` (§13.3) for rankings — the last two in the
+  quiet button style. None is duplicated here, and the board adds no tile.
 
 **Unauthenticated** — a static welcome only: the brand lede ("Ideas worth building
 start here") with **no** KPI tiles, spotlight cards, `/api/dashboard` fetch, or
@@ -3854,9 +3921,10 @@ withholds too). Each field is simply omitted when empty.
 Every surface that names a user renders an **avatar bubble** next to the name —
 photo per §3.1, sourced exclusively through `GET /api/users/:id/photo`.
 
-- **Surfaces:** challenge/solution cards and detail headers (author), comment
-  threads, assignee chips, **assignee-search result rows** (§7.3 — the assignment
-  and triage-assign popovers), leaderboard rows, profile pages (large), the account
+- **Surfaces:** challenge/solution cards and detail headers (author),
+  implementation-board cards (the solution's author and the challenge's assignee,
+  §46.4), comment threads, assignee chips, **assignee-search result rows** (§7.3 — the
+  assignment and triage-assign popovers), leaderboard rows, profile pages (large), the account
   menu/sidebar (self), triage queue rows, the admin users list, search results, and
   the reveal dialog (§9). **Not** in notification e-mails (no embedded images), CSV
   exports, or the notification **inbox** rows — the outbox payload carries only a
@@ -3908,7 +3976,8 @@ A dedicated **`/quick-start`** page: one generic walkthrough for every
 authenticated user regardless of role, covering the common flows — submitting a
 challenge, proposing a solution on a `valid` challenge, commenting/liking/
 following, following topics (§34.6, with a link to `/topics`), and where to find the
-dashboard, leaderboard, and search — each
+dashboard, the implementation board (§46.3 — one sentence and a link to
+`/implementation`, no mockup of its own), the leaderboard, and search — each
 illustrated with a theme-aware SVG mockup of the relevant screen (drawn on the §2.2
 tokens, so it follows light/dark and never goes stale the way a screenshot does).
 Always reachable afterward
@@ -3973,8 +4042,9 @@ Of the three directory fields, department and job title already exist (§3, §5)
 #### Where it appears
 
 - **Every avatar bubble that carries a real user id**, across the app: challenge and
-  solution cards and detail headers, comment threads, assignee chips, the leaderboard,
-  triage-queue rows, the admin users list, search results and profile pages.
+  solution cards and detail headers, implementation-board cards (§46.4), comment
+  threads, assignee chips, the leaderboard, triage-queue rows, the admin users list,
+  search results and profile pages.
 - **A mention's name** in a solution's text (§43.7) or in a comment (§44.7) on the
   challenge detail page — the one trigger that is a name rather than a bubble. It opens the same card on hover,
   keyboard focus, or press-and-hold; an erased person's *"@Deleted User"* opens none.
@@ -4485,7 +4555,7 @@ results, tagged *retired*.
   | `attachments` | attaching files | an upload completed (§11) | `attachments.uploaded_by` |
   | `search` | search | a non-empty topbar or `/search` query (§13.4) | none — starts empty |
   | `leaderboard` | the leaderboard | `/leaderboard` opened (§13.3) | none — starts empty |
-  | `review` | moving items through review | an **enforced** (non-override) status change by a committee member or assignee (§7.2, §8.2) | `challenge.status_changed` / `solution.status_changed` audit rows by actor with `override = false` |
+  | `review` | moving items through review | an **enforced** (non-override) status change by a committee member or assignee (§7.2, §8.2), on the detail page or on the implementation board (§46.7) | `challenge.status_changed` / `solution.status_changed` audit rows by actor with `override = false` |
   | `triage` | the triage queue | `/admin/triage` opened (§14.1) | `users.triage_seen_at` (approximate) |
 
 - **Detection is client-reported, on purpose.** Only the browser knows `canShow`. A forged
@@ -5223,7 +5293,12 @@ non-admin surface for presence anywhere in the app (§13.8).
   the bell, the attention badge (§14.4) and the banner, polls every 30 s, so counting it would
   make "online" mean "has a tab open somewhere" and every user who ever left InnoBox
   open would read as permanently active. Reading counts as using: a challenge detail
-  `GET` is activity, `GET /api/notifications` is not.
+  `GET` is activity, `GET /api/notifications` is not. The implementation board's read
+  (§46.8) is silent as well: an open board repeats it every 30 s, and the read that opens
+  the page is the same route and method, so the allowlist cannot tell them apart and the
+  route is not on it. Opening the board therefore stamps nothing and sets no location —
+  the under-count this section accepts. A move made on the board is a solution status
+  change and stamps as one.
 - **Explicit allowlist, not a denylist.** Routes that stamp presence are enumerated;
   anything unlisted is silent by default. A new polling widget can therefore never
   quietly pollute presence by being forgotten — the failure mode is an under-count,
@@ -6063,8 +6138,9 @@ Top to bottom:
    keep detail for 7 days and daily totals thereafter, and are visible to platform
    admins only.
 
-**Route names.** A **registry** in the web package maps each page template to its
-name — Home, Challenges, Challenge, New challenge, Search, Leaderboard, Profile,
+**Route names.** A **registry** in the shared package (`RUM_ROUTES`) maps each page
+template to its name — Home, Challenges, Challenge, New challenge, Implementation
+board (§46), Search, Leaderboard, Profile,
 Quick start, What's new, AI agents, Administration, Triage queue, Platform settings,
 Audit log, System log, Trash, Public submissions, Real user monitoring — and the
 collector resolves the concrete pathname to its template through the same registry
@@ -6199,7 +6275,12 @@ anomalies. Since v0.10 also:
 - **innovation board** — `innovation_board.member_added` and
   `innovation_board.member_removed` (actor the platform admin, target the person, one
   row per person; under Admin), and `user.scrubbed` gains `boardMember: true` when the
-  erasure removed a membership. Events 1, 2 and 28 are not audited (§45.10).
+  erasure removed a membership. Events 1, 2 and 28 are not audited (§45.10);
+- **implementation board** — no action of its own: a move on the board is the ordinary
+  `solution.status_changed` row, with the §8.3 cascade rows for a move into
+  `implemented`, and nothing in a row says the move was made on the board. A refused
+  move — the 409 for an out-of-date card included — writes nothing, and reading the
+  board is not audited (§46.13).
 
 **Deliberately not audited:** the worker's scheduled sweeps, webhook deliveries (their
 trace is the delivery row and, on final failure, the system log), identity-sync reads
@@ -6424,7 +6505,8 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
 - `challenges/:number/solutions` (create — `POST` only; solutions are **read** inside
   the challenge detail payload, there is no standalone solution `GET`, matching the
   page model of §13.1), `solutions/:number` (edit/withdraw/resubmit/transition/reveal/
-  self-reveal/**delete**) — `DELETE` on a challenge or solution is the platform-admin
+  self-reveal/**delete**; the transition `PATCH` accepts the optional `baseStatus` and
+  `baseChallengeStatus`, §46.8) — `DELETE` on a challenge or solution is the platform-admin
   hard delete (§10.3): reason required in the body, cascading, irreversible, **404 (not
   403)** to anyone else; `challenges/:number/trash`, `solutions/:number/trash` and
   `…/restore` (`POST`) are the §10.4 trash, platform admin only on the same 404 terms
@@ -6468,6 +6550,19 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   (where each one sits in the text and whom it names), `mentionsLeft` and the viewer's
   `mentionsLeftToday`; `users?q=&canSee=` is the mention list's search; `ai/draft`
   accepts `mentions`
+- implementation board (§46.13): `implementation-board` (`GET` — the five columns of
+  solutions at or past `accepted_internally` that the caller can see, each with its
+  per-viewer `total` and its cards, masked per §9, every card carrying the `moves` that
+  caller may make and their `moveMode`, plus `namespaces`, the namespaces in which the
+  caller's unfiltered board has a card; accepts `namespaceId`, `impactAreaId`, `topic`,
+  `involving` and `following`; 400 for a malformed id or a toggle value other than `1`,
+  and empty columns — never an answer that tells an unknown value from a hidden one —
+  for a value that matches nothing); the solution transition `PATCH` accepts
+  `baseStatus` and `baseChallengeStatus` (400 when either is not a status; 409 with
+  `code: "stale_status"` when either is no longer current, checked after the 404, the
+  trashed 409 and the 403 and before the 422 of an illegal move; without them the call
+  answers as before, and with or without them it judges the rows it reads under a lock,
+  §46.8)
 - `comments` (list/create/edit/delete on either parent type; create takes an optional
   `replyTo`, and list rows carry `threadRootId`/`replyToId`, §10.2; create and edit
   accept `mentions: [{ userId, name }]` — 422 for an ineligible person, 409 at the
@@ -6486,9 +6581,9 @@ REST under `/api`, session-authenticated, JSON, UTC ISO timestamps. Resource gro
   following a retired one), `challenges/:number/topics` (`PUT { topicIds }` — the
   challenge's namespace admins and platform admins; 404 when the item is invisible, 409
   on a trashed one, 403 for other viewers, 422 for the §34.3 rules); challenge create
-  and edit accept `topicIds`; `challenges`, `search` and the triage queue accept `topic`
-  (the queue also `topic=none`); challenge payloads and search hits carry `topics` and
-  the detail `canEditTopics` (§34.9)
+  and edit accept `topicIds`; `challenges`, `search`, `implementation-board` and the
+  triage queue accept `topic` (the queue also `topic=none`); challenge payloads and
+  search hits carry `topics` and the detail `canEditTopics` (§34.9)
 - `attachments` (single-shot upload — bound or **staged via `draftKey`**; **chunked upload** via `attachments/uploads` — initiate → parts → complete/abort — for files over the chunk size; list own staged by `draftKey`; gateway download; `challenges`/`solutions` create accept a `draftKey` to bind staged files, **gated on a clean scan when a scanner is available**)
 - `notifications` (inbox list with its `unreadCount`, fetched when the bell opens; mark
   read, mark all read), `me/pulse` (`GET` the §12.2 pulse — `unreadCount`,
@@ -6707,6 +6802,14 @@ visibility or follows anything, no list or count of a person's mentions for anyo
 closed solution, no excerpt of the solution in the e-mail, no search by a mentioned
 person's name, no rich text or highlighting inside the text box, no points, badge or
 platform switch, and no new mentions through MCP;
+for the implementation board (§46): no board per namespace, no card for a challenge or
+for a solution at or before `valid`, no manual order and no drop position inside a
+column, no reject, no move back to `valid` and no move out of *Implemented* on the
+board, no undo, no bulk move, no swimlanes, work-in-progress limits, due dates or
+estimates, no colour, target or alert on the time in stage, no liking, hyping,
+following or commenting from a card, no saved filters, no export, no dragging on
+touch, no tile on Home, nothing through MCP, and no new notification, points, badge,
+webhook event or platform switch;
 no i18n;
 no Kubernetes/Helm, HA, or SAML; no mobile app; no audit-log trim or retention window (considered and rejected: deleting audit rows violates
 invariant 5 and would sever the hash chain's anchor, §15); no external anchoring of the
@@ -8563,6 +8666,9 @@ Errors are MCP tool errors carrying the same plain message the API returns (§21
 - **Marking a duplicate** (§42.8). `get_challenge` reads `duplicateOf`, `duplicateNote`
   and `duplicates`, filtered per caller; `post_comment` on a duplicate returns the
   API's refusal.
+- **The implementation board** (§46.11). No tool reads the board or moves a card: a
+  move is a status change. `get_challenge` and `get_solution` carry a solution's status
+  as before.
 - **Profiles, leaderboards and gamification.**
 
 **15 is the ceiling.** A sixteenth tool is a spec change, and the first answer to
@@ -8822,7 +8928,9 @@ solution (§8.3) is decided by it.
 - **Concurrency.** The budget check and the insert run in one transaction under a
   transaction-scoped advisory lock per person, so two concurrent requests can never both
   spend the last hype; the unique key on `(user, item)` makes a retried request a 409,
-  never a second row.
+  never a second row. The item's row is read `FOR SHARE` so a concurrent close cannot
+  slip past the open check; for a solution, the challenge's row is locked first and the
+  solution's second, the order every transaction takes them in (§46.8).
 
 ### §26.3 Eligibility
 
@@ -8872,12 +8980,13 @@ board-eligible again; the existing hypes are unchanged.
   item does not re-open the window.
 - **The number.** An item's **hype** is `sum(weight)` over its hype rows, all time. It
   is what cards, the list view, the detail header, each solution's header, the triage
-  rows and the challenges-page sort use. The Home board instead ranks by
-  `sum(weight)` over the rows whose `created_at` falls in the current week (§26.5).
+  rows, the implementation board's cards (§46.4) and the challenges-page sort use. The
+  Home board instead ranks by `sum(weight)` over the rows whose `created_at` falls in
+  the current week (§26.5).
 - **Copy.** The glyph is a flame; the number sits beside it as the like count sits beside
   the heart. The button tooltip, while early hype applies, reads *"Counts double — this
   item is under a week old"*; otherwise *"Spend one of this week's hypes on this item"*.
-  The hypers list and the board never show a per-person weight; the raw hyper count is
+  The hypers list and the Home board never show a per-person weight; the raw hyper count is
   not surfaced anywhere (decision 6).
 
 ### §26.5 Surfaces
@@ -8908,6 +9017,10 @@ absent, and `/api/hypes` answers 404.
   column (the number only, after the existing columns, before the date), so the signal
   is visible where decisions are made. No new sort and no filter. Mobile rows add it to
   the meta line. The CSV export does **not** gain a column.
+- **Implementation board (§46.4).** Each card shows its **solution's** hype number
+  after the solution's like count (flame glyph + number; **0 is shown**). The number
+  only: the board has no hype button, no hypers list and no sort by hype. A card in
+  *Implemented*, or under a closed challenge, keeps showing the number it has.
 - **Home board — "Hyped this week" (§13.2).** A section below Featured and above the
   KPI tiles, rendered only while the feature is on **and** the viewer can see at least
   one eligible item (no heading, no empty state otherwise — as Featured). Its heading
@@ -9008,7 +9121,7 @@ hype itself does not require gamification.
 ### §26.9 Visibility, anonymity and lifecycle
 
 - **Invariant 2.** A hype number is part of its item's payload and travels with the
-  item's visibility; the board is per-viewer (§26.5); `canHype`, `hyped`, `hypers` and
+  item's visibility; the Home board is per-viewer (§26.5); `canHype`, `hyped`, `hypers` and
   the number are never returned for an item the viewer cannot see (404). Nothing
   aggregates hypes across items the viewer cannot see — there is no global hype count
   or KPI tile.
@@ -9068,7 +9181,8 @@ hype itself does not require gamification.
   weekStart, hypesLeft, items: [{ type, number, title, parentTitle?, challengeNumber
   (the row's link target), author (masked), status, points }] } | null`
   (`null` while off). `GET /api/me` gains `hype: { enabled, hypesLeft } | null` for the
-  button's initial render. Triage-queue rows carry `hype`. No endpoint returns a
+  button's initial render. Triage-queue rows and implementation-board cards (§46.13) carry
+  `hype`. No endpoint returns a
   per-person weight.
 - **Audit (§15).** **`hype.given`** — actor the hyper, target the item, `after: { weight
   }` — under All only, as `like.*` rows are (the budget spent is derivable from the
@@ -9151,10 +9265,11 @@ aid. They decide nothing about triage, transitions, assignment or visibility.
 - **Retire** is a soft flip of `active`. A retired topic stays on the challenges that
   carry it (its chip renders muted, with the tooltip *"Retired topic"*); it leaves every
   picker (submit, edit, the admin control, bulk), `/topics`, the profile's Topics
-  section and the gallery and search filters (the triage filter keeps it, so admins can
-  find what carries it); it can no longer be added to a challenge or followed; and it
-  **never triggers event 18** (§34.5). Its follows are kept, dormant. **Reactivate**
-  makes it live again and sends nothing: a reactivation is not an opening.
+  section and the gallery, search and implementation-board filters (the board shows a
+  retired topic only while it is the one filtering, §46.5; the triage filter keeps it, so
+  admins can find what carries it); it can no longer be added to a challenge or
+  followed; and it **never triggers event 18** (§34.5). Its follows are kept, dormant.
+  **Reactivate** makes it live again and sends nothing: a reactivation is not an opening.
 - **Delete** is offered only on a retired row; the API refuses an active topic (**409**).
   The confirm dialog reads *"Permanently delete <Topic>? It is removed from N challenges,
   and N people stop following it."* One transaction removes the topic's
@@ -9274,7 +9389,7 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
 ### §34.6 Surfaces
 
 - **Sidebar (§2.2).** A **Topics** nav item for every signed-in user, between
-  Challenges and Leaderboard. No count bubble.
+  Implementation (§46) and Leaderboard. No count bubble.
 - **`/topics`.** Heading *Topics*, subtitle *"Follow a topic to hear when a new
   challenge in it opens for solutions."* One row per **active** topic, alphabetical: the
   name (a link to the filtered gallery), the description, *"N open"* and the Follow
@@ -9318,6 +9433,12 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
 - **AI triage assist (§22.11).** The note gains **suggested topics**.
 - **MCP (§25.6).** Topics in the reference data, on submit and edit, in search and on
   the challenge detail.
+- **Implementation board (§46).** A card shows its **challenge's** topics as chips after
+  the impact-area chip, a retired one muted as on a gallery card. A chip filters the
+  board by that topic and does not open the card. The board's **Topic** filter is the
+  gallery's select, carried in the board's own URL as `topic=<id>` under the same
+  rules: a retired id still filters and is not offered, an unknown one is dropped. The
+  board has no filtered header and no Follow button.
 - **Nowhere else.** Not on Home, the leaderboards, other people's profiles, the hover
   card, channel webhooks or gamification.
 
@@ -9371,7 +9492,8 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
     description, active, following, openCount }]`, `openCount` per viewer (§34.6).
     `?include=retired` adds the retired topics after them for a namespace or platform
     admin — the triage filter's list — and is ignored for anyone else.
-  - `GET /api/topics/:id` — one topic for the filtered gallery's header, `{ id, name,
+  - `GET /api/topics/:id` — one topic, for the filtered gallery's header and the
+    implementation board's Topic filter (§46.5), `{ id, name,
     description, active, following }`, a retired one included; **404** for an unknown id.
   - `POST /api/topics/:id/follow { following: true | false }` — sets the wanted state, so
     a repeated click is harmless; returns `{ following }`. **404** for an unknown id;
@@ -9381,13 +9503,15 @@ A new row of the §12.1 matrix, **"New challenge in a topic you follow"**.
     cannot see the challenge, the shared **409** on a trashed one (§10.4), **403** for
     anyone else who can see it, **422** for the §34.3 rules. Returns `{ topics }`.
   - Challenge create and author edit accept `topicIds` (absent on an edit leaves the
-    topics as they are). `GET /api/challenges` and `GET /api/search` accept `topic=<id>`;
+    topics as they are). `GET /api/challenges`, `GET /api/search` and
+    `GET /api/implementation-board` accept `topic=<id>`;
     the triage queue and its CSV export accept `topic=<id> | none`.
     `POST /api/admin/triage/bulk-topic { numbers, action: "add" | "remove", topicId }`
     is the bulk action, answering `{ outcomes: [{ number, status }] }` (**422** for an
     unknown topic, or for adding a retired one).
-  - Gallery rows, search hits, triage rows and the detail payload carry `topics: [{ id,
-    name, active }]`; the detail payload also carries `canEditTopics`.
+  - Gallery rows, search hits, triage rows, implementation-board cards (§46.13) and the
+    detail payload carry `topics: [{ id, name, active }]`; the detail payload also
+    carries `canEditTopics`.
   - `GET` and `POST /api/admin/topics`, `PATCH /api/admin/topics/:id` (name,
     description, active) and `DELETE /api/admin/topics/:id` — platform admin only
     (**403** otherwise); each row carries `challengeCount` and `followerCount`.
@@ -10156,7 +10280,11 @@ changes."*) and nothing is written; the check and the write are one statement
 (`… WHERE edited_at IS NOT DISTINCT FROM $baseEditedAt`). The form keeps the person's
 text so they can copy it before reloading. The check applies to every item, solo ones
 too (two open tabs). Resubmit and withdraw need no token: the state machine already
-refuses a stale move.
+refuses a stale move, and a solution's withdraw judges it against the status it reads
+under the row lock of §46.8. A reviewer's status change on a solution has its own, optional
+tokens — `baseStatus` and `baseChallengeStatus` (§46.8) — because an admin's override is
+not bound by the state machine, and an enforced target can still be legal from the
+status someone else has just set.
 
 ### §39.6 Visibility
 
@@ -10177,7 +10305,8 @@ refuses a stale move.
 ### §39.7 Display
 
 - **Compact form** — gallery cards and list rows (§13.1), the solution cards on the
-  detail page, triage rows on both tabs (§14.1), search results (§13.4), the Home
+  detail page, the implementation board's cards (§46.4), triage rows on both tabs
+  (§14.1), search results (§13.4), the Home
   *Featured* and *Hyped this week* sections (§13.2, §26.5) and the profile's activity
   (§13.5): the **first member's** bubble and name, then **"+N"** when there are more,
   with up to **three** overlapping small bubbles (the first three members). Each is an
@@ -10344,8 +10473,11 @@ member alike:
 - §41.2, §41.3, §41.6 — any member sets the team's one estimate in the edit window, no
   member may mark the challenge as affecting them (a marker who joins loses the mark),
   and event 24 goes to every member.
-- §4.2, §7.2, §8.2, §13.1 — the committee bar (§39.5): a committee member moves no
-  item they are a member of, and marks none as a duplicate (§42.3).
+- §4.2, §7.2, §8.2, §13.1, §46.6 — the committee bar (§39.5): a committee member moves
+  no item they are a member of, on the detail page or on the implementation board, and
+  marks none as a duplicate (§42.3).
+- §46.5 — the implementation board's *Involving me* filter: a member of the solution's
+  team or of its challenge's.
 - §42.4, §42.6 — event 25 goes to every member of the duplicate's team, and the one
   authors' mark copied to the original is made in the name of its first member.
 
@@ -11042,8 +11174,9 @@ whether or not its namespace is archived (as with likes and hypes, §26.9).
   one, their own) has no button. Marking from the banner confirms with the toast
   *"Marked CH-12 as affecting you. You can still submit yours."* It leaves the form, the
   banner and the **Submit anyway** button as they were, and does not re-arm the check.
-- **Nowhere else.** No reach on Home, the profile, the hover card, search results, the
-  leaderboard, channel webhooks (§12.4), AI prompts (§22) or e-mails of other events.
+- **Nowhere else.** No reach on Home, the implementation board (§46.4), the profile, the
+  hover card, search results, the leaderboard, channel webhooks (§12.4), AI prompts
+  (§22) or e-mails of other events.
 
 ### §41.6 Notifications — event 24
 
@@ -11398,7 +11531,10 @@ is absent when the viewer can see none.
   redirect.
 - **Left out:** the §6.1 similarity check (and with it the §41.5 banner and §22.12),
   the §22.11 candidate titles, the §13.2 challenge KPI tiles (a duplicate is in none of
-  the four), and the Home featured and hyped sections (it is closed). On the §13.3
+  the four), the Home featured and hyped sections (it is closed), and the
+  implementation board (§46.2), which a mark can reach only for an `implemented`
+  solution under a challenge an admin has moved back to `valid`, since neither a
+  `solved` challenge nor one with an open solution can be marked (§42.3). On the §13.3
   leaderboard a duplicate counts exactly as a rejected challenge does: not among
   *challenges submitted*, and its likes not among *likes received*.
 - **Triage queue (§14.1).** The status filter offers *Duplicate*. The CSV export gains
@@ -12387,7 +12523,9 @@ survive triage. The **innovation board** is one platform-wide list of people, ke
 platform admins in Administration. A member can read new challenges and new solutions
 before they are reviewed, and is told about each one by e-mail and in-app. Membership is
 a way to **watch**, never to **decide**: it carries no triage, no status change, no
-reveal and no admin surface, and it opens no restricted content.
+reveal and no admin surface, and it opens no restricted content. It is a list of
+people, not a page: the **implementation board** (§46) is the page of accepted
+solutions, and a member reads it as anyone does.
 
 ### §45.1 Decisions
 
@@ -12654,3 +12792,649 @@ Both events gain a recipient route, **the board route**.
     seen the board line above **Submit**; B's bell shows *"New challenge CH-… was
     submitted."*, and its link opens the challenge in *Awaiting triage* with no triage
     controls.
+
+---
+
+## §46 Implementation board
+
+Accepted solutions can be followed only one at a time today, each on its own challenge's
+page: nothing shows everything that is being built. The **implementation board** puts
+every accepted solution a person can see on one page, as a card in the column of its
+status, from *Accepted internally* to *Implemented*. The people who can already change a
+solution's status move its card; everyone else reads the board to see what is being
+built. The board is a second place for a control that already exists, never a second
+permission: a move is the ordinary status change of §8.2, and the board decides nothing
+about who may make it.
+
+In this section *the board* is the implementation board. It is not the innovation board
+(§45), which is a list of people, nor the Home board of §26.5. Its four columns before
+*Implemented* are the **in-progress columns**.
+
+### §46.1 Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | **One board for everything the viewer can see, across namespaces,** with a namespace filter. Not one board per namespace. | Most people belong only to `global`, and a platform admin needs the view across namespaces. A board per namespace would make everyone else hop between them to see what is being built. |
+| 2 | **Its own page, `/implementation`, with a sidebar item *Implementation*** for every signed-in user, between Challenges and Topics. | Its cards are solutions, and the gallery lists challenges. The sidebar says neither "board", which §45 uses for a list of people, nor "roadmap", which What's new uses for *Coming soon* (§13.9). |
+| 3 | **Five columns, one per status from `accepted_internally` to `implemented`.** A solution at or before `valid` has no card. | The board starts at acceptance. Before it, several solutions compete under one challenge; from it on, invariant 7 leaves one, so a challenge has at most one card. |
+| 4 | **A card is on the board only while its challenge is `valid` or `solved`.** | Work under a challenge that was rejected, withdrawn or sent back to an earlier status is not work in progress. The solution itself is untouched and stays on the detail page. |
+| 5 | **A card stays in *Implemented* for 90 days.** | A quarter of results on show, in a column that does not grow forever. Older ones stay on their challenges, the solved ones under Challenges → Completed. |
+| 6 | **Whoever may change the solution's status on its detail page may move its card, and nobody else.** | One rule on both surfaces (§8.2, §39.5). The board adds no power. |
+| 7 | **The board offers fewer moves than the endpoint allows:** nothing out of *Implemented*, no reject, and for an admin only the other columns. | Leaving a terminal status and rejecting accepted work are rare and deliberate, and belong where the whole item is in view. These are limits of the board's controls, not new server rules, so invariant 6 is untouched. |
+| 8 | **Only a move into *Implemented* asks first.** | It solves the challenge, closes the other open solutions, awards points, posts to channels and can e-mail an outside submitter, and no second move takes those back. Any other move is one status change that an admin can move back. The detail page keeps its controls as they are. |
+| 9 | **A *Move to…* menu on every movable card; dragging is an extra for a mouse.** | A keyboard, a screen reader and a phone cannot drag. The menu is the control, and a drop does exactly what a menu item does. |
+| 10 | **No manual order and no drop position.** In-progress columns show the longest wait first, *Implemented* the newest first. | Stuck work surfaces by itself. A stored rank would need its own rules for who may reorder, and would be one more thing to keep per card. |
+| 11 | **A move is an ordinary status change** — the same audit row, events and cascade — with no undo, delay or coalescing. | One code path (§8.2). Anything else would make a board move a second kind of transition. |
+| 12 | **A move made from an out-of-date card is refused.** The board sends the two statuses that put the card where it was, and the route judges them under a lock. | An admin's override is legal from any status. Without the check, a stale drag could pull a card back out of *Implemented*, or solve a challenge an admin had just rejected. |
+| 13 | **An open board re-reads itself every 30 seconds** while its tab is visible. | Several reviewers work at once. It is the cadence of the pulse (§12.2) and of *Coming soon* (§38.3). |
+| 14 | **A card shows what is needed to follow the work** — the challenge's title, both numbers, the namespace, the solution's author, time in stage, the challenge's assignee, the solution's likes and hype, the challenge's impact area and topics — **and holds one control that changes the item, *Move to…*.** Otherwise it behaves as a gallery card does: it opens the solution, a topic chip filters the board, and a person's bubble carries the directory card. | Liking, hyping, following and commenting stay on the detail page, where the item can be read first. Opening, filtering by a chip and the directory card change nothing and are what a card already does elsewhere (§14.1, §13.8). |
+| 15 | **Time in stage is plain text:** no colour, target or alert. A card in *Implemented* shows the date it was implemented instead. | Thresholds and alerts are a feature of their own, with their own decisions. *Implemented* has no next stage to wait for, and the date is what orders the column and counts its 90 days. |
+| 16 | **Filters for namespace, impact area, topic, *Involving me* and *Following*, all carried in the URL.** | A filtered board can be shared. The two toggles name nobody, so each reader of a shared link gets their own cards. |
+| 17 | **Every count is per viewer and follows the filters.** | Invariant 2. Home's tiles follow their own rule and may show a different number (§13.2). |
+| 18 | **Home gets one link and no tile** (§13.2), and Quick start one sentence and the same link (§13.7). | The spotlights already show the latest of each kind; the board is where the rest is. |
+| 19 | **Nothing else is new:** no notification, points, badge, audit action, webhook event, MCP tool, nav bubble or platform switch. | The board shows nothing a person could not already open, and with no card to show it shows an empty state. |
+
+### §46.2 What is on the board
+
+A solution has a card for a viewer when **all** of the following hold:
+
+1. its status is `accepted_internally`, `waiting_for_resources`, `in_implementation`,
+   `external_acceptance` or `implemented`;
+2. neither it nor its challenge is in the trash (§10.4);
+3. its challenge's status is `valid` or `solved` (decision 4);
+4. the viewer can see its challenge under §4.3;
+5. if it is `implemented`, its `status_changed_at` is less than 90 days old — 90 × 24
+   hours, judged by the server at each read. `IMPLEMENTATION_BOARD_WINDOW_DAYS = 90` is
+   fixed in `@innobox/shared/implementation-board`.
+
+- **The column is the solution's own status.** The challenge's status decides only
+  whether the card is on the board at all. A solution still in progress under a
+  challenge that an admin has already set to `solved` stays in its in-progress column
+  and moves like any other.
+- **At most one card per challenge.** Only one solution of a challenge can hold one of
+  the five statuses (invariant 7, §8.3). A challenge whose accepted solution is in the
+  trash has no card, although the slot is still held (§10.4).
+- **Leaving and returning.** A card leaves the board when its challenge moves to any
+  status other than `valid` or `solved` — rejected, withdrawn, or sent back to an
+  earlier status by an admin — or is trashed; when its solution is rejected or otherwise
+  moved out of the five statuses on the detail page, withdrawn by its author (§10.1,
+  possible from every in-progress column) or trashed; when the viewer can no longer see
+  its challenge; and, in *Implemented*, when its 90 days run out. It comes back when the
+  rules above hold again. A card that leaves because of its challenge, the trash, the
+  viewer's access or the 90 days has had nothing written to its solution, and its time
+  in stage runs on. A card that leaves through its solution's own status left by an
+  ordinary status change; if an admin later sets the solution back to one of the five
+  statuses, that is a second change, and its time in stage starts from the return.
+- **Marking a duplicate** (§42.3) almost never touches the board: a challenge cannot be
+  marked while it has a solution in progress, nor while it is `solved`. The one case
+  left is an `implemented` solution whose challenge an admin has moved back to `valid`;
+  marking that challenge takes its card out of *Implemented*.
+- **Order.** In the in-progress columns: `status_changed_at` ascending — the longest in
+  its stage first — then the lower solution number. In *Implemented*:
+  `status_changed_at` descending, then the higher solution number.
+- **What moves the clock.** Only a status change sets a solution's `status_changed_at`
+  (§5). A restore from the trash, an edit, a team change and featuring do not, so days
+  in the trash count, and a card that passed its 90 days there does not return on
+  restore.
+
+### §46.3 The page
+
+- **Where.** `/implementation`, for every signed-in user. The sidebar item
+  **Implementation** sits between Challenges and Topics (§2.2), always, and carries no
+  count bubble. The page is headed *Implementation board*, with the subtitle *"Accepted
+  solutions on their way to implementation."*
+- **Ways in.** Besides the sidebar, two. Home's row of links directly under the
+  spotlight cards carries **See the implementation board**, between the link to
+  Challenges and the link to the leaderboard (§13.2). Quick start's last section, *Find
+  your way around* (§13.7), gains one sentence — *"Implementation shows every accepted
+  solution on its way to being built."* — and, under its text, the same link to
+  `/implementation`. Quick start gets no section and no mockup of its own for the
+  board; the content is static, like the rest of that page.
+- **Columns.** Five, left to right, under the §8.1 display names: *Accepted
+  internally*, *Waiting for resources*, *In implementation*, *External acceptance*,
+  *Implemented*. Each heading is its status's pill (§2.2) and the column's count —
+  *"In implementation · 4"*. The count is the number of cards in that column for this
+  viewer under the current filters: the whole column, not only the cards showing.
+- **Width.** The board uses the full width of the main area, not the reading width
+  other pages keep. Each column is at least 240 px wide; when the five do not fit, the
+  row of columns scrolls sideways inside the board, and the page itself never does.
+- **Long columns.** A column shows its first 30 cards, then **Show 30 more**, which
+  reveals cards already loaded. The button counts loaded cards only — *"Show 10 more"*
+  when 90 of 100 are showing — and goes once all of them show. A read carries at most
+  100 cards per column, the first 100 in the column's order (§46.2). When a column has
+  more, a muted line appears under it once every loaded card is showing: *"Showing 100
+  of 140. Use the filters to narrow the board."* Both numbers are fixed in
+  `@innobox/shared/implementation-board`. What holds across re-reads (§46.8) is a number
+  per column — how many of its cards are showing — not which cards; it is not in the URL
+  and is gone when the page is left.
+- **Under *Implemented*,** always and with no count: *"Implemented in the last 90 days.
+  Older ones stay on their challenges; the solved ones are under Challenges →
+  Completed."*, where *Challenges → Completed* is a link to `/challenges?tab=completed`
+  (§13.1). It is shown whether or not older ones exist, so it says nothing about what
+  the viewer cannot see.
+- **On a phone (≤ 880 px)** the five columns become five sections stacked top to bottom
+  in board order. Each heading is one button (`aria-expanded`, `aria-controls`) with
+  the same name and count, 0 included, and the line under *Implemented* sits directly
+  below that section's heading, outside the part that collapses. Which sections are open
+  is decided once, when the page loads: those with cards open, empty ones closed. After
+  that only the viewer opens or closes a section, and a section opens by itself only for
+  the viewer's own move into it (§46.7); a re-read never does, whatever its count
+  becomes. Nothing is stored, so the next visit starts over. Nothing scrolls sideways
+  and nothing is dragged.
+- **Empty states.** While at least one card shows, every column shows, and an empty one
+  reads a muted *"Nothing here."* With no card at all and no filter set, the columns
+  give way to *"Nothing is on the board right now. A solution appears here once it is
+  accepted."*, followed by the line that stands under *Implemented*, with its link. The
+  message is the same whether nothing was ever accepted or everything has left the
+  board. With filters set and nothing matching: *"No cards match these filters."* and
+  **Clear filters**.
+- **Loading and failure.** While the first read is in flight: *"Loading the board…"*.
+  When it fails, the columns give way to *"The board didn't load."* and **Try again**,
+  which reads at once; the 30-second tick (§46.8) keeps trying as well. After a filter
+  change the cards on show stay, dimmed and not movable, until the new read lands; if it
+  fails they stay dimmed, a toast reads *"The board didn't load. Please try again."*,
+  and the next tick reads with the new filters.
+
+### §46.4 A card
+
+Top to bottom:
+
+1. **The challenge's title** — a solution has none of its own — on at most two lines,
+   ellipsized, with the full title as its `title`. It is a link to the solution on its
+   challenge's page, `/challenges/:number#SOL-<n>` (the §12.1 deep link).
+2. **`SOL-34 · CH-12 · /finance`** — both numbers and the namespace's slug, mono and
+   muted.
+3. **Chips:** the challenge's impact area, then its topics (§34.6), a retired topic
+   muted as on a gallery card.
+4. **Time in stage,** muted.
+5. **A foot row:** the solution's author on the left; on the right the challenge's
+   assignee, then the solution's like count and hype number.
+6. **Move to…** — only for a viewer who may move the card (§46.6).
+
+- **Opening.** A click anywhere on the card opens the same place as its title, in
+  place. The title stays the real link for keyboard and screen-reader users, and a
+  click that is part of a text selection, or that ends a drag, does not navigate. The
+  zones that do not navigate are **Move to…**, the topic chips and the avatar bubbles
+  (the §14.1 row pattern).
+- **Author.** The solution's author, masked exactly as on the detail page (§9): a real
+  author as a small bubble and name, a team in its compact form (§39.7), an anonymous
+  one as *Anonymous* with the anonymous bubble. Never the challenge's author — so a
+  challenge accepted from the public form (§24.6) needs nothing special.
+- **Assignee.** The challenge's assignee as a small bubble with the `aria-label`
+  *"Assigned to Ana Petrova"*, shown to everyone who sees the card, as the detail page
+  shows it; a muted *Unassigned* when there is none. A deactivated assignee is greyed
+  and an erased one is *Deleted User* (§13.6). An assignee who can no longer see the
+  challenge is still named on the card others see, and has no card themselves.
+- **Likes and hype.** The **solution's** like count (heart and number) and, while hype
+  is on (§26.8), the solution's hype number (flame and number, 0 shown). Because the
+  title above them is the challenge's, their labels say whose they are: *"12 likes on
+  this solution"*, *"8 hype on this solution"*. They are numbers, not buttons. The page
+  knows hype is on from the presence of `hype` on the cards.
+- **Time in stage.** The whole number of 24-hour periods between the solution's last
+  status change and the browser's clock, worked out from the UTC instant, so no time
+  zone enters it (invariant 10): *"Less than a day in this stage"*, *"1 day in this
+  stage"*, *"12 days in this stage"*. Anything under one full period, a negative
+  difference included (a browser clock behind the server's just after a move), reads
+  *"Less than a day in this stage"*. The text is worked out when a read lands (§46.8)
+  and not again between reads, so the wording takes the current instant as an argument.
+  Its `title` is that moment's date and time through `useDateFmt()`. A card in
+  *Implemented* reads *"Implemented on <date>"* instead, through the same formatter. It
+  is plain muted text with no colour, icon or threshold (decision 15). For a solution
+  that has not moved since status times were first recorded, the clock starts at its
+  creation.
+- **Topic chips** set the board's Topic filter (§46.5) and do not open the card, as a
+  gallery chip filters the gallery. The impact-area chip is plain text.
+- **Hover cards.** Real-user bubbles carry the directory card (§13.8) and anonymous
+  ones never do. No directory card opens while a board card is being dragged, and a
+  drag closes an open one.
+- **Not on a card:** the solution's text, the challenge's reach (§41) or client name, a
+  visibility chip, a *new* tag, a comment count, and any like, hype or follow control.
+
+### §46.5 Filters
+
+A row above the columns: **Namespace**, **Impact area** and **Topic** selects, then two
+buttons, **Involving me** and **Following**, each pressed or not (`aria-pressed`, the
+`.sort-toggle` look of §2.2), and, while any filter is set, **Clear filters**, which
+removes all five. Every filter narrows, and they combine with *and*. All five are
+applied by the server, and the counts follow them (decision 17).
+
+- **Namespace** — *All namespaces*, then every namespace that has at least one card on
+  the viewer's board before any filter is applied, written as on the cards (`/<slug>`)
+  and in alphabetical order. It therefore names nothing the cards do not already show,
+  and it lists an archived namespace while that still has cards. `namespaceId=<id>`.
+- **Impact area** — the gallery's select (§13.1): the active impact areas.
+  `impactAreaId=<id>`.
+- **Topic** — the gallery's select (§34.6): *All topics*, then the active topics, and
+  absent while no topic is active and none is selected. A retired topic's id still
+  filters and is not offered to pick. The board has no filtered header, so while `topic`
+  holds a retired topic — one a muted chip set, or one retired while it was the filter —
+  the select is shown with that topic as one extra, selected option after the active
+  ones, *"<Name> (retired)"*; *All topics* clears it and the extra option goes with it.
+  Its name comes from `GET /api/topics/:id` (§34.9), which answers for a retired topic
+  too. `topic=<id>`.
+- **Involving me** — the viewer is a current member of the solution's team or of its
+  challenge's team (§39), or is the challenge's assignee. `involving=1`. It includes
+  the viewer's own anonymous items, which stay masked: the filter changes only what
+  that viewer sees, as the gallery's **Mine** tab does.
+- **Following** — the viewer follows the solution or its challenge (§12.3), automatic
+  follows included. `following=1`.
+- **One parser.** `@innobox/shared/implementation-board` parses the five parameters for
+  the API and for the page. An id is malformed when it is not a UUID, the empty string
+  included; a toggle is malformed when its value is anything but `1`. The first
+  occurrence of a repeated parameter is read, and unknown parameters are ignored. The
+  API answers **400** when any of the five is malformed; the page never sends one.
+- **In the URL.** The page keeps the five parameters in the address as the viewer
+  changes them, so a filtered board can be bookmarked and shared. It replaces the
+  current history entry, as the gallery's topic filter does (§34.6), and leaves
+  parameters that are not the board's alone. It checks the address's values once, when
+  the page loads and whenever the address changes other than through the filter row:
+  before it reads, it drops a malformed value; after the first read it drops a
+  `namespaceId` that the answer's `namespaces` does not list, an impact area that is not
+  among the active ones, and a topic for which `GET /api/topics/:id` answers 404 — and,
+  if it dropped any, reads once more without them, still showing *"Loading the
+  board…"*. A dropped value is removed from the address as well.
+- **A filter stays put.** After that check no re-read changes a filter (§46.8). When the
+  selected namespace's last card leaves, the Namespace select keeps that namespace as
+  its value, with the `/<slug>` it already showed, and the board reads *"No cards match
+  these filters."*; the namespace leaves the options once the viewer picks another. The
+  board never widens by itself.
+- **No oracle.** The server checks no id against its table. A well-formed id that
+  matches no card the viewer can see gives empty columns and the same `namespaces`,
+  whether the namespace does not exist, is hidden from the viewer or simply has no cards
+  — one answer for all three (invariant 2). Topics and impact areas are reference data
+  every signed-in user may read, so the page's lookups say nothing about any card.
+- **Narrowing only.** No filter shows a card the viewer could not otherwise see:
+  *Involving me* does not bring back a card whose challenge its author can no longer
+  open.
+
+### §46.6 Who can move a card
+
+| The viewer | Moves the board offers |
+|---|---|
+| A **platform admin**, or a **namespace admin** of the challenge's namespace | From an in-progress column: each of the other three in-progress columns, and *Implemented*. From *Implemented*: none. Every one is an override (`override: true`), forward or backward, on their own solution too. |
+| A **committee member** of the challenge's namespace who is not an author of the solution, or the challenge's **assignee** | The next columns of §8.2 only: *Accepted internally* → *Waiting for resources*; *Waiting for resources* → *In implementation*; *In implementation* → *External acceptance* or *Implemented*; *External acceptance* → *Implemented*. Enforced (`override: false`). |
+| Everyone else who can see the card | None. |
+
+- **The bar on one's own solution** is §39.5's: a committee member who is an author of
+  the solution has no moves, unless they are also the challenge's assignee, who keeps
+  the assignee's.
+- **Both an admin and a committee member** gets the admin's list.
+- **"Everyone else"** includes an admin or committee member of another namespace, an
+  innovation board member (§45) and the authors of the solution and of the challenge.
+- **Per viewer, from the server.** Each card in the response carries `moves`, the
+  statuses this viewer may move it to, in board order and usually empty, and — only
+  when `moves` is not empty — `moveMode`: `"override"` for a platform or namespace
+  admin, `"enforced"` for a committee member or the assignee. `moveMode` serves the
+  first-use report alone (§46.7); it is never sent back, and the endpoint decides the
+  mode from the caller's role at the move, as before (§7.2). The page never works
+  `moves` out itself. A card with no moves has no **Move to…** button, no drag
+  affordance, no disabled control and no line saying why. The one reason a person might
+  look for — a committee member who is an author of the solution — is given on the
+  detail page (§13.1).
+- **Limits of the board, not of the endpoint** (decision 7). `PATCH
+  /api/solutions/:number` keeps accepting everything §8.2 allows. Rejecting an accepted
+  solution, sending it back to `valid` and moving it out of `implemented` stay on the
+  detail page.
+- **Roles are read per request** (§4.2). A person whose role has changed since the board
+  was read is refused at the move: **403** when no review right is left, and **422**
+  when the move was one only an admin may make and the person is now only a committee
+  member or the assignee (§46.8). A move that is still a legal arrow for them goes
+  through as an enforced one.
+
+### §46.7 Moving a card
+
+- **The menu.** **Move to…** is a button on the card (`aria-haspopup="menu"`,
+  `aria-expanded`) that opens a `.menu-pop` list (§2.2) with `role="menu"`. Its items
+  are the card's `moves` as column names, in board order — never the card's own column,
+  never *Rejected*. The button is the same whether it holds one item or four. Opening
+  the menu puts focus on its first item; Up and Down move through the items, Enter or
+  Space picks one, and Escape, Tab or a click outside closes the menu and returns focus
+  to the button. The list is drawn in an overlay layer, so a column never clips it (as
+  in §14.1).
+- **Dragging** is offered only in the five-column layout and only to a mouse or a
+  trackpad: a drag starts only from a press whose `pointerType` is `"mouse"` (the §13.8
+  rule), so a finger or a pen never drags a card — on a touch-screen laptop either —
+  and uses the menu instead. A drag never starts from the card's title, a chip, a bubble
+  or the menu button. While a card is dragged, the columns in its `moves` are outlined in
+  the accent colour as targets, and the others are dimmed and take no drop. A drop on a
+  target does exactly what the same menu item does. A drop on the card's own column, on
+  a dimmed column or outside the columns, and Escape, put the card back and send
+  nothing. A column scrolled out of view is reached through the menu; dragging adds no
+  scrolling of its own. Dragging needs no new dependency.
+- **No drop position** (decision 10). A moved card takes its place by the column's
+  order — the bottom of an in-progress column, since it has just arrived, and the top
+  of *Implemented* — and is scrolled into view.
+- **A moved card is always shown to its mover.** On a phone, the section it moves into
+  opens if it was closed. When its place lies below the cards its column is showing,
+  the column shows down to it, as **Show 30 more** would, and keeps showing that many
+  (§46.3). When its place lies beyond the 100 cards a read carries, it cannot be shown:
+  it leaves its old column, the new column's count includes it, and the live region
+  says *"SOL-34 moved to In implementation. It is below the first 100 cards of that
+  column."* This applies to the viewer's own move only; a card someone else moved
+  arrives silently and opens nothing (§46.8).
+- **Into *Implemented*,** by menu or by drop, the browser's confirm dialog (§2.2) asks
+  first: *"Mark SOL-34 as implemented? This solves CH-12, closes its other open
+  solutions as not selected and tells the people involved. It can't be undone from the
+  board."* For a card whose challenge is already `solved` (§46.2) it reads instead
+  *"Mark SOL-34 as implemented? CH-12 is already solved. This closes its other open
+  solutions as not selected and tells the people involved. It can't be undone from the
+  board."* Cancel leaves the card where it was. No other move asks (decision 8), and the
+  detail page asks nothing, as before.
+- **The request** is `PATCH /api/solutions/:number` with the new `status` and the two
+  base statuses of §46.8, taken from the card as the last read gave it.
+- **While it is in flight.** A move other than into *Implemented* shows at once: the
+  card slides to its new column (about 200 ms; no motion under
+  `prefers-reduced-motion: reduce`), and both columns' counts change with it. A move
+  into *Implemented* waits in its column for the answer. Until the answer comes, that
+  card cannot be dragged and its **Move to…** button is `aria-disabled` — not
+  `disabled`, so it keeps focus — and does not open; the other cards stay usable.
+- **Afterwards.** On success a polite live region says *"SOL-34 moved to In
+  implementation."* and the board re-reads at once (§46.8). Until that read lands the
+  card stays in its new column with its time in stage counted from now and with no
+  **Move to…** and no drag: its new `moves` and `statusChangedAt` come from that read,
+  never from the `PATCH` answer, so a second move of the same card always sends base
+  statuses the server has just given. Focus goes to the card's title in its new column,
+  or to that column's heading when the card cannot be shown (above) — the heading takes
+  focus from script only (`tabindex="-1"`; on a phone it is the section's button). When
+  the read lands and the card has moves, focus goes on to its **Move to…** button,
+  unless the viewer has moved focus elsewhere meanwhile. If that read fails, the card
+  stays without its menu until a read succeeds.
+- **On a refusal** the card returns (§46.8) and focus stays with it: on its **Move to…**
+  button once it is back, on its title when the re-read leaves it no moves, and on the
+  heading of the column it was in when the re-read no longer holds it. A re-read never
+  moves focus otherwise.
+- **What a move does** is what §8.2 says of any solution status change: the
+  `solution.status_changed` audit row, a new `status_changed_at`, event 3 and the §43.4
+  check; a move into *Implemented* also runs the §8.3 cascade. An admin's move is an
+  override whichever way it goes, because the mode follows the role (§7.2). A backward
+  move restarts the time in stage and tells people like any other move.
+- **No undo** (decision 11). An admin corrects a mistaken move by moving the card back
+  — a second change, with its own audit row and its own notice. A committee member or
+  an assignee, who can only move forward, asks an admin.
+- **First use.** A successful move from a card whose `moveMode` is `"enforced"` reports
+  the `review` feature (§13.10), as the detail page's enforced control does; a move
+  from an `"override"` card reports nothing, also when the admin is a committee member
+  too.
+
+### §46.8 Out-of-date cards and the live refresh
+
+- **Base statuses.** `PATCH /api/solutions/:number` accepts two optional fields:
+  **`baseStatus`**, the solution's status as the mover's page showed it, and
+  **`baseChallengeStatus`**, its challenge's status as that page showed it. The board
+  always sends both. The detail page sends neither and behaves as before.
+- **The refusal.** When either is sent and is no longer current, the change is refused
+  — **409**, `code: "stale_status"`, *"This solution has changed since you loaded it.
+  Reload to see where it stands."* — and nothing is written: no audit row, no event, no
+  cascade. A mismatch refuses even when the requested status is the one the solution
+  already has, so the second of two people making the same move is told the truth
+  instead of seeing a success that did nothing.
+- **One transaction.** A status `PATCH` finds the solution and its challenge by number,
+  opens a transaction and locks, `FOR UPDATE`, **the challenge's row first and then the
+  solution's** — the order the §10.3 delete and the trash purge already take them — so
+  every status change under one challenge queues on the challenge's row. Everything
+  those rows decide is then taken from the rows as read under the lock: whether either
+  is in the trash, the challenge's namespace, visibility and assignee and the solution's
+  team (behind the 404 and the 403), the two statuses compared with the base fields, and
+  the status the move is judged against. The first read decides nothing but which rows
+  to lock, and a solution gone by then is the 404. The caller's roles are resolved as
+  on every request and are not locked. A move into `implemented` locks and reads the
+  sibling solutions it closes after both rows, in id order, so a sibling changed a
+  moment earlier is closed from the status it really had. Two people who confirm at the
+  same moment therefore cannot both land, a move cannot land on an item trashed a moment
+  earlier, every audit row's `before` — the solution's, the challenge's and each closed
+  sibling's — is the status that was replaced, and two status changes under one
+  challenge never wait on each other in a cycle. This holds for every status `PATCH`,
+  with or without the base fields, from the board and from the detail page alike; the
+  `GET`, `PUT` and `DELETE` on the same path are unchanged.
+- **Lock order.** Every transaction that locks a solution's row together with its
+  challenge's takes the challenge's first. The author's withdraw of a solution (§10.1)
+  takes the same two locks in the same order and judges "not terminal" against the
+  status it reads under them, so a withdraw that crosses a move into *Implemented* gets
+  that route's existing refusal, and its audit row's `before` is likewise the status
+  that was replaced; it takes no base fields, since a withdraw is legal from every
+  status that has a card. A hype on a solution (§26.2) locks the challenge's row, then
+  the solution's.
+- **Order of checks (§2.4).** **404** for a solution the caller cannot see; the shared
+  **409** for one in the trash; **403** for a caller with no review right, and for a
+  committee member on their own solution (§39.5); then the **409** above; then **422**
+  for a committee member's or assignee's target that is no legal arrow (§8.2); then the
+  **409** of the single-winner gate (§8.3), which no board move can reach, because a
+  card already holds the slot. So the base fields tell a caller nothing they could not
+  already read: whoever cannot see the solution gets the 404, and whoever may not move
+  it the 403, whatever the fields carry. A `baseStatus` that is not a solution status,
+  or a `baseChallengeStatus` that is not a challenge status, is **400**, like a bad
+  `status`.
+- **What the mover sees.** The board shows one of three toasts — the shared `.toast`
+  (`role="status"`), announced once — and never the API's own message; the §46.7 live
+  region says nothing on a refusal. On a **404** and on any **409** — `stale_status`,
+  the trash's, or any other, which the board does not tell apart: the card returns, the
+  board re-reads at once, and the toast reads *"That card changed while you were looking
+  at it. The board is up to date now."* — the same words for all of them, so the message
+  never says why a card is gone (invariant 2). On a **403** or a **422** (§46.6): the
+  card returns, the toast reads *"You can no longer move this card."*, and the board
+  re-reads at once, so the menu shows the moves the person has now. On a **401** the
+  card returns, the live refresh stops and the session's end is handled as everywhere
+  else (§3). On a **429**, a **400**, a **5xx**, a network failure or any other answer:
+  the card returns, the toast reads *"That didn't save. Please try again."*, and nothing
+  is re-read. Whatever the answer, the card is released when it comes: it can be
+  dragged and its menu opened again.
+- **System log.** A stale move is recorded like every other 409 (§14.7).
+- **Live refresh** (decision 13). While the page is open and its tab is visible, it
+  re-reads `GET /api/implementation-board` with the current filters every 30 seconds
+  (`IMPLEMENTATION_BOARD_REFRESH_MS`). It pauses while the tab is hidden and reads at
+  once when it is visible again. It skips a tick while one of the viewer's own moves is
+  in flight, while a card is being dragged, and while a **Move to…** menu or the
+  confirmation is open. When the last of those ends it reads once, if a tick was
+  skipped or an answer dropped meanwhile; closing a menu otherwise costs no request.
+  Every "re-reads at once" in this section and in §46.7 waits the same way: with
+  several moves in flight the board re-reads once, after the last is answered.
+- **Which answer is applied.** An answer is applied only when it answers the latest
+  read the page sent, none of the viewer's moves was sent or answered after that read
+  was sent, no card is being dragged and no menu or confirmation is open. Any other
+  answer is dropped, so no card moves or disappears under an open menu or a drag. A
+  failed read keeps the cards and tries again at the next tick; a 401 stops it.
+- **Other people's changes** are applied silently: a card that moved slides to its
+  column, one that left disappears and a new one fades in, with no announcement. A
+  re-read keeps the scroll position, which sections are open or closed (§46.3), how many
+  cards each column is showing, and the filters as the viewer set them (§46.5).
+- **Presence and monitoring.** The read is not on the §14.5 allowlist: the read that
+  opens the page is the same route and method as the ones that repeat every 30 seconds,
+  so the allowlist cannot tell them apart. Neither opening the board nor leaving it open
+  therefore counts as activity or sets a location, and the board has no location
+  category of its own — the under-count §14.5 accepts. A move stamps presence as any
+  solution status change does, locating the mover at that solution. The page is
+  *Implementation board* in the §14.12 route registry, and its re-reads count as the
+  page's own work there.
+
+### §46.9 Notifications
+
+Nothing is new here: no event, no preference, no template. A move sends what the same
+status change sends from the detail page (§12.1).
+
+- **Between the in-progress columns,** in either direction: event 3, to the people and
+  under the preferences of §12.1 — never to the mover.
+- **Into *Implemented*:** event 3 for the solution and event 8 for the auto-close
+  (§8.3), and with them what the cascade already brings — the `solution.implemented`
+  channel post (§12.4), the points of a first implementation (§23.2) and an invitation's
+  payoff (§40.5). Two things come only when they are due. The `challenge.solved` post is
+  sent only when the challenge really enters `solved`; a card under a challenge that is
+  already `solved` (§46.2) posts `solution.implemented` alone. For a challenge accepted
+  from the public form, the submitter's outcome mail goes only if none has gone before
+  (§24.7).
+- **Events 4 and 5 cannot arise:** the board neither rejects nor asks for improvements.
+- **Not coalesced.** Three moves of one card are three notices; a daily or weekly
+  digest folds them, as it folds any status changes (§12.1).
+- **Following is unchanged.** The board has no follow control and changes no follow. A
+  viewer who follows only the challenge finds the card under *Following*, yet hears of
+  it only when it is implemented (event 8): event 3 goes to the solution's followers
+  (§12.3).
+- **Nothing is marked read** by opening the board or moving a card. The board is outside
+  the Challenges surface (§13.1): its cards carry no *new* tag, and neither being on the
+  board nor its re-read advances `challenges_seen_at`. The §13.1 leave rule is
+  unchanged, and the board is an ordinary destination under it: going to the board from
+  the gallery or from a challenge's page is a leave like any other.
+
+### §46.10 Visibility, anonymity and lifecycle
+
+- **Invariant 2.** The board is a per-viewer surface (§4.3). Cards, column counts and
+  the namespace options all come from one `where` clause, built from the two shared SQL
+  forms of §4.3 — the challenge predicate and the solution predicate, each carrying its
+  own row's trash rule — so a new filter cannot forget either. No response carries a
+  count of hidden cards, a total across viewers or an unfiltered figure beside a
+  filtered one. There is no exception for a solution's authors or an assignee who can
+  no longer see the challenge.
+- **Restricted content.** The card of a `namespace` or `people` challenge exists only
+  for those who can open that challenge. A card carries no visibility chip, as a
+  gallery card carries none; the detail page shows it.
+- **Invariant 3.** The author on a card is masked as on the detail page, by the same
+  code. `moves` and `moveMode` are worked out per viewer and seen by nobody else. A
+  committee member sees no menu on their own solution, anonymous or not; that difference
+  shows only on their own screen, as `canHype` does (§26.3). Nothing on the board says
+  who else can move a card, or who moved it last.
+- **Home (§13.2).** The spotlights and the solution tiles follow their own rule: they
+  count a solution under any challenge the viewer can see, whatever that challenge's
+  status and however long ago it was implemented. They can show a solution that is not
+  on the board, and a number that is not a column's count.
+- **The innovation board (§45)** changes nothing here: no pre-review status has a
+  card.
+- **Trash (§10.4).** A trashed solution, or one under a trashed challenge, has no card
+  — for platform admins too; the trash page is where it is found. It returns on restore
+  in the column of the status it kept (§46.2).
+- **Delete (§10.3).** The card goes with the rows. Deleting the implemented solution
+  reverts its challenge to `valid` (§8.3), and nothing is left on the board.
+- **Moved on the detail page.** A solution an admin moves out of `implemented` there
+  shows in the column of its new status at the next read, under a challenge that stays
+  `solved` (§8.3). Moving it into *Implemented* again is a new implementation: the
+  confirmation in its already-solved wording (§46.7), events 3 and 8 and the
+  `solution.implemented` post come again, and its 90 days start again; the
+  `challenge.solved` post, the submitter's outcome mail and the points do not (§8.3).
+- **Archived namespace (§4.1).** Its cards stay and move as usual: archiving blocks new
+  submissions, not progress.
+- **Deactivation and erasure (§3).** A deactivated author or assignee shows greyed and
+  an erased one as *Deleted User* (§13.6). Nothing about the board is stored per
+  person, so there is nothing to erase.
+- **Likes and hype** on a card follow their own rules (§8.3, §26.3): the board only
+  reads them.
+
+### §46.11 Agents (MCP)
+
+No tool reads the board or moves a card. Every status change but the author's resubmit
+is web-only (§25.6), and `get_challenge` and `get_solution` carry a solution's status
+as before. Still 15 tools. No AI task (§22) reads the board.
+
+### §46.12 Data model
+
+**No migration.** No table, column, index, notification type, settings key or grant.
+
+- **`solutions.status_changed_at`** (§5) gains three readers: a card's time in stage,
+  its place in its column, and the start of an implemented card's 90 days.
+- **The one-card rule** rests on the existing unique index behind invariant 7, which
+  covers exactly the board's five statuses (§8.3).
+- **`@innobox/shared/implementation-board`** holds the five columns in order,
+  `IMPLEMENTATION_BOARD_WINDOW_DAYS = 90`, `IMPLEMENTATION_BOARD_REFRESH_MS = 30_000`,
+  `IMPLEMENTATION_BOARD_PAGE = 30`, `IMPLEMENTATION_BOARD_COLUMN_MAX = 100`, the query
+  parser, the rule for which moves a viewer has on a card and in which mode, the
+  on-board rule, the two orders, the time-in-stage wording and every string the board
+  shows.
+
+### §46.13 API, audit, tests
+
+- **API (§16).**
+  - `GET /api/implementation-board` — any signed-in user. Query: `namespaceId`,
+    `impactAreaId`, `topic`, `involving=1`, `following=1`; a malformed id, or a toggle
+    value other than `1`, is **400** (§46.5). Response: `{ columns: [{ status, total,
+    cards }], namespaces: [{ id, slug }] }` — the five columns always present, in board
+    order; `total` the column's count for this viewer under the filters, never capped;
+    `cards` its first 100, in the column's order; `namespaces` the Namespace filter's
+    options (§46.5), worked out before any filter. A card carries `number`, `status`,
+    `statusChangedAt`, `author` and `authors` (the masked shape, §39.7), `likeCount`,
+    `hype` (only while hype is on), `moves`, `moveMode` (only with a non-empty
+    `moves`), and of its challenge `challengeNumber`, `challengeTitle`,
+    `challengeStatus`, `namespaceSlug`, `impactAreaName`, `topics` (`[{ id, name,
+    active }]`, the gallery row's shape, §34.9) and `assigneeId` /
+    `assigneeDisplayName` / `assigneeActive` / `assigneeScrubbed`.
+  - `PATCH /api/solutions/:number` accepts the optional `baseStatus` and
+    `baseChallengeStatus` (§46.8). Without them its answers are unchanged; with or
+    without them it reads under the §46.8 lock.
+  - Nothing under `/api/admin`, and no change to the challenge detail payload, the
+    gallery's read or `/api/me`. The gallery's `tab` address parameter (§13.1) belongs
+    to the page, which passes the API only a tab it knows; `GET /api/challenges` already
+    takes a `tab` of its own and is unchanged, its **400** for an unknown value
+    included.
+- **Audit (§15).** No action of its own. A move is the ordinary
+  `solution.status_changed` row, with the §8.3 cascade rows for a move into
+  `implemented`; no row says a move came from the board; a refused move writes nothing;
+  and reading the board is not audited.
+- **Tests.**
+  - *Unit:* the moves a viewer has on a card, for each role and each column — an admin
+    gets the three other in-progress columns and `implemented`, and none from
+    `implemented`; a committee member and an assignee get the legal arrows without
+    `rejected`; a committee member who is an author gets none, one who is also the
+    assignee gets the assignee's; an admin who is also a committee member gets the
+    admin's; anyone else none — and `moveMode`: `override` for an admin, also one who
+    is a committee member or the assignee, `enforced` for a committee member and an
+    assignee, absent with no moves. The on-board rule over every pair of solution and
+    challenge status. The 90-day edge, a second inside and a second outside. Both
+    orders, ties included. The time-in-stage wording under a day, at one day, at
+    several, for a status change later than the given instant, and in *Implemented*.
+    The query parser: each filter; an id that is not a UUID, an empty id and a toggle
+    value other than `1` are malformed; a repeated parameter reads its first value; an
+    unknown parameter is ignored. The page's checks of its address: a namespace not
+    among the options, an unknown impact area or topic, and a retired topic, which
+    stays and shows as *"<Name> (retired)"*. The **Show 30 more** step, its shorter
+    last step and the *"Showing 100 of 140"* line; the place of a moved card in a
+    column of 29, 30 and 100 cards — shown, revealed past the first 30, and not shown.
+    The client's move: shown in its new column at once and returned on a refusal, held
+    in its column into `implemented` until the answer; the toast for each answer of
+    §46.8 and which of them re-read. The refresh under fake timers: a read every
+    `IMPLEMENTATION_BOARD_REFRESH_MS` while visible, none while hidden and one at once
+    on return; a tick skipped while a move is in flight, a card is dragged, or a menu
+    or the confirmation is open, with one read when that ends; an answer that is not
+    the latest, or older than one of the viewer's moves, dropped; a failed read keeps
+    the cards; a 401 stops it. Both confirmation texts and the live-region texts. A
+    press with `pointerType` `touch` or `pen` starts no drag. The gallery's `tab`
+    reader (§13.1): `mine`, `completed`, absent, and any other value as **Open**.
+    Presence is silent for `GET /api/implementation-board`.
+  - *Integration:* a viewer reads the card of an `org` challenge; an outsider gets no
+    card of a `namespace` or a `people` challenge, and neither `total` nor `namespaces`
+    counts it, while a member gets all three; an anonymous author is masked and a team
+    comes as `authors`; `hype` is absent while hype is off; an in-progress card under a
+    `solved` challenge is there; a card goes when its challenge is rejected, withdrawn
+    or sent back to review, and comes back with it; a trashed solution has no card, for
+    a platform admin too, and returns on restore; an implemented card is there at 89
+    days and gone at 91; both orders; `total` follows each filter and exceeds a capped
+    `cards`; `namespaces` is the same under every filter, lists an archived namespace
+    that still has cards, and is in alphabetical order; a retired topic's id still
+    filters; *Involving me* for a member of the solution's team, a member of the
+    challenge's team, the assignee and the author of an anonymous solution, and no card
+    for an author who can no longer see the challenge; *Following* by a follow of the
+    solution and by a follow of the challenge; a malformed id and a toggle value other
+    than `1` are each 400; an unknown id gives empty columns, and a `namespaceId` whose
+    namespace exists but is hidden answers exactly as one that does not exist; `moves`
+    and `moveMode` for each role. On the `PATCH`: a matching `baseStatus` and
+    `baseChallengeStatus` apply the move; a stale `baseStatus` is 409 `stale_status`
+    with no audit row and no outbox row, also when the target equals the current
+    status; a stale `baseChallengeStatus` is 409 and a challenge rejected a moment
+    earlier stays rejected; a caller who cannot see the solution gets the 404 whatever
+    the base fields carry, and a platform admin's move on a trashed solution is the
+    trash's 409 and not `stale_status`; the 403 comes before the `stale_status` 409 and
+    that 409 before the 422; a base value that is not a status is 400; without the
+    fields the route answers as before; of two simultaneous moves from the same base
+    one lands and the other is 409; two simultaneous changes sent without the base
+    fields write audit rows whose `before` is in each case the status replaced; a move
+    into `implemented` and a simultaneous change of a sibling both answer without a
+    5xx, and the sibling ends `not_selected`; a move while its challenge is being
+    trashed is judged on the committed row; an author's withdraw crossing a move into
+    `implemented` is refused; a board move writes the same audit row as a detail-page
+    move; a move into `implemented` runs the cascade and writes events 3 and 8; under a
+    challenge that is already `solved`, `solution.implemented` is enqueued,
+    `challenge.solved` is not and no points are awarded; three moves write three
+    event-3 rows.
+  - *E2e:* an admin opens **Implementation** from the sidebar and finds SOL-…
+    in *Accepted internally*; **Move to…** → *In implementation* puts it there, reading
+    *"Less than a day in this stage"*; user B, who has no role, opens the board, sees
+    the card and has no **Move to…**; the admin moves it to *Implemented*, first
+    cancels the confirmation and finds the card still in its column, then accepts it,
+    and the challenge's page reads *Solved*; the link under *Implemented* opens the
+    gallery on **Completed**; Home's **See the implementation board** and Quick start's
+    link both open the board.
